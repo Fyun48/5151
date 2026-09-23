@@ -26,6 +26,7 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import * as repo from "./repository/crmOutbox.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 function sqliteFor(options = {}) {
   return options.sqliteHandle || sqliteHandle();
@@ -58,7 +59,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const exec = async (sql, params = []) => normalizeResult(await pgDriver.query(toPostgresSql(sql), params));
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    if (!sqliteFallbackAllowed(options, { write: options.write === true })) throw error;
     return runSqlite();
   }
 }
@@ -70,7 +71,7 @@ function iso(now) {
 // crmOutbox.js enqueueCrmOutbox()
 export function enqueueCrmOutboxAsync(input = {}, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const contactId = Number(input.contactId) || 0;
       if (!contactId) return null;
@@ -97,7 +98,7 @@ export function enqueueCrmOutboxAsync(input = {}, options = {}) {
 export function claimCrmOutboxBatchAsync(args = {}, options = {}) {
   const { limit = 20, now = new Date(), staleMs = CRM_OUTBOX_STALE_MS } = args;
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const nowIso = iso(now);
       const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
@@ -120,7 +121,7 @@ export function claimCrmOutboxBatchAsync(args = {}, options = {}) {
 // crmOutbox.js markCrmOutboxSent()
 export function markCrmOutboxSentAsync(id, args = {}, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       const q = repo.outboxSentQuery(iso(args.now || new Date()), id);
       await exec(q.sql, q.params);
@@ -136,7 +137,7 @@ export function markCrmOutboxFailureAsync(row, errText, args = {}, options = {})
   const max = Number(row.max_attempts) || CRM_OUTBOX_MAX_ATTEMPTS;
   const err = String(errText || "").slice(0, 500);
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       if (attempts >= max) {
         const q = repo.outboxDeadQuery(attempts, err, row.id);
@@ -249,7 +250,7 @@ export function crmDeliveryControlAsync(env = process.env, options = {}) {
 // crmDelivery.js setLocalCrmSyncStopped() 的 async 版。
 export function setCrmDeliveryStopAsync(stopped, env = process.env, options = {}) {
   return withFallback(
-    options,
+    { ...options, write: true },
     async (exec) => {
       await exec("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [
         "ops_crm_stop",

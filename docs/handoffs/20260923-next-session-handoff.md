@@ -111,13 +111,17 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
      （fence 前先確認 standby `caught_up`）。應用路徑（web-A 容器的 PG_URL 經 pg_rw）讀寫都 OK、
      公開站與兩台 web 都是 200、容器近 15 分鐘 0 錯誤。
    - **沒有資料分歧**：實測三個應用容器的本機 SQLite（正式站容器／web-A／web-B）mtime 都在演練窗口之前，
-     所以 fail-open 這次沒有真的把寫入掉進 SQLite（但風險仍在，見下）。
+     所以 fail-open 這次沒有真的把寫入掉進 SQLite。**這個風險已收掉（2026-09-23，PR #473）**：
+     PG 模式的寫入改成 fail-closed，見下。
    - ⚠️ 第一次嘗試時我的自動化腳本卡在 ssh session，導致「fence 後遲遲沒 promote」約 6 分鐘的寫入中斷；
      後續改成「一個指令一個 ssh ＋ 本地 `timeout`」才穩定。**演練請逐步做、不要包成一大段腳本。**
    - ⚠️ 踩到 HAProxy 的 inode 陷阱（改了 `haproxy.cfg` 卻完全沒生效，pg_rw 一度打到唯讀節點）→
      細節與正確做法寫在 `docs/runbooks/postgres-manual-failover.md` §6。
-5. **尚未處理的建議**：把 PG 模式的 fail-open 收掉（DB 不可用時拒絕寫入，而不是落回本機 SQLite），
-   這樣演練或真實故障時不會有無聲的 SQLite 寫入。
+5. ~~**尚未處理的建議**：把 PG 模式的 fail-open 收掉~~ → **已完成（2026-09-23，PR #473）**：
+   新增 `v3/src/sqliteFallback.js`，**寫入 fail-closed**（PG 失敗時往上丟，不再落回本機 SQLite）、
+   **讀取維持 fail-open**；`PG_SQLITE_FALLBACK=open` 或呼叫端 `fallback: "open"` 是緊急逃生門。
+   證據 `v3/test/sqlite-fallback-policy.test.js` 7/7。**注意：這包尚未發版**——
+   發版後（若 PG 真的不可用）寫入會直接失敗，不會再無聲寫 SQLite。
 
 ## 4. 常用指令
 

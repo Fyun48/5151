@@ -115,6 +115,17 @@
      **會員的兩個動作**（`/api/listings/:id/recheck`、`/report-gone`）都改成 await。
      live parity：`v3/test/listing-state-writes.test.js` **4/4**（PG 寫入後以爬蟲入口回讀，
      offline／alive／restore／checked 逐欄等於 SQLite；invalidateLocation 清掉 route_jobs）。
+   - **PG 模式的 SQLite fallback 政策（2026-09-23：收掉寫入的 fail-open）**：
+     每個 `*Async` 模組原本在 PG 失敗時一律 fail-open 回本機 SQLite。讀取那樣是合理的，
+     但寫入會寫進「站不會讀的 store」＝無聲的資料分歧（HA 演練時真的出現過寫入失敗的窗口）。
+     現在由 `v3/src/sqliteFallback.js` 統一決定：**寫入 fail-closed**（往上丟，讓呼叫端回報或重試）、
+     **讀取維持 fail-open**；`options.strict` 仍是一律往上丟，緊急時可用 `PG_SQLITE_FALLBACK=open`
+     （或呼叫端 `fallback: "open"`）回退成舊行為。改到的地方＝9 個模組的 helper
+     （`budgetGuardAsync`／`crawlerWrites`／`crmAsync`／`crmOutboxAsync`／`listingEnrichQueueAsync`／
+     `listingSimilarityAsync`／`notifyEnqueueAsync`／`notifyQueueAsync`；`crawlerReads` 是純讀取不動），
+     讀寫混合的模組由寫入入口帶 `write: true` 旗標。
+     證據：`v3/test/sqlite-fallback-policy.test.js` **7/7**（寫入不落回 SQLite、讀取仍回退、
+     緊急逃生門真的寫進 SQLite、`strict` 壓過環境變數）。
    - **仍待接（切換前必須完成，已評估可機械化）**：
      ① **`listingsNeeding*` 掃描（9 個，進行中）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
         SourceKit,Route,AliveCheck,OfflineRecheck,Mrt}` ＋ `getRouteJob`／`community_cache`／`route_jobs`

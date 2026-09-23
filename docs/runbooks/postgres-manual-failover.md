@@ -108,6 +108,11 @@ docker exec 5151-haproxy kill -s HUP 1
 >    所以 promote 之後若沒同步這裡的順序，pg-rw 會照舊順序打到已降級成唯讀的節點，
 >    應用端會出現 `cannot execute … in a read-only transaction`（寫入全數失敗）。順序＝正確性，不是最佳化。
 >
+> 3. **應用端寫入是 fail-closed（2026-09-23 起）**：PG 模式的寫入失敗**不會再悄悄落回本機 SQLite**，
+>    而是直接把錯誤往上丟（使用者看到 5xx／「儲存失敗」）。演練時這代表「promote 沒做完＝寫入全滅」，
+>    但不會產生無聲的資料分歧；讀取仍維持 fail-open（回舊資料）。真的需要「先讓站活著」時才設
+>    `PG_SQLITE_FALLBACK=open`（寫入也回退），用完立刻關掉。
+>
 > 另外：**兩個 compose 目錄名稱與實際角色是相反的**——
 > primary 的 compose 在 `~/5151-shadow-ha/shadow-ha/postgres-standby/`（syn-nas，容器 `5151-postgres-B`）、
 > standby 的在 `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（casa-nas，容器 `5151-postgres-A`）；

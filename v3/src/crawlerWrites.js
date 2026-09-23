@@ -37,6 +37,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -51,7 +52,8 @@ async function write(options, runPostgres, runSqlite) {
     const exec = await postgresExec(options);
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    /* 寫入 fail-closed：不落回本機 SQLite（見 sqliteFallback.js）。 */
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
     return runSqlite();
   }
 }

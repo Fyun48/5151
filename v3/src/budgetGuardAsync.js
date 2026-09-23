@@ -55,6 +55,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import * as repo from "./repository/budgetGuard.js";
 
 function firstRow(rows) {
@@ -96,7 +97,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const exec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;
     return await runPostgres(exec);
   } catch (error) {
-    if (options.strict) throw error;
+    if (!sqliteFallbackAllowed(options, { write: options.write === true })) throw error;
     return runSqlite();
   }
 }
@@ -114,7 +115,8 @@ async function withFallbackTx(options, runPostgres, runSqlite) {
       return runPostgres(exec);
     });
   } catch (error) {
-    if (options.strict) throw error;
+    /* 寫入 fail-closed：不落回本機 SQLite（見 sqliteFallback.js）。 */
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
     return runSqlite();
   }
 }
@@ -355,7 +357,7 @@ async function pgHoldBudget(exec, reservationInput, { category, now = new Date()
 export function ensureBudgetSchemaAsync(conn, options = {}) {
   const opts = withConn(options, conn);
   return withFallback(
-    opts,
+    { ...opts, write: true },
     async (exec) => {
       if (!opts.exec) {
         const pgDriver = opts.pgDriver || (await sharedPgDriver());
