@@ -13,18 +13,17 @@ export function runWorkerBatch({
   handler = null,
   now = Date.now(),
 } = {}) {
-  const q = queue || (await jobQueueFor({ sqliteDb: db }));
   // Crash recovery: reclaim jobs whose lease expired (e.g. a dead worker).
-  await q.reclaimExpired({ now });
-  const jobs = await q.claim({ workerId, jobTypes, limit, now });
+  reclaimExpiredLeases(db, { now });
+  const jobs = claimJobs(db, { workerId, jobTypes, limit, now });
   const results = [];
   for (const job of jobs) {
     try {
       const out = handler ? handler(job) : undefined;
-      await q.complete({ jobId: job.id, workerId, now: Date.now() });
+      completeJob(db, { jobId: job.id, workerId, now: Date.now() });
       results.push({ id: Number(job.id), state: "done", out });
     } catch (error) {
-      await q.fail({ jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
+      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
       results.push({ id: Number(job.id), state: "failed", error: error?.message || String(error) });
     }
   }
@@ -40,17 +39,18 @@ export async function runWorkerBatchAsync({
   handler = null,
   now = Date.now(),
 } = {}) {
+  const q = queue || (await jobQueueFor({ sqliteDb: db }));
   // Crash recovery: reclaim jobs whose lease expired (e.g. a dead worker).
-  reclaimExpiredLeases(db, { now });
-  const jobs = claimJobs(db, { workerId, jobTypes, limit, now });
+  await q.reclaimExpired({ now });
+  const jobs = await q.claim({ workerId, jobTypes, limit, now });
   const results = [];
   for (const job of jobs) {
     try {
       const out = handler ? await handler(job) : undefined;
-      completeJob(db, { jobId: job.id, workerId, now: Date.now() });
+      await q.complete({ jobId: job.id, workerId, now: Date.now() });
       results.push({ id: Number(job.id), state: "done", out });
     } catch (error) {
-      failJob(db, { jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
+      await q.fail({ jobId: job.id, workerId, error: error?.message || String(error), retryAfterMs: error?.retryAfterMs ?? null, now: Date.now() });
       results.push({ id: Number(job.id), state: "failed", error: error?.message || String(error) });
     }
   }

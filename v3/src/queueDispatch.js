@@ -3,7 +3,6 @@
 // jobQueue.js 裡的 createJobQueue() 兩種實作都有，但先前沒有任何呼叫端（等於寫好沒接線）。
 // 這個模組負責「拿 driver、拿連線、回傳對應實作」，呼叫端只認 queue 介面：
 //   enqueue / claim / complete / fail / reclaimExpired
-import { sqliteHandle } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { createJobQueue, ensurePgJobQueueIndex } from "./jobQueue.js";
@@ -15,6 +14,7 @@ export async function jobQueueFor({ driver = null, sqliteDb = null, pgPool = nul
     await ensurePgJobQueueIndex(pool);
     return createJobQueue({ driver: "postgres", pgPool: pool });
   }
-  return createJobQueue({ driver: "sqlite", sqliteDb: sqliteDb || sqliteHandle() });
+  const handle = sqliteDb || (await import("./db.js")).sqliteHandle();
+  return createJobQueue({ driver: "sqlite", sqliteDb: handle });
 }
 
