@@ -96,6 +96,24 @@ docker exec 5151-haproxy kill -s HUP 1
 
 應用程式 DB router 亦依 `pg_is_in_recovery()` 自動辨識新 primary（read-after-write 打 primary）。
 
+> ⚠️ **2026-09-23 演練實測的兩個必讀事項**
+>
+> 1. **`haproxy.cfg` 只能用「就地改寫」**：compose 是把 `./haproxy.cfg` 以**單檔 bind mount** 掛進容器，
+>    而 bind mount 綁的是 inode。若用 `awk … > f.new && mv f.new f`（或任何會換 inode 的編輯器）改設定，
+>    **容器仍看到舊檔**，`kill -HUP` 也只會重載舊設定；連容器內 `haproxy -c -f …` 驗證到的都是舊內容
+>    （症狀：改了順序卻完全沒生效，pg-rw 繼續打到舊 primary）。請用會**改同一個 inode**的方式
+>    （例如 python `open(path,'w')` 覆寫、`printf … > file` 也同 inode），或重建容器
+>    （`docker compose -f /opt/5151-shadow/haproxy/docker-compose.yml up -d --force-recreate`）。
+> 2. **`option pgsql-check` 不會分辨 primary／standby**：它只確認「這個 PG 接受連線」，
+>    所以 promote 之後若沒同步這裡的順序，pg-rw 會照舊順序打到已降級成唯讀的節點，
+>    應用端會出現 `cannot execute … in a read-only transaction`（寫入全數失敗）。順序＝正確性，不是最佳化。
+>
+> 另外：**兩個 compose 目錄名稱與實際角色是相反的**——
+> primary 的 compose 在 `~/5151-shadow-ha/shadow-ha/postgres-standby/`（syn-nas，容器 `5151-postgres-B`）、
+> standby 的在 `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（casa-nas，容器 `5151-postgres-A`）；
+> volume 名稱同理（`…pg-primary_…pg-a` 目前裝的是 standby）。重建節點時依 **容器名稱與 volume 名稱**判斷，
+> 不要看目錄名。
+
 ### 7. verify — 驗證新 primary 可寫
 
 ```bash

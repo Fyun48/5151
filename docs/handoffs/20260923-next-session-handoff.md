@@ -101,11 +101,23 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
    公開站由 web-B 接手（15 次請求中 14 次 200，**只有節點被殺的那一瞬間 1 次 503**）；
    啟動 web-A 後兩台都回 200。那個 1 次 503 是「回應已開始傳輸後節點死亡」，
    代理無法重試（redispatch／retry-on 都救不到）。
-4. **DB 層演練尚未做**：前置檢查已過（primary = syn-nas `5151-postgres-B`、standby = casa-nas
-   `5151-postgres-A` 且 `caught_up`、`pg_rw(25433) → primary`、`pg_ro(25434) → standby`）。
-   ⚠️ 做之前要注意：**PG 模式的 async 寫入在失敗時會 fail-open 回本機 SQLite**
-   （`withFallback` 未設 `strict`），promote 的數秒寫入失敗可能讓少量狀態落在 SQLite 而沒進 PG。
-   建議先決定要「接受這個風險」（挑離峰做）還是「先讓 DB 不可用時拒絕寫入」再演練。
+4. **DB 層演練已完成（2026-09-23，兩個方向都走完）**：
+   - 方向一：fence `5151-postgres-B`（syn-nas）→ promote `5151-postgres-A` → 建 slot `standby_b`、
+     用 syn-nas 的 `postgres-standby/setup-standby.sh` 重建 B → B 以 standby 回來（lag 0）。
+   - 方向二：fence A → promote B → 建 slot `standby_a`、用 casa-nas 的
+     `postgres-standby/setup-standby.sh`（`PRIMARY_HOST=192.168.0.220 SLOT_NAME=standby_a`）重建 A →
+     A 以 standby 回來。**最終狀態回到文件預設（primary = syn-nas `5151-postgres-B`、standby = casa-nas A）**。
+   - **量測：RTO ≈ 7 秒**（fence 22:07:49 → promote 完成 22:07:56，同秒寫入測試成功）、**RPO = 0**
+     （fence 前先確認 standby `caught_up`）。應用路徑（web-A 容器的 PG_URL 經 pg_rw）讀寫都 OK、
+     公開站與兩台 web 都是 200、容器近 15 分鐘 0 錯誤。
+   - **沒有資料分歧**：實測三個應用容器的本機 SQLite（正式站容器／web-A／web-B）mtime 都在演練窗口之前，
+     所以 fail-open 這次沒有真的把寫入掉進 SQLite（但風險仍在，見下）。
+   - ⚠️ 第一次嘗試時我的自動化腳本卡在 ssh session，導致「fence 後遲遲沒 promote」約 6 分鐘的寫入中斷；
+     後續改成「一個指令一個 ssh ＋ 本地 `timeout`」才穩定。**演練請逐步做、不要包成一大段腳本。**
+   - ⚠️ 踩到 HAProxy 的 inode 陷阱（改了 `haproxy.cfg` 卻完全沒生效，pg_rw 一度打到唯讀節點）→
+     細節與正確做法寫在 `docs/runbooks/postgres-manual-failover.md` §6。
+5. **尚未處理的建議**：把 PG 模式的 fail-open 收掉（DB 不可用時拒絕寫入，而不是落回本機 SQLite），
+   這樣演練或真實故障時不會有無聲的 SQLite 寫入。
 
 ## 4. 常用指令
 
