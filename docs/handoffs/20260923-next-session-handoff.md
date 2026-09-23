@@ -8,9 +8,9 @@
 - 正式站：CasaOS `591-tracker-v3`，`DB_DRIVER=postgres`（PG `192.168.0.140:25433/5151_shadow`）；
   公開站 `jibbyrenth.reversalplay.me`、OPS `jibbyrentops.reversalplay.me`。
 - 移植進度：**① 掃描 ✅ ② 迴圈欄位 ✅ ③ 通知佇列 ✅（含 live）④ 相似度／洞察 ✅（含 live）
-  2.2 CRM（2.2a／2.2b／2.2c）✅ 2.3a jobQueue／jobWorker ✅ 2.3b 第一段（讀取與後台統計）✅
-  2.3b 第二段（寫入路徑：enqueue／claim／reclaim／finish／metric）✅**
-  → 單容器切換已無阻塞項。剩 **2.3b 第三段（種子查詢 seed）→ provider／budget 島 → HA**。
+  2.2 CRM（2.2a／2.2b／2.2c）✅ 2.3 佇列四支 ✅（2.3a jobQueue／jobWorker、2.3b listingEnrichQueue
+  三段全部完成，含 live）**
+  → 單容器切換已無阻塞項。剩 **provider／budget 島（§3.4）→ HA（§3.5）**。
 
 ## 1. 環境（先看這節，省半小時）
 
@@ -42,6 +42,7 @@
 | 2.3a `jobQueue`／`jobWorker` 接上 PG 佇列 | **#459**（`v3/test/job-queue-parity.test.js` 離線 2／live 3、0 skip） |
 | 2.3b 第一段：listing enrich 讀取與後台統計 | **#460**（`v3/test/listing-enrich-parity.test.js`） |
 | 2.3b 第二段：listing enrich 寫入路徑 | 本 session：builder ＋ async 入口 ＋ `enrichQueue` façade，watcher／server／adminOverview 接線；離線 5 pass、live 7 pass 0 skip；PG 端另修掉 identity 序號未推進（見 §5.9） |
+| 2.3b 第三段：種子查詢改讀 PG | 本 session：`seedEnrichCandidatesQuery()` ＋ `seedHousepriceEnrichJobsAsync()`，`enrichQueue.seed` 不再回 0；離線 7 pass、live 10 pass 0 skip |
 
 ## 3. 待辦（照序做，一包一 PR）
 
@@ -64,10 +65,10 @@ grep -nE "db\.prepare|res\.changes|last_insert_rowid|INSERT OR |datetime\(|julia
 再用同一套模式（repository ＋ async ＋ parity ＋ live）。`listingEnrichQueue.js` 已有 `upsertListingPrepAsync()` 可參考。
 
 **2026-09-23 進度（實查）**：2.3a ✅（#459）、2.3b 第一段 ✅（#460）、2.3b 第二段 ✅（寫入路徑
-enqueue／claim／reclaim／finish／recordEnrichMetric ＋ `helpers.enrichQueue` façade）。
+enqueue／claim／reclaim／finish／recordEnrichMetric ＋ `helpers.enrichQueue` façade）、
+2.3b 第三段 ✅（種子查詢改讀 PG；`enrichQueue.seed` 不再刻意回 0）。
 `jobQueue`／`jobWorker`／`geoQueue` 都不需要再動（`geoQueue` 是純記憶體佇列，見 PG-2.3-NOTES.md）。
-**剩下的島**：`seedHousepriceEnrichJobs()` 的種子查詢（`listings LEFT JOIN listing_prep`）
-還沒移植，PG 模式的 `enrichQueue.seed` 目前刻意回 0。
+**runbook §7 列的孤島到此只剩 provider／budget（見 §3.4）**。
 
 ### 3.4 provider／budget 島
 `budgetGuard.js`／`providers/*`／`callOpenAiCompat` 目前讀 SQLite（④ 刻意只把「產出的列」放 PG，見 #447 說明）。

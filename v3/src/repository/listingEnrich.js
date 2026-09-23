@@ -263,3 +263,19 @@ export function addColumnQuery(table, name, ddl) {
   return { sql: `ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`, params: [] };
 }
 
+// seedHousepriceEnrichJobs()：挑出「房價來源、未下架、還沒有 ready（或根本沒有 prep 列）」的物件。
+// IFNULL 在 PG 端由 sqlDialect 轉成 COALESCE，所以兩邊共用同一份文字。
+export function seedEnrichCandidatesQuery(limit) {
+  return {
+    sql: `SELECT l.post_id, l.source, l.source_id, l.url, l.title, l.price_num, l.address, l.floor_name, l.lat, l.lng, l.tags
+      FROM listings l
+      LEFT JOIN listing_prep p ON p.post_id = l.post_id
+     WHERE l.source = 'houseprice'
+       AND IFNULL(l.offline, 0) = 0
+       AND (p.post_id IS NULL OR p.display_ready = 0)
+     ORDER BY IFNULL(p.checked_at, l.first_seen_at) ASC, l.post_id ASC
+     LIMIT ?`,
+    params: [Math.max(1, Number(limit) || 80)],
+  };
+}
+

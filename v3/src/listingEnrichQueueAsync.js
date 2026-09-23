@@ -31,6 +31,7 @@ import {
   requestClickPlan,
   requestClickRefresh as requestClickRefreshSync,
   seedHousepriceEnrichJobs as seedHousepriceEnrichJobsSync,
+  seedRowMissing,
   stageSummary,
   summarizeEnrichMetrics as summarizeEnrichMetricsSync,
   WATCH_PRIORITY,
@@ -212,6 +213,18 @@ export function ensureListingPrepSchemaAsync(conn, options = {}) {
   );
 }
 
+// 單筆入列（PG 路徑）。seed 也走這一支，避免「入列」的判斷出現兩份。
+async function enqueueViaExec(exec, listing, { via = "scheduler", priority, missing = [], now = Date.now() } = {}) {
+  if (!enrichEnqueueEligible(listing)) return null;
+  const postId = Number(listing.post_id);
+  const prio = enqueuePriority(via, priority);
+  const jobQuery = repo.enrichJobByPostIdQuery(postId);
+  const existing = firstRow(await exec(jobQuery.sql, jobQuery.params));
+  const plan = enqueueEnrichPlan(existing, { postId, prio, via, missing, now });
+  await exec(plan.sql, plan.params);
+  return firstRow(await exec(jobQuery.sql, jobQuery.params));
+}
+
 // listingEnrichQueue.js enqueueListingEnrich()
 export function enqueueListingEnrichAsync(conn, listing, {
   via = "scheduler",
@@ -222,17 +235,29 @@ export function enqueueListingEnrichAsync(conn, listing, {
   const opts = withConn(options, conn);
   return withFallbackCounted(
     opts,
-    async (exec) => {
-      if (!enrichEnqueueEligible(listing)) return null;
-      const postId = Number(listing.post_id);
-      const prio = enqueuePriority(via, priority);
-      const jobQuery = repo.enrichJobByPostIdQuery(postId);
-      const existing = firstRow(await exec(jobQuery.sql, jobQuery.params));
-      const plan = enqueueEnrichPlan(existing, { postId, prio, via, missing, now });
-      await exec(plan.sql, plan.params);
-      return firstRow(await exec(jobQuery.sql, jobQuery.params));
-    },
+    (exec) => enqueueViaExec(exec, listing, { via, priority, missing, now }),
     () => enqueueListingEnrichSync(conn, listing, { via, priority, missing, now }),
+  );
+}
+
+// listingEnrichQueue.js seedHousepriceEnrichJobs()：候選查詢改讀 PG（原本讀本機 SQLite，
+// PG 模式下會拿到空的或以本機資料產出錯誤的工作），每一列再走 enqueueViaExec。
+export function seedHousepriceEnrichJobsAsync(conn, { limit = 80, isEnabled = () => true } = {}, options = {}) {
+  const opts = withConn(options, conn);
+  if (!isEnabled("houseprice")) return 0;
+  return withFallbackCounted(
+    opts,
+    async (exec) => {
+      const q = repo.seedEnrichCandidatesQuery(limit);
+      const rows = (await exec(q.sql, q.params)).rows || [];
+      let n = 0;
+      for (const row of rows) {
+        await enqueueViaExec(exec, row, { via: "scheduler", missing: seedRowMissing(row) });
+        n += 1;
+      }
+      return n;
+    },
+    () => seedHousepriceEnrichJobsSync(conn, { limit, isEnabled }),
   );
 }
 
@@ -381,7 +406,7 @@ export function listingEnrichQueueFacade(conn, options = {}) {
   const useConn = (c) => c || conn;
   return {
     driver,
-    seed: (c, seedOpts) => (driver === "postgres" ? 0 : seedHousepriceEnrichJobsSync(useConn(c), seedOpts)),
+    seed: (c, seedOpts) => seedHousepriceEnrichJobsAsync(useConn(c), seedOpts, opts),
     claim: (c, args) => claimEnrichJobsAsync(useConn(c), args, opts),
     finish: (c, job, patch) => finishEnrichJobAsync(useConn(c), job, patch, opts),
     metric: (c, job, timings) => recordEnrichMetricAsync(useConn(c), job, timings, opts),
