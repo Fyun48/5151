@@ -7035,10 +7035,18 @@ export function listPublicListingsSqlFirst(args = {}) {
   };
 }
 
-// SQL-first when the query is inside the exact-equivalence envelope, otherwise the Node path —
-// the same dispatch shape the member surface uses (see searchListingsSqlite() in
+// Guest search: SQL-first when the query is inside the exact-equivalence envelope, otherwise the
+// Node path — the same dispatch shape the member surface uses (see searchListingsSqlite() in
 // listingSearchAsync.js).
+//
+// 2026-09-23: 預設關閉。正式站 A/B（同一個 build，用 priceMax 逃出 envelope 叫回 Node 路徑）發現
+// 兩條路徑的列集不一致：SQL 端 83,287 筆 vs Node 端 65,341 筆。SQL 子句還沒有覆蓋只有 Node 端才有的
+// 條件（例如 listings.hidden、pending offline 之類），在補齊並用正式資料形狀驗證之前，寧可維持
+// Node 路徑的結果。要再開啟請設 PUBLIC_LISTINGS_SQL_FIRST=1（並確認 parity 測試與 A/B 都對得上）。
+const publicListingsSqlFirstEnabled = process.env.PUBLIC_LISTINGS_SQL_FIRST === "1";
+
 export function listPublicListingsFast(args = {}) {
+  if (!publicListingsSqlFirstEnabled) return listPublicListings(args);
   // projection 與 listings 筆數不一致時（有列缺席）SQL-first 會少顯示物件，寧可回退完整的 Node 路徑。
   if (!publicProjectionReady) return listPublicListings(args);
   return listPublicListingsSqlFirst(args) || listPublicListings(args);
