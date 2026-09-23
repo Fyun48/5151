@@ -289,6 +289,7 @@ import {
 } from "./crm.js";
 import { ensureCrmOutboxSchema } from "./crmOutbox.js";
 import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
+import { crmDeliveryControlAsync, crmOutboxOps, setCrmDeliveryStopAsync } from "./crmOutboxAsync.js";
 import { addNoteAsync, addTodoAsync, createCaseAsync, createContactAsync, crmModuleAsync, crmOverviewAsync, getCrmContactAsync, setTodoDoneAsync, updateCaseAsync, updateContactAsync } from "./crmAsync.js";
 import {
   bindBudgetDb,
@@ -1987,12 +1988,12 @@ export function setCrmModuleEnabled(enabled) {
   return setCrmEnabledOn(db, enabled);
 }
 
-export function getCrmDeliveryControl() {
-  return crmDeliveryControl(db);
+export async function getCrmDeliveryControl() {
+  return crmDeliveryControlAsync();
 }
 
-export function setCrmDeliveryStop(stopped) {
-  return setLocalCrmSyncStopped(db, Boolean(stopped));
+export async function setCrmDeliveryStop(stopped) {
+  return setCrmDeliveryStopAsync(stopped);
 }
 
 export function createCrmFromFeedback(feedbackId) {
