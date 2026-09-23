@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -136,5 +136,24 @@ test("authorize step runs before any SCP/SSH/secret access (fail-closed ordering
     if (scpIdx > 0) assert.ok(authIdx < scpIdx, `${name} authorize must precede any production action`);
     const nasIdx = text.indexOf("secrets.NAS_");
     if (nasIdx > 0) assert.ok(authIdx < nasIdx, `${name} authorize must precede NAS secret usage`);
+  }
+});
+
+// steps-output-order：step 的輸出只有「排在它後面的步驟」看得到。
+// 2026-09-23 實例：CF bridge 重構把 cf-ssh-bridge 步驟排到使用者後面，
+// deploy-ops-synology 的 staging 因此拿到空的 steps.cf-bridge.outputs.host（Bad port ''）。
+test("steps-output-order: steps.<id>.outputs 只能出現在定義 id 的步驟之後", () => {
+  const wfDir = path.join(dir, "..", ".github", "workflows");
+  for (const name of readdirSync(wfDir).filter((n) => n.endsWith(".yml"))) {
+    const text = readFileSync(path.join(wfDir, name), "utf8");
+    for (const m of text.matchAll(/steps\.([A-Za-z0-9_-]+)\.outputs/g)) {
+      const id = m[1];
+      const def = new RegExp(`^[ \\t]*id:[ \\t]*${id}[ \\t]*$`, "m").exec(text);
+      assert.ok(def, `${name}: 讀了 steps.${id}.outputs，但沒有任何步驟定義 id: ${id}`);
+      assert.ok(
+        def.index < m.index,
+        `${name}: steps.${id}.outputs 出現在定義該 id 的步驟之前（step 輸出只對後續步驟可見）`
+      );
+    }
   }
 });
