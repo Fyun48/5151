@@ -23,8 +23,14 @@
 | `591-tracker-tunnel` | 同上（profile `tunnel`） | Cloudflare Tunnel（host network） | — |
 | `5151-postgres-A` | `/root/5151-shadow-ha/shadow-ha/postgres-primary/docker-compose.yml` | 正式站 PostgreSQL | — |
 | `5151-haproxy` | `/opt/5151-shadow/haproxy/docker-compose.yml` | **A 組**入口（25153 網站／25433 PG） | — |
-| `5151-web-A` | `/opt/5151-shadow/web-a/docker-compose.yml` | **A 組**網站 | **sqlite** |
-| `5151-crawler` | **手動 `docker run`（沒有 compose）** | **A 組**爬蟲（與 web-a 共用 `/data`） | **sqlite** |
+| `5151-web-A` | `/opt/5151-shadow/web-a/docker-compose.yml` | **A 組**網站（2026-09-23 起讀同一套 PG） | **postgres** |
+| `5151-crawler` | **手動 `docker run`（沒有 compose）** | **A 組**爬蟲（與 web-a 共用 `/data`，仍寫本機 SQLite） | **sqlite** |
+
+> **2026-09-23 HA 切換（A 組）**：`5151-web-A` 的 image 改成與正式站同一顆 digest
+> （`ghcr.io/fyun48/5151@sha256:43bd376c…`，內建 `src` 與正式站主機掛載的 `src` 逐檔相同），
+> 並加上 `DB_DRIVER=postgres`、`PG_URL=…@192.168.0.140:25433/5151_shadow`（HAProxy `pg-rw`）。
+> compose 備份：同一目錄的 `docker-compose.yml.bak-20260923T*`。
+> `5151-crawler` 刻意留在 SQLite（它是 A 組 SQLite 的保鮮來源＝回復路徑），**不要一起切**。
 
 ## 三個必須記住的事實
 
@@ -33,8 +39,10 @@
    映像 digest（由 `deploy-v3.yml` 產生的 override 鎖定）只決定「基底映像」，**擋不住掛載的原始碼**。
 2. **OPS Console 與正式站共用同一張映像**，差別只在啟動指令與資料目錄；它的資料是容器自己的 `/data`，
    **與 v3 的 PostgreSQL 不是同一個庫**。
-3. **A 組目前是 sqlite 模式**，且 `5151-crawler` 沒有 compose（手動建立）。
-   因此**切換到 A 組之前必須先把還在用 SQLite 的路徑清完**，否則網站會改讀本機檔案。
+3. **A 組的 web 已經在 2026-09-23 切到 PostgreSQL**（與正式站讀同一套，經 HAProxy `pg-rw` 25433），
+   但它**不掛主機原始碼**：程式來自 image。所以「A 組的程式版本」由 compose 的 image digest 決定，
+   與正式站（掛載主機原始碼）是兩條更新路徑——要換 A 組程式就得改 digest 並重建。
+   `5151-crawler` 沒有 compose（手動建立）且仍是 SQLite。
 
 ## HA 與資料庫的權威文件（不要重寫）
 
