@@ -382,7 +382,7 @@ test("server and UI keep click-open non-blocking and expose prep admin stats", (
   assert.match(recheck, /wakeWorker/);
   assert.match(recheck, /PROBE_INCONCLUSIVE|inconclusive/);
   assert.match(server, /app\.get\("\/go\/:id"/);
-  assert.match(server, /requestClickRefresh\(db, listing, "go"\)/);
+  assert.match(server, /requestClickRefreshAsync\(db, listing, "go"\)/);
   assert.match(server, /listing_updated/);
   assert.match(server, /classifyListingProbeWrite/);
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");

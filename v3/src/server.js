@@ -309,7 +309,9 @@ import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords,
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "./probeOutcomes.js";
-import { enqueueListingEnrich, processListingEnrichBatch, requestClickRefresh, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
+import { processListingEnrichBatch, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
+// 2.3b 第二段：入列與點擊複查走 driver-aware 版本（PG 模式才不會寫到本機 SQLite）。
+import { enqueueListingEnrichAsync, requestClickRefreshAsync } from "./listingEnrichQueueAsync.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
 import { startWishOfferExpiryLoop } from "./wishOfferWorker.js";
@@ -360,7 +362,7 @@ import {
   updateSupportTransaction,
   verifySupportWebhook,
 } from "./support.js";
-import { crawlSourceHealth, getAdminDataHealth, getAdminOverview, searchAdminListings } from "./adminOverview.js";
+import { crawlSourceHealth, getAdminDataHealthAsync, getAdminOverviewAsync, searchAdminListings } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
@@ -653,7 +655,7 @@ app.get("/go/:id", async (req, res) => {
         setFlags(id, { viewed: true }, session.userId);
       }
       if (listing && String(listing.source || "") === "houseprice") {
-        const queued = requestClickRefresh(db, listing, "go");
+        const queued = await requestClickRefreshAsync(db, listing, "go");
         if (queued.wakeWorker) kickListingEnrich();
       }
     } catch (error) {
@@ -2410,12 +2412,20 @@ app.post("/api/admin/same-house/reconcile", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/overview", requireAdminApi, (_req, res) => {
-  res.json(getAdminOverview());
+app.get("/api/admin/overview", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getAdminOverviewAsync());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取後台總覽" });
+  }
 });
 
-app.get("/api/admin/data-health", requireAdminApi, (_req, res) => {
-  res.json(getAdminDataHealth());
+app.get("/api/admin/data-health", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getAdminDataHealthAsync());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取資料健康度" });
+  }
 });
 
 app.get("/api/admin/audit", requireAdminApi, (req, res) => {
@@ -3831,7 +3841,7 @@ app.post("/api/listings/:id/flags", async (req, res) => {
     if (req.body?.watched === true || req.body?.watched === 1) {
       queueGeoBackfill();
       if (updated && String(updated.source || "") === "houseprice") {
-        enqueueListingEnrich(db, updated, { via: "watch", priority: WATCH_PRIORITY });
+        await enqueueListingEnrichAsync(db, updated, { via: "watch", priority: WATCH_PRIORITY });
         kickListingEnrich();
       }
       try { await probeListingAliveBySource(updated); } catch { /* 關注後狀態探測失敗不擋回寫 */ }
@@ -3891,7 +3901,7 @@ app.post("/api/listings/:id/recheck", async (req, res) => {
       return;
     }
     if (source === "houseprice") {
-      const queued = requestClickRefresh(db, listing, "click");
+      const queued = await requestClickRefreshAsync(db, listing, "click");
       if (queued.wakeWorker) kickListingEnrich();
       res.json({
         supported: true,

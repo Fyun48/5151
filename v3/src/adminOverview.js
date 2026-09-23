@@ -15,6 +15,8 @@ import { lastAuditAction } from "./adminAudit.js";
 import { CONFIRM_ADMIN, CONFIRM_AUTO, CONFIRM_SUSPECTED } from "./listingGroups.js";
 import { IMPORT_STATUSES } from "./listingImport.js";
 import { listingPrepAdminStats } from "./listingEnrichQueue.js";
+// 2.3b 第二段：後台統計的 driver-aware 版本（DB_DRIVER=postgres 時讀 PostgreSQL）。
+import { listingPrepAdminStatsAsync } from "./listingEnrichQueueAsync.js";
 
 const RAKUYA_OWNER_OFF = "Owner 手動停用";
 
@@ -147,7 +149,8 @@ function sameHouseCounts() {
   };
 }
 
-export function getAdminOverview() {
+// listingPrep 由呼叫端帶入：同步入口沿用 SQLite（原本行為），async 入口給 PG 模式。
+function buildAdminOverview(listingPrep) {
   const catalog = readSiteCatalogStats();
   const listingsTotal = countSql("SELECT COUNT(*) AS n FROM listings");
   const todayNew = countSql("SELECT COUNT(*) AS n FROM listings WHERE first_seen_at >= ?", todayStartIso());
@@ -210,7 +213,7 @@ export function getAdminOverview() {
       announcementDrafts,
     },
     sameHouse,
-    listingPrep: listingPrepAdminStats(db),
+    listingPrep,
     crawl: {
       intervalMinutes: getSystemCrawl().intervalMinutes,
       districtCount: (getSystemCrawl().watchDistricts || []).length,
@@ -218,7 +221,16 @@ export function getAdminOverview() {
   };
 }
 
-export function getAdminDataHealth() {
+export function getAdminOverview() {
+  return buildAdminOverview(listingPrepAdminStats(db));
+}
+
+// DB_DRIVER=postgres 時的入口：補抓統計要讀 PostgreSQL，所以路由請 await 這個版本。
+export function getAdminOverviewAsync() {
+  return listingPrepAdminStatsAsync(db).then(buildAdminOverview);
+}
+
+function buildAdminDataHealth(listingPrep) {
   const safe = (sql) => {
     try {
       return db.prepare(sql).get() || {};
@@ -258,8 +270,16 @@ export function getAdminDataHealth() {
     missingFees: Number(row.missing_fees) || 0,
     missingFurnish: Number(row.missing_furnish) || 0,
     suspectedDuplicate: suspected,
-    listingPrep: listingPrepAdminStats(db),
+    listingPrep,
   };
+}
+
+export function getAdminDataHealth() {
+  return buildAdminDataHealth(listingPrepAdminStats(db));
+}
+
+export function getAdminDataHealthAsync() {
+  return listingPrepAdminStatsAsync(db).then(buildAdminDataHealth);
 }
 
 export function searchAdminListings(q, limit = 20) {
