@@ -226,3 +226,5 @@ cat docs/handoffs/20260921-postgres-cutover-session.md    # 就是本文件
 # 若要先補 ④（相似度／洞察）或 CRM outbox／job queue，見 §4 與 runbook 步驟 7。
 ```
 
+
+> **後續請看 `docs/handoffs/20260923-next-session-handoff.md`**（2026-09-23 收尾交接：③④ 完成、2.2 CRM 起的待辦順序、環境與憑證庫、踩過的坑）。
