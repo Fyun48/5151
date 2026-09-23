@@ -179,6 +179,70 @@ test("寫入路徑：PG 路徑的列數判斷用 rowCount（拿不到 rowCount �
 });
 
 // ---------------------------------------------------------------------------
+// 2.3b 第三段：種子查詢（seedHousepriceEnrichJobs 的候選 SELECT）
+//
+// 這條 SELECT 原本讀本機 SQLite；PG 模式下會拿到空的清單（或以本機資料產生錯誤的工作）。
+// 這裡比對「兩條 driver 挑出同一批候選、產生同一批工作」。
+// ---------------------------------------------------------------------------
+
+const SEED_READY_POST = 981201;
+const SEED_PENDING_POST = 981202;
+const SEED_STAMP = "2026-09-01T00:00:00.000Z";
+
+function seedListingsFixture() {
+  const insert = db.prepare(`INSERT OR REPLACE INTO listings(
+      post_id, source, source_id, source_key, title, url, price_num, address, floor_name,
+      lat, lng, tags, offline, first_seen_at, last_seen_at
+    ) VALUES (?, 'houseprice', ?, ?, ?, ?, 18000, ?, ?, 25.03, 121.56, '[]', 0, ?, ?)`);
+  insert.run(SEED_READY_POST, "seed-ready", "hp-seed-ready", "已 ready 的物件", "https://example.test/ready", "台北市中正區", "3F", SEED_STAMP, SEED_STAMP);
+  insert.run(SEED_PENDING_POST, "seed-pending", "hp-seed-pending", "還沒 ready 的物件", "https://example.test/pending", "台北市大安區", "5F", "2026-09-02T00:00:00.000Z", "2026-09-02T00:00:00.000Z");
+  // 已 ready 的那筆要有 prep 列（display_ready = 1）才會被種子查詢排除。
+  db.prepare("INSERT OR REPLACE INTO listing_prep(post_id, source, display_ready, prep_status) VALUES (?, 'houseprice', 1, 'ready')")
+    .run(SEED_READY_POST);
+}
+
+function resetSeedFixture() {
+  resetWriteFixture();
+  seedListingsFixture();
+}
+
+// 種子候選是從 `listings` 挑的，所以 live 測試要真的把 fixture 的 listings 刪掉，
+// 才能斷言「sqlite 分支不該有候選」（resetWriteFixture 只清 jobs／metrics／prep）。
+function clearSeedListings() {
+  db.prepare("DELETE FROM listings WHERE post_id IN (?, ?)").run(SEED_READY_POST, SEED_PENDING_POST);
+}
+
+test("種子查詢：sqlite 與 postgres 路徑挑出同一批候選並產生同一批工作", async () => {
+  resetSeedFixture();
+  const viaSqlite = await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 10 }, { driver: "sqlite" });
+  const sqliteJobs = db.prepare("SELECT post_id, status, priority, requested_via, missing_fields FROM listing_enrich_jobs ORDER BY post_id").all();
+  db.prepare("DELETE FROM listing_enrich_jobs").run();
+  const viaPg = await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 10 }, pgWriteOptions);
+  const pgJobs = db.prepare("SELECT post_id, status, priority, requested_via, missing_fields FROM listing_enrich_jobs ORDER BY post_id").all();
+  assert.equal(viaSqlite, 1, "只有還沒 ready 的那筆要被挑到");
+  assert.equal(viaPg, viaSqlite);
+  assert.deepEqual(pgJobs, sqliteJobs);
+  assert.equal(pgJobs[0].post_id, SEED_PENDING_POST);
+  assert.equal(pgJobs[0].status, "queued");
+  // 同步版也要給同一個答案（三條路徑共用同一份 SQL 與同一份 missing 推導）。
+  db.prepare("DELETE FROM listing_enrich_jobs").run();
+  assert.equal(enrich.seedHousepriceEnrichJobs(db, { limit: 10 }), 1);
+  assert.deepEqual(
+    db.prepare("SELECT post_id, status, priority, requested_via, missing_fields FROM listing_enrich_jobs ORDER BY post_id").all(),
+    pgJobs,
+  );
+});
+
+test("種子查詢：來源停用時不播種（sync 與 async 一致）", async () => {
+  resetSeedFixture();
+  const off = { isEnabled: () => false };
+  assert.equal(enrich.seedHousepriceEnrichJobs(db, { limit: 10, ...off }), 0);
+  assert.equal(await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 10, ...off }, { driver: "sqlite" }), 0);
+  assert.equal(await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 10, ...off }, pgWriteOptions), 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listing_enrich_jobs").get().n, 0);
+});
+
+// ---------------------------------------------------------------------------
 // 第二段的 live 驗證（PG_TEST_URL）：真的在影子站的 PostgreSQL 上跑一輪寫入。
 // ---------------------------------------------------------------------------
 
@@ -226,6 +290,57 @@ test("live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metr
       if (borrowed.length) {
         await driver.query("UPDATE listing_enrich_jobs SET status = 'queued', lease_until = NULL WHERE id = ANY($1::bigint[])", [borrowed]);
       }
+    } catch {
+      /* 清不掉不影響上面的斷言 */
+    }
+    await driver.close();
+  }
+});
+
+// 種子查詢的 live 驗證：影子站（＝正式站資料的匯入）有候選，本機 SQLite fixture 沒有，
+// 所以要能明確分辨「讀的是哪一個 store」。跑完把自己新增的工作刪掉。
+test("live：種子查詢讀的是 PostgreSQL，不是本機 SQLite", async (t) => {
+  const url = process.env.PG_TEST_URL;
+  if (!url) {
+    t.skip("PG_TEST_URL is not set (live listing enrich seed)");
+    return;
+  }
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const driver = await createPostgresDriver({ connectionString: url });
+  const options = { driver: "postgres", pgDriver: driver, strict: true, sqliteHandle: db };
+  const startedAt = new Date().toISOString();
+  try {
+    resetWriteFixture();
+    clearSeedListings();
+    assert.equal(
+      await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 2 }, { driver: "sqlite" }),
+      0,
+      "本機 fixture 沒有任何 listings，sqlite 分支不該有候選",
+    );
+    const seeded = await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 2 }, options);
+    assert.ok(seeded > 0, "影子站有候選（正式站資料的匯入），PG 分支要被挑到");
+    // 本機 SQLite 不可留下任何工作（PG 模式的讀與寫都必須落在 PG）。
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listing_enrich_jobs").get().n, 0, "PG 模式不可寫到本機 SQLite");
+    // 用同一組候選條件自己查一次，當作獨立對照：每一筆候選在 PG 都要有對應的工作列。
+    // （影子站上那幾筆可能本來就有工作列，所以種子是「更新」不是「新增」——不能用 created_at 找。）
+    const candidates = await driver.query(
+      `SELECT l.post_id FROM listings l
+         LEFT JOIN listing_prep p ON p.post_id = l.post_id
+        WHERE l.source = 'houseprice'
+          AND COALESCE(l.offline, 0) = 0
+          AND (p.post_id IS NULL OR p.display_ready = 0)
+        ORDER BY COALESCE(p.checked_at, l.first_seen_at) ASC, l.post_id ASC
+        LIMIT 2`,
+    );
+    assert.equal(candidates.rows.length, seeded, "挑到幾筆候選就該回報幾筆");
+    const jobs = await driver.query(
+      "SELECT post_id FROM listing_enrich_jobs WHERE post_id = ANY($1::bigint[])",
+      [candidates.rows.map((row) => Number(row.post_id))],
+    );
+    assert.equal(jobs.rows.length, seeded, "每一筆候選在 PG 都要有對應的工作列");
+  } finally {
+    try {
+      await driver.query("DELETE FROM listing_enrich_jobs WHERE requested_via = 'scheduler' AND created_at >= $1", [startedAt]);
     } catch {
       /* 清不掉不影響上面的斷言 */
     }
