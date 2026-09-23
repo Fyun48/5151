@@ -173,3 +173,33 @@ export function rebuildListingSearchProjection(db, listingRows, now = Date.now()
     throw err;
   }
 }
+
+// Idempotent safety net: fills projection rows that are missing. A row is missing only when it
+// was created before the projection existed (Phase 7) and never re-upserted since — the SQL-first
+// search paths read this table, so a missing row would simply disappear from the list. Runs in
+// bounded batches so a cold database cannot make boot slow; returns how many rows were added.
+export function backfillListingSearchProjection(db, { maxBatches = 40, batchSize = 500 } = {}) {
+  ensureListingSearchProjection(db);
+  const missingSql = `SELECT l.* FROM listings l
+    LEFT JOIN ${PROJECTION_TABLE} p ON p.post_id = l.post_id
+    WHERE p.post_id IS NULL
+    LIMIT ?`;
+  const insert = db.prepare(UPDATE_SQL);
+  let added = 0;
+  for (let i = 0; i < maxBatches; i += 1) {
+    const rows = db.prepare(missingSql).all(batchSize);
+    if (!rows.length) break;
+    db.exec("BEGIN");
+    try {
+      for (const row of rows) insert.run(...bind(computeListingProjection(row)));
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    added += rows.length;
+    if (rows.length < batchSize) break;
+  }
+  return added;
+}
+

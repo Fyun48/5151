@@ -27,8 +27,8 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
-import { ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
-import { buildListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
+import { backfillListingSearchProjection, ensureListingSearchProjection, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing } from "./match.js";
@@ -540,6 +540,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 `);
 ensureListingSearchProjection(db);
+// 訪客搜尋也讀 listing_search_projection；Phase 7 之前建立、之後沒再被 upsert 的列若不在表裡，
+// 會從清單消失。啟動後（延後一點，別跟第一批請求搶）用冪等、分批的補建把缺的列補齊。
+setTimeout(() => {
+  try {
+    backfillListingSearchProjection(db);
+  } catch {
+    /* fail-open：補建失敗只代表可能少顯示舊列，不能讓啟動或請求掛掉 */
+  }
+}, 1500);
 
 addColumnsIfMissing(db, "listings", [
   ["search_key", "TEXT NOT NULL DEFAULT ''"],
@@ -6909,6 +6918,73 @@ export function publicListingsDecorateCount() {
 }
 export function resetPublicListingsDecorateCount() {
   publicDecorateCount = 0;
+}
+
+function publicListingsSearchBuildContext() {
+  return {
+    ...listingSearchBuildContext(),
+    // Guests have no session — the personal flag clauses must run with uid 0 so they match no
+    // user_listing_flags row (the Node path loads an empty flag map for guests).
+    resolveUserId: () => 0,
+  };
+}
+
+// Guest/public SQL-first search. Same discipline as listListingsSqlFirst(): the page IDs come
+// from the indexed projection, so only the page is hydrated instead of the whole candidate set.
+// Production measured 65,342 candidates for the default guest query, all of which used to be
+// loaded and filtered in Node — ~28 s during which the synchronous SQLite work blocked every
+// other request on the container (static files included). Returns null when the query falls
+// outside the exact-equivalence envelope; callers must fall back to listPublicListings().
+export function listPublicListingsSqlFirst(args = {}) {
+  const settings = args.settings || publicSearchSettings(args);
+  const built = buildPublicListingSearchSql({ ...args, settings }, publicListingsSearchBuildContext());
+  if (!built.ok) return null;
+
+  const countRow = db.prepare(built.countQuery.sql).get(...built.countQuery.params);
+  const totalMatched = Number(countRow?.n) || 0;
+
+  // Guest paging contract (same clamp as the Node path): default 40, never more than 50.
+  const pageLimit = Math.max(1, Math.min(Number(args.limit) || 40, 50));
+  const plan = built.pageQuery({ limit: pageLimit, offset: args.offset, cursor: args.cursor ?? null });
+  const pageRows = db.prepare(plan.sql).all(...plan.params);
+  const ids = pageRows.map((row) => Number(row.post_id));
+  const fullRows = ids.length
+    ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${ids.map(() => "?").join(",")})`).all(...ids)
+    : [];
+  const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
+  publicDecorateCount += 1;
+  const listings = ids
+    .filter((id) => fullById.has(id))
+    .map((id) => {
+      const row = fullById.get(id);
+      const lite = decorateListingLite(row, settings, 0);
+      attachGuestCommute(lite, row, settings);
+      if (!Number.isFinite(Number(row.guest_commute_km))) {
+        const fit = listingFitFields(lite, guestFitSettings(settings), { guest: true });
+        lite.fit_score = fit.fit_score;
+        lite.fit_label = fit.fit_label;
+      }
+      const needPeers = Boolean(row.match_post_id || row.same_house_role);
+      return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0 });
+    });
+
+  return {
+    listings,
+    totalMatched,
+    hasMore: plan.useCursor ? ids.length === plan.pageSize : plan.start + plan.pageSize < totalMatched,
+    nextOffset: plan.start + plan.pageSize,
+    nextCursor: ids.length ? built.cursorOf(pageRows[pageRows.length - 1]) : null,
+    queryVersion: 2,
+    queryDetails: { sql_first: true, cursor: plan.useCursor },
+    guest: true,
+  };
+}
+
+// SQL-first when the query is inside the exact-equivalence envelope, otherwise the Node path —
+// the same dispatch shape the member surface uses (see searchListingsSqlite() in
+// listingSearchAsync.js).
+export function listPublicListingsFast(args = {}) {
+  return listPublicListingsSqlFirst(args) || listPublicListings(args);
 }
 
 /** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */

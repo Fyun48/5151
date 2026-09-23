@@ -31,6 +31,7 @@ import {
   rejectSuspectedMatch,
   confirmSuspectedMatch,
   listPublicListings,
+  listPublicListingsFast,
   publicSearchSettings,
   GUEST_MAX_DISTRICTS,
   runSameHouseBackfill,
@@ -565,7 +566,7 @@ app.get("/api/public/listings", async (req, res) => {
       workLat: work.workLat,
       workLng: work.workLng,
     };
-    const listed = getCachedPublicListings(query, () => listPublicListings({
+    const listed = getCachedPublicListings(query, () => listPublicListingsFast({
       ...query,
       settings: publicSearchSettings(query),
     }));
