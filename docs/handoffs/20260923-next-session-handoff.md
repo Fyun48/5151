@@ -71,8 +71,13 @@ enqueue／claim／reclaim／finish／recordEnrichMetric ＋ `helpers.enrichQueue
 **runbook §7 列的孤島到此只剩 provider／budget（見 §3.4）**。
 
 ### 3.4 provider／budget 島
-`budgetGuard.js`／`providers/*`／`callOpenAiCompat` 目前讀 SQLite（④ 刻意只把「產出的列」放 PG，見 #447 說明）。
+`budgetGuard.js`／`providers/*`／`callOpenAiCompat` 目前讀寫 SQLite（④ 刻意只把「產出的列」放 PG，見 #447 說明）。
 移植後 `loadEnabledProvider()` 等才能全走 PG，AI 成本控管也才會跟著資料庫走。
+
+⚠️ **切法注意（2026-09-23 修正）**：這一包**不能拆成「先換讀取、再換寫入」**。
+`saveProviderConfig`（寫）與 `loadEnabledProvider`（讀）是同一個 store，只換讀取會變成
+「管理介面寫 SQLite、判斷讀 PG」，LLM 會被靜默判定成未啟用。詳細的檔案、行號區間、
+語句清單、交易改法與驗證重點見 `/home/cline/PG-2.3-NOTES.md` 的「2.4 provider／budget 島」。
 
 ### 3.5 HA 切換（最後）
 runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 ＝ 可切 HA；
