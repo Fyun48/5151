@@ -25,6 +25,8 @@
 | `5151-postgres-A`（casa-nas） | 同上的 standby compose | **目前的 hot standby**（`caught_up=t`） | — |
 | `5151-haproxy` | `/opt/5151-shadow/haproxy/docker-compose.yml` | **A 組**入口（25153 網站／25433 PG `pg-rw`／25434 `pg_ro`） | — |
 | `5151-web-A` | `/opt/5151-shadow/web-a/docker-compose.yml` | **A 組**網站（2026-09-23 起讀同一套 PG，且**已接手公開站流量**） | **postgres** |
+| `5151-web-B`（syn-nas） | `~/5151-shadow/web-b/docker-compose.yml` | **B 組**網站（2026-09-23 起與 web-A 同版同 PG；HAProxy 的 `web_nodes` 兩台都在） | **postgres** |
+| `5151-worker`（syn-nas） | 同上的 compose（`profiles: ["worker"]`，**預設不啟動**） | B 組的 worker（備援）。原本與 web-B 共用 SQLite 且做白工，2026-09-23 停用 | **postgres**（啟用時） |
 | `5151-crawler` | **手動 `docker run`（沒有 compose）** | **A 組**爬蟲（與 web-a 共用 `/data`，仍寫本機 SQLite） | **sqlite** |
 
 > **2026-09-23 HA 切換（A 組）**：`5151-web-A` 的 image 改成與正式站同一顆 digest
@@ -44,6 +46,18 @@
 > 所以公開站（在 web-A）會跟著發版更新。
 > ⚠️ **web-B 在 syn-nas，發版流程的 SSH 通道只到 casa-nas**（Cloudflare Access bridge，沒有 syn-nas 的
 > secret）→ web-B 的更新目前是**手動**：把同一顆 digest 寫進它的 `.env` 後重建（見 P1 章節的指令）。
+>
+> **兩個節點的對齊清單（2026-09-23 兩台都做完）**：① image 同一顆 digest（由各自 `.env` 的 `V3_IMAGE` 注入）
+> ② `DB_DRIVER=postgres` ＋ 同一個 `PG_URL`（HAProxy `pg-rw`）③ `SESSION_SECRET` 與正式站同一組
+> （已登入會員跨節點不會被登出）④ `/data/auth.env` 複製自正式站（SMTP／OAuth／管理員帳號）。
+> 少了任一項，該節點就會「服務得到但行為不一樣」——所以**新增節點時要照這四項逐項確認**。
+>
+> **HAProxy（`/opt/5151-shadow/haproxy/haproxy.cfg`，正本在 repo `deploy/shadow-ha/haproxy/`）**：
+> `web_nodes` 有 `web-a`（casa-nas）與 `web-b`（syn-nas）兩台（預設 roundrobin），
+> 2026-09-23 加了 `option redispatch`——節點掛掉時連線失敗會立即改試另一台，
+> 不必等 health check（`inter 3s × fall 3`，最久約 9 秒）標記 DOWN。
+> **`pg_rw`／`pg_ro` 刻意不加 redispatch**：那會把寫入轉到唯讀的 standby。
+> 改完一定要 `docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg` 再 `kill -s HUP 1`（runbook 有寫）。
 
 ## 三個必須記住的事實
 
