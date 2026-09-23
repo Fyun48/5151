@@ -72,7 +72,7 @@ jobs:
           python3 .github/scripts/test-production-support.py
           tree_hash="$(node .github/scripts/production-support-check.mjs source-hash v3)"
           printf 'SOURCE_TREE_SHA256=%s\n' "$tree_hash" >> "$GITHUB_ENV"
-      - name: NAS SSH endpoint (Cloudflare Access bridge, falls back to public SSH)
+      - name: NAS SSH endpoint (Cloudflare Access bridge only; no public fallback)
         id: cf-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -80,8 +80,6 @@ jobs:
           port: "2222"
           client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          fallback-host: ${{ secrets.NAS_HOST }}
-          fallback-port: ${{ secrets.NAS_PORT }}
           ssh-user: ${{ secrets.NAS_USER }}
           ssh-key: ${{ secrets.NAS_SSH_KEY }}
       - name: Collect isolated timings and one Rakuya response
