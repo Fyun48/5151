@@ -4286,7 +4286,7 @@
       </form>
     </div>
   </div>
-      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="#me" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.57</span></footer>
+      <footer class="site-footer">reversal play tech | 逆遊科技 <a href="/spirit.html">本站理念</a> · <a href="/data.html">居住數據</a> · <a href="/support.html" id="supportFooterLink">支持本站</a> · <a href="#" id="feedbackFooterLink">意見回饋</a> <span class="site-ver">ver. 3.57</span></footer>
   <aside id="supportCtaCard" class="support-cta-card" hidden role="dialog" aria-modal="true" aria-labelledby="supportCtaTitle">
     <p class="support-kicker" id="supportCtaTitle">支持本站</p>
     <p id="supportCtaMessage">如果本站真的幫你省下時間，可以請開發者喝杯咖啡。</p>
@@ -5615,18 +5615,19 @@
       const footer = $("supportFooterLink");
       const meWrap = $("supportMeLinkWrap");
       const meLink = $("supportMeLink");
-      // Support domain（/support.html）是否真的開放。沒開放時入口留在站內帳號區，
-      // 不要把人帶去只寫「目前尚未開放線上支持入口」的頁面。
+      // Support domain（/support.html）是否真的開放。
       const domainOpen = document.body.dataset.supportDomain === "1";
+      // 入口一律是「連到 /support.html」的普通連結：即使 Support domain 關閉，那頁也會列出後台
+      // 「贊助連結」的支持方式（見 support.js / support-page.js），所以不必靠 JS 切換檢視，
+      // 點了馬上有反應（先前用 JS 切到設定頁＋捲動，使用者會覺得「沒反應」）。
       const showEntry = domainOpen || support.show_entry === true;
       if (entry) {
-        if (domainOpen) entry.href = "/support.html";
-        else if (entry.getAttribute("href") === "/support.html") entry.href = "#me";
+        entry.href = "/support.html";
         entry.hidden = !showEntry;
       }
-      if (footer) footer.href = domainOpen ? "/support.html" : "#me";
+      if (footer) footer.href = "/support.html";
       if (meWrap) meWrap.hidden = !showEntry;
-      if (meLink && domainOpen) meLink.href = "/support.html";
+      if (meLink) meLink.href = "/support.html";
     }
 
     function commsInboxItems() {
@@ -8697,17 +8698,9 @@
         await fetch(`/api/announcements/${encodeURIComponent(commsBannerId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
       }
     });
-    // 「支持本站」入口（桌機 header、頁尾）：Support domain 沒開放時不要連到 /support.html
-    // （那裡只會說尚未開放），改成打開帳號區的支持區塊，直接看到可用的支持方式。
-    for (const supportEntryId of ["supportFooterLink", "supportHeaderLink"]) {
-      $(supportEntryId)?.addEventListener("click", (ev) => {
-        const link = $(supportEntryId);
-        if (!link || link.hidden || link.getAttribute("href") === "/support.html") return;
-        ev.preventDefault();
-        setAppView("me");
-        $("supportAccountCard")?.scrollIntoView({ block: "nearest" });
-      });
-    }
+    // 「支持本站」入口（桌機 header、頁尾、帳號區）一律是連到 /support.html 的普通連結，
+    // 由 paintSupportEntry() 決定顯示與否；不需要攔截點擊，Support domain 關閉時那頁也會
+    // 列出後台「贊助連結」的支持方式。
     // support-cta.js 取得 /api/support/public 後才知道 Support domain 是否開放；知道後重畫入口。
     window.addEventListener("support-domain", () => paintSupportEntry());
     document.addEventListener("click", (ev) => {

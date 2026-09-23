@@ -88,7 +88,10 @@ test("支持本站 entry and sponsor ways come from comms instead of a dead-ende
   assert.match(html, /links\.innerHTML = ways\.map\(sponsorChipHtml\)\.join\(""\)/);
   assert.match(html, /function paintSupportEntry\(\)/);
   assert.match(html, /support\.show_entry === true/);
-  // Support domain 沒開時不要把人帶去只寫「尚未開放」的頁面。
-  assert.match(html, /domainOpen \? "\/support\.html" : "#me"/);
+  // Support domain 沒開時，入口仍然是連到 /support.html 的普通連結（那頁會列出後台「贊助連結」），
+  // 不再用 JS 切換檢視＋捲動（使用者會覺得沒反應）。
+  assert.match(html, /entry\.href = "\/support\.html"/);
+  assert.match(html, /if \(footer\) footer\.href = "\/support\.html"/);
+  assert.match(html, /<a href="\/support\.html" id="supportFooterLink">/);
   assert.match(html, /dataset\.supportDomain/);
 });
