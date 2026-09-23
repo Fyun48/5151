@@ -1,0 +1,22 @@
+{
+ "before": {
+  "headerHiddenAttr": false,
+  "headerDisplay": "flex",
+  "headerHref": "#me",
+  "footerHref": "#me",
+  "cardCopy": "支持是自願的。沒贊助也能繼續使用。",
+  "ways": [
+   "吉比需要你的支持~來份飼料~!海外信用卡 -> https://buymeacoffee.com/acefengyund"
+  ]
+ },
+ "after": {
+  "appView": "me",
+  "cardVisible": true,
+  "ways": [
+   "吉比需要你的支持~來份飼料~!海外信用卡 -> https://buymeacoffee.com/acefengyund"
+  ]
+ },
+ "problems": [
+  "TIMEOUT waiting for sponsor chip"
+ ]
+}

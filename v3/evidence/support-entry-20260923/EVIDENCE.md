@@ -95,8 +95,38 @@ not ok 905 - PR A src manifest matches git tree and fails closed when mounted db
 
 ## 5. 已知／未處理
 
-- `getScrollTop is not defined` 這個 console page error 是**既有問題**（`git show HEAD:v3/public/index.html` 同一行就存在），本次未動。
+- `getScrollTop is not defined` 這個 console page error 是**既有問題**（`git show HEAD:v3/public/index.html` 同一行就存在，
+  而且 `v3/test/client-state-wiring.test.js` 的斷言還把這個錯字一起鎖住）。同一個 PR 已修：改用既有的
+  `pageScrollY()`，並把斷言改成正確版本（另加 `assert.doesNotMatch(html, /getScrollTop/)` 擋回去）。
 - 本次刻意**沒有**改 `.chip`／`a.sponsor-chip` 的尺寸（`.chip` 在這個專案本來就不是 44px，維持既有慣例）。
 - 站內那條主動出現的贊助橫條（`#sponsorBar`）維持「只給未贊助的登入會員」，與 `sponsorLinks.js` 的既有註解一致。
 - 驗證用資料已清掉：`data-v3/v3.db` 內的測試會員（`free@example.com`）與測試用 `sponsorLinks`
   （`https://buymeacoffee.com/jibbyexample`，佔位網址）都刪除，只留原本的 `admin@local`。
+
+## 6. 部署與上線後實測（2026-09-23，`manual_owner` 路徑）
+
+```text
+PR                 #441（squash 併入 master）
+master / sha       0008fcb28feabae80c8bb330a0033f205795977f
+build              run 35814831289  → success
+image digest       sha256:c697e6aff1741428740bd94fc4ae639de1d2d0a77b1e5ebd32b58d05da653ccb
+predeploy-check    run 35814977523  → success
+deploy-v3          run 35815081496  → success
+```
+
+上線後對正式站（`https://jibbyrenth.reversalplay.me`，**訪客**身分）實測：
+
+| 檢查 | 結果 |
+| --- | --- |
+| `GET /api/comms` → `support.sponsor_links` | 1 筆：`吉比需要你的支持~來份飼料~! → https://buymeacoffee.com/acefengyund` |
+| `GET /api/support/public`（Support domain 仍關閉） | `enabled:false`，但 `sponsor_links` 有 1 筆 |
+| 桌機 1280 訪客首頁 header「支持本站」 | 可見（`display:flex`、`href="#me"`）；點擊後 `appView=me`、帳號區卡片可見並帶上述連結 |
+| 手機 375「設定」分頁 | 卡片可見並帶上述連結 |
+| `/support.html`（桌機 1280／手機 375） | hero＝支持本站＋免費聲明、「支持方式」列出上述連結、方案卡隱藏、無 console error、無橫向溢出 |
+
+截圖：`shots/prod-375-account-support-ways.png`、`shots/prod-1280-account-support-ways.png`、
+`shots/prod-375-support-page-ways.png`；DOM 實測輸出：`prod-verify.json`。
+
+> 註：`prod-verify.json` 內有一行 `TIMEOUT waiting for sponsor chip`。那是驗證腳本用
+> `waitForSelector`（預設等「可見」）去等一個位在**已隱藏**的「設定」檢視裡的元素造成的誤判，
+> 同一次輸出裡 `ways` 已列出該連結、點擊後 `cardVisible=true`，不是頁面問題。
