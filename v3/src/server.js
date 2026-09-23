@@ -2067,28 +2067,28 @@ app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) =
 app.get("/api/admin/crm", requireAdminApi, async (req, res) => {
   try {
       res.json({
-        ...(await getCrmOverview({ q: req.query?.q })),
-        sync: getCrmDeliveryControl(),
+        ...(await await getCrmOverview({ q: req.query?.q })),
+        sync: await getCrmDeliveryControl(),
       });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message });
   }
 });
 
-app.put("/api/admin/crm/module", requireAdminApi, (req, res) => {
+app.put("/api/admin/crm/module", requireAdminApi, async (req, res) => {
   const enabled = !(req.body?.enabled === false || req.body?.enabled === 0 || req.body?.enabled === "0");
-  res.json({ module: setCrmModuleEnabled(enabled), sync: getCrmDeliveryControl() });
+  res.json({ module: await setCrmModuleEnabled(enabled), sync: await getCrmDeliveryControl() });
 });
 
-app.put("/api/admin/crm/sync", requireAdminApi, (req, res) => {
+app.put("/api/admin/crm/sync", requireAdminApi, async (req, res) => {
   const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
-  res.json(setCrmDeliveryStop(stop));
+  res.json(await setCrmDeliveryStop(stop));
 });
 
 app.get("/api/admin/crm/contacts/:id", requireAdminApi, async (req, res) => {
   try {
       try {
-        res.json(await getCrmContact(req.params.id));
+        res.json(await await getCrmContact(req.params.id));
       } catch (error) {
         res.status(error.status || 400).json({ error: error.message });
       }
@@ -2097,65 +2097,65 @@ app.get("/api/admin/crm/contacts/:id", requireAdminApi, async (req, res) => {
   }
 });
 
-app.post("/api/admin/crm/contacts", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/contacts", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createCrmContact(req.body || {}, { actorUserId: actorUserId(req) }));
+    res.status(201).json(await createCrmContact(req.body || {}, { actorUserId: actorUserId(req) }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/crm/contacts/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/crm/contacts/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateCrmContact(req.params.id, req.body || {}));
+    res.json(await updateCrmContact(req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/crm/contacts/:id/cases", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/contacts/:id/cases", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createCrmCase(req.params.id, req.body || {}));
+    res.status(201).json(await createCrmCase(req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/crm/cases/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/crm/cases/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateCrmCase(req.params.id, req.body || {}));
+    res.json(await updateCrmCase(req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/crm/contacts/:id/notes", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/contacts/:id/notes", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(addCrmNote(req.params.id, req.body || {}, { actorUserId: actorUserId(req) }));
+    res.status(201).json(await addCrmNote(req.params.id, req.body || {}, { actorUserId: actorUserId(req) }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/crm/contacts/:id/todos", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/contacts/:id/todos", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(addCrmTodo(req.params.id, req.body || {}));
+    res.status(201).json(await addCrmTodo(req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/crm/todos/:id/done", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/todos/:id/done", requireAdminApi, async (req, res) => {
   try {
-    res.json(setCrmTodoDone(req.params.id, req.body?.done !== false));
+    res.json(await setCrmTodoDone(req.params.id, req.body?.done !== false));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, (req, res) => {
+app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createCrmFromFeedback(req.params.id));
+    res.status(201).json(await createCrmFromFeedback(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

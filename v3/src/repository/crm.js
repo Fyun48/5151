@@ -112,3 +112,114 @@ export async function readFeedbackBrief(exec, feedbackId) {
   return ((await exec(query.sql, query.params)) || [])[0] || null;
 }
 
+
+// ---- 2.2b：寫入動作與佇列寫入 ----
+// createCase 用 INSERT ... RETURNING id 取 id（SQLite 端原本用 lastInsertRowid，PG 沒有這個東西）。
+export const CRM_WRITE_TABLES = [...CRM_READ_TABLES, "crm_outbox"];
+
+export function contactInsertQuery(values) {
+  return {
+    sql: `INSERT INTO crm_contacts(display_name, company_name, user_id, email, phone, line_id, assigned_to, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    params: values,
+  };
+}
+
+export function contactUpdateQuery(values) {
+  return {
+    sql: `UPDATE crm_contacts
+       SET display_name=?, company_name=?, user_id=?, email=?, phone=?, line_id=?, assigned_to=?, updated_at=?
+     WHERE id=?`,
+    params: values,
+  };
+}
+
+export function caseInsertQuery(values) {
+  return {
+    sql: `INSERT INTO crm_cases(contact_id, feedback_id, title, handling_state, assigned_to, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    params: values,
+  };
+}
+
+export function caseUpdateQuery(values) {
+  return {
+    sql: `UPDATE crm_cases
+       SET title=?, handling_state=?, feedback_id=?, assigned_to=?, updated_at=?
+     WHERE id=?`,
+    params: values,
+  };
+}
+
+export function caseRowQuery(caseId) {
+  return { sql: "SELECT * FROM crm_cases WHERE id = ?", params: [Number(caseId) || 0] };
+}
+
+export function contactTouchQuery(stamp, contactId) {
+  return { sql: "UPDATE crm_contacts SET updated_at=? WHERE id=?", params: [stamp, Number(contactId) || 0] };
+}
+
+export function noteInsertQuery(values) {
+  return {
+    sql: `INSERT INTO crm_notes(contact_id, case_id, body, author_user_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+    params: values,
+  };
+}
+
+export function todoInsertQuery(values) {
+  return {
+    sql: `INSERT INTO crm_todos(contact_id, case_id, title, due_at, done_at, assigned_to, created_at)
+      VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+    params: values,
+  };
+}
+
+export function todoRowQuery(todoId) {
+  return { sql: "SELECT * FROM crm_todos WHERE id = ?", params: [Number(todoId) || 0] };
+}
+
+export function todoDoneQuery(stamp, todoId) {
+  return { sql: "UPDATE crm_todos SET done_at=? WHERE id=?", params: [stamp, Number(todoId) || 0] };
+}
+
+// 標籤：PG 不支援 INSERT OR IGNORE，改寫成 ON CONFLICT DO NOTHING。
+export function tagDeleteQuery(contactId) {
+  return { sql: "DELETE FROM crm_contact_tags WHERE contact_id=?", params: [Number(contactId) || 0] };
+}
+
+export function tagUpsertQuery(name) {
+  return { sql: "INSERT INTO crm_tags(name) VALUES (?) ON CONFLICT(name) DO NOTHING", params: [name] };
+}
+
+export function tagIdQuery(name) {
+  return { sql: "SELECT id FROM crm_tags WHERE name=?", params: [name] };
+}
+
+export function contactTagInsertQuery(contactId, tagId) {
+  return {
+    sql: "INSERT INTO crm_contact_tags(contact_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    params: [Number(contactId) || 0, Number(tagId) || 0],
+  };
+}
+
+export function crmSyncStopQuery() {
+  return { sql: "SELECT value FROM settings WHERE key = ?", params: ["ops_crm_stop"] };
+}
+
+export function outboxInsertQuery(values) {
+  return {
+    sql: `INSERT INTO crm_outbox(delivery_id, idempotency_key, contact_id, payload, status, attempts, max_attempts, next_attempt_at, created_at)
+      VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?)`,
+    params: values,
+  };
+}
+
+export async function runWrite(exec, sql, params) {
+  await exec(sql, params);
+}
+
+export async function insertReturningId(exec, query) {
+  const rows = (await exec(query.sql, query.params)) || [];
+  return Number((rows[0] || {}).id) || 0;
+}
+

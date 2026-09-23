@@ -289,7 +289,7 @@ import {
 } from "./crm.js";
 import { ensureCrmOutboxSchema } from "./crmOutbox.js";
 import { crmDeliveryControl, setLocalCrmSyncStopped } from "./crmDelivery.js";
-import { crmModuleAsync, crmOverviewAsync, getCrmContactAsync } from "./crmAsync.js";
+import { addNoteAsync, addTodoAsync, createCaseAsync, createContactAsync, crmModuleAsync, crmOverviewAsync, getCrmContactAsync, setTodoDoneAsync, updateCaseAsync, updateContactAsync } from "./crmAsync.js";
 import {
   bindBudgetDb,
   ensureBudgetSchema,
@@ -1951,32 +1951,32 @@ export async function getCrmContact(id) {
   return getCrmContactAsync(id);
 }
 
-export function createCrmContact(input, opts) {
-  return createContactOn(db, input, opts);
+export async function createCrmContact(input, opts) {
+  return createContactAsync(input, opts);
 }
 
-export function updateCrmContact(id, input) {
-  return updateContactOn(db, id, input);
+export async function updateCrmContact(id, input) {
+  return updateContactAsync(id, input);
 }
 
-export function createCrmCase(contactId, input) {
-  return createCaseOn(db, contactId, input);
+export async function createCrmCase(contactId, input) {
+  return createCaseAsync(contactId, input);
 }
 
-export function updateCrmCase(caseId, input) {
-  return updateCaseOn(db, caseId, input);
+export async function updateCrmCase(caseId, input) {
+  return updateCaseAsync(caseId, input);
 }
 
-export function addCrmNote(contactId, input, opts) {
-  return addNoteOn(db, contactId, input, opts);
+export async function addCrmNote(contactId, input, opts) {
+  return addNoteAsync(contactId, input, opts);
 }
 
-export function addCrmTodo(contactId, input) {
-  return addTodoOn(db, contactId, input);
+export async function addCrmTodo(contactId, input) {
+  return addTodoAsync(contactId, input);
 }
 
-export function setCrmTodoDone(todoId, done) {
-  return setTodoDoneOn(db, todoId, done);
+export async function setCrmTodoDone(todoId, done) {
+  return setTodoDoneAsync(todoId, done);
 }
 
 export async function getCrmModule() {
