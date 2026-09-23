@@ -75,3 +75,9 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 **不要把值寫進 repo／PR／對話**；要引用時只寫檔名與鍵名。
 詳見 `docs/runbooks/shared-infra-access.md` §5.1。
 
+
+## 回覆風格與用語（Owner 指定，所有專案適用）
+
+回覆請用**台灣的繁體中文與台灣慣用語**，不要用中國大陸的用詞；句子要通順、要能一次看懂。
+完整規範與對照表放在跨專案共用的 `/home/cline/USER-STYLE.md`，請先讀它再回覆。
+
