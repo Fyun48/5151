@@ -439,7 +439,7 @@ function percentile(list, p) {
   return sorted[idx];
 }
 
-function stageSummary(rows, key) {
+export function stageSummary(rows, key) {
   const vals = rows.map((row) => metricNumber(row[key])).filter((n) => n != null);
   return { n: vals.length, p50: percentile(vals, 50), p95: percentile(vals, 95) };
 }
