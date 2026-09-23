@@ -22,16 +22,37 @@ import {
   INSIGHT_APPLY_SETTING_KEY,
   PACK7_PHASH_BASELINE,
   PHASH_SETTING_KEY,
+  enqueueListingSimilarity as enqueueListingSimilaritySync,
   getSimilarityAdmin as getSimilarityAdminSync,
+  hardVetoReasons,
   isInsightApplyEnabled as isInsightApplyEnabledSync,
   isPhashEnabled as isPhashEnabledSync,
   listRecentInsights as listRecentInsightsSync,
   listSimilaritySuggestions as listSimilaritySuggestionsSync,
+  recordCrawlInsight as recordCrawlInsightSync,
+  recordListingPhash as recordListingPhashSync,
   reviewSimilarity as reviewSimilaritySync,
   savePhashSettings as savePhashSettingsSync,
+  shouldAskLlm,
   shouldEnqueueSimilarity as shouldEnqueueSimilaritySync,
+  suggestFromNewHash as suggestFromNewHashSync,
 } from "./listingSimilarity.js";
 import * as repo from "./repository/listingSimilarity.js";
+import { matchVeto, scoreMatch } from "./match.js";
+import { loadEnabledProvider } from "./budgetGuard.js";
+import {
+  PHASH_ALGO,
+  PHASH_SIMILAR_MAX,
+  imageKeyFromUrl,
+  normalizePhashHex,
+  pairwiseSimilarHashes,
+  phashFromImageUrl,
+} from "./phash.js";
+import {
+  compareSameHouseWithLlm,
+  extractCrawlInsight,
+  sourceTextHash,
+} from "./providers/llm.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -258,5 +279,172 @@ export function getSimilarityAdminAsync(options = {}) {
 // Exposed for tests/diagnostics: the builders the PostgreSQL admin path runs.
 export function listingSimilarityAdminContext() {
   return repo;
+}
+
+// listingSimilarity.js recordListingPhash()
+export function recordListingPhashAsync(listing, options = {}) {
+  return withFallback(
+    options,
+    async (exec) => {
+      const postId = Number(listing?.post_id) || 0;
+      const url = String(listing?.cover || listing?.image_url || "").trim();
+      const imageKey = imageKeyFromUrl(url);
+      if (!postId || !imageKey) return null;
+      const hex = await phashFromImageUrl(url, options);
+      const phash = normalizePhashHex(hex);
+      if (!phash) return null;
+      const algoVersion = options.algoVersion || PHASH_ALGO;
+      const stamp = iso(options.now);
+      await repo.insertPhash(exec, { postId, url, imageKey, algoVersion, phash, stamp });
+      return { post_id: postId, image_url: url, image_key: imageKey, algo_version: algoVersion, phash, computed_at: stamp };
+    },
+    () => recordListingPhashSync(sqliteFor(options), listing, options),
+  );
+}
+
+// listingSimilarity.js suggestFromNewHash()：配對、veto／LLM evidence、upsert 建議。
+export function suggestFromNewHashAsync(listing, recorded, options = {}) {
+  return withFallback(
+    options,
+    async (exec) => {
+      const postId = Number(listing?.post_id || recorded?.post_id) || 0;
+      if (!postId || !recorded?.phash) return [];
+      const algoVersion = recorded.algo_version || PHASH_ALGO;
+      const others = await repo.otherHashes(exec, algoVersion, postId);
+      const pairs = pairwiseSimilarHashes([{ post_id: postId, phash: recorded.phash }, ...others], {
+        maxDistance: options.maxDistance ?? PHASH_SIMILAR_MAX,
+      }).filter((pair) => pair.listing_a === postId || pair.listing_b === postId);
+
+      const created = [];
+      for (const pair of pairs) {
+        const peerId = pair.listing_a === postId ? pair.listing_b : pair.listing_a;
+        const peer = (await listingRowById(exec, peerId)) || { post_id: peerId };
+        const veto = matchVeto(listing, peer);
+        const hard = hardVetoReasons(listing, peer);
+        const matchHit = scoreMatch(listing, peer);
+        const evidence = {
+          signals: ["phash"],
+          hamming: pair.hamming,
+          algo_version: algoVersion,
+          phash_a: pair.phash_a,
+          phash_b: pair.phash_b,
+          veto,
+          match_level: matchHit?.level || null,
+          llm: null,
+        };
+        if (hard.length) {
+          evidence.blocked_by_veto = hard;
+        } else if (shouldAskLlm({ hamming: pair.hamming, veto, matchHit }) && loadEnabledProvider(sqliteFor(options), "llm")) {
+          // provider／budget 堆疊仍是 SQLite 島（見第二段開頭）；建議列本身寫進 PG。
+          try {
+            const llm = await compareSameHouseWithLlm(sqliteFor(options), listing, peer, options);
+            if (llm) evidence.llm = llm;
+          } catch {
+            evidence.llm = null;
+          }
+        }
+        const row = await upsertSuggestionPair(exec, pair, evidence, options.now);
+        if (row && !row.kept) {
+          const a = await listingRowById(exec, row.listing_a);
+          const b = await listingRowById(exec, row.listing_b);
+          created.push(publicSuggestionFrom(row, a, b));
+        }
+      }
+      return created;
+    },
+    () => suggestFromNewHashSync(sqliteFor(options), listing, recorded, options),
+  );
+}
+
+// listingSimilarity.js upsertSuggestion()：非 pending 的人工判定優先保留（kept）。
+async function upsertSuggestionPair(exec, pair, evidence, now) {
+  const lo = Math.min(Number(pair.listing_a), Number(pair.listing_b));
+  const hi = Math.max(Number(pair.listing_a), Number(pair.listing_b));
+  if (!lo || !hi || lo === hi) return null;
+  const existing = await repo.suggestionPair(exec, lo, hi);
+  if (existing && existing.review_state !== "pending") {
+    return { ...existing, listing_a: lo, listing_b: hi, kept: true };
+  }
+  await repo.upsertSuggestion(exec, lo, hi, evidence, iso(now));
+  return repo.suggestionPairRow(exec, lo, hi);
+}
+
+// ---- 第二段：佇列寫入（phash／建議／洞察）----
+//
+// 資料本體（listing_image_phash／listing_similarity_suggestion／listing_crawl_insight）寫進
+// **與 UI 同一個 store**（PG 模式就是 PostgreSQL）——這正是「後台讀得到、佇列卻填不進去」的修法。
+//
+// ⚠️ 刻意的階段切法：**呼叫外部 provider 的兩步仍用 SQLite handle**
+// （`loadEnabledProvider()`／`compareSameHouseWithLlm()`／`extractCrawlInsight()`），因為
+// provider／budget 堆疊（budgetGuard.js／providers/*）本身還是 SQLite 島，那是另一個島
+// （runbook §7）。決策與 evidence 逐字沿用 listingSimilarity.js。
+const APPLY_STATES = new Set(["hint_only", "applied_empty", "skipped"]);
+
+// listingSimilarity.js enqueueListingSimilarity()：整個佇列的入口。
+export function enqueueListingSimilarityAsync(listing, options = {}) {
+  return withFallback(
+    options,
+    async (exec) => {
+      const out = { phash: null, suggestions: [], insight: null, skipped: null };
+      if (!listing?.post_id) {
+        out.skipped = "no_listing";
+        return out;
+      }
+      const phashOn = await isPhashEnabledAsync(options);
+      if (phashOn) {
+        out.phash = await recordListingPhashAsync(listing, { ...options, exec });
+        if (out.phash) out.suggestions = await suggestFromNewHashAsync(listing, out.phash, { ...options, exec });
+      }
+      if (loadEnabledProvider(sqliteFor(options), "llm_crawl_insight")) {
+        out.insight = await recordCrawlInsightAsync(listing, { ...options, exec });
+      }
+      if (!out.phash && !out.insight && !out.suggestions.length) {
+        out.skipped = phashOn ? "no_fingerprint" : "disabled";
+      }
+      return out;
+    },
+    () => enqueueListingSimilaritySync(sqliteFor(options), listing, options),
+  );
+}
+
+// listingSimilarity.js recordCrawlInsight()
+export function recordCrawlInsightAsync(listing, options = {}) {
+  return withFallback(
+    options,
+    async (exec) => {
+      const postId = Number(listing?.post_id) || 0;
+      if (!postId) return null;
+      const hints = await extractCrawlInsight(sqliteFor(options), listing, options); // provider 島：見上
+      if (!hints) return null;
+      const hash = sourceTextHash(listing);
+      let applyState = "hint_only";
+      if ((await isInsightApplyEnabledAsync(options)) && Number(hints.confidence) >= 0.85) {
+        applyState = await maybeFillEmptyStructuredAsync(exec, listing, hints);
+      }
+      await repo.insertInsight(
+        exec,
+        postId,
+        hash,
+        hints,
+        APPLY_STATES.has(applyState) ? applyState : "hint_only",
+        iso(options.now),
+      );
+      return repo.insightRow(exec, postId, hash);
+    },
+    () => recordCrawlInsightSync(sqliteFor(options), listing, options),
+  );
+}
+
+// listingSimilarity.js maybeFillEmptyStructured()：只補空白欄，回傳 apply_state。
+async function maybeFillEmptyStructuredAsync(exec, listing, hints) {
+  if (!listing?.post_id || !hints) return "hint_only";
+  const emptyFloor = !String(listing.floor_name || "").trim() && hints.floor;
+  if (!emptyFloor) return "hint_only";
+  try {
+    await repo.applyFloorHint(exec, listing.post_id, hints.floor);
+    return "applied_empty";
+  } catch {
+    return "hint_only";
+  }
 }
 
