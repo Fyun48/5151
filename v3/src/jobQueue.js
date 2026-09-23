@@ -342,3 +342,10 @@ export function createJobQueue({ driver = "sqlite", sqliteDb = null, pgPool = nu
   return sqliteQueue(sqliteDb);
 }
 
+
+// PG 的 job_queue 是從 SQLite 鏡射建表的，唯一性（idempotency_key）不會自動帶過去；
+// 缺這個索引時，PG 會直接拒絕 `ON CONFLICT (idempotency_key)`（42P10）。
+export async function ensurePgJobQueueIndex(pool) {
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS job_queue_idempotency_key_uniq ON job_queue(idempotency_key)");
+}
+
