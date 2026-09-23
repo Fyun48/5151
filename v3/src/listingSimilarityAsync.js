@@ -390,7 +390,7 @@ export function enqueueListingSimilarityAsync(listing, options = {}) {
         out.skipped = "no_listing";
         return out;
       }
-      const phashOn = await isPhashEnabledAsync(options);
+      const phashOn = await isPhashEnabledAsync({ ...options, exec });
       if (phashOn) {
         out.phash = await recordListingPhashAsync(listing, { ...options, exec });
         if (out.phash) out.suggestions = await suggestFromNewHashAsync(listing, out.phash, { ...options, exec });
