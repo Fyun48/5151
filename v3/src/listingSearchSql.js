@@ -66,6 +66,8 @@ export function buildListingSearchSql(args = {}, deps = {}) {
     matchVoteUserId,
   } = args;
 
+  const allowAllDistricts = args.allowAllDistricts === true;
+
   if (filter !== "all") return outOfEnvelope("filter");
   if (kind || sources || q) return outOfEnvelope("kind_or_sources_or_q");
   if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
@@ -86,8 +88,14 @@ export function buildListingSearchSql(args = {}, deps = {}) {
 
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
     .map((name) => String(name || "").trim()).filter(Boolean);
-  const districtNames = requestedDistricts.length ? requestedDistricts : deps.memberRegionDistrictNames(settings);
-  if (!districtNames.length) return outOfEnvelope("districts");
+  // Members always search inside their saved regions, so an empty district list expands to
+  // memberRegionDistrictNames(). The public/guest surface has no saved regions: an empty list
+  // means "all districts", exactly like the Node path (it only applies the district set when
+  // the visitor actually picked districts).
+  const districtNames = requestedDistricts.length
+    ? requestedDistricts
+    : (allowAllDistricts ? [] : deps.memberRegionDistrictNames(settings));
+  if (!districtNames.length && !allowAllDistricts) return outOfEnvelope("districts");
 
   const clauses = [];
   const params = [];
@@ -117,7 +125,10 @@ export function buildListingSearchSql(args = {}, deps = {}) {
         ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
         : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
 
-  const districtWhere = `p.district IN (${districtNames.map(() => "?").join(",")})`;
+  const districtWhere = districtNames.length
+    ? `p.district IN (${districtNames.map(() => "?").join(",")})`
+    : "";
+  const districtSql = districtWhere ? `AND ${districtWhere}` : "";
   const displayFilter = sqlDisplayFilter(settings);
 
   // Cursor/keyset pagination. The cursor encodes the full sort key of the last
@@ -159,7 +170,7 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   const countQuery = {
     sql: `SELECT COUNT(*) AS n FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-    AND ${districtWhere}
+    ${districtSql}
     ${displayFilter}`,
     params: [...params, ...districtNames],
   };
@@ -177,7 +188,7 @@ export function buildListingSearchSql(args = {}, deps = {}) {
       : [...params, ...districtNames, pageSize, start];
     const sql = `SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
     WHERE p.post_id IN (SELECT post_id FROM listings ${where})
-    AND ${districtWhere}
+    ${districtSql}
     ${displayFilter}
     ${cursorWhere}
     ORDER BY ${orderBy}
@@ -202,4 +213,34 @@ export function buildListingSearchSql(args = {}, deps = {}) {
     countQuery,
     pageQuery,
   };
+}
+
+// Guest / public surface (`GET /api/public/listings`). Same statement text and same envelope as
+// the member path — the only differences mirror listPublicListings() in db.js:
+//   • no logged-in user: the personal flag clauses run with uid 0, which matches no
+//     user_listing_flags row (the Node path loads an empty flag map for guests),
+//   • an empty district list means "all districts" (guests have no saved regions),
+//   • the guest straight-line commute filter is JS-only (it needs the visitor's lat/lng per
+//     row), so a query that sets guestCommuteKm with a work point stays out of envelope and
+//     falls back to the Node path.
+// Returns `{ ok: false }` outside the envelope, exactly like buildListingSearchSql().
+export function buildPublicListingSearchSql(args = {}, deps = {}) {
+  assertListingSearchDeps(deps);
+  const { filter = "all", kind = "", sources = "", q = "", sort = "newest", settings = {} } = args;
+
+  if (filter !== "all") return outOfEnvelope("filter");
+  if (kind || sources || q) return outOfEnvelope("kind_or_sources_or_q");
+  if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
+
+  const guestKm = Number(settings.guestCommuteKm) || 0;
+  const guestWorkLat = Number(settings.guestWorkLat);
+  const guestWorkLng = Number(settings.guestWorkLng);
+  if (guestKm > 0 && Number.isFinite(guestWorkLat) && Number.isFinite(guestWorkLng)) {
+    return outOfEnvelope("guest_commute");
+  }
+
+  return buildListingSearchSql(
+    { ...args, settings, userId: 0, matchVoteUserId: 0, allowAllDistricts: true },
+    deps,
+  );
 }
