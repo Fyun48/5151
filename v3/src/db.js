@@ -301,11 +301,13 @@ import { executeWithProvider } from "./providers/executeWithProvider.js";
 import {
   ensureListingSimilaritySchema,
   enqueueListingSimilarity,
-  getSimilarityAdmin,
-  reviewSimilarity,
-  savePhashSettings,
   shouldEnqueueSimilarity,
 } from "./listingSimilarity.js";
+import {
+  getSimilarityAdminAsync,
+  reviewSimilarityAsync,
+  savePhashSettingsAsync,
+} from "./listingSimilarityAsync.js";
 import {
   closeSelfListing as closeSelfListingOn,
   createSelfListing as createSelfListingOn,
@@ -1008,16 +1010,18 @@ export function saveAdminSiteBudget(partial = {}) {
   return saveSiteBudget(db, partial);
 }
 
-export function getAdminSimilaritySettings() {
-  return getSimilarityAdmin(db);
+// ④ 第一段：審核 UI／設定改走 driver-aware（PG 模式讀寫 PostgreSQL，不再讀本機 SQLite）。
+// 呼叫端（server.js 的 admin 路由）已改成 await；sqlite 模式行為與輸出完全不變。
+export function getAdminSimilaritySettings(options = {}) {
+  return getSimilarityAdminAsync(options);
 }
 
-export function saveAdminPhashSettings(partial = {}) {
-  return savePhashSettings(db, partial);
+export function saveAdminPhashSettings(partial = {}, options = {}) {
+  return savePhashSettingsAsync(partial, options);
 }
 
-export function reviewAdminSimilarity(id, partial = {}, userId = 0) {
-  return reviewSimilarity(db, id, partial, userId);
+export function reviewAdminSimilarity(id, partial = {}, userId = 0, options = {}) {
+  return reviewSimilarityAsync(id, partial, userId, options);
 }
 
 export async function testAdminProvider(partial = {}) {
