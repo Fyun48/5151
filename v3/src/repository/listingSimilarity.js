@@ -116,3 +116,118 @@ export async function listInsights(exec, limit = 20) {
   const query = listInsightsQuery(limit);
   return (await exec(query.sql, query.params)) || [];
 }
+
+// ---- 第二段：佇列寫入（phash 指紋／同源建議／爬蟲洞察）----
+//
+// 語句文字與 listingSimilarity.js 逐字相同（兩邊共用同一份），只有 `IFNULL` 改成等價且兩個
+// driver 都吃的 `COALESCE`（SQLite 也支援）。決策（hardVetoReasons／shouldAskLlm／配對）留在
+// listingSimilarityAsync.js，這裡只負責 SQL。
+export function insertPhashQuery({ postId, url, imageKey, algoVersion, phash, stamp }) {
+  return {
+    sql: `INSERT INTO listing_image_phash(post_id, image_url, image_key, algo_version, phash, computed_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(post_id, image_key, algo_version) DO UPDATE SET
+        image_url = excluded.image_url,
+        phash = excluded.phash,
+        computed_at = excluded.computed_at`,
+    params: [Number(postId) || 0, String(url).slice(0, 500), imageKey, algoVersion, phash, stamp],
+  };
+}
+
+export function otherHashesQuery(algoVersion, postId) {
+  return {
+    sql: "SELECT post_id, phash, image_key FROM listing_image_phash WHERE algo_version = ? AND post_id != ?",
+    params: [algoVersion, Number(postId) || 0],
+  };
+}
+
+export function suggestionPairQuery(lo, hi) {
+  return {
+    sql: "SELECT id, review_state, evidence_json FROM listing_similarity_suggestion WHERE listing_a = ? AND listing_b = ?",
+    params: [lo, hi],
+  };
+}
+
+export function suggestionPairRowQuery(lo, hi) {
+  return {
+    sql: "SELECT * FROM listing_similarity_suggestion WHERE listing_a = ? AND listing_b = ?",
+    params: [lo, hi],
+  };
+}
+
+export function upsertSuggestionQuery(lo, hi, evidence, stamp) {
+  return {
+    sql: `INSERT INTO listing_similarity_suggestion(listing_a, listing_b, evidence_json, review_state, created_at)
+    VALUES (?, ?, ?, 'pending', ?)
+    ON CONFLICT(listing_a, listing_b) DO UPDATE SET
+      evidence_json = excluded.evidence_json
+    WHERE listing_similarity_suggestion.review_state = 'pending'`,
+    params: [lo, hi, JSON.stringify(evidence), stamp],
+  };
+}
+
+export function insertInsightQuery(postId, hash, hints, applyState, stamp) {
+  return {
+    sql: `INSERT INTO listing_crawl_insight(post_id, source_text_hash, hints_json, apply_state, created_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(post_id, source_text_hash) DO UPDATE SET
+      hints_json = excluded.hints_json,
+      apply_state = excluded.apply_state`,
+    params: [Number(postId) || 0, hash, JSON.stringify(hints), applyState, stamp],
+  };
+}
+
+export function insightRowQuery(postId, hash) {
+  return {
+    sql: "SELECT * FROM listing_crawl_insight WHERE post_id = ? AND source_text_hash = ?",
+    params: [Number(postId) || 0, hash],
+  };
+}
+
+// listingSimilarity.js maybeFillEmptyStructured()：只補空白欄（IFNULL → COALESCE，兩邊等價）。
+export function applyFloorHintQuery(postId, floor) {
+  return {
+    sql: "UPDATE listings SET floor_name = ? WHERE post_id = ? AND COALESCE(floor_name, '') = ''",
+    params: [String(floor).slice(0, 40), Number(postId) || 0],
+  };
+}
+
+export async function insertPhash(exec, row) {
+  const query = insertPhashQuery(row);
+  await exec(query.sql, query.params);
+}
+
+export async function otherHashes(exec, algoVersion, postId) {
+  const query = otherHashesQuery(algoVersion, postId);
+  return (await exec(query.sql, query.params)) || [];
+}
+
+export async function suggestionPair(exec, lo, hi) {
+  const query = suggestionPairQuery(lo, hi);
+  return (await exec(query.sql, query.params))?.[0] || null;
+}
+
+export async function suggestionPairRow(exec, lo, hi) {
+  const query = suggestionPairRowQuery(lo, hi);
+  return (await exec(query.sql, query.params))?.[0] || null;
+}
+
+export async function upsertSuggestion(exec, lo, hi, evidence, stamp) {
+  const query = upsertSuggestionQuery(lo, hi, evidence, stamp);
+  await exec(query.sql, query.params);
+}
+
+export async function insertInsight(exec, postId, hash, hints, applyState, stamp) {
+  const query = insertInsightQuery(postId, hash, hints, applyState, stamp);
+  await exec(query.sql, query.params);
+}
+
+export async function insightRow(exec, postId, hash) {
+  const query = insightRowQuery(postId, hash);
+  return (await exec(query.sql, query.params))?.[0] || null;
+}
+
+export async function applyFloorHint(exec, postId, floor) {
+  const query = applyFloorHintQuery(postId, floor);
+  await exec(query.sql, query.params);
+}

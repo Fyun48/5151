@@ -304,9 +304,11 @@ import {
   shouldEnqueueSimilarity,
 } from "./listingSimilarity.js";
 import {
+  enqueueListingSimilarityAsync,
   getSimilarityAdminAsync,
   reviewSimilarityAsync,
   savePhashSettingsAsync,
+  shouldEnqueueSimilarityAsync,
 } from "./listingSimilarityAsync.js";
 import {
   closeSelfListing as closeSelfListingOn,
@@ -4220,8 +4222,9 @@ export function upsertListing(listing) {
  *                the search projection and the change-log entry, mirroring the order and the
  *                event types of upsertListing()
  *
- * NOT ported here: enqueueSimilaritySafe() (the pHash/similarity queue) stays SQLite-shaped, so a
- * PostgreSQL ingest does not enqueue image fingerprints yet - recorded in POSTGRES_SWITCH_PLAN.
+ * NOT ported here: the LLM provider／budget stack (budgetGuard.js／providers/*) is still SQLite-shaped,
+ * so the insight/LLM *calls* keep using the SQLite handle — but the rows they produce (指紋／建議／洞察)
+ * now land in the same store the site reads (enqueueSimilaritySafeAsync + ④ 第二段).
  */
 export async function persistListing(listing, { driver = resolveDbDriver(), pgDriver = null } = {}) {
   if (driver !== "postgres") {
@@ -4239,6 +4242,7 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
     entityId: Number(listing?.post_id) || 0,
     eventType: changeEvent,
   });
+  enqueueSimilaritySafeAsync(listing, pool);
   return { driver: "postgres", changeEvent };
 }
 
@@ -4247,6 +4251,21 @@ function enqueueSimilaritySafe(listing) {
     if (!listing?.post_id || !shouldEnqueueSimilarity(db)) return;
     queueMicrotask(() => {
       Promise.resolve(enqueueListingSimilarity(db, listing)).catch(() => {});
+    });
+  } catch {
+    // 指紋失敗不擋入庫
+  }
+}
+
+// ④ 第二段：PG 入庫後的同一個 best-effort 佇列（指紋／同源建議／爬蟲洞察寫進 PostgreSQL）。
+// 一律不擋入庫、失敗只吞掉；要不要跑由 shouldEnqueueSimilarityAsync()（＝設定或 provider 開關）決定。
+function enqueueSimilaritySafeAsync(listing, pgDriver) {
+  try {
+    if (!listing?.post_id) return;
+    queueMicrotask(() => {
+      Promise.resolve(shouldEnqueueSimilarityAsync({ driver: "postgres", pgDriver }))
+        .then((on) => (on ? enqueueListingSimilarityAsync(listing, { driver: "postgres", pgDriver }) : null))
+        .catch(() => {});
     });
   } catch {
     // 指紋失敗不擋入庫

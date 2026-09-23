@@ -4,7 +4,7 @@
 // v3.db」。listingSimilarityAsync.js 讓那幾條路徑在 PostgreSQL 上跑同一份語句文字；這條測試把兩邊
 // 的輸出釘在一起。離線那段的 PostgreSQL exec 是「$n 還原成 ? 再跑同一個 SQLite fixture」，
 // 所以真正的 SQL 文字與組裝都被跑到（作法同 notify-enqueue-parity.test.js）。
-import { after, test } from "node:test";
+import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -35,16 +35,98 @@ const B = 970102;
 const INSIGHT = 970103;
 
 // 一筆待審建議、一筆洞察；listings 故意不種 → title 走 `#id` fallback（兩邊一致）。
-db.prepare(`INSERT OR REPLACE INTO listing_similarity_suggestion
+// 第二段的測試會清掉這兩筆，所以用 beforeEach 在每條測試前重種（fixture 一律回到原始狀態）。
+function restoreFixture() {
+  // 回到「只有 fixture 那兩筆」的乾淨狀態：第二段的測試會多建建議／洞察與指紋列。
+  db.prepare("DELETE FROM listing_similarity_suggestion WHERE id != 1").run();
+  db.prepare("DELETE FROM listing_crawl_insight WHERE id != 1").run();
+  db.prepare("DELETE FROM listing_image_phash").run();
+  db.prepare(`INSERT OR REPLACE INTO listing_similarity_suggestion
     (id, listing_a, listing_b, evidence_json, review_state, created_at)
     VALUES (1, ?, ?, ?, 'pending', ?)`)
-  .run(A, B, JSON.stringify({ hamming: 3, match_level: "medium", veto: [], blocked_by_veto: [] }), STAMP);
-db.prepare(`INSERT OR REPLACE INTO listing_crawl_insight
+    .run(A, B, JSON.stringify({ hamming: 3, match_level: "medium", veto: [], blocked_by_veto: [] }), STAMP);
+  db.prepare(`INSERT OR REPLACE INTO listing_crawl_insight
     (id, post_id, source_text_hash, hints_json, apply_state, created_at)
     VALUES (1, ?, 'hash-1', ?, 'applied_empty', ?)`)
-  .run(INSIGHT, JSON.stringify({ floor: "7F" }), STAMP);
+    .run(INSIGHT, JSON.stringify({ floor: "7F" }), STAMP);
+}
+restoreFixture();
+beforeEach(restoreFixture);
 
-// PostgreSQL exec 的離線替身：$n → ?，SELECT 回列，其餘當寫入。
+// ---- 第二段（佇列寫入）parity：draft，尚未跑過 ----
+// 跑法：cd /tmp/5151-sim && node --test v3/test/listing-similarity-admin-parity.test.js
+// 這一條不需要真的算圖：直接餵 recorded = { post_id, phash, algo_version } 給
+// suggestFromNewHashAsync（真實呼叫端就是這樣把錄好的指紋傳進來的），
+// 斷言用「兩邊 driver 的輸出（去掉 id）完全相同」→ 對 veto／LLM 分支的實際走向不敏感。
+test("第二段：suggestFromNewHashAsync 兩個 driver 寫出等價的建議", async () => {
+  const PHASH = "ffffffffffffffff"; // 16 hex；下列兩筆同值 → hamming 0
+  const PEER = 970104;
+  const seed = (id) =>
+    db
+      .prepare(`INSERT OR REPLACE INTO listing_image_phash
+          (post_id, image_url, image_key, algo_version, phash, computed_at)
+          VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(id, `https://example.test/${id}.jpg`, `k${id}`, sim.PACK7_PHASH_BASELINE, PHASH, STAMP);
+  seed(A);
+  seed(PEER);
+
+  const listing = { post_id: A, title: "A 物件", cover: `https://example.test/${A}.jpg` };
+  const recorded = { post_id: A, phash: PHASH, algo_version: sim.PACK7_PHASH_BASELINE };
+  const dropIds = (value) => JSON.stringify(value).replace(/"id":\d+,?/g, "");
+
+  db.prepare("DELETE FROM listing_similarity_suggestion").run();
+  const viaSqlite = await simAsync.suggestFromNewHashAsync(listing, recorded, { driver: "sqlite", now: STAMP });
+
+  db.prepare("DELETE FROM listing_similarity_suggestion").run();
+  const viaPg = await simAsync.suggestFromNewHashAsync(listing, recorded, { ...pgOptions, now: STAMP });
+
+  assert.ok(Array.isArray(viaSqlite) && Array.isArray(viaPg), "兩邊都應回陣列");
+  assert.equal(dropIds(viaPg), dropIds(viaSqlite), "PG 路徑的建議內容要與 sqlite 路徑相同");
+
+  const stored = db.prepare("SELECT listing_a, listing_b, review_state FROM listing_similarity_suggestion").all();
+  assert.equal(stored.length, viaPg.length, "回傳幾筆就要真的寫進 store 幾筆");
+  for (const row of stored) {
+    assert.ok(row.listing_a === A || row.listing_b === A, "每筆建議都要含新指紋那筆物件");
+    assert.equal(row.review_state, "pending", "新建議一律 pending");
+  }
+});
+
+test("第二段：recordCrawlInsightAsync 把洞察列寫進 PG（provider 以 llmInsight 注入）", async () => {
+  const HOST = 970105;
+  const listing = { post_id: HOST, title: "有車位 3 房", floor_name: "" };
+
+  db.prepare("DELETE FROM listing_crawl_insight").run();
+  // extractCrawlInsight() 是 provider 島 → 離線用 options.llmInsight 注入（見 listingSimilarity.js）。
+  const viaPg = await simAsync.recordCrawlInsightAsync(listing, {
+    ...pgOptions,
+    llmInsight: () => ({ floor: "7F", confidence: 0.9 }),
+  });
+  if (viaPg === null) {
+    assert.fail("回 null → extractCrawlInsight 的注入鍵名／形狀要再確認一次（交接文件有記）");
+  }
+  assert.equal(viaPg.post_id, HOST, "回傳列要是剛寫進去那筆");
+  const rows = db.prepare("SELECT post_id, apply_state FROM listing_crawl_insight").all();
+  assert.equal(rows.length, 1, "應寫入 1 筆洞察");
+  assert.equal(rows[0].post_id, HOST);
+  assert.ok(
+    ["hint_only", "applied_empty", "skipped"].includes(rows[0].apply_state),
+    "apply_state 必為三態之一（PG 端的 CHECK 也一樣）",
+  );
+});
+
+test("第二段：enqueueListingSimilarityAsync 在功能關閉時明確回 disabled、不誤寫", async () => {
+  await simAsync.savePhashSettingsAsync({ enabled: false }, pgOptions);
+  const out = await simAsync.enqueueListingSimilarityAsync(
+    { post_id: A, cover: "https://example.test/x.jpg" },
+    pgOptions,
+  );
+  assert.deepEqual(Object.keys(out).sort(), ["insight", "phash", "skipped", "suggestions"]);
+  assert.equal(out.phash, null, "關閉時不該算指紋");
+  assert.deepEqual(out.suggestions, [], "關閉時不該建建議");
+  assert.equal(out.insight, null, "fixture 沒有啟用洞察 provider");
+  assert.equal(out.skipped, "disabled", "要明確回 disabled（＝正式站現況）");
+});
+
 function pgShimOn(handle) {
   return async (sql, params = []) => {
     const text = String(sql).replace(/\$(\d+)/g, "?");

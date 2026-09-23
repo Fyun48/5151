@@ -173,6 +173,32 @@ node --test v3/test/crawler-reads-parity.test.js v3/test/listing-fields-parity.t
 `listing_crawl_insight`（**不會寫壞資料**）；而這個功能是 **opt-in、預設關閉**（`phash_enabled` 預設 `false`，
 洞察另外要啟用 LLM provider），正式站沒有在用。**要啟用該功能或走到 HA 之前必須移植。**
 
+> **狀態（2026-09-23 補記）：④ 兩段都開工了，第一段已合併。**
+> - **第 1 段（審核 UI／設定／清單）**：PR #442 —— `v3/src/repository/listingSimilarity.js`（共用 SQL
+>   文字 builder）＋ `v3/src/listingSimilarityAsync.js`（driver 分派 ＋ `withFallback` ＋ fail-open ＋
+>   `options.strict`）＋ `db.js` 三個 admin wrapper 改 async ＋ `server.js` 三條 admin 路由改 await ＋
+>   `v3/test/listing-similarity-admin-parity.test.js`。離線 parity **4/4（1 skip）**、shadow live **5/5**、
+>   既有 `listing-similarity.test.js` **11/11**；正式站行為不變（`phash_enabled` 預設 false）。
+> - **第 2 段（佇列寫入）**：`recordListingPhash`／`suggestFromNewHash`／`recordCrawlInsight`／
+>   `enqueueListingSimilarity` 的 driver-aware 版本，程式在分支 **`feat/pg-similarity-queue`**
+>   （**PR #447**）：離線 parity **7/7**、**shadow live 8/8（0 skip）**、`listing-similarity.test.js` 11/11、**CI 三項全綠**；
+>   live 憑證於 2026-09-23 由 `ssh syn-nas` 取用影子站 `.env`（未落地、未進版控）。資料本體（`listing_image_phash`／`listing_similarity_suggestion`／
+>   `listing_crawl_insight`）改寫進「與 UI 同一個 store」（PG 模式＝PostgreSQL）——這正是
+>   「後台讀得到、佇列填不進去」的修法；`db.js` 的 `persistListing()` PG 分支改呼叫
+>   `enqueueSimilaritySafeAsync()`（best-effort、不擋入庫）。
+>   **刻意的階段切法**：`loadEnabledProvider()`／`compareSameHouseWithLlm()`／`extractCrawlInsight()`
+>   仍走 SQLite handle，因為 provider／budget 堆疊（`budgetGuard.js`／`providers/*`）本身還是 SQLite 島
+>   → 要一起移植才能讓洞察「產生」也全 PG 化。
+>   ⚠️ 該分支含第 1 段那顆 commit；合併 #442 之後要 **`git cherry-pick`** 到新 master 再開 PR，
+>   不然會把第 1 段的內容再算一次。
+> - **接手起手式**：`node --test v3/test/listing-similarity-admin-parity.test.js` —— 第二段的 3 條 parity
+>   已經**轉正（不再失敗）**：`suggestFromNewHashAsync` 直接餵 `recorded={post_id,phash,algo_version}`（不必真的算圖）、
+>   `recordCrawlInsightAsync` 用 `options.llmInsight` **函式**注入 provider（注意只吃函式）、
+>   `enqueueListingSimilarityAsync` 關閉時回 `disabled`；fixture 用 `beforeEach` 還原（否則後面第一段的測試會被清掉而紅）。
+>   離線 7/7 ＋ shadow live 8/8 都已在 2026-09-23 通過（live 需要 `PG_TEST_URL`，密碼在 syn-nas 的 `~/5151-shadow-ha/shadow-ha/postgres-primary/.env`）。
+>   這條測試會建立 3 張表並動 `settings`（用影子站／離線 shim 就好，別打正式站）。
+
+
 **移植範圍與難點（給下一包用）**：`v3/src/listingSimilarity.js` **409 行、18 條同步語句**，而且「佇列寫入」與
 「審核 UI」是同一條鏈：`recordListingPhash`／`suggestFromNewHash`／`recordCrawlInsight` 寫入，
 `listSimilaritySuggestions`／`reviewSimilarity`／`getSimilarityAdmin`／`listRecentInsights` 讀取
