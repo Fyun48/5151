@@ -85,7 +85,11 @@ test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收",
     assert.equal(q.name, "postgres");
     const now = Date.now();
     const key = "live-job-" + now;
-    const enqueued = await q.enqueue({ jobType: "enrich", payload: { post_id: 42 }, idempotencyKey: key, now });
+    // 影子站上還留著先前的工作列，而 claim 的順序是「優先權高者先、其次最舊者先」
+    // （POSTGRES_CLAIM_JOBS_SQL 的 ORDER BY priority DESC, created_at ASC），
+    // 所以用一個正式站不會出現的高優先權（正式站最高是 ON_SCREEN_LISTING = 100），
+    // 保證這一輪搶到的就是剛排進去的這一筆。
+    const enqueued = await q.enqueue({ jobType: "enrich", payload: { post_id: 42 }, idempotencyKey: key, priority: 10_000, now });
     assert.equal(Number(enqueued.attempts), 0);
     const claimed = await q.claim({ workerId: "live-worker", limit: 5, now });
     const mine = claimed.find((row) => row.idempotency_key === key);
