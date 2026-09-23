@@ -191,9 +191,10 @@ export function projectionCounts(db) {
   return { listings, projected, missing: Math.max(0, listings - projected) };
 }
 
-// Inserts at most `batchSize` missing rows. Returns how many were written so a caller can loop
-// (with yields) without ever blocking the event loop for long.
-export function backfillListingSearchProjectionStep(db, { batchSize = 200 } = {}) {
+// Inserts missing rows until `batchSize` or `budgetMs` is reached. Returns how many were written so
+// a caller can loop (with yields) without ever blocking the event loop for long: production inserts
+// cost ~30ms each (fsync on a network volume), so a 200-row batch used to block for ~6 seconds.
+export function backfillListingSearchProjectionStep(db, { batchSize = 200, budgetMs = 120 } = {}) {
   ensureListingSearchProjection(db);
   const rows = db.prepare(`SELECT l.* FROM listings l
     LEFT JOIN ${PROJECTION_TABLE} p ON p.post_id = l.post_id
@@ -201,6 +202,7 @@ export function backfillListingSearchProjectionStep(db, { batchSize = 200 } = {}
     LIMIT ?`).all(batchSize);
   if (!rows.length) return { added: 0, scanned: 0 };
   const insert = db.prepare(UPDATE_SQL);
+  const started = Date.now();
   let added = 0;
   for (const row of rows) {
     try {
@@ -209,6 +211,7 @@ export function backfillListingSearchProjectionStep(db, { batchSize = 200 } = {}
     } catch {
       /* 單列失敗（例如缺欄位）不影響其他列，下一輪還會再看到它 */
     }
+    if (Date.now() - started >= budgetMs) break;
   }
   return { added, scanned: rows.length };
 }

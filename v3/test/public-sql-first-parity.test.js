@@ -15,8 +15,12 @@ const ISOLATED_TIMEOUT_MS = Math.max(30_000, Number(process.env.V3_ISOLATED_TEST
 const dbUrl = JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href);
 const projectionUrl = JSON.stringify(pathToFileURL(path.join(dir, "../src/listingSearchProjection.js")).href);
 
-function runIsolated(body) {
+function runIsolated(body, { sqlFirst = false } = {}) {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-public-sqlfirst-"));
+  const env = { ...process.env, DATA_DIR: dataDir };
+  // guest SQL-first 目前是 opt-in（預設關閉），只有要驗證它本身的測試才打開。
+  if (sqlFirst) env.PUBLIC_LISTINGS_SQL_FIRST = "1";
+  else delete env.PUBLIC_LISTINGS_SQL_FIRST;
   const script = `
     import assert from "node:assert/strict";
     import * as app from ${dbUrl};
@@ -48,7 +52,7 @@ function runIsolated(body) {
   `;
   try {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-      encoding: "utf8", timeout: ISOLATED_TIMEOUT_MS, env: { ...process.env, DATA_DIR: dataDir },
+      encoding: "utf8", timeout: ISOLATED_TIMEOUT_MS, env,
     });
     assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
   } finally {
@@ -146,7 +150,7 @@ test("guest SQL-first 只在一模一樣的等價範圍內接手，其餘回退 
     // 範圍內的查詢則確實走 SQL-first（前提是 projection 與 listings 已對齊）
     assert.equal(app.refreshPublicListingsProjectionReady(), true);
     assert.equal(app.listPublicListingsFast(guestArgs({})).queryDetails.sql_first, true);
-  `);
+  `, { sqlFirst: true });
 });
 
 test("公開 builder：行政區可留空、分頁 SQL 帶 LIMIT，會員路徑仍必須有行政區", () => {
@@ -218,5 +222,17 @@ test("projection 缺列時，啟動補建會把列補回來，且守門會先回
     const fast = app.listPublicListingsFast(scope);
     assert.equal(fast.queryDetails.sql_first, true);
     assert.equal(fast.totalMatched, full);
+  `, { sqlFirst: true });
+});
+
+test("預設不啟用 guest SQL-first：PUBLIC_LISTINGS_SQL_FIRST 未設時一律走 Node 路徑", () => {
+  runIsolated(`
+    ${seedTrickyPool()}
+    // 即使 projection 已對齊，預設仍是 Node 路徑（2026-09-23 正式站 A/B 發現兩條路徑列集不一致）
+    assert.equal(app.refreshPublicListingsProjectionReady(), true);
+    const scope = guestArgs({ districts: ["士林區"] });
+    const listed = app.listPublicListingsFast(scope);
+    assert.equal(listed.queryDetails?.sql_first, undefined);
+    assert.equal(listed.totalMatched, app.listPublicListings(scope).totalMatched);
   `);
 });
