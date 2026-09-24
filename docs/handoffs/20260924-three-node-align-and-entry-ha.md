@@ -100,9 +100,22 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
    系統依後台設定（生產站 **20 分**）抓取並形成「基地」，會員 **8 分**（贊助 **5 分**）補抓，
    基地剛跑完的 **90 秒**內會員不重複抓（`RECENT_COVERING_MS`）。
    **要判斷健康請看後台 IA／底庫頁的「最近一輪結果」**，不要看 `last_seen_at`。
-4. `listings` 有 1 列 `last_checked_at` 內容壞掉（`post_id=2414061000`）。
-5. `5155`（正式站容器的本機別名埠）仍只被 deploy 的健康檢查使用；要收回需同時改 workflow 與
-   compose override（會重啟正式站），併入下一次發版。
+4. ~~`listings` 有 1 列 `last_checked_at` 內容壞掉（`post_id=2414061000`）。~~
+   → **2026-09-24 已修**：該值原本是亂碼位元組；已設回同列的 `last_seen_at`（程式的寫入語意就是這個），
+   全庫格式異常筆數 **0**。查證時確認全庫只有這 1 筆。
+5. ~~`5155`（正式站容器的本機別名埠）仍只被 deploy 的健康檢查使用；要收回需同時改 workflow 與
+   compose override（會重啟正式站），併入下一次發版。~~
+   → **2026-09-24 已收回**：`docker-compose.yml` 不再發佈第二個埠；`deploy-v3.yml` 的本機健康探測改用
+   `5153`（原本那三行只是對 5155 重做同樣的檢查，已刪除）。公開流量本來就走 HAProxy 25153，未受影響。
+6. ~~**VS Code dev tunnel（`cline-server`）的 1006**~~ → **2026-09-24 使用者確認已正常**。
+   根因是「新舊 CLI 版本並存造成下載鎖死鎖」（log 一直印 `Another instance is still downloading the server`），
+   清掉 `~/.vscode-server/cli/servers/.locks/*` 後以同版 CLI 重啟即恢復。
+7. **後台可自行開關付費外掛** → **2026-09-24 已完成**：新增後台頁「系統與整合 > 外掛與預算」
+   （`v3/public/admin-providers.js`、`admin.html` 面板、`admin-ia.js` 索引），可逐類別啟用／關閉、
+   設定每日／每月／單筆上限、填金鑰（加密存放）、測試連線、刪金鑰，並有全站預算與用量紀錄。
+   測試 `v3/test/admin-providers.test.js` 6/6；UI 以真實後台版面截圖驗證（0 console error）。
+8. **前台重整預設分頁** → **2026-09-24 已修**：原本切到許願房會把 `#demand` 寫進網址且回到找房不清掉，
+   導致之後每次重整都被帶回許願房；現在只有明確帶 `#demand`／`#wish` 的網址才會停在許願房。
 6. **VS Code dev tunnel（`cline-server`）的 1006**：dev box（cline-dev）上 `/tmp/vscode-tunnel.log`
    顯示 `NoAttachedServerError` 多次、且同時存在兩個 server 版本（`Stable-7debcd0e…` 與
    `Stable-2242ebbb…`）。重啟 tunnel 會中斷目前連線，需使用者同意後再做。

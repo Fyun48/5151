@@ -18,7 +18,7 @@
 
 | 容器 | 由哪個 compose 建立 | 角色 | DB 模式 |
 |---|---|---|---|
-| `591-tracker-v3` | `/mnt/Storage1/apps/5151/docker-compose.yml` ＋ override | 正式站容器（web `127.0.0.1:5153`／`5155`；爬蟲＋worker，`APP_ROLE` 未設＝all） | **postgres** |
+| `591-tracker-v3` | `/mnt/Storage1/apps/5151/docker-compose.yml` ＋ override | 正式站容器（web `127.0.0.1:5153`；爬蟲＋worker，`APP_ROLE` 未設＝all） | **postgres** |
 | `5151-ops` | 同上 | OPS Console（埠 5154） | 自己的 `/data`（無 PG 設定） |
 | `591-tracker-tunnel` | 同上（profile `tunnel`） | Cloudflare Tunnel（host network）。**公開站 ingress → `127.0.0.1:25153`（HAProxy）**、OPS → `127.0.0.1:5154` | — |
 | `591-tracker-tunnel-b`（syn-nas） | `~/5151-shadow/cloudflared-public/docker-compose.yml` | **同一個公開 tunnel（`5151`）的第二個 connector**（2026-09-24 補；host network，指到本機 `5151-haproxy-B`） | — |
@@ -37,9 +37,9 @@
 > 並把 `SESSION_SECRET` 對齊正式站、複製一份正式站的 `/data/auth.env`（SMTP／OAuth／管理員帳號）
 > 到 A 組的 `/data/auth.env`，讓兩個節點行為一致。
 > 最後在 Cloudflare 後台把公開站的 ingress 由 `http://127.0.0.1:5155` 改成 `http://127.0.0.1:25153`。
-> 因此正式站容器發佈的 **`5155` 現在只剩「本機別名」用途**——`deploy-v3.yml` 仍用它做本機健康探測
-> （`/tmp/v3-alias-health.json`），公開流量已不走它。要收回這個埠得**同時**改 workflow 的那兩處檢查
-> 與主機的 compose override，且會重啟正式站容器，所以**併入下一次發版處理**（不要單獨做）。
+> **2026-09-24 已收回 `5155`**：`docker-compose.yml` 不再發佈第二個埠，`deploy-v3.yml` 的本機健康探測
+> 改用 `5153`（原本那三行只是對 5155 重做一次同樣的檢查，已刪除）。公開流量本來就走 HAProxy 25153，
+> 所以這次收回沒有動到任何對外路徑；之後要再加別名埠請三處一起改（compose／workflow／本文件）。
 > compose 備份：同一目錄的 `docker-compose.yml.bak-20260923T*`、`…bak-seq-…`；
 > tunnel 設定的備份在 `/home/cline/infra-compose/cloudflare/`。
 > `5151-crawler` 刻意留在 SQLite（它是 A 組 SQLite 的保鮮來源＝回復路徑），**不要一起切**。
