@@ -41,7 +41,9 @@ counts    : listings 115618 / data_revision 685489 / user_events 7280 /
             listing_match_evaluations 861424 / crawl_covers 2
 ```
 
-封存位置（與 live data 分離）：`/mnt/Storage1/docker_data/591-tracker-v3-backups/sqlite-archive-20260924/`
+封存步驟（**⚠️ 未成功，見 F 節第 3 點**）：原計畫搬到 `/mnt/Storage1/docker_data/591-tracker-v3-backups/sqlite-archive-20260924/`；
+搬移後該目錄為空、`/data` 與 live 目錄也都找不到快照檔 → **manifest（含 sha256）已取得，但檔案目前不在任何已知位置**。
+本輪結論不受影響（manifest 的 integrity／筆數／sha256 都是在檔案還在時對快照本身實測的），但**封存能力必須修好才能算 PR-A 完成**。
 
 ## C. 本輪新增的量化證據（原報告沒有）
 
@@ -76,3 +78,6 @@ counts    : listings 115618 / data_revision 685489 / user_events 7280 /
 
 1. `node-readonly-evidence.sh`：`imageDigest` 為空（見 A 節）；`runtimeHashes` 目前輸出接近 JSON 但缺外層陣列括號（解析時需自行補 `[...]`）。
 2. `sqlite-consistency-snapshot.mjs`：快照暫存在 `/data`（live 目錄）後由 host 搬出；若同一節點多次執行需注意磁碟餘裕（現有 817 GB 可用）。
+3. **封存失敗（本輪最重要缺陷）**：`mv` 到 `sqlite-archive-20260924/` 後，該目錄為空、live 目錄與容器 `/data` 也都沒有快照檔。
+   尚未查明原因（可能跨檔案系統複製失敗或路徑誤判）。**修法**：改用 `cp` ＋ 事後 `sha256sum` 兩端比對 ＋ 只在比對通過後才刪除來源；
+   重跑後把檔案與 sha256 一起記錄，才能宣告「各節點快照已保存」。
