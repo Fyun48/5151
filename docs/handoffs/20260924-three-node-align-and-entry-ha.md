@@ -21,14 +21,33 @@
   - web-B：同理，各一份
   → 使用者的設定「看哪一台回答」而變，用空設定篩選 → 畫面 0 筆。
 
-### 1.3 同一晚的另一件事：我發版把 2.4（provider／budget 島）推上正式站
-- PG 的 `system_provider_configs` 全是 `is_enabled=0`、`provider_secrets` **0 筆** → 新版閘門
-  （`providers/executeWithProvider.js`）把每次呼叫判為 `disabled_or_no_credential` 並走 fallback，
-  19 分鐘內灌了約 500 筆 `provider_usage_logs`。
-- **已回滾**：正式站 `v3/src`＋`v3/public` 回到發版前 `9e79b23b`（新版原始碼備份在 casa
-  `/tmp/v3-src-new-*.tgz`），web-A／web-B 也回到發版前的 image digest `43bd376c…`。三台健康、公開站 200。
-- **2.4 那包要重發之前**，必須先把 PG 的 provider 設定／憑證補正確（`system_provider_configs`
-  的 `is_enabled`／`daily_limit_minor` 等 ＋ `provider_secrets`），否則正式站的 provider 呼叫會被短路。
+### 1.3 追查結論（2026-09-24 修正我先前的判斷）
+
+- 我先前說「我的發版把 2.4 推上正式站造成 provider 短路」是**錯的**：正式站 SQLite 的
+  `provider_usage_logs` 早就有 **6 萬筆 `fallback` 紀錄（到 2026-09-23 10:40）**，
+  而且 SQLite 與 PG 的 `system_provider_configs` **完全相同**（全部 `is_enabled=0`、
+  `credential_ref=null`、`provider_secrets` 0 筆）→ **2.4 的閘門在我的發版前就已經在跑**，
+  沒有付費 provider 時一律走 `fallback()`（＝原本的直連路徑），所以**不是回歸**。
+- 真正該修的是**診斷寫入**：`fallback: disabled_or_no_credential` 每次呼叫都寫一列（爬蟲每個抓取
+  一次），在 PG 模式 ＋ 寫入 fail-closed（#473）之下，那一列寫失敗會讓**整個 provider 呼叫
+  （含直連 fallback）** 一起失敗 → 已修（**PR #477**：同一 (category, note) 每行程只記一次，
+  且任何錯誤都吞掉）。證據：`v3/test/provider-fallback-logging.test.js` 2/2。
+- 爬蟲「重新確認」量能偏低（6 小時每 10 分鐘約 1 筆）是**更早以前就存在**的現象（與發版無關），
+  仍待查（疑 591 端）。
+
+### 1.5 發版前的一次性資料同步（2026-09-24）
+
+`user_settings`／`user_search_profiles` 在發版前的最後一次變更（使用者 09-23 09:59 的儲存）只落在
+SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **upsert 進 PG**（186 列 ＋ 3 個設定檔，
+實查 PG 的 active 設定檔 `updated_at` 已是 `2026-09-23T09:59:15Z`）。
+腳本：`/tmp/dump-member-island.mjs` ＋ `/tmp/sync-member-island.mjs`（一次性，可重跑）。
+
+- 我當下先把正式站**回滾**（`v3/src`＋`v3/public` → `9e79b23b`；web-A／web-B → image `43bd376c…`；
+  新版原始碼備份在 casa `/tmp/v3-src-new-*.tgz`）——那是**預防性**處置：事後查證發現 2.4 的閘門
+  在回滾前就已經在跑，且行為與 2.4 之前相同（沒有付費 provider 時走直連），沒有造成短路。
+- **重新發版的順序**（2026-09-24 進行中）：①修掉診斷寫入的影響（PR #477）
+  ②把會員設定島嶼的最後一次變更同步進 PG（§1.5）③走 build／predeploy／deploy
+  （會同時帶上 #473 fail-closed、#476 設定島嶼、2.4 provider／budget）。
 
 ### 1.4 處置（使用者選的方案：不動入口，讓三台一致）
 1. 對正式站做 SQLite **熱快照**（`VACUUM INTO`，`integrity=ok`，455MB）＋ `member-media`／`self-photos`
