@@ -44,7 +44,39 @@
    `listingSearchAsync` 的「查詢不支援 → SQLite」與「例外 → SQLite」（F2）。
 5. **錯誤語意**：PG 不可用時回 **503 ＋ 穩定錯誤碼**（不得顯示 0 間房源、不得偷偷回 SQLite）。
 
-## 4. 驗收（與 GATE-4 對應）
+## 5. 修正與精確化（2026-09-24 補充，避免誤判缺口）
+
+前一版把「PG 只涵蓋很窄的一片」寫得太寬。實讀 `listingSearchSql.js:100–140` 後確認，`filter=all` 這條路徑**已經實作**：
+
+| 已實作 | 位置 |
+|---|---|
+| 搜尋鍵（`searchKeys`）與可見性條件 | L102–103（`deps.searchWhere`／`deps.listingVisibilityClauses`） |
+| 行政區候選與價格上限候選 | L104–105（`appendDistrictCandidates`／`appendPriceCeilingCandidates`） |
+| 已確認下架／`match_verdict='yes'`／被隱藏／已關注的排除 | L106–118 |
+| 排序三種（`newest`／`price_asc`／`price_desc`）與 keyset 分頁、含「金額 0 視為無效」的處理 | L121–140 |
+| 顯示型篩選（低樓層／頂加／車位） | L21–25 |
+| 價格上限含額外費用（`priceMaxIncludesExtras`） | L121–131 |
+
+→ 因此缺的是「**外框清單**（§1 的 12 項）」，不是整條路徑。
+
+## 6. 每一項實作前必須先確認的語意（避免比不支援更糟）
+
+不做「看起來像」的實作；下列每一項都要在實作前用 Node 路徑的同一份資料驗證語意（欄位單位、邊界、null 行為），再寫 SQL：
+
+| 缺口 | 需要確認的事 |
+|---|---|
+| `settings.priceMin` | `cost` 的定義要與既有 `priceMaxIncludesExtras` 一致（L121）；`rent=0`（無效金額）要不要排除 |
+| `settings.areaMax` | 單位是「坪」嗎？`area` 欄位的正規化方式與 null 行為 |
+| `settings.minBuildingFloors` | 比較的是 `total_floors`（建物總樓層）還是 `floor`？`total_floors` 缺失時算不算通過 |
+| `kind`（房屋類型） | Node 用 `kindsToQuery()` ＋ `listingMatchesKindKey()`（`floors.js:289–325`），而每個 key 可能看 `kind_name`／tags／標題（例如 `elevator` 看 `has_elevator`）。**設計決定**：在投影補一組「canonical kind keys」欄位（例如 `kind_keys text[]` 或對應的 bit/旗標欄位），由 `computeListingProjection()` 以**同一支** `listingMatchesKindKey()` 產生 → SQL 只做集合比對，才能保證與 Node 完全等價（不靠重寫一份判斷邏輯）。 |
+| `sources` | `parseListingSources()` 的輸出面；`p.source` 是否即同一組 id（應可直接 `IN (...)`，但仍要驗一個 sample） |
+| `q`（文字搜尋） | Node 搜尋哪些欄位（標題／地址／描述）、是否正規化（全半形、空白、大小寫）、是否用子字串比對；投影目前**沒有**這些欄位 → 需補檢索欄位（或 join `listings` ＋索引），並量測延遲 |
+| `sort = fit_desc` | `fit` 分數怎麼算（`listingScore.js`）、是否 per-user（若是 per-user，投影不能存單一值 → 需改設計或維持 envelope 外） |
+| `sort = commute_asc/desc` | 依賴使用者工作點與 `route_cache`／`route_jobs`（per-user）→ 投影的 `commute_km` 是否只對「主要使用者」有效？若 per-user 則必須在 SQL 以 join 計算 |
+| `filter != "all"` | 各分頁（未瀏覽／已瀏覽／特別關注／同屋源更新／疑似同屋源／已隱藏／下架）目前的 Node 條件；多數可用既有 `user_listing_flags`／`listing_groups` 表在 PG 內表達 |
+| `settings.wholeFloorOnly`／`excludeKeywords`／`excludeAgents`／`excludeAgentIds`／`excludeBoxes`／`commuteKm` | 各自的判定欄位來源（文字欄位需要投影補欄位；`commuteKm` 同 `commute` 排序的 per-user 問題） |
+
+**順序不變**：先補能力（並以 parity 測試證明等價）→ 才移除 `listingSearchAsync` 的兩條回退（F2）→ 最後把 PG 不可用改成 503＋穩定錯誤碼。
 
 - 每個篩選／排序條件都要有「Node 路徑 vs PG 路徑」的 ID 集合、順序、total、hasMore、nextCursor 完全相同。
 - 真實 HTTP API：匿名與會員各跑一輪所有篩選與排序；PG 失聯時確認回 503（不回空清單）。
