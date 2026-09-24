@@ -2,6 +2,14 @@ import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
 import { searchListingsAsync } from "./listingSearchAsync.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
+import {
+  armMemberExternalFetchAsync,
+  deleteProfileAsync,
+  getSettingsAsync,
+  loadProfileAsync,
+  saveAsProfileAsync,
+  saveSettingsAsync,
+} from "./settingsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
@@ -3579,11 +3587,11 @@ function safeStats(userId) {
   }
 }
 
-app.get("/api/settings", (req, res) => {
+app.get("/api/settings", async (req, res) => {
   try {
     const session = requireMember(req, res);
     if (!session) return;
-    res.json({ settings: getSettings(session.userId), cities: CITIES });
+    res.json({ settings: await getSettingsAsync(session.userId), cities: CITIES });
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
   }
@@ -4130,9 +4138,9 @@ async function persistSettings(body = {}, userId) {
     }
   }
   const pausing = Object.prototype.hasOwnProperty.call(body, "notificationsPaused");
-  let settings = saveSettings(body, uid);
+  let settings = await saveSettingsAsync(body, uid);
   if (pausing && settings.notificationsPaused !== true) {
-    settings = armMemberExternalFetch(uid);
+    settings = await armMemberExternalFetchAsync(uid);
   }
   schedule();
   return settings;
@@ -4162,18 +4170,18 @@ app.post("/api/profiles", async (req, res) => {
       await persistSettings(patch, uid);
     }
     const overwrite = Boolean(req.body?.overwrite);
-    const settings = saveAsProfile(name, undefined, uid, { overwrite });
+    const settings = await saveAsProfileAsync(name, undefined, uid, { overwrite });
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/profiles/:id/load", (req, res) => {
+app.post("/api/profiles/:id/load", async (req, res) => {
   try {
     const session = requireMember(req, res);
     if (!session) return;
-    const settings = loadProfile(req.params.id, session.userId);
+    const settings = await loadProfileAsync(req.params.id, session.userId);
     schedule();
     res.json({ settings });
   } catch (error) {
@@ -4181,11 +4189,11 @@ app.post("/api/profiles/:id/load", (req, res) => {
   }
 });
 
-app.delete("/api/profiles/:id", (req, res) => {
+app.delete("/api/profiles/:id", async (req, res) => {
   try {
     const session = requireMember(req, res);
     if (!session) return;
-    const settings = deleteProfile(req.params.id, session.userId);
+    const settings = await deleteProfileAsync(req.params.id, session.userId);
     res.json({ settings });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });

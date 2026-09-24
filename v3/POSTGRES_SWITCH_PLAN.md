@@ -126,6 +126,14 @@
      讀寫混合的模組由寫入入口帶 `write: true` 旗標。
      證據：`v3/test/sqlite-fallback-policy.test.js` **7/7**（寫入不落回 SQLite、讀取仍回退、
      緊急逃生門真的寫進 SQLite、`strict` 壓過環境變數）。
+   - **已完成（2026-09-24，PG 島嶼）**：`v3/src/settingsAsync.js` ＋ `v3/src/repository/memberSettings.js`
+     把**會員設定／搜尋設定檔**整條改成 driver-aware：`getSettings／saveSettings／saveAsProfile／
+     loadProfile／deleteProfile／armMemberExternalFetch`。純判斷留在 `settingsState.js`（兩邊共用），
+     PG 只換「跑語句的人」，`/api/settings`（GET／POST）與 `/api/profiles*` 都改走 async 版。
+     動機：這一條原本只有同步 SQLite，PG 模式下「儲存設定」寫進的是**該節點自己的 SQLite**
+     （公開站輪流到 web-A／web-B 時設定不一致 → 2026-09-23 的「設定檔不見、列表全空」）。
+     證據：`v3/test/settings-driver-parity.test.js` 離線 **4/4**（寫入落在 user_settings／settings／
+     user_search_profiles、跳過的鍵不寫、active 切換）＋ live **1/1**（PG 寫入後讀回、啟用設定檔）。
    - **仍待接（切換前必須完成，已評估可機械化）**：
      ① **`listingsNeeding*` 掃描（9 個，進行中）**：`listingsNeeding{591Geo,AddressGeo,AddressEnrich,FeeDetail,
         SourceKit,Route,AliveCheck,OfflineRecheck,Mrt}` ＋ `getRouteJob`／`community_cache`／`route_jobs`

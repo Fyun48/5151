@@ -2542,7 +2542,7 @@ export function requestTempPassword(email, opts = {}) {
 
 export { publicUser };
 
-const SITE_SETTING_KEYS = new Set([
+export const SITE_SETTING_KEYS = new Set([
   "dataEpoch",
   "hasBaseline",
   "personalFlagsMigrated",
@@ -2553,7 +2553,42 @@ const SITE_SETTING_KEYS = new Set([
   "crawlSources",
 ]);
 
-const DEFAULTS = {
+// saveSettings() 不寫進 settings/user_settings 的鍵：這些由各自的專用函式寫
+// （站台端 SMTP／範本／贊助／廣告／公告／通訊設定，以及系統層的爬蟲與離線確認天數）。
+// settingsAsync.js（PG 分支）共用同一份，避免兩個 driver 的寫入範圍不同。
+export const USER_SETTING_WRITE_SKIP_KEYS = new Set([
+  "smtp",
+  "mailTemplates",
+  "sponsorLinks",
+  "siteAds",
+  "broadcasts",
+  "commsConfig",
+  "memberSmtp",
+  "memberMailTemplates",
+  "systemWatchDistricts",
+  "systemCrawlIntervalMinutes",
+  "systemCrawlIntervalMinutesDisplay",
+  "offlineConfirmDays",
+  "systemOfflineConfirmDays",
+  "brandMascot",
+]);
+
+// 把 applySettingPatch() 的結果拆成「要寫 settings 的」與「要寫 user_settings 的」，
+// 兩個 driver 都跑這一份（回傳已編碼的 JSON 字串）。
+export function planSettingWrites(next, siteKeys = SITE_SETTING_KEYS) {
+  const userWrites = [];
+  const siteWrites = [];
+  for (const [key, value] of Object.entries(next || {})) {
+    if (value === undefined) continue;
+    if (USER_SETTING_WRITE_SKIP_KEYS.has(key)) continue;
+    const encoded = JSON.stringify(value);
+    if (siteKeys.has(key)) siteWrites.push([key, encoded]);
+    else userWrites.push([key, encoded]);
+  }
+  return { userWrites, siteWrites };
+}
+
+export const DEFAULTS = {
   searchUrls: [],
   intervalMinutes: 8,
   pagesPerWatch: 40,
@@ -2694,28 +2729,9 @@ export function saveSettings(partial, userId, { forceAdmin = false } = {}) {
   );
   db.exec("BEGIN");
   try {
-    for (const [key, value] of Object.entries(next)) {
-      if (value === undefined) continue;
-      if (
-        key === "smtp"
-        || key === "mailTemplates"
-        || key === "sponsorLinks"
-        || key === "siteAds"
-        || key === "broadcasts"
-        || key === "commsConfig"
-        || key === "memberSmtp"
-        || key === "memberMailTemplates"
-        || key === "systemWatchDistricts"
-        || key === "systemCrawlIntervalMinutes"
-        || key === "systemCrawlIntervalMinutesDisplay"
-        || key === "offlineConfirmDays"
-        || key === "systemOfflineConfirmDays"
-        || key === "brandMascot"
-      ) continue;
-      const encoded = JSON.stringify(value);
-      if (SITE_SETTING_KEYS.has(key)) globalUpsert.run(key, encoded);
-      else userUpsert.run(uid, key, encoded);
-    }
+    const { userWrites, siteWrites } = planSettingWrites(next);
+    for (const [key, encoded] of siteWrites) globalUpsert.run(key, encoded);
+    for (const [key, encoded] of userWrites) userUpsert.run(uid, key, encoded);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
