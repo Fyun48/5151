@@ -3484,6 +3484,7 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
+import { rotateCoveringJobs } from "./crawlPolicy.js";
 
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
@@ -3547,7 +3548,8 @@ async function tick(reason = "schedule") {
     const result = await withBudget(
       () => runWatch({
         skipHeavyGeo: true,
-        jobs: plan.jobs,
+        // 每輪只跑一段覆蓋條件（時間輪替）：19 組全跑會超過 15 分鐘預算而被放棄。
+        jobs: rotateCoveringJobs(plan.jobs, { now, intervalMs: crawlIntervalMinutes() * 60 * 1000 }),
         includedUserIds: plan.includedUserIds,
         includeSystem: plan.includeSystem,
       }),

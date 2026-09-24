@@ -28,7 +28,9 @@ const {
   coveringBookkeepingAsync,
   isSystemCoveringDueAsync,
   markCoveringCompletedAsync,
+  markCoveringProgressAsync,
 } = await import("../src/coveringBookkeepingAsync.js");
+const { COVERING_JOBS_PER_RUN, rotateCoveringJobs } = await import("../src/crawlPolicy.js");
 
 function fakeExec(rowsForQuery = null) {
   const calls = [];
@@ -78,3 +80,38 @@ test("SQLite 分支：沿用同步讀（不動原本行為）", async () => {
   assert.equal(typeof bookkeeping.lastCoveringAt, "string");
   assert.equal(typeof bookkeeping.lastSystemCoveringAt, "string");
 });
+
+test("PG 分支：進度紀錄只寫 lastCoveringAt，includeSystem 才寫系統時間、且不動 crawl_covers", async () => {
+  const { calls, exec } = fakeExec();
+  const at = "2026-09-24T11:40:00.000Z";
+  await markCoveringProgressAsync({ at }, { driver: "postgres", exec });
+  assert.deepEqual(insertCalls(calls).map((call) => call.params[0]), ["lastCoveringAt"]);
+  assert.equal(calls.some((call) => /UPDATE crawl_covers/.test(call.sql)), false);
+
+  const withSystem = fakeExec();
+  await markCoveringProgressAsync({ at, includeSystem: true }, { driver: "postgres", exec: withSystem.exec });
+  assert.deepEqual(insertCalls(withSystem.calls).map((call) => call.params[0]), ["lastCoveringAt", "lastSystemCoveringAt"]);
+});
+
+test("每輪只跑一段覆蓋條件：輪替會接著跑一輪，掃完全部後回到開頭", async () => {
+  const jobs = Array.from({ length: 19 }, (_, i) => `job-${i}`);
+  const intervalMs = 20 * 60 * 1000;
+  const roundAt = (n) => n * intervalMs;
+  const first = rotateCoveringJobs(jobs, { now: roundAt(0), intervalMs });
+  assert.equal(first.length, COVERING_JOBS_PER_RUN);
+  assert.deepEqual(first, jobs.slice(0, COVERING_JOBS_PER_RUN));
+  // 下一輪接著上一輪往後一段（不是每輪都重跑前 6 組）。
+  const second = rotateCoveringJobs(jobs, { now: roundAt(1), intervalMs });
+  assert.deepEqual(second, jobs.slice(COVERING_JOBS_PER_RUN, COVERING_JOBS_PER_RUN * 2));
+  // 掃完全部的輪數後會回到開頭，且每一組都會被跑到。
+  const windowCount = Math.ceil(jobs.length / COVERING_JOBS_PER_RUN);
+  const seen = new Set();
+  for (let round = 0; round < windowCount; round += 1) {
+    for (const job of rotateCoveringJobs(jobs, { now: roundAt(round), intervalMs })) seen.add(job);
+  }
+  assert.equal(seen.size, jobs.length);
+  assert.deepEqual(rotateCoveringJobs(jobs, { now: roundAt(0), intervalMs }), first);
+  // 不超過上限時原樣回傳。
+  assert.deepEqual(rotateCoveringJobs(["a", "b"], { now: roundAt(3), intervalMs }), ["a", "b"]);
+});
+

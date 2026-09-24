@@ -46,7 +46,7 @@ import {
   pushPayloadFromEvents,
 } from "./db.js";
 import { replaceCrawlCovers } from "./crawlCovers.js";
-import { markCoveringCompletedAsync } from "./coveringBookkeepingAsync.js";
+import { markCoveringCompletedAsync, markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
@@ -785,6 +785,10 @@ export async function runWatch(options = {}) {
   const freshIds = [];
   const searchReports = [];
 
+  // 取頁階段（整輪最久的一段）跑完就先記進度：輪次可能超過 15 分鐘，不能等整輪結束才更新，
+  // 否則 isSystemCoveringDue() 在這段期間只會看到上一輪的舊時間（2026-09-24 事故）。
+  await markCoveringProgressAsync({ at: nowIso(), includeSystem: plan.includeSystem === true });
+
   for (const batch of collected) {
     const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;
     searchReports.push({
@@ -798,6 +802,8 @@ export async function runWatch(options = {}) {
       errors: batch.errors || [],
     });
     let upserts = 0;
+    // 每批（≈ 每組覆蓋）落地後就更新一次進度，讓長輪次的節奏判定有依據。
+    await markCoveringProgressAsync({ at: nowIso() });
     for (const listing of batch.listings) {
       if (seen.has(listing.post_id)) continue;
       seen.add(listing.post_id);
