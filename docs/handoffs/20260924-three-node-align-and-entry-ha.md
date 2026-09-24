@@ -145,3 +145,20 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
   另做一次「卸載 NFS → 守護程式自動復原 → 容器重建 → 公開站仍 200」的演練。
 - **回退**：刪掉三份 compose 的那兩行 → 重建容器（各節點原本的本機檔案都還在）；
   casa `umount /mnt/5151-media` ＋ 刪 fstab 該行 ＋ 停用 timer。
+
+## 6. 會員媒體改走 Cloudflare R2 CDN（2026-09-24 上線，PR #480）
+
+- **動機**：媒體原本只存在自家（今日稍早集中到 Synology，反而讓它變成單點）。改由 R2 ＋ CDN 直送瀏覽器，
+  位元組不經過 NAS，媒體也不再依賴任何一台機器。
+- **程式**：`v3/src/media/r2Client.js`（零依賴 SigV4，PUT／HEAD／DELETE）、
+  `v3/src/media/mediaStore.js`（儲存策略）、`memberMedia.js`（交易內上傳、302 導向、刪除／重算時清快取）。
+  開關 `MEDIA_SERVE=local|r2`（**預設 local**）。
+- **隱私界線**：只有公開顯示檔（`<hash>.jpg`、`<hash>_t.jpg`）進 R2；`_o.jpg`（未浮水印原圖）與
+  `self-photos`（身分自拍）**永不外流**。外部平台（591）的物件圖**維持外連、不快取**（不重製他人內容）。
+- **設定位置（易踩雷）**：`deploy-v3.yml` 每次發版會用 `printf … > .env` 覆寫 web 節點的 `.env`
+  → **web-A／web-B 寫在主機 compose 的 `environment:`、正式站寫在 `/mnt/Storage1/apps/5151/.env`**。
+  三節點皆已設定，備份為 `*.bak-20260924-r2`。
+- **上線**：發版 `d50dbcc`（image digest `sha256:43b188ed…`）；既有 6 個公開顯示檔已遷移（`_o.jpg` 略過）。
+- **驗收（實查）**：三容器 `/media/lib/<hash>.jpg` → **302** 到 `media.reversalplay.me`；
+  `_o.jpg` → **404**；R2 上 self-photos 與 `_o.jpg` 皆**不存在**、公開檔**存在**；CDN `MISS→HIT`；公開站 200。
+- **回退**：把 `MEDIA_SERVE` 改回 `local` ＋ 重建容器（本機檔案一直都在，圖片不會掉）。

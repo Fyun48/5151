@@ -110,6 +110,23 @@ systemctl daemon-reload && systemctl enable --now 5151-media-mount-guard.timer
 web-A／web-B 請寫在**主機 compose 的 `environment:`**（發版不會覆寫 compose）；正式站寫在
 `/mnt/Storage1/apps/5151/.env`（發版會覆寫 compose，但**不動 `.env`**）。
 
+### 上線狀態（2026-09-24，PR #480）
+
+**已上線**：三節點都設 `MEDIA_SERVE=r2`，程式（`v3/src/media/*` ＋ `memberMedia.js`）隨發版 `d50dbcc`
+（image digest `sha256:43b188ed…`）到位。設定位置：web-A／web-B 寫在**主機 compose 的 `environment`**、
+正式站寫在 `/mnt/Storage1/apps/5151/.env`（皆已備份 `.bak-20260924-r2`）。
+
+實查驗收：
+
+| 項目 | 結果 |
+|---|---|
+| 三容器環境 | `MEDIA_SERVE=r2`、`R2_BUCKET=5151-media`、`R2_MEDIA_DOMAIN=https://media.reversalplay.me` |
+| 公開顯示檔 | `/media/lib/<hash>.jpg` → **302** 至 `https://media.reversalplay.me/member-media/<name>` |
+| 未浮水印原圖 | `/media/lib/<hash>_o.jpg` → **404**（且 R2 上不存在） |
+| 自拍照 | 仍由本機提供；R2 上**不存在** |
+| 既有檔案遷移 | 6 個公開顯示檔已上傳（`_o.jpg` 3 個略過），CDN `MISS → HIT` |
+| 公開站 | `https://jibbyrenth.reversalplay.me/` → **200** |
+
 ### 實測（2026-09-24）
 
 - R2 物件：`PUT 200`、`HEAD 200`、`DELETE 204`、刪除後 `HEAD 404`
