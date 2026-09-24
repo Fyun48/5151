@@ -78,6 +78,7 @@ counts    : listings 115618 / data_revision 685489 / user_events 7280 /
 
 1. `node-readonly-evidence.sh`：`imageDigest` 為空（見 A 節）；`runtimeHashes` 目前輸出接近 JSON 但缺外層陣列括號（解析時需自行補 `[...]`）。
 2. `sqlite-consistency-snapshot.mjs`：快照暫存在 `/data`（live 目錄）後由 host 搬出；若同一節點多次執行需注意磁碟餘裕（現有 817 GB 可用）。
-3. **封存失敗（本輪最重要缺陷）**：`mv` 到 `sqlite-archive-20260924/` 後，該目錄為空、live 目錄與容器 `/data` 也都沒有快照檔。
-   尚未查明原因（可能跨檔案系統複製失敗或路徑誤判）。**修法**：改用 `cp` ＋ 事後 `sha256sum` 兩端比對 ＋ 只在比對通過後才刪除來源；
-   重跑後把檔案與 sha256 一起記錄，才能宣告「各節點快照已保存」。
+3. **封存流程（已解決，作法已改）**：第一次用 `mv` 後目錄看似空的（NFS 屬性快取／glob 展開問題，`ls` 列不到但檔案以路徑讀取正常）。
+   已改成「`cp` → 兩端 `sha256sum` 比對 → 相同才 `rm` 來源」：
+   第二次執行 `sha_src = sha_arc = cbfe43b5457ef571c15bd7431cf8ca8096f71dca8f66c74eaf9c2941c232ddc3` → **VERIFY_MATCH**、來源已移除。
+   **待注意**：封存目錄的 `ls` 可能因 NFS 屬性快取暫時列不到內容；驗證請以 `sha256sum <完整路徑>` 為準，不要只看 `ls`。
