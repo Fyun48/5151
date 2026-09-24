@@ -215,8 +215,23 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
   空用量提示）；`test/v3-compose.test.js` 與 `v3/test/deploy-v3-workflow.test.js` 同步更新 5155 的期望。
 
 **⚠️ 仍待 Owner 本人確認（我沒有管理員密碼，無法代登入看畫面）**
-
 - 開 `https://jibbyrenth.reversalplay.me/admin.html#system/providers`，確認五個類別卡與「最近用量」符合預期。
+
+### 7.1 修正發版（同日，PR #485）
+
+上線後從驗收截圖發現：**「地圖距離」的單筆上限 `0.2` 在欄位裡顯示成 `0`**（`moneyInput()` 用了 `Math.round`），
+管理員只要按「儲存這一類」就會把 `ceiling_minor` 靜默改成 0。
+
+- 修法：`moneyInput` 保留兩位小數（整數欄位仍輸出 `20`）；新增測試（修之前會失敗，`distance_matrix` 的
+  ceiling 欄位必須是 `value="0.2"`）。
+- 第二次發版：source `bd7f22ccb57d1cb12af44934403bcef6f8ca7c7e`、
+  digest `sha256:083074966747a0d3ee0ef6ad31f6c18ef6f9065416967aef92e2cd5e784f7e28`；
+  predeploy `35963293450`、build `35963295768`、deploy `35963668959`（皆 success）。
+- 驗收：`591-tracker-v3` 與 `5151-web-A` revision 皆 `bd7f22cc…`；容器內 `admin-providers.js`
+  sha256 `84e88c4a…` 與本機相同；公開站 12/12 新版；正式站埠仍只有 `127.0.0.1:5153->5153/tcp`。
+- 真實瀏覽器複驗（Chrome，清掉 SW／CacheStorage 後）：`distance_matrix` 的單筆上限欄位 = `0.2`。
+  先前看到 `0` 是本機快取造成的（線上 `sw.js` 的 fetch 策略是 **network-first**，使用者連線時會拿到新檔）。
+
 - 前台：進「許願房」後回「找房」再重整，應停在**找房**（不是許願房）。
 - 想確認爬蟲健康：看「房源與資料 > 抓取範圍與排程」的「最近一輪結果」（**不要**看 `last_seen_at` 當健康指標）。
 
