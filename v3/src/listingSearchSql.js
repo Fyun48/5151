@@ -69,7 +69,11 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   const allowAllDistricts = args.allowAllDistricts === true;
 
   if (filter !== "all") return outOfEnvelope("filter");
-  if (kind || sources || q) return outOfEnvelope("kind_or_sources_or_q");
+  // F3 逐項補齊（PR-B）：sources 已在呼叫端經 authorizedListingSources() 驗證與授權
+  //（server.js:3759），所以這裡只做集合比對，不會繞過權限。
+  const sourceKeys = (Array.isArray(args.sources) ? args.sources : String(args.sources || "").split(/[,|]/))
+    .map((item) => String(item || "").trim()).filter(Boolean);
+  if (kind || q) return outOfEnvelope("kind_or_q");
   if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
 
   const uid = deps.resolveUserId(userId);
@@ -103,6 +107,10 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   deps.listingVisibilityClauses(clauses, params);
   deps.appendDistrictCandidates(districtNames, clauses, params);
   deps.appendPriceCeilingCandidates(settings, clauses, params);
+  if (sourceKeys.length) {
+    clauses.push(`p.source IN (${sourceKeys.map(() => "?").join(", ")})`);
+    params.push(...sourceKeys);
+  }
   // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
