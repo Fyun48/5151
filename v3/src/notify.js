@@ -67,7 +67,7 @@ export function eventLabel(type, event = {}) {
   if (type === "same_source") return "同屋源更新";
   if (type === "relist") return "重新上架";
   if (type === "offline") {
-    return Number(event.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+    return Number(event.offline_confirmed) === 1 ? "已下架" : "物件暫離";
   }
   if (type === "price_drop") return "價格調降";
   if (type === "price_update") return "價格變更";
@@ -82,7 +82,7 @@ export function eventLabel(type, event = {}) {
 /**
  * webhook 色（左側色條＝這則訊息的事件類型）：
  *   全新＝金黃、重刊＝淺綠、租金變動＝深綠、標題／其他＝棕、
- *   費用變更＝紫、確認下架中＝紅、確認已下架＝深紅（紅色家族＝下架）。
+ *   費用變更＝紫、物件暫離＝紅、已下架＝深紅（紅色家族＝下架）。
  * 沒有「同屋源」單獨的色：那類事件本身會是 relist／fee_update 等。
  */
 export function embedColor(type, event = {}) {

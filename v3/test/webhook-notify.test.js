@@ -367,10 +367,10 @@ test("webhook colors and offline labels", () => {
   assert.equal(embedColor("relist"), 0x86efac, "重刊＝淺綠");
   assert.equal(embedColor("fee_update"), 0xa855f7, "費用變更＝紫");
   assert.equal(embedColor("price_drop"), 0x15803d);
-  assert.equal(embedColor("offline", { offline_confirmed: 0 }), 0xef4444, "確認下架中＝紅");
-  assert.equal(embedColor("offline", { offline_confirmed: 1 }), 0xdc2626, "確認已下架＝深紅");
-  assert.equal(eventLabel("offline", { offline_confirmed: 0 }), "確認下架中");
-  assert.equal(eventLabel("offline", { offline_confirmed: 1 }), "確認已下架");
+  assert.equal(embedColor("offline", { offline_confirmed: 0 }), 0xef4444, "物件暫離＝紅");
+  assert.equal(embedColor("offline", { offline_confirmed: 1 }), 0xdc2626, "已下架＝深紅");
+  assert.equal(eventLabel("offline", { offline_confirmed: 0 }), "物件暫離");
+  assert.equal(eventLabel("offline", { offline_confirmed: 1 }), "已下架");
 });
 
 test("同房源在 webhook 只留最便宜與最新更新兩則的完整說明", () => {

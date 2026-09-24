@@ -15,7 +15,7 @@ test("pending offline stays in the main list; only confirmed offline is removed"
   const live = { ...base, offline: 0, offline_confirmed: 0 };
   assert.equal(listingMatchesListFilter(live, "all"), true);
   assert.equal(listingMatchesListFilter(pending, "all"), true, "下架確認中要留在列表");
-  assert.equal(listingMatchesListFilter(confirmed, "all"), false, "確認已下架要移除");
+  assert.equal(listingMatchesListFilter(confirmed, "all"), false, "已下架要移除");
   assert.equal(listingMatchesListFilter(pending, "unseen"), true);
   // 專屬 offline 檢視仍可用（API 相容），但只含 pending
   assert.equal(listingMatchesListFilter(pending, "offline"), true);

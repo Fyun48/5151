@@ -172,9 +172,9 @@ const COMPARE_FIELDS = [
   ["source", "來源", (row) => String(row.source_label || row.source || "").trim()],
   ["offline", "物件狀態", (row) => (
     Number(row.offline_confirmed) === 1
-      ? "確認已下架"
+      ? "已下架"
       : Number(row.offline) === 1
-        ? "下架確認中"
+        ? "物件暫離"
         : "刊登中"
   )],
 ];
