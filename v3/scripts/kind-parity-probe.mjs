@@ -15,22 +15,45 @@
 import { createRequire } from "node:module";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { listingMatchesKindKey, matchesHousingKind, normalizeListQuery } from "./src/floors.js";
+import { listingMatchesKindKey, matchesHousingKind } from "./src/floors.js";
+import {
+  HOUSING_KINDS,
+  LEGACY_RENTAL_KINDS,
+  kindsToQuery,
+  effectiveAppearanceCategories,
+  commercialCategories,
+  elevatorRequired,
+} from "./src/housingQuery.js";
 
-const KIND_KEYS = [
-  "elevator", "apartment", "building", "suite", "yafang", "share",
-  "coliving", "suite_shared", "whole", "shop", "warehouse",
-];
+// key 全集必須來自解析器本身，不能手寫（實測：手寫清單漏 apartment_huaxia，
+// 導致 kind=apartment 有 1,959/2,000 列不一致）。
+const KIND_UNIVERSE = [...new Set([
+  ...(HOUSING_KINDS || []),
+  ...(LEGACY_RENTAL_KINDS || []),
+  "elevator", "apartment", "apartment_huaxia", "suite_shared", "whole",
+])];
 
 // 與 SQL 述詞完全對應的 JS 版本：kindKeys = ",elevator,building," 這種字串。
 export function kindKeysFor(listing) {
-  const keys = KIND_KEYS.filter((key) => listingMatchesKindKey(listing, key) === true);
+  const keys = KIND_UNIVERSE.filter((key) => listingMatchesKindKey(listing, key) === true);
   return keys.length ? `,${keys.join(",")},` : ",";
 }
 
-export function sqlPredicateMatches(kindKeys, requestedKeys) {
-  // 每個請求 key 都要在集合內（Node 端 appearance/commercial 是 some()，已由 resolveHousingKinds 收斂）
-  return requestedKeys.every((key) => kindKeys.includes(`,${key},`));
+// 這一支就是未來要產生的 SQL 形式：每個 has(key) 對應 kind_keys LIKE '%,key,%'，
+// 其餘結構與 floors.js:matchesHousingKind 一行一行對齊。
+export function sqlPredicateMatches(kindKeys, kindArg) {
+  const has = (key) => kindKeys.includes(`,${key},`);
+  const q = kindsToQuery(kindArg);
+  if (q.rentalMode === "any" && !q.categories.length && !q.elevatorManual && !q.legacyRental) return true;
+  if (q.rentalMode === "whole" && !has("whole")) return false;
+  if (q.rentalMode === "suite_shared" && !has("suite_shared")) return false;
+  if (q.rentalMode === "legacy" && q.legacyRental && !has(q.legacyRental)) return false;
+  const appearance = effectiveAppearanceCategories(q);
+  if (appearance.length && !appearance.some(has)) return false;
+  const commercial = commercialCategories(q);
+  if (commercial.length && !commercial.some(has)) return false;
+  if (elevatorRequired(q) && !has("elevator")) return false;
+  return true;
 }
 
 function findDb() {
@@ -56,11 +79,9 @@ function main() {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
   const queries = ["", "elevator", "apartment", "building", "suite", "whole", "shop",
-    "apartment,building", "suite,yafang", "coliving,share"];
-  const resolved = queries.map((arg) => ({
-    arg,
-    keys: normalizeListQuery("all", arg, "").kinds,
-  }));
+    "apartment,building", "suite,yafang", "coliving,share",
+    "warehouse", "whole,elevator", "shop,warehouse", "suite_shared"];
+  const resolved = queries.map((arg) => ({ arg }));
 
   const rows = db.prepare(`SELECT * FROM listings LIMIT ?`).all(limit);
 
@@ -70,7 +91,7 @@ function main() {
     let mismatch = 0;
     for (const row of rows) {
       const node = matchesHousingKind(row, item.arg) === true;
-      const sql = item.keys.length ? sqlPredicateMatches(kindKeysFor(row), item.keys) : true;
+      const sql = sqlPredicateMatches(kindKeysFor(row), item.arg);
       if (node === sql) { if (node) match += 1; continue; }
       mismatch += 1;
       if (stats.mismatches.length < 5) {
