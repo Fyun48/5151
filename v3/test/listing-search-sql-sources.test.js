@@ -46,6 +46,20 @@ test("sources：未指定時不產生來源條件（既有行為不變）", () =
   assert.doesNotMatch(JSON.stringify(result), /p\.source IN/);
 });
 
+test("areaMax：不再 outOfEnvelope，且產生 NULL-通過的面積上限條件", () => {
+  const deps = stubDeps({ getSettings: () => ({ areaMax: 35 }) });
+  const result = buildListingSearchSql({ ...ARGS }, deps);
+  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 200)}`);
+  const text = JSON.stringify(result);
+  assert.match(text, /p\.area IS NULL OR p\.area <= \?/);
+  assert.match(text, /35/);
+});
+
+test("areaMax：0／未設定時不產生面積條件（既有行為不變）", () => {
+  const deps = stubDeps({ getSettings: () => ({ areaMax: 0 }) });
+  assert.doesNotMatch(JSON.stringify(buildListingSearchSql({ ...ARGS }, deps)), /p\.area <=/);
+});
+
 test("kind／q 仍在外框外（尚未補齊，維持既有回退）", () => {
   assert.equal(buildListingSearchSql({ ...ARGS, kind: "building" }, stubDeps())?.ok, false);
   assert.equal(buildListingSearchSql({ ...ARGS, q: "電梯" }, stubDeps())?.ok, false);

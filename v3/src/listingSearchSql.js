@@ -79,9 +79,10 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   const uid = deps.resolveUserId(userId);
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   const settings = settingsOverride || deps.getSettings(uid);
+  // F3 逐項補齊（PR-B）：areaMax 已下推（語意見 floors.js:412-415：area 為 NULL 時視為通過）。
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
-    Number(settings.minBuildingFloors) > 0 || Number(settings.areaMax) > 0 ||
+    Number(settings.minBuildingFloors) > 0 ||
     settings.wholeFloorOnly === true ||
     (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
     (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
@@ -89,6 +90,7 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   ) {
     return outOfEnvelope("settings");
   }
+  const areaMax = Number(settings.areaMax);
 
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
     .map((name) => String(name || "").trim()).filter(Boolean);
@@ -110,6 +112,11 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   if (sourceKeys.length) {
     clauses.push(`p.source IN (${sourceKeys.map(() => "?").join(", ")})`);
     params.push(...sourceKeys);
+  }
+  if (Number.isFinite(areaMax) && areaMax > 0) {
+    // Node 等價（floors.js:412-415）：area 為 NULL 不排除，只有明確大於上限才排除。
+    clauses.push("(p.area IS NULL OR p.area <= ?)");
+    params.push(areaMax);
   }
   // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
