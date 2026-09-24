@@ -19,7 +19,13 @@
     const v = Number(n);
     return Number.isFinite(v) ? `NT$ ${Math.round(v).toLocaleString("zh-Hant-TW")}` : "—";
   };
-  const moneyInput = (n) => (Number.isFinite(Number(n)) ? String(Math.round(Number(n))) : "");
+  // 上限欄位的值：保留小數（單筆上限可能是 0.2 這種零錢級數字，用 Math.round 會變成 0，
+  // 一按儲存就靜默把上限改成 0）。整數欄位輸出仍會是 "20" 這種乾淨字串。
+  const moneyInput = (n) => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return "";
+    return String(Math.round(v * 100) / 100);
+  };
 
   const API = "/api/admin/providers";
 

@@ -149,6 +149,15 @@ test("saveRow 的 payload 用 TWD 數字，刪除金鑰帶 clear_credential", as
   assert.equal(JSON.parse(calls.find((c) => c.method === "PUT").body).clear_credential, true);
 });
 
+test("單筆上限的小數不會被吃掉（0.2 不能變成 0）", async () => {
+  const { mod, doc } = load();
+  await mod.load();
+  const html = doc.getElementById("providersGrid").innerHTML;
+  const distanceRow = html.slice(html.indexOf('data-provider-row="distance_matrix"'));
+  assert.match(distanceRow, /data-field="ceiling_twd" value="0\.2"/);
+  assert.doesNotMatch(distanceRow, /data-field="ceiling_twd" value="0"/);
+});
+
 test("未啟用的類別仍顯示「走免費路徑」的說明，避免誤解為已在花錢", async () => {
   const { mod, doc } = load();
   await mod.load();
