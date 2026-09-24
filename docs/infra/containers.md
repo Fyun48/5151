@@ -21,13 +21,15 @@
 | `591-tracker-v3` | `/mnt/Storage1/apps/5151/docker-compose.yml` ＋ override | 正式站容器（web `127.0.0.1:5153`／`5155`；爬蟲＋worker，`APP_ROLE` 未設＝all） | **postgres** |
 | `5151-ops` | 同上 | OPS Console（埠 5154） | 自己的 `/data`（無 PG 設定） |
 | `591-tracker-tunnel` | 同上（profile `tunnel`） | Cloudflare Tunnel（host network）。**公開站 ingress → `127.0.0.1:25153`（HAProxy）**、OPS → `127.0.0.1:5154` | — |
+| `591-tracker-tunnel-b`（syn-nas） | `~/5151-shadow/cloudflared-public/docker-compose.yml` | **同一個公開 tunnel（`5151`）的第二個 connector**（2026-09-24 補；host network，指到本機 `5151-haproxy-B`） | — |
 | `5151-postgres-B`（syn-nas） | `/root/5151-shadow-ha/shadow-ha/postgres-primary/docker-compose.yml` | **目前的 primary**（`pg_is_in_recovery=f`） | — |
 | `5151-postgres-A`（casa-nas） | 同上的 standby compose | **目前的 hot standby**（`caught_up=t`） | — |
 | `5151-haproxy` | `/opt/5151-shadow/haproxy/docker-compose.yml` | **A 組**入口（25153 網站／25433 PG `pg-rw`／25434 `pg_ro`） | — |
+| `5151-haproxy-B`（syn-nas） | `~/5151-shadow/haproxy/docker-compose.yml` | **B 組**入口（2026-09-24 起；同一個設定檔，web 段 0.0.0.0:25153，供 Synology 的 connector 使用） | — |
 | `5151-web-A` | `/opt/5151-shadow/web-a/docker-compose.yml` | **A 組**網站（2026-09-23 起讀同一套 PG，且**已接手公開站流量**） | **postgres** |
 | `5151-web-B`（syn-nas） | `~/5151-shadow/web-b/docker-compose.yml` | **B 組**網站（2026-09-23 起與 web-A 同版同 PG；HAProxy 的 `web_nodes` 兩台都在） | **postgres** |
 | `5151-worker`（syn-nas） | 同上的 compose（`profiles: ["worker"]`，**預設不啟動**） | B 組的 worker（備援）。原本與 web-B 共用 SQLite 且做白工，2026-09-23 停用 | **postgres**（啟用時） |
-| `5151-crawler` | **手動 `docker run`（沒有 compose）** | **A 組**爬蟲（與 web-a 共用 `/data`，仍寫本機 SQLite） | **sqlite** |
+| `5151-crawler` | 手動 `docker run`（沒有 compose） | **A 組**爬蟲（與 web-a 共用 `/data`）。**2026-09-23 已停用**：與正式站容器自身的爬蟲重複，且佔著 web-a 的 SQLite 鎖 | **sqlite** |
 
 > **2026-09-23 HA 切換（A 組）**：`5151-web-A` 的 image 改成與正式站同一顆 digest
 > （`ghcr.io/fyun48/5151@sha256:43bd376c…`，內建 `src` 與正式站主機掛載的 `src` 逐檔相同），

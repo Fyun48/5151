@@ -1,0 +1,21 @@
+name: 5151-tracker-tunnel-b
+
+# 公開站 tunnel（`5151` / 3adb90bf-e31e-43ab-88af-5606b47fca01）在 Synology 的第二個 connector。
+#
+# 為什麼需要它：公開站的 ingress 是 `http://127.0.0.1:25153`，而 cloudflared 把 `127.0.0.1`
+# 解析成「自己那台主機」。原本只有 CasaOS 的 `591-tracker-tunnel` 一個實例（掛掉＝站掛掉），
+# 現在 Synology 這台也跑一個實例，指到本機的 `5151-haproxy-B`（見 deploy/shadow-ha/haproxy/）。
+# 兩個實例註冊同一條 tunnel → Cloudflare 邊緣可以擇一送；任一台主機掛掉都還有入口。
+#
+# 注意：`~/5151-shadow/cloudflared/`（`5151-cloudflared-B`）接的是**另一條** shadow 測試 tunnel
+# （`5151-shadow-web`，ingress 指 192.168.0.140:25153），與公開站無關，不要混用。
+#
+# ⚠️ `TUNNEL_TOKEN` 放在同目錄 `.env`（chmod 600、不進版控）。這是**正式站 tunnel 的 token**
+# （與 CasaOS `591-tracker-tunnel` 同一條），要當機密保管。
+services:
+  591-tracker-tunnel-b:
+    container_name: 591-tracker-tunnel-b
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
