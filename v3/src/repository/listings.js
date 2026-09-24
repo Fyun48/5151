@@ -56,7 +56,10 @@ const PG_PROJECTION_INDEXES = [
 // F3：CREATE TABLE IF NOT EXISTS 不會替既有表補欄位（pgSchema.js 只做 CREATE，沒有 ALTER），
 // 所以在同一個迴圈裡補 idempotent 遷移，否則新欄位會讓 upsert 多送一個值而整批失敗。
 const PG_PROJECTION_MIGRATIONS = [
-  `ALTER TABLE ${PROJECTION_TABLE} ADD COLUMN IF NOT EXISTS kind_keys TEXT NOT NULL DEFAULT ''`,
+  // 用 `ALTER TABLE IF EXISTS` 是刻意的：ensureProjection() 會用
+  // /(TABLE IF NOT EXISTS |EXISTS |ON )<table>/ 改寫成帶 schema 的形式，
+  // 這個寫法才會被正確加上 schema（在帶 schema 的環境才不會打錯表）。
+  `ALTER TABLE IF EXISTS ${PROJECTION_TABLE} ADD COLUMN IF NOT EXISTS kind_keys TEXT NOT NULL DEFAULT ''`,
 ];
 
 export const LISTINGS_REPOSITORY_TABLES = ["listings", "user_listing_flags", PROJECTION_TABLE];

@@ -1,6 +1,6 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
-import { searchListingsAsync } from "./listingSearchAsync.js";
+import { isListingSearchUnavailable, searchListingsAsync } from "./listingSearchAsync.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
 import {
   armMemberExternalFetchAsync,
@@ -3772,9 +3772,22 @@ app.get("/api/listings", async (req, res) => {
   // exact-equivalence envelope, so fall back to the Node path when it does.
   // The chain is awaited (searchListingsAsync) so the same handler can serve the
   // PostgreSQL driver; with DB_DRIVER=sqlite the returned object is unchanged.
-  const listed = await searchListingsAsync(args, {
-    allowUndecorated: process.env.PG_LISTINGS_UNDECORATED === "1",
-  });
+  let listed;
+  try {
+    listed = await searchListingsAsync(args, {
+      allowUndecorated: process.env.PG_LISTINGS_UNDECORATED === "1",
+    });
+  } catch (error) {
+    // F2：PostgreSQL 失效時回 503 + 穩定錯誤碼（不回退 SQLite）。訊息說明原因與下一步。
+    if (isListingSearchUnavailable(error)) {
+      res.status(503).json({
+        error: "資料庫暫時無法連線，清單目前讀不到；請稍後重試，若持續發生請回報。",
+        code: error.code,
+      });
+      return;
+    }
+    throw error;
+  }
   const queryMs = Date.now() - started;
   const statsStarted = Date.now();
   const statsDetails = {};

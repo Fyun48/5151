@@ -35,6 +35,23 @@ import { createListingsRepository } from "./repository/listings.js";
 // One pool for the process, shared with the write path (see pgSharedDriver.js).
 import { sharedPgDriver } from "./pgSharedDriver.js";
 
+// F2：PostgreSQL 失效時的穩定錯誤碼。呼叫端（server.js）據此回 503，而不是回退 SQLite
+// ——回退會讓「清單看到的資料」與「PG 的真相」無聲分裂，且讓故障無法被看見。
+export const SEARCH_UNAVAILABLE_CODE = "SEARCH_UNAVAILABLE";
+
+export class ListingSearchUnavailableError extends Error {
+  constructor(cause) {
+    super(`listing search unavailable on the postgres driver: ${String(cause?.message || cause || "").slice(0, 200)}`);
+    this.name = "ListingSearchUnavailableError";
+    this.code = SEARCH_UNAVAILABLE_CODE;
+    this.cause = cause;
+  }
+}
+
+export function isListingSearchUnavailable(error) {
+  return error?.code === SEARCH_UNAVAILABLE_CODE || error?.name === "ListingSearchUnavailableError";
+}
+
 // The pre-existing chain, unchanged and shared by both drivers as the fallback.
 export function searchListingsSqlite(args = {}) {
   return (
@@ -104,9 +121,12 @@ export async function searchListingsAsync(args = {}, options = {}) {
     });
     return pageResult(page, listings, { hydrated: "decorated", decoration: "full" });
   } catch (error) {
-    // Never serve a half-decorated page: a preload/decoration failure falls back to the
-    // synchronous SQLite chain instead.
-    if (options.strict) throw error;
-    return searchListingsSqlite(args);
+    // F2：PostgreSQL 失效時**不再**回退 SQLite 鏈（失敗要看得見，資料來源也不該默默換掉）。
+    // 正式路徑一律拋出穩定錯誤碼 → /api/listings 回 503。
+    // options.sqliteFallback 只給測試明確開啟，沒有環境變數開關（不留逃生門）。
+    // options.strict 由呼叫端傳入時行為不變（現在已是預設）。
+    if (options.sqliteFallback === true) return searchListingsSqlite(args);
+    if (isListingSearchUnavailable(error)) throw error;
+    throw new ListingSearchUnavailableError(error);
   }
 }
