@@ -12,6 +12,7 @@ import {
 } from "./geoPrecision.js";
 import {
   HOUSING_KINDS,
+  LEGACY_RENTAL_KINDS,
   commercialCategories,
   effectiveAppearanceCategories,
   elevatorRequired,
@@ -300,6 +301,21 @@ export function listingMatchesKindKey(listing, kind) {
   if (key === "shop") return listingIsShop(listing);
   if (key === "warehouse") return listingIsWarehouse(listing);
   return true;
+}
+
+// F3（PR-B）：投影用的 canonical kind key 集合，回傳 ",key1,key2," 這種可做集合包含比對的字串。
+// 產生與判斷都走同一支 listingMatchesKindKey，因此 SQL 端只需 kind_keys LIKE '%,key,%' 即可與
+// matchesHousingKind()（floors.js:305）等價——等價性證據：v3/scripts/kind-parity-probe.mjs
+// （14 種查詢 × 2,000 列真實資料，mismatch=0）。
+const KIND_KEY_UNIVERSE = [...new Set([
+  ...HOUSING_KINDS,
+  ...(LEGACY_RENTAL_KINDS || []),
+  "elevator", "apartment", "apartment_huaxia", "suite_shared", "whole",
+])];
+
+export function listingKindKeys(listing) {
+  const keys = KIND_KEY_UNIVERSE.filter((key) => listingMatchesKindKey(listing, key) === true);
+  return keys.length ? `,${keys.join(",")},` : ",";
 }
 
 export function matchesHousingKind(listing, kind) {
