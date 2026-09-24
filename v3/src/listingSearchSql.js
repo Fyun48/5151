@@ -55,7 +55,23 @@ function outOfEnvelope(reason) {
   return { ok: false, reason };
 }
 
-// F3：kind 篩選下推。結構逐行鏡射 floors.js:matchesHousingKind；每個 has(key) 對應
+// F3：q（關鍵字）下推。逐行鏡射 db.js:6446-6456 的四個比對（title／address／post_id／watch_note），
+// 但**包上 lower()**：實測原始 LIKE 在兩邊不同（SQLite 對 ASCII 不分大小寫、PG 分大小寫，
+// 6 案中 4 案不一致），改用 lower(x) LIKE lower(?) 後 6 案全部一致（含 CJK 與重音字）。
+function appendQueryClauses(query, uid, clauses, params) {
+  if (!query) return;
+  const like = `%${query}%`;
+  clauses.push(`(
+    lower(title) LIKE lower(?) OR lower(address) LIKE lower(?)
+    OR lower(CAST(post_id AS TEXT)) LIKE lower(?)
+    OR lower(IFNULL((
+      SELECT watch_note FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ?
+    ), '')) LIKE lower(?)
+  )`);
+  params.push(like, like, like, uid, like);
+}
+
 // kind_keys LIKE '%,key,%'（kind_keys 由 listingKindKeys() 用同一支 listingMatchesKindKey 產生）。
 // 等價性證據：v3/scripts/kind-parity-probe.mjs（14 種查詢 × 2,000 列真實資料，mismatch=0）。
 function appendKindClauses(kindArg, clauses, params) {
@@ -105,7 +121,6 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   //（server.js:3759），所以這裡只做集合比對，不會繞過權限。
   const sourceKeys = (Array.isArray(args.sources) ? args.sources : String(args.sources || "").split(/[,|]/))
     .map((item) => String(item || "").trim()).filter(Boolean);
-  if (q) return outOfEnvelope("q");
   if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
 
   const uid = deps.resolveUserId(userId);
@@ -159,6 +174,7 @@ export function buildListingSearchSql(args = {}, deps = {}) {
     clauses.push("p.kind_keys LIKE ?");
     params.push("%,whole,%");
   }
+  appendQueryClauses(q, uid, clauses, params);
   // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");

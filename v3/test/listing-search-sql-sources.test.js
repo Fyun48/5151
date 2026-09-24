@@ -60,6 +60,8 @@ test("areaMax：0／未設定時不產生面積條件（既有行為不變）", 
   assert.doesNotMatch(JSON.stringify(buildListingSearchSql({ ...ARGS }, deps)), /p\.area <=/);
 });
 
-test("q 仍在外框外（尚未補齊，維持既有回退；kind 已於 F3 下推）", () => {
-  assert.equal(buildListingSearchSql({ ...ARGS, q: "電梯" }, stubDeps())?.ok, false);
+test("q 已於 F3 下推（lower() 統一兩邊 LIKE 語意，實測 6 案全部一致）", () => {
+  const built = buildListingSearchSql({ ...ARGS, q: "電梯" }, stubDeps());
+  assert.notEqual(built?.ok, false, "q 應在 envelope 內");
+  assert.match(JSON.stringify(built), /lower\(title\) LIKE lower\(\?\)/);
 });
