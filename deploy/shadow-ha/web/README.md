@@ -102,11 +102,12 @@ SESSION_SECRET='<同一組>' PG_URL='postgres://…@<haproxy>:25433/<db>' SYNOLO
 
 ## 尚未做到
 
-- **SQLite 孤島還沒移植（web 層 HA 的最後一塊）**：`v3/src/searchProfiles.js` 等仍是純 SQLite，
-  兩台 web 各寫各的 → 線上「儲存設定」可能只落在回應你的那一台、列表看起來像空的。
-  2026-09-23 的暫時解法是把正式站的 `DATA_DIR`（v3.db＋媒體）對齊到兩台 web
-  （工具：`/home/cline/scripts/5151-align/`）；**正解是移植到 PostgreSQL**。
-- **媒體沒有共享儲存**：`member-media`／`self-photos` 上傳只落在處理請求的那台主機。
+- **SQLite 孤島**：線上「儲存設定／搜尋設定檔」已於 2026-09-24 移植到 PG
+  （`v3/src/settingsAsync.js` ＋ `repository/memberSettings.js`）→ 兩台 web 現在寫同一套 PG，
+  不會再「看哪一台回答」而不一致。
+- **媒體仍沒有共享儲存**：`member-media`／`self-photos` 上傳只落在處理請求的那台主機
+  （2026-09-23 的暫時解法是把正式站的 `DATA_DIR` 對齊到兩台 web，工具在
+  `/home/cline/scripts/5151-align/`）；這是 web 層 HA 剩下的最後一項。
 - `crawler` 的 shadow compose 尚未收進本目錄（2026-09-23 已停用 `5151-crawler`：它與 web-A 共用
   同一份 SQLite 且與正式站容器自身的爬蟲重複）。Synology 的 `5151-worker` 也是 profile 關閉、未執行。
 

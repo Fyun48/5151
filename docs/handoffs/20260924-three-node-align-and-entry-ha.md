@@ -59,9 +59,14 @@
 
 ## 3. 待辦（照序）
 
-1. **把 SQLite 孤島移植到 PG**（web 層 HA 的最後一塊）：`searchProfiles.js`（搜尋設定檔）、
-   以及任何仍走 `db.prepare()` 的本機狀態；媒體則需要共享儲存（NFS／物件儲存）。
-   → 完成前，公開站的「多節點」對設定／媒體仍是不一致狀態。
+1. ~~**把 SQLite 孤島移植到 PG**（web 層 HA 的最後一塊）：`searchProfiles.js`（搜尋設定檔）~~
+   → **已完成（2026-09-24，PR #476）**：新增 `v3/src/settingsAsync.js` ＋
+   `v3/src/repository/memberSettings.js`，`getSettings／saveSettings／saveAsProfile／loadProfile／
+   deleteProfile／armMemberExternalFetch` 全部 driver-aware，`/api/settings`（GET／POST）與
+   `/api/profiles*` 改走 async 版；純判斷仍在 `settingsState.js`／`db.js`（兩個 driver 共用）。
+   證據：`v3/test/settings-driver-parity.test.js` 離線 4/4 ＋ live 1/1（PG 寫入後讀回）。
+   **媒體（member-media／self-photos）仍需要共享儲存**——那是 web 層 HA 剩下的最後一項。
+2. **`5151-crawler` 與 `5151-worker` 已停用**；若日後要恢復，先確認它們不會再寫各節點自己的 SQLite。
 2. **2.4（provider／budget）修好 PG provider 設定後再重發**（見 §1.3）。
 3. 爬蟲「重新確認」量能長期偏低（過去 6 小時每 10 分鐘約 1 筆；24 小時內只確認 91 筆，
    但近 3 天新增 8,364 筆）→ 查 591 是否在擋。
