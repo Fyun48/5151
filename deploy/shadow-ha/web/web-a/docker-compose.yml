@@ -26,5 +26,7 @@ services:
       TZ: Asia/Taipei
     volumes:
       - ${WEB_A_DATA_DIR:-/opt/5151-shadow/web-a/data}:/data
+      - /mnt/5151-media/member-media:/data/member-media
+      - /mnt/5151-media/self-photos:/data/self-photos
     command: ["node", "src/server.js"]
 

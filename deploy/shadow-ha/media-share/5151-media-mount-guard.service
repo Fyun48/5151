@@ -1,0 +1,8 @@
+[Unit]
+Description=5151 media share mount guard（檢查 /mnt/5151-media 的 NFS 掛載）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/5151-media-mount-guard.sh

@@ -1,0 +1,10 @@
+[Unit]
+Description=每 2 分鐘執行 5151 media share mount guard
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+Unit=5151-media-mount-guard.service
+
+[Install]
+WantedBy=timers.target

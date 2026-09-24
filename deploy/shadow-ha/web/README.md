@@ -105,9 +105,12 @@ SESSION_SECRET='<同一組>' PG_URL='postgres://…@<haproxy>:25433/<db>' SYNOLO
 - **SQLite 孤島**：線上「儲存設定／搜尋設定檔」已於 2026-09-24 移植到 PG
   （`v3/src/settingsAsync.js` ＋ `repository/memberSettings.js`）→ 兩台 web 現在寫同一套 PG，
   不會再「看哪一台回答」而不一致。
-- **媒體仍沒有共享儲存**：`member-media`／`self-photos` 上傳只落在處理請求的那台主機
-  （2026-09-23 的暫時解法是把正式站的 `DATA_DIR` 對齊到兩台 web，工具在
-  `/home/cline/scripts/5151-align/`）；這是 web 層 HA 剩下的最後一項。
+- **媒體共享儲存已完成（2026-09-24）**：`member-media`／`self-photos` 改由 Synology 共用資料夾
+  `/volume1/5151-media` 以 NFS 提供，正式站／`5151-web-A` 掛在 `/mnt/5151-media`、
+  `5151-web-B` 同機直接 bind → **上傳在 A、從 B 讀也拿得到**（實測：用 `saveSelfPhoto` 在 web-A
+  寫入，web-B 讀到 `found:true`）。媒體的**資料表**（`member_media`／`media_tags`）本來就在 PG，
+  三台查詢結果一致。設定、掛載守護與驗收：`deploy/shadow-ha/media-share/README.md`。
+  （2026-09-23 的暫時解法 `scripts/5151-align/` 只在媒體尚未共享時使用，現在不需要再重跑。）
 - `crawler` 的 shadow compose 尚未收進本目錄（2026-09-23 已停用 `5151-crawler`：它與 web-A 共用
   同一份 SQLite 且與正式站容器自身的爬蟲重複）。Synology 的 `5151-worker` 也是 profile 關閉、未執行。
 

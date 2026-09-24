@@ -88,6 +88,22 @@
    與正式站（掛載主機原始碼）是兩條更新路徑——要換 A 組程式就得改 digest 並重建。
    `5151-crawler` 沒有 compose（手動建立）且仍是 SQLite。
 
+## 媒體共享儲存（2026-09-24 起）
+
+`member-media`／`self-photos` 由 Synology 的共用資料夾 `/volume1/5151-media` 提供（NFS），
+三個節點掛載同一份：正式站與 `5151-web-A` 經 NFS（casa 掛在 `/mnt/5151-media`），
+`5151-web-B` 同機直接 bind。**程式不需修改**（路徑固定是 `DATA_DIR/member-media`、`DATA_DIR/self-photos`）。
+
+| 節點 | 掛載 |
+|---|---|
+| `591-tracker-v3`（casa） | `/mnt/5151-media/{member-media,self-photos}` → `/data/{member-media,self-photos}` |
+| `5151-web-A`（casa） | 同上 |
+| `5151-web-B`（syn） | `/volume1/5151-media/...` → `/data/...`（本機，無 NFS） |
+
+⚠️ 正式站的 compose 由 `deploy-v3.yml` 從 repo 覆蓋到 NAS，**改動要改 repo 版**（根目錄 `docker-compose.yml`）。
+完整說明、DSM 設定、fstab、掛載守護（`mount-guard.sh` + timer）與驗收紀錄：
+`deploy/shadow-ha/media-share/README.md`。
+
 ## HA 與資料庫的權威文件（不要重寫）
 
 | 問題 | 來源 |
