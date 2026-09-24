@@ -8770,8 +8770,12 @@
         if (mergeSelectMode || selected.size) exitMergeSelect();
       }
       if (view === "demand") {
-        if (location.hash !== "#demand") history.replaceState({}, "", `${location.pathname}${location.search}#demand`);
         loadDemand().catch(() => {});
+      } else if (location.hash === "#demand" || location.hash === "#wish") {
+        // 2026-09-24：重整要回到「找房」。以前切到許願房時會把 #demand 寫進網址、回到找房又沒清掉，
+        // 導致之後每次重整（或重開）都被帶回許願房。現在只有「明確帶 #demand／#wish 的網址」才會停在
+        // 許願房（舊書籤仍有效），一旦切到其他分頁就把殘留的 hash 清掉。
+        history.replaceState({}, "", `${location.pathname}${location.search}`);
       }
       if (view === "listings") loadDemandExposure().catch(() => {});
       if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); }

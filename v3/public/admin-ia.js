@@ -268,6 +268,14 @@
       aliases: ["外部服務", "整合", "金鑰"],
     },
     {
+      id: "system/providers",
+      group: "system",
+      groupLabel: "系統與整合",
+      label: "外掛與預算",
+      blurb: "五類外部服務（代爬／代理／LLM／洞察／地圖）的啟用、每日與每月預算、金鑰與用量。預設全部關閉。",
+      aliases: ["外掛", "provider", "預算", "budget", "金鑰", "API Key", "zenrows", "scrape_do", "brightdata", "smartproxy", "openai", "qwen", "google routes", "額度", "用量"],
+    },
+    {
       id: "system/status",
       group: "system",
       groupLabel: "系統與整合",
@@ -330,7 +338,7 @@
     { id: "content", label: "站台內容", pages: ["content/brand", "content/spirit", "content/legal", "content/cms", "content/qa", "content/housing"] },
     { id: "comms", label: "通知與溝通", pages: ["comms/notices", "comms/news", "comms/smtp", "comms/templates"] },
     { id: "revenue", label: "收益與曝光", pages: ["revenue/sponsors", "revenue/support", "revenue/campaigns", "revenue/ads"] },
-    { id: "system", label: "系統與整合", pages: ["system/maps", "system/oauth", "system/services", "system/status"] },
+    { id: "system", label: "系統與整合", pages: ["system/maps", "system/oauth", "system/services", "system/providers", "system/status"] },
     { id: "feedback", label: "意見與治理", pages: ["feedback/inbox", "feedback/audit", "crm"] },
   ];
 

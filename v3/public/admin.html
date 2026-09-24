@@ -1710,6 +1710,34 @@
           <h2>外部服務</h2>
           <p class="hint">整合狀態一覽。改設定請到對應頁。</p>
           <div id="servicesGrid"></div>
+          <p class="hint">付費外掛的開關、預算與金鑰：<a href="#system/providers">外掛與預算</a>。</p>
+        </section>
+      </div>
+      <div id="system-providers" class="admin-panel" data-admin-page="system/providers">
+        <section class="card">
+          <h2>外掛與預算</h2>
+          <p class="hint">五類外部服務的開關與預算。<strong>預設全部關閉</strong>：關閉時一律走免費路徑（直接抓取、免費 OSRM 路線…），不會產生任何費用。金鑰以 <code>V3_PROVIDER_SECRET</code> 加密存放於資料庫；<strong>三台節點必須設定同一組金鑰</strong>，否則跨節點解不開。</p>
+          <div id="providersGrid"></div>
+          <p class="msg" id="providersMsg"></p>
+        </section>
+        <section class="card">
+          <h2>全站預算</h2>
+          <p class="hint">所有類別共用的總上限（每類別另有自己的每日上限）。<strong>0＝不限制</strong>。</p>
+          <form id="providersBudgetForm">
+            <div class="grid-2">
+              <div><label for="siteDailyTwd">每日上限（TWD）</label><input id="siteDailyTwd" type="number" min="0" step="1" /></div>
+              <div><label for="siteMonthlyTwd">每月上限（TWD）</label><input id="siteMonthlyTwd" type="number" min="0" step="1" /></div>
+            </div>
+            <div class="row" style="margin:14px 0 0">
+              <button type="submit" class="primary" id="providersBudgetSave">儲存全站預算</button>
+            </div>
+            <p class="msg" id="providersBudgetMsg"></p>
+          </form>
+        </section>
+        <section class="card">
+          <h2>最近用量</h2>
+          <p class="hint">最近 50 筆保留／結算／釋放／錯誤紀錄。沒有付費呼叫時會是空的。</p>
+          <div id="providersLogs"></div>
         </section>
       </div>
       <div id="system-status" class="admin-panel" data-admin-page="system/status">
@@ -2122,6 +2150,7 @@
   <script src="/mascot.js"></script>
   <script src="/admin-ia.js"></script>
   <script src="/admin-support.js"></script>
+  <script src="/admin-providers.js"></script>
   <script>
 
     const $ = (id) => document.getElementById(id);
@@ -2217,6 +2246,7 @@
       if (page.id === "inventory/same-house") loaders.push(loadSameHouse());
       if (page.id === "inventory/health") loaders.push(loadDataHealth());
       if (page.id === "feedback/audit") loaders.push(loadAudit());
+      if (page.id === "system/providers") loaders.push(globalThis.AdminProviders?.load?.());
       if (page.id === "system/services" || page.id === "system/status") loaders.push(loadOverview());
       const settle = () => {
         if (adminFormsReady) IA.finishPageLoad(page.id);
