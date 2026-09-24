@@ -32,7 +32,7 @@
 | `areaMax` | ✅ 下推 | `floors.js:412-415`：area 為 NULL **不排除** → `(p.area IS NULL OR p.area <= ?)` |
 | `kind` | ✅ 下推 | 新增投影欄位 `kind_keys`（由**同一支** `listingKindKeys()`／`listingMatchesKindKey()` 產生）；SQL 述詞逐行鏡射 `floors.js:matchesHousingKind` |
 | `wholeFloorOnly` | ✅ 下推 | `db.js:6480/7183`：Node 以 `skipWholeFloor: Boolean(kind)` 呼叫 → **kind 有值時跳過整層過濾**（已在 SQL 用完全相同判斷） |
-| `q` | ⏳ 待做 | `db.js:6446-6456` 是 4 個 LIKE，但涉及 Node 後處理 |
+| `q` | ⏸ 暫緩（有明確阻塞原因）| `db.js:6446-6456` 是 4 個 `LIKE`，看似可直接下推；但**實測** `LIKE` 的大小寫語意兩邊不同 —— SQLite `'ABC' LIKE 'abc'` → `1`（真）、PG → `false` ⇒ 直接下推會讓 ASCII 查詢（例如 `q=Park`）在兩個 driver 得到不同結果。解法（建議）：改用可攜的 `lower(x) LIKE lower(?)`（CJK 兩邊一致，已實測），再以 Node↔PG parity 框架驗證後才啟用 |
 | `filter ≠ all` | ⏳ 待做 | `watched` 走另一條管線；`suspected`/`offline` 用 `passesPriceFilter` 而非 `applyListingFilter`；另有 `listingMatchesListFilter`/`keepSelfListingForViewer` 後處理 |
 | `sort=fit_desc`、`priceMin`、`minBuildingFloors` | ⏳ 待做 | 屬**評分**語意（`listingScore.js`），不是單表過濾 |
 | `excludeKeywords`／`excludeAgents`／`excludeAgentIds`／`excludeBoxes`／`commuteKm` | ⏳ 待做 | 需文字／代理／幾何欄位，或為 per-user（投影的 `commute_km` 是單一使用者） |
