@@ -39,6 +39,11 @@ if [ -n "$CONT_ID" ]; then
   emit "runtimeHashes" "$(docker exec "$CONT_ID" sha256sum /app/src/db.js /app/src/server.js /app/src/watcher.js /app/src/listingSearchAsync.js /app/public/index.html 2>/dev/null | awk '{printf "%s{\"file\":\"%s\",\"sha256\":\"%s\"}", (NR>1?",":""), $2, $1}')"; echo ","
   emit "sqliteDb" "$(docker exec "$CONT_ID" sh -c 'if [ -e /data/v3.db ]; then printf "{\"bytes\":%s,\"mtime\":\"%s\"}" "$(stat -c %s /data/v3.db)" "$(stat -c %y /data/v3.db)"; else echo null; fi' 2>/dev/null)"; echo ","
   emit "sqliteWal" "$(docker exec "$CONT_ID" sh -c 'if [ -e /data/v3.db-wal ]; then printf "{\"bytes\":%s,\"mtime\":\"%s\"}" "$(stat -c %s /data/v3.db-wal)" "$(stat -c %y /data/v3.db-wal)"; else echo null; fi' 2>/dev/null)"; echo ","
+  emit "dataMount" "\"$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$CONT_ID" 2>/dev/null)\""; echo ","
   emit "health" "\"$(docker exec "$CONT_ID" node -e 'fetch("http://127.0.0.1:5153/api/health").then(r=>r.text()).then(t=>console.log(t.slice(0,100))).catch(e=>console.log("ERR "+e.message))' 2>/dev/null | tr -d '\n')\""; echo ""
+else
+  # 找不到容器時仍輸出合法 JSON（先前版本會多一個逗號而無法解析）
+  emit "revision" 'null'; echo ","
+  emit "note" '"找不到指定容器（可用 EVIDENCE_CONTAINER 指定名稱，例如 5151-web-B）"'; echo ""
 fi
 echo "}"

@@ -74,7 +74,61 @@ counts    : listings 115618 / data_revision 685489 / user_events 7280 /
 - PR-A 錯誤邊界與違規碼 → 未開始（D 節）。
 - PR-B～PR-F → 未開始。
 
-## F. 腳本缺陷（待修）
+## G. web-B（Synology）採證與快照（2026-09-24T13:15Z，**已解除 BLOCKED**）
+
+**重要更正**：先前交接寫「`tori` 無 docker 權限、web-B 的 docker 只能 root 進」是**錯的**（未經實測的推論）。
+實測：`ssh tori@syn-nas`（port 58722，密碼登入）成功，`groups` = `users, administrators, docker` →
+**tori 有 docker 權限**；只是 `docker` 不在非互動 SSH 的 PATH，需 `export PATH=$PATH:/usr/local/bin`。
+Synology 上同時可見 `5151-postgres-B`（PG primary，15432→5432）、`5151-haproxy-B`、`5151-web-B`、`5151-ops`、`591-tracker-tunnel-b`。
+
+### 節點採證（`EVIDENCE_CONTAINER=5151-web-B`）
+
+```json
+{
+  "host": "syn-web-B",
+  "container": {"name":"5151-web-B","id":"52b999061cee"},
+  "revision": "9c6b7b04f9801717cb6696e8e095fde4c309473f",
+  "startedAt": "2026-09-24T11:57:51Z",
+  "restartCount": 0,
+  "dbDriver": "postgres",
+  "pgTarget": "192.168.0.140:25433/5151_shadow",
+  "sqliteDb": {"bytes":465666048,"mtime":"2026-09-24 19:09 +0800"},
+  "sqliteWal": {"bytes":4157112,"mtime":"2026-09-24 19:11 +0800"},
+  "dataMount": "/var/services/homes/tori/5151-shadow/web-b/data",
+  "health": "{\"ok\":true,\"version\":\"3.57\"}"
+}
+```
+
+- **runtime 檔 sha256 與 casa 完全相同**（`db.js 64ea0aa6…`、`server.js d0ce356e…`、`watcher.js b37355e7…`、`listingSearchAsync.js 20c9e19b…`、`index.html 1d830bb0…`）→ 三節點同版 ✓
+- **重要精確化**：web-B 的 SQLite 主檔 mtime = 19:09（本地）＝ **11:09Z**、WAL = 11:11Z → **web-B 自 11:11Z 起就沒有再寫 SQLite**；
+  web-A 的 mtime 也是 19:08／19:10 本地（同樣時間點）。也就是**剩下的持續 SQLite 寫入集中在跑爬蟲的 casa 容器**（`listing_match_evaluations` ≈ 1/秒、`crawl_covers` 每輪重寫）。
+
+### web-B 一致快照（`VACUUM INTO`）
+
+```
+integrity=ok, pageCount=112869, tables=98, bytes=462311424
+sha256=8143a76fba193f854b1d0b6732d88f74d753b854918d0e82ba3e33e7021860e2
+counts: listings 115619 / data_revision 685489 / user_events 7280 /
+        listing_match_evaluations 895182 / crawl_covers 19
+```
+
+封存：`/var/services/homes/tori/backups/5151/sqlite-archive-20260924/`，`cp` ＋ 兩端 sha256 比對 **VERIFY_MATCH**，來源已移除
+（`ls` 因屬性快取列不到，驗證以 `sha256sum <完整路徑>` 為準）。
+**兩節點 SQLite 分歧已實證**：`listing_match_evaluations` casa 861,654（12:56Z）vs web-B **895,182**（13:15Z）；`crawl_covers` casa 2 vs web-B 19。
+
+## H. PG primary 事實（`5151-postgres-B`，2026-09-24T13:16Z，**GATE-11 相關**）
+
+| 項目 | 實查值 | 判讀 |
+|---|---|---|
+| 版本 | PostgreSQL **16.14**（Alpine） | — |
+| `synchronous_commit` | `on`（本機 WAL flush） | 不等於同步複寫 |
+| `synchronous_standby_names` | **空** | ✗ 複寫為**非同步** |
+| `pg_stat_replication` | `walreceiver / streaming / **async** / sent_lsn=replay_lsn=0/B347FDC8 / lag=0 bytes` | 取樣當下無落後，但**非同步 → RPO > 0** |
+| `pg_stat_archiver` | `archived_count=0, failed_count=0, last_archived_time=NULL` | ✗✗ **沒有開啟 WAL 封存 → 沒有 PITR** |
+
+→ 依 ChatGPT 指令文件 §6：**目前不能承諾「已回覆成功的資料一筆不丟」**（非同步複寫），
+且**沒有 PITR**（只有磁碟／volume 層備份）。這兩點應列入 GATE-11 的 FAIL／缺口清單。
+
 
 1. `node-readonly-evidence.sh`：`imageDigest` 為空（見 A 節）；`runtimeHashes` 目前輸出接近 JSON 但缺外層陣列括號（解析時需自行補 `[...]`）。
 2. `sqlite-consistency-snapshot.mjs`：快照暫存在 `/data`（live 目錄）後由 host 搬出；若同一節點多次執行需注意磁碟餘裕（現有 817 GB 可用）。
