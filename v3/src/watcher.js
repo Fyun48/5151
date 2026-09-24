@@ -17,7 +17,6 @@ import {
   listingCommutePatch,
   upsertRouteJob,
   getRouteJob,
-  markCoveringCompleted,
   markListingOffline,
   confirmExpiredOfflineListings,
   restoreListingOnline,
@@ -46,7 +45,8 @@ import {
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
-import { replaceCrawlCovers, touchCrawlCoversRun } from "./crawlCovers.js";
+import { replaceCrawlCovers } from "./crawlCovers.js";
+import { markCoveringCompletedAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
@@ -925,8 +925,9 @@ export async function runWatch(options = {}) {
   if (settings.hasBaseline !== true) {
     saveSettings({ hasBaseline: true });
   }
-  touchCrawlCoversRun(db);
-  markCoveringCompleted({
+  // 整輪完成的紀錄（lastCoveringAt／lastSystemCoveringAt ＋ crawl_covers.last_run_at）要走 driver-aware
+  // 入口：只寫 SQLite 的話，PG 模式的「該抓了」判定永遠讀到舊值 → 每分鐘重跑一整輪（2026-09-24 事故）。
+  await markCoveringCompletedAsync({
     includedUserIds: plan.includedUserIds,
     includeSystem: plan.includeSystem === true,
     at: nowIso(),
