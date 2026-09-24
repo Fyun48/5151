@@ -123,3 +123,25 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
     ⇒ **公開站在 web-A／web-B 之間輪流時不會再出現空設定**。
   - 發版前已把 `user_settings`（186 列）／`user_search_profiles`（3 筆）從正式站 SQLite upsert 進 PG
     （§1.5）；PG 現在是 `user_settings=229`／`profiles=4`（含 PG 原有的列）。
+
+## 5. 媒體共享儲存上線（2026-09-24，web 層 HA 的最後一項）
+
+- **架構**：Synology 共用資料夾 `/volume1/5151-media`（NFS export 給 `192.168.0.140`，
+  Squash＝所有使用者→admin、安全性 sys）→ casa 掛 `/mnt/5151-media`
+  （fstab：`nfs nfsvers=3,soft,timeo=50,retrans=2,_netdev,nofail`）
+  → 正式站與 `5151-web-A` 各 bind 兩個子目錄到 `/data/{member-media,self-photos}`；
+  `5151-web-B` 同機直接 bind `/volume1/5151-media/...`。**程式完全沒改**
+  （路徑本來就是 `DATA_DIR/member-media`、`DATA_DIR/self-photos`）。
+- **三份 compose 已改**：repo 根 `docker-compose.yml`、`deploy/shadow-ha/web/web-a|web-b/docker-compose.yml`；
+  主機端同步套用並保留 `.bak-20260924` 備份。
+  ⚠️ 正式站 compose 由發版流程 SCP 覆蓋 → **改動必須落在 repo 版**，只改 NAS 會被下次發版蓋掉。
+- **掛載守護**：`deploy/shadow-ha/media-share/mount-guard.sh` ＋ systemd timer（casa，每 2 分鐘）。
+  原因：Docker 的 bind mount 在掛載變動後仍指向舊目錄 —— NFS 斷線又重掛時，容器會繼續寫本機空目錄
+  （靜默分歧）。守護程式會「救出本機檔案 → 重掛 → 搬回共享 → 重建容器」。
+- **驗收（實查）**：casa NFS 掛載＋寫入 OK；三個容器各看到 11 個媒體檔；
+  **用 App 的 `saveSelfPhoto` 在 web-A 寫入 → web-B 讀到 `found:true`**
+  （共享目錄檔案擁有者 `admin`，符合 Squash 規則）；`listMemberMediaFor(1)` 三台一致
+  （`media_count=3`、`tag_count=2`）＝ 媒體**資料表**本就走 PG，不是孤島；
+  另做一次「卸載 NFS → 守護程式自動復原 → 容器重建 → 公開站仍 200」的演練。
+- **回退**：刪掉三份 compose 的那兩行 → 重建容器（各節點原本的本機檔案都還在）；
+  casa `umount /mnt/5151-media` ＋ 刪 fstab 該行 ＋ 停用 timer。

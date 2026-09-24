@@ -23,6 +23,8 @@ services:
       PG_URL: ${PG_URL:-}
     volumes:
       - ${V3_DATA_ROOT:-/mnt/Storage1/docker_data/591-tracker-v3}:/data
+      - ${V3_MEDIA_ROOT:-/mnt/5151-media}/member-media:/data/member-media
+      - ${V3_MEDIA_ROOT:-/mnt/5151-media}/self-photos:/data/self-photos
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker:/v1-data:ro
       - ${DATA_ROOT:-/DATA}/AppData/591-tracker-v2:/v2-data:ro
       - ./v3/src:/app/src:ro

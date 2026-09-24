@@ -26,6 +26,8 @@ services:
       TZ: Asia/Taipei
     volumes:
       - ${WEB_B_DATA_DIR:-~/5151-shadow/web-b/data}:/data
+      - /volume1/5151-media/member-media:/data/member-media
+      - /volume1/5151-media/self-photos:/data/self-photos
     command: ["node", "src/server.js"]
 
   # worker 用 profile 關起來（2026-09-23：正式站的 worker 已在跑同一批工作，多一個會搶 job）。
@@ -46,5 +48,7 @@ services:
       TZ: Asia/Taipei
     volumes:
       - ${WEB_B_DATA_DIR:-~/5151-shadow/web-b/data}:/data
+      - /volume1/5151-media/member-media:/data/member-media
+      - /volume1/5151-media/self-photos:/data/self-photos
     command: ["node", "src/server.js"]
 
