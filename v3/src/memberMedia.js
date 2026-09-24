@@ -2,6 +2,12 @@ import { createReadStream, existsSync, mkdirSync, writeFileSync, unlinkSync, rea
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { applySiteWatermark, normalizeImage } from "./imageProcess.js";
+import {
+  deleteMemberMediaObjects,
+  memberMediaCdnUrl,
+  purgeMemberMediaNames,
+  putMemberMediaObjects,
+} from "./media/mediaStore.js";
 
 // 會員照片素材庫（member media library）。
 // 配額為「素材庫總量」：一般會員 30、贊助會員 100（≠ 單一物件照片數）。
@@ -110,6 +116,15 @@ export function memberMediaInternalOriginalPath(name) {
 }
 
 export function servePublicMemberMedia(req, res) {
+  // CDN 模式（MEDIA_SERVE=r2）：公開顯示檔以 302 導向 Cloudflare，位元組不經過本站。
+  // 302 本身帶短快取，且路徑以 .jpg 結尾 → Cloudflare 預設會快取這個轉址，所以只有第一次會回到源站。
+  const name = memberMediaPublicName(req.params?.file);
+  const cdnUrl = name ? memberMediaCdnUrl(name) : "";
+  if (cdnUrl) {
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.redirect(302, cdnUrl);
+    return;
+  }
   const full = memberMediaPublicFilePath(req.params?.file);
   if (!full) {
     res.statusCode = 404;
@@ -229,6 +244,12 @@ export async function saveMemberMedia(db, userId, buffer, {
     writeFileSync(path.join(dir, originalNameKey), processed.main.buffer);
     writeFileSync(path.join(dir, mainName), marked.buffer);
     writeFileSync(path.join(dir, thumbName), markedThumb.buffer);
+    // 公開顯示檔同步寫一份到 R2（`_o.jpg` 未浮水印原圖刻意不上傳）。
+    // r2 模式下失敗＝整筆失敗：寧可請使用者重試，也不要出現「DB 有、CDN 沒有」的圖。
+    await putMemberMediaObjects([
+      { name: mainName, buffer: marked.buffer },
+      { name: thumbName, buffer: markedThumb.buffer },
+    ]);
     const res = db.prepare(
       `INSERT INTO member_media(user_id, storage_key, thumb_key, original_key, original_name, mime, format, width, height, bytes, digest, watermarked, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -242,6 +263,8 @@ export async function saveMemberMedia(db, userId, buffer, {
   } catch (err) {
     try { db.exec("ROLLBACK"); } catch { /* already rolled back */ }
     for (const n of [mainName, thumbName, originalNameKey]) { try { const p = path.join(dir, n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ } }
+    // 交易失敗 → 已上傳的 CDN 物件也要清掉（best-effort）。
+    await deleteMemberMediaObjects([mainName, thumbName]).catch(() => {});
     throw err;
   }
   return getOwnedMedia(db, userId, id);
@@ -265,6 +288,17 @@ export async function reprocessMemberMediaDisplay(db, userId, id, { watermarker 
   writeFileSync(path.join(dir, row.storage_key), marked.buffer);
   if (thumbKey && markedThumb) writeFileSync(path.join(dir, thumbKey), markedThumb.buffer);
   db.prepare("UPDATE member_media SET watermarked=1, bytes=? WHERE id=? AND user_id=?").run(marked.buffer.length, Number(id), Number(userId));
+  // 重算後把新版推上 CDN 並清快取（best-effort：本機檔已成功，不讓 CDN 問題回滾它）。
+  const refreshed = [
+    { name: memberMediaPublicName(row.storage_key), buffer: marked.buffer },
+    thumbKey && markedThumb ? { name: thumbKey, buffer: markedThumb.buffer } : null,
+  ].filter((x) => x && x.name);
+  try {
+    await putMemberMediaObjects(refreshed, { required: false });
+    await purgeMemberMediaNames(refreshed.map((x) => x.name));
+  } catch (error) {
+    console.log(`[memberMedia] 重算後同步 CDN 失敗（忽略）：${String(error?.message || error).slice(0, 160)}`);
+  }
   return { ...getOwnedMedia(db, userId, id), skipped: false };
 }
 
@@ -286,6 +320,11 @@ export function deleteMemberMedia(db, userId, id, { now = new Date() } = {}) {
     ].filter(Boolean)) {
       try { const p = path.join(memberMediaDir(), n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
     }
+    // CDN 端的公開顯示檔一併移除並清快取（best-effort；`_o.jpg` 從未上傳，刪除後最慢 7 天自然失效）。
+    const removed = [memberMediaPublicName(row.storage_key), memberMediaPublicName(row.thumb_key)].filter(Boolean);
+    void deleteMemberMediaObjects(removed)
+      .then(() => purgeMemberMediaNames(removed))
+      .catch(() => {});
   }
   return { deleted: true, kept_file: referenced };
 }
