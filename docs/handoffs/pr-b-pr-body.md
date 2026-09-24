@@ -91,7 +91,37 @@ cat v3/scripts/kind-column-verify.mjs | ssh root@casa-nas 'docker exec -i -e LIM
 - 部署後若 `kind_keys` 尚未回填完成：`kind` 查詢會回空清單 → **務必先完成前置條件 1**。
 - 回退：直接 revert 本 PR 的 commit 即可（投影多出的欄位無害，可保留）。
 
-## 五、本 PR 尚未包含（後續 PR）
+## 六、測試狀態（誠實版）
+
+### 全跑結果（本 PR 分支，實測）
+
+```
+# tests 1648   # pass 1626   # fail 2   # skipped 20
+```
+
+### 修掉一個會讓整套卡死的問題（不是本 PR 的功能變更，但影響每個審查者）
+
+- 現象：兩次獨立全跑都**停在 253 個測試後零進度**（確定性阻塞，不是慢）。
+- 根因：`v3/test/commute-route-live.test.js` 的 `runIsolated()` 用 `spawnSync` 跑子程序但**沒有 timeout**；
+  子程序一卡住，`spawnSync` 就永久阻塞，父層 runner 無法中斷。
+- 處置：加 `timeout: 30_000`（commit `3362945`）→ 全跑因此能完成（253 → 1648 個測試）。
+
+### 兩個失敗的判定
+
+| 失敗 | 判定 | 依據 |
+|---|---|---|
+| `cursor walks past the old 2000-row candidate cap`（`commute-route-live.test.js:141`）| **環境性、與本 PR 無關** | 同一個測試、同樣 100 秒上限：`origin/master` → `exit=124`（卡住、無結果）；本分支 → `exit=1`（快速失敗且可見）⇒ 本 PR 只是把「無聲卡死」變成「明確失敗」 |
+| `guest SQL-first 只在一模一樣的等價範圍內接手，其餘回退 Node 路徑` | **本 PR 的預期影響**（我刻意把 `areaMax` 移出外框）| 用測試自身的量測確定範圍：`{q:null, kind:null, sources:null, fit:null, priceMax:null, areaMax:有值, commuteKm:null, watched:null}` ⇒ 訪客路徑**只有 areaMax** 改走 SQL；測試已改為斷言該行為，現為 6/6 通過 |
+
+（過程中我兩次用推論代替量測而寫錯斷言，已改為「先讓測試自己輸出事實、再寫斷言」。）
+
+### 已知尚未完成
+
+- F3 剩餘項與 F2 的「外框外」回退（見第一節表格）。
+- 端到端（正式 SQL 對 PG 真實資料）的 kind 計數比對：腳本已寫但在 PG 被回填佔用時
+  count 查詢會撞 `statement_timeout`／連線被中止 ⇒ 排在 `kind_keys` 回填完成、PG 閒置時執行。
+- `docs/handoffs/pr-b-pr-body.md` 之外，仍有 PR-A 的證據文件與 GATE-1～12 表待補。
+
 
 - F3 剩餘項（`q`、`filter ≠ all`、`sort=fit_desc`、評分／per-user 類 settings）——將以 repo 既有的
   Node↔PG parity 框架（`withMirroredSchema` + `strict: true`）逐項驗證，不用手寫 SQL 推論。
