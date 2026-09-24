@@ -1797,6 +1797,51 @@
     }
     .match-peer a { color: var(--ink); font-weight: 700; }
     .item.offline { opacity: 0.78; }
+    /* 2026-09-24：已確定下架（確認期滿）改成低密度摘要列——不佔版面，但仍看得見、點得進去。
+       做法是減少欄位與行數，不是再壓低透明度（避免對比低於 4.5:1）。
+       同房源合併卡片一起收斂：先把「費差／規格」那種長文字行收掉，避免整張卡片被撐高。 */
+    .item.off-off,
+    .item:has(.item-cover.empty).off-off {
+      grid-template-columns: 44px minmax(0, 1fr);
+      padding: 8px 10px;
+      gap: 6px 10px;
+    }
+    .item.off-off .pick-hit { grid-column: 1; grid-row: 1; padding: 0; align-items: center; }
+    .item.off-off .item-cover { display: none; }
+    .item.off-off .item-copy { display: contents; }
+    .item.off-off .item-main { grid-column: 2; grid-row: 1; min-width: 0; }
+    .item.off-off .item-details,
+    .item.off-off .contact,
+    .item.off-off .actions,
+    .item.off-off .same-house-panel,
+    .item.off-off .same-house-fold { grid-column: 2; }
+    .item.off-off .item-title {
+      font-size: 14px;
+      margin: 0 0 2px;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .item.off-off .item-details .meta {
+      font-size: 12px;
+      margin: 2px 0;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .item.off-off .rent-price { font-size: 14px; }
+    .item.off-off .item-details .fees,
+    .item.off-off .kit-line,
+    .item.off-off .mrt-line,
+    .item.off-off .watch-note-label,
+    .item.off-off .watch-note,
+    .item.off-off .same-house-fee,
+    .item.off-off .same-house-meta { display: none; }
+    .item.off-off .actions { padding-top: 2px; }
+    .item.offline:not(.off-off) .same-house-fee,
+    .item.offline:not(.off-off) .same-house-meta { display: none; }
     .list-head-sticky {
       position: static;
       z-index: 1;
@@ -3354,7 +3399,7 @@
         <div class="stat"><b>—</b><span>未瀏覽</span></div>
         <div class="stat"><b>—</b><span>特別關注</span></div>
         <div class="stat"><b>—</b><span>已隱藏</span></div>
-        <div class="stat"><b>—</b><span>疑似</span></div>
+        <div class="stat"><b>—</b><span>疑似同源</span></div>
       </div>
       <p class="hint" id="settingsLoadMsg">正在載入已存設定…完成前請不要按儲存。若一直停在這句、儲存也不能按，是網頁程式沒跑起來，不是資料壞了；請重新整理，不要按清除資料。</p>
       <p class="hint" id="profileListHint"></p>
@@ -3458,6 +3503,11 @@
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
           </div>
+          <div class="chip-row" id="watchViewRow" hidden role="group" aria-label="特別關注：要不要看已下架的物件">
+          <button type="button" class="chip on" data-watch-view="all" aria-pressed="true">全部</button>
+          <button type="button" class="chip" data-watch-view="pending" aria-pressed="false">確認下架中</button>
+          <button type="button" class="chip" data-watch-view="confirmed" aria-pressed="false">已確定下架</button>
+          </div>
           <p class="chip-row-label" id="kindRowLabel">房屋類型</p>
           <p class="chip-row-hint" id="kindRowHint">整層與套房是隔局，不能同時選。只選其中一個、沒指定建築樣式時，大樓與公寓／華廈都會列入。大樓與公寓可複選；店面與倉庫只看標題且不能同時選。電梯是加條件，大樓一定有電梯。</p>
           <div class="chip-row" data-chip-row="kind" role="group" aria-labelledby="kindRowLabel">
@@ -3500,6 +3550,7 @@
             <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
             <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
             <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
+            <button type="button" class="primary" id="unwatchSelectedBtn" hidden>取消關注已選</button>
             <button type="button" class="primary" id="mergeSelectedBtn" hidden>併入同房源</button>
             <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
           </div>
@@ -4673,6 +4724,8 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
+    // 特別關注的子檢視：切換要看「進行中／確認下架中／已確定下架」。只影響畫面，不動查詢與配額。
+    let watchView = "all";
     let kinds = ["whole"];
     let listOffset = 0;
     let listCursor = null;
@@ -7111,9 +7164,10 @@
         ["未瀏覽", st.unseen],
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
-        ["疑似", st.suspected],
+        ["疑似同源", st.suspected],
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
       paintWatchChip();
+      paintWatchViewRow();
     }
 
     function formatCostWhen(iso) {
@@ -7539,6 +7593,21 @@
       }
       mergeAutoScroll(y);
     }
+    /** 特別關注的子檢視：確認下架中＝已下架但確認期未滿；已確定下架＝確認期滿（不佔名額）。 */
+    function matchesWatchView(item, view) {
+      const confirmed = Number(item?.offline_confirmed) === 1;
+      const offline = Number(item?.offline) === 1;
+      if (view === "pending") return offline && !confirmed;
+      if (view === "confirmed") return confirmed;
+      return true;
+    }
+
+    /** 子檢視那一列只有在「特別關注」清單才有意義。 */
+    function paintWatchViewRow() {
+      const row = $("watchViewRow");
+      if (row) row.hidden = filter !== "watched";
+    }
+
     function updateBulkBar() {
       const n = selected.size;
       $("bulkBar").classList.toggle("on", n > 0);
@@ -7547,6 +7616,9 @@
       const hint = $("compareHint");
       const mergeBtn = $("mergeSelectedBtn");
       if (mergeBtn) mergeBtn.hidden = n < 2;
+      // 「取消關注已選」只在特別關注清單出現：那是配額管理清單，需要能一次退出多筆。
+      const unwatchBtn = $("unwatchSelectedBtn");
+      if (unwatchBtn) unwatchBtn.hidden = filter !== "watched";
       paintMergeDock();
       if (compareBtn) {
         compareBtn.textContent = `比較（${n}／3）`;
@@ -7743,6 +7815,15 @@
       captureOpenNotes();
       listCache = (Array.isArray(items) ? items : []).map(normalizeListingText);
       items = listCache;
+      // 特別關注的子檢視只裁畫面，不動 listCache（卡片查詢與批次操作仍要能找到被收起的下架物件）。
+      if (filter === "watched") {
+        if (watchView !== "all") items = items.filter((item) => matchesWatchView(item, watchView));
+        // 已確定下架排最後：那批已經結束了，先看你還來得及處理的。
+        items = items
+          .map((item, idx) => ({ item, idx }))
+          .sort((a, b) => (Number(a.item.offline_confirmed) === 1) - (Number(b.item.offline_confirmed) === 1) || a.idx - b.idx)
+          .map((row) => row.item);
+      }
       lastStats = st || {};
       paintWatchChip();
       updateListMeta(items, st);
@@ -7750,6 +7831,11 @@
         const q = $("q").value.trim();
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
+        else if (filter === "watched" && watchView !== "all") {
+          msg = watchView === "pending"
+            ? "目前沒有正在確認下架中的特別關注物件。591 關閉或刪除的刊登會先列在這裡核對，滿設定天數仍找不到就改成「已確定下架」。"
+            : "目前沒有已確定下架的特別關注物件。這些不佔特別關注名額，所以不會壓縮你的配額。";
+        }
         else if (filter === "watched") {
           const used = watchedCount();
           msg = used
@@ -7794,7 +7880,7 @@
             <span class="swipe-hide-hint">不再顯示</span>
             <span class="swipe-watch-hint">特別關注</span>
           </div>
-        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${sameHouseOf(item) ? "has-same-house" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
+        <article class="item ${on ? "picked" : ""} ${item.offline ? "offline" : ""} ${item.offline_confirmed ? "off-off" : ""} ${sameHouseOf(item) ? "has-same-house" : ""} ${isAcefengyunAdmin() && isShezidaoAddress(item) ? "shezidao" : ""}" data-card="${id}">
           <label class="pick-hit"><input class="pick" type="checkbox" data-pick="${id}" ${on ? "checked" : ""} aria-label="選取以比較或批次處理：${esc(item.title || id)}" /></label>
           <a class="item-cover${item.cover ? "" : " empty"}" ${listingLinkAttrs(item)} aria-label="${item.cover ? "物件照片" : "暫無照片"}：${esc(item.title || id)}">
             ${item.cover ? `<img src="${esc(item.cover)}" alt="" referrerpolicy="no-referrer" onerror="this.removeAttribute('src');this.style.display='none';this.parentNode.classList.add('empty');if(!this.parentNode.querySelector('.cover-ph')){var s=document.createElement('span');s.className='cover-ph';s.textContent='暫無';this.parentNode.appendChild(s);}" />` : ""}
@@ -12256,6 +12342,36 @@
       });
       updateBulkBar();
     };
+    $("unwatchSelectedBtn").onclick = async () => {
+      if (isGuest) {
+        remindGuest();
+        return;
+      }
+      const ids = [...selected];
+      if (!ids.length) return;
+      const btn = $("unwatchSelectedBtn");
+      btn.disabled = true;
+      try {
+        const results = await Promise.all(ids.map(async (id) => {
+          const res = await fetch(`/api/listings/${id}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ watched: false }),
+          });
+          return res.ok;
+        }));
+        const okCount = results.filter(Boolean).length;
+        selected.clear();
+        $("status").textContent = okCount === ids.length
+          ? `已取消關注 ${okCount} 筆`
+          : `已取消關注 ${okCount}／${ids.length} 筆，其餘請稍後再試`;
+        await loadList({ force: true });
+      } catch (error) {
+        $("status").textContent = error.message;
+      } finally {
+        btn.disabled = false;
+      }
+    };
     $("hideSelectedBtn").onclick = async () => {
       if (isGuest) {
         remindGuest();
@@ -12396,12 +12512,34 @@
         document.querySelectorAll("[data-filter]").forEach((b) => b.classList.remove("on"));
         btn.classList.add("on");
         filter = btn.dataset.filter;
+        paintWatchViewRow();
         persistSearchState();
         const preview = previewListForFilter(filter);
         loadList({
           keep: !preview,
           paintPreview: preview || undefined,
           busyText: filter === "watched" ? "正在載入特別關注…" : filter === "hidden" ? "正在載入已隱藏物件…" : "正在更新列表…",
+        });
+      };
+    });
+
+    document.querySelectorAll("[data-watch-view]").forEach((btn) => {
+      btn.onclick = () => {
+        watchView = btn.dataset.watchView || "all";
+        document.querySelectorAll("[data-watch-view]").forEach((other) => {
+          const on = other === btn;
+          other.classList.toggle("on", on);
+          other.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        const preview = previewListForFilter(filter);
+        loadList({
+          keep: !preview,
+          paintPreview: preview || undefined,
+          busyText: watchView === "confirmed"
+            ? "正在載入已確定下架的物件…"
+            : watchView === "pending"
+              ? "正在載入確認下架中的物件…"
+              : "正在載入特別關注…",
         });
       };
     });

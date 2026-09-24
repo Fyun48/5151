@@ -79,16 +79,21 @@ export function eventLabel(type, event = {}) {
   return type;
 }
 
-/** webhook 色：全新淺藍、重刊淺綠、費用粉紅、確認已下架才紅、確認下架中不紅。 */
+/**
+ * webhook 色（左側色條＝這則訊息的事件類型）：
+ *   全新＝金黃、重刊＝淺綠、租金變動＝深綠、標題／其他＝棕、
+ *   費用變更＝紫、確認下架中＝紅、確認已下架＝深紅（紅色家族＝下架）。
+ * 沒有「同屋源」單獨的色：那類事件本身會是 relist／fee_update 等。
+ */
 export function embedColor(type, event = {}) {
-  if (type === "new") return 0x7dd3fc;
+  if (type === "new") return 0xfbbf24;
   if (type === "relist") return 0x86efac;
-  if (type === "offline") return Number(event.offline_confirmed) === 1 ? 0xdc2626 : 0x9ca3af;
+  if (type === "offline") return Number(event.offline_confirmed) === 1 ? 0xdc2626 : 0xef4444;
   if (type === "same_source") return 0x7c3aed;
   if (type === "price_drop") return 0x15803d;
   if (type === "price_update") return 0x15803d;
   if (type === "title_update") return 0xb45309;
-  if (type === "fee_update") return 0xf9a8d4;
+  if (type === "fee_update") return 0xa855f7;
   return 0xb45309;
 }
 
@@ -337,21 +342,89 @@ export function formatNotifyFacts(event) {
   ].filter(Boolean).join(" · ");
 }
 
+/** 同房源事件分組（鍵＝same_house_primary_id；沒有這個欄位的不算同組）。 */
+function sameHouseNotifyGroups(events = []) {
+  const groups = new Map();
+  for (const event of events) {
+    const primary = Number(event?.same_house_primary_id) || 0;
+    if (!primary) continue;
+    const list = groups.get(primary) || [];
+    list.push(event);
+    groups.set(primary, list);
+  }
+  return groups;
+}
+
+function sameHouseNotifyTotal(event) {
+  const rent = listingPriceNum(event);
+  const extra = Number(event?.extra_fee) || 0;
+  return (rent > 0 ? rent : 0) + (extra > 0 ? extra : 0);
+}
+
+function sameHouseNotifyStamp(event) {
+  const stamp = Date.parse(String(event?.created_at || event?.cost_changed_at || ""));
+  return Number.isFinite(stamp) ? stamp : 0;
+}
+
+/** 費用變更的事件，detail 本身就寫出變更內容，不必再重貼整份費用清單。 */
+function detailCoversFees(event) {
+  return /費用|額外月費|服務費/.test(String(event?.detail || ""));
+}
+
+/**
+ * webhook 的同房源收斂：一組同房源裡只留「最便宜」與「最新更新」兩則的完整說明欄，
+ * 其餘標成 peer，訊息就不會把同一段規格／位置／費用說明重複貼好幾次。
+ * 沒有同房源兄弟的事件一律是 full，行為與以前相同。
+ */
+export function markSameHouseNotifyDetails(events = []) {
+  const list = Array.isArray(events) ? events : [];
+  const groups = sameHouseNotifyGroups(list);
+  const full = new Set();
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    let cheapest = rows[0];
+    let newest = rows[0];
+    for (const row of rows) {
+      if (sameHouseNotifyTotal(row) < sameHouseNotifyTotal(cheapest)) cheapest = row;
+      if (sameHouseNotifyStamp(row) >= sameHouseNotifyStamp(newest)) newest = row;
+    }
+    full.add(cheapest);
+    full.add(newest);
+  }
+  return list.map((event) => {
+    const primary = Number(event?.same_house_primary_id) || 0;
+    const siblings = primary ? groups.get(primary) || [] : [];
+    const peer = siblings.length > 1 && !full.has(event);
+    return { ...event, same_house_detail: peer ? "peer" : "full" };
+  });
+}
+
+/**
+ * webhook embed 的說明欄（純函式，方便測試）。
+ * - 費用變更：detail 已寫出變更內容，就不再重貼整份費用清單。
+ * - 同房源的 peer：不重複貼規格／位置說明，只留事件、租金與一句指引。
+ */
+export function webhookEmbedDescription(event, { peer = false } = {}) {
+  return [
+    `**${eventLabel(event.type, event)}**${event.detail ? ` · ${event.detail}` : ""}`,
+    event.price ? `${event.price} 元/月` : "",
+    detailCoversFees(event) ? "" : formatFeeLine(event),
+    peer ? "" : formatNotifyFacts(event),
+    peer ? "同房源的另一筆：規格與位置見這一批的最便宜／最新更新那兩則。" : "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 1000);
+}
+
 async function postDiscord(webhook, title, events) {
   if (!webhook) return { ok: true, job_state: "skipped" };
-  const embeds = events.slice(0, 8).map((event) => ({
+  const outbound = markSameHouseNotifyDetails(events);
+  const embeds = outbound.slice(0, 8).map((event) => ({
     title: String(event.title || "591 物件").slice(0, 250),
     url: trackedListingUrl(event.post_id, event.url),
     color: embedColor(event.type, event),
-    description: [
-      `**${eventLabel(event.type, event)}**${event.detail ? ` · ${event.detail}` : ""}`,
-      event.price ? `${event.price} 元/月` : "",
-      formatFeeLine(event),
-      formatNotifyFacts(event),
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, 1000),
+    description: webhookEmbedDescription(event, { peer: event.same_house_detail === "peer" }),
   }));
   try {
     const res = await fetch(webhook, {

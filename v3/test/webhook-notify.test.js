@@ -11,12 +11,14 @@ import {
   listingNotifyVars,
   listingPriceNum,
   listingSmtpReady,
+  markSameHouseNotifyDetails,
   notify,
   parseNotifyChanges,
   shouldDockNotify,
   shouldMailNotify,
   shouldNotify,
   shouldWebhookNotify,
+  webhookEmbedDescription,
 } from "../src/notify.js";
 import { defaultMailTemplates } from "../src/siteMail.js";
 
@@ -361,13 +363,71 @@ test("listing mail keeps the member smtp on the payload", async () => {
 });
 
 test("webhook colors and offline labels", () => {
-  assert.equal(embedColor("new"), 0x7dd3fc);
-  assert.equal(embedColor("relist"), 0x86efac);
-  assert.equal(embedColor("fee_update"), 0xf9a8d4);
-  assert.equal(embedColor("offline", { offline_confirmed: 0 }), 0x9ca3af);
-  assert.equal(embedColor("offline", { offline_confirmed: 1 }), 0xdc2626);
+  assert.equal(embedColor("new"), 0xfbbf24, "全新＝金黃");
+  assert.equal(embedColor("relist"), 0x86efac, "重刊＝淺綠");
+  assert.equal(embedColor("fee_update"), 0xa855f7, "費用變更＝紫");
+  assert.equal(embedColor("price_drop"), 0x15803d);
+  assert.equal(embedColor("offline", { offline_confirmed: 0 }), 0xef4444, "確認下架中＝紅");
+  assert.equal(embedColor("offline", { offline_confirmed: 1 }), 0xdc2626, "確認已下架＝深紅");
   assert.equal(eventLabel("offline", { offline_confirmed: 0 }), "確認下架中");
   assert.equal(eventLabel("offline", { offline_confirmed: 1 }), "確認已下架");
+});
+
+test("同房源在 webhook 只留最便宜與最新更新兩則的完整說明", () => {
+  const events = [
+    { post_id: 1, same_house_primary_id: 9, price: "18000 元/月", extra_fee: 0, created_at: "2026-09-24T01:00:00Z", type: "fee_update" },
+    { post_id: 2, same_house_primary_id: 9, price: "16500 元/月", extra_fee: 0, created_at: "2026-09-24T02:00:00Z", type: "price_drop" },
+    { post_id: 3, same_house_primary_id: 9, price: "17000 元/月", extra_fee: 0, created_at: "2026-09-24T03:00:00Z", type: "relist" },
+  ];
+  assert.deepEqual(
+    markSameHouseNotifyDetails(events).map((event) => [event.post_id, event.same_house_detail]),
+    [[1, "peer"], [2, "full"], [3, "full"]],
+  );
+
+  // 最便宜看的是總月費（租金＋額外月費），不是只看租金。
+  const withExtras = markSameHouseNotifyDetails([
+    { post_id: 11, same_house_primary_id: 5, price: "16000 元/月", extra_fee: 2000, created_at: "2026-09-24T01:00:00Z" },
+    { post_id: 12, same_house_primary_id: 5, price: "17000 元/月", extra_fee: 0, created_at: "2026-09-24T02:00:00Z" },
+    { post_id: 13, same_house_primary_id: 5, price: "17500 元/月", extra_fee: 0, created_at: "2026-09-24T00:00:00Z" },
+  ]);
+  assert.deepEqual(withExtras.map((event) => event.same_house_detail), ["peer", "full", "peer"]);
+
+  // 沒有同房源兄弟（或只有自己）時行為不變，一律是完整說明。
+  assert.equal(markSameHouseNotifyDetails([{ post_id: 4, price: "9000", type: "new" }])[0].same_house_detail, "full");
+  assert.equal(markSameHouseNotifyDetails([{ post_id: 5, same_house_primary_id: 7, price: "9000" }])[0].same_house_detail, "full");
+  assert.deepEqual(markSameHouseNotifyDetails([]), []);
+});
+
+test("webhook 說明欄：費用變更只講變更、同房源 peer 不重貼規格", () => {
+  const base = {
+    type: "fee_update",
+    detail: "費用說明 管理費 1000 → 1500",
+    price: "20000 元/月",
+    address: "台北市中山區",
+    layout: "2房1廳",
+    floor_name: "5F",
+    area_name: "20坪",
+    source: "591",
+    // detail 只提到管理費；水費是「沒變更的那一筆」，不該再被列出來。
+    extra_fees: [{ name: "管理費", value: "1500" }, { name: "水費", value: "300" }],
+  };
+  const feeText = webhookEmbedDescription(base);
+  assert.match(feeText, /費用變更/);
+  assert.match(feeText, /管理費 1000 → 1500/);
+  assert.doesNotMatch(feeText, /水費 300/, "費用變更不該重貼整份費用清單");
+  assert.match(feeText, /台北市中山區/, "規格與位置仍要留著（那不是重複內容）");
+
+  // 非費用事件仍保留完整費用行。
+  const drop = { ...base, type: "price_drop", detail: "價格 20000 → 19000" };
+  const dropText = webhookEmbedDescription(drop);
+  assert.match(dropText, /水費 300/);
+  assert.match(dropText, /20\s*坪/);
+
+  // peer：不重貼規格與位置，但有指引句與租金。
+  const peerText = webhookEmbedDescription(drop, { peer: true });
+  assert.doesNotMatch(peerText, /台北市中山區/);
+  assert.match(peerText, /同房源的另一筆/);
+  assert.match(peerText, /20000 元\/月/);
 });
 
 test("only watched listings get non-new notifications", () => {
