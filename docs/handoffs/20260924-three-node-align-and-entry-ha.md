@@ -92,8 +92,14 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
    ⚠️ **要啟用付費 provider 之前**：三台必須設**同一組** `V3_PROVIDER_SECRET`
    （`budgetGuard.js` 的 `activeSecret()` 依序取 `V3_PROVIDER_SECRET` → `AUTH_PASSWORD` →
    `"v3-local-provider-secret"`），否則在某一台加密的憑證到別台解不開 → 該 category 一律走 fallback。
-3. 爬蟲「重新確認」量能長期偏低（過去 6 小時每 10 分鐘約 1 筆；24 小時內只確認 91 筆，
-   但近 3 天新增 8,364 筆）→ 查 591 是否在擋。
+3. ~~爬蟲「重新確認」量能長期偏低（過去 6 小時每 10 分鐘約 1 筆；24 小時內只確認 91 筆，
+   但近 3 天新增 8,364 筆）→ 查 591 是否在擋。~~
+   → **2026-09-24 更正**：那是**誤用 `listings.last_seen_at` 當健康指標**（程式自己在
+   `adminOverview.js` 註明它「只代表曾經寫入底庫，不是現在健康」）。實際的節奏與通知規則已由
+   Owner 口述並逐條核對程式，記在 **`docs/architecture/crawl-and-notify-rules.md`**：
+   系統依後台設定（生產站 **20 分**）抓取並形成「基地」，會員 **8 分**（贊助 **5 分**）補抓，
+   基地剛跑完的 **90 秒**內會員不重複抓（`RECENT_COVERING_MS`）。
+   **要判斷健康請看後台 IA／底庫頁的「最近一輪結果」**，不要看 `last_seen_at`。
 4. `listings` 有 1 列 `last_checked_at` 內容壞掉（`post_id=2414061000`）。
 5. `5155`（正式站容器的本機別名埠）仍只被 deploy 的健康檢查使用；要收回需同時改 workflow 與
    compose override（會重啟正式站），併入下一次發版。
