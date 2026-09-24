@@ -62,6 +62,20 @@ export async function isSystemCoveringDueAsync(now = Date.now(), options = {}) {
   return now - last >= crawlIntervalMinutes() * 60 * 1000;
 }
 
+// 只更新「抓到哪了」的時間戳（不動 crawl_covers、不碰會員到期時間）。
+// 為什麼需要：取頁階段可能 10 分鐘以上，若只等到整輪結束才寫完成紀錄，
+// isSystemCoveringDue() 在這段期間只會看到上一輪的舊時間（2026-09-24 事故）。
+export async function markCoveringProgressAsync({ at = new Date().toISOString(), includeSystem = false } = {}, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    touchCrawlCoversRun(sqliteHandle());
+    return markCoveringCompleted({ includedUserIds: [], includeSystem, at });
+  }
+  const exec = await pgExec(options);
+  await exec(SITE_SETTING_UPSERT_SQL, ["lastCoveringAt", JSON.stringify(at)]);
+  if (includeSystem) await exec(SITE_SETTING_UPSERT_SQL, ["lastSystemCoveringAt", JSON.stringify(at)]);
+  return { lastCoveringAt: at, lastSystemCoveringAt: includeSystem ? at : "" };
+}
+
 // db.js markCoveringCompleted() ＋ crawlCovers.touchCrawlCoversRun()（PG 分支）。
 // 兩個都是「整輪抓取完成」的紀錄，一起寫才不會出現「時間更新了、覆蓋條件沒更新」的半套狀態。
 export async function markCoveringCompletedAsync({
