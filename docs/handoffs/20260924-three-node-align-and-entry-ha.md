@@ -181,3 +181,42 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 - **驗收（實查）**：三容器 `/media/lib/<hash>.jpg` → **302** 到 `media.reversalplay.me`；
   `_o.jpg` → **404**；R2 上 self-photos 與 `_o.jpg` 皆**不存在**、公開檔**存在**；CDN `MISS→HIT`；公開站 200。
 - **回退**：把 `MEDIA_SERVE` 改回 `local` ＋ 重建容器（本機檔案一直都在，圖片不會掉）。
+
+## 7. 發版（2026-09-24，PR #483）：後台外掛頁＋分頁預設＋收回 5155＋修壞資料
+
+**Release identity**
+
+- source SHA：`ebf695b6224ff35b82339c03ed42b393ecfa071f`（PR #483 squash merge）
+- image digest：`sha256:21ce5bb46a337bff21f509d0074fd820f788e9e8f13cfc508af993caca558d67`
+- predeploy check run `35961287333`（success）；build image run `35961289874`（success）；deploy run `35961651897`（success）
+- 正式站容器 revision `ebf695b6224ff35b82339c03ed42b393ecfa071f`；`5151-web-A` revision 同；
+  `5151-web-B` 同（web-B 的 docker 只能 root 進，改用公開站 12/12 取樣證明）。
+
+**驗收證據（都是實際輸出，不是推論）**
+
+- 正式站容器埠：`591-tracker-v3|127.0.0.1:5153->5153/tcp` → **5155 已消失**；`http://127.0.0.1:5155/api/health` 回 `000`（連不上）。
+- 公開站 `https://jibbyrenth.reversalplay.me/` 200；`index.html` 已是新版（新註解出現 1 次、舊的 `location.search}#demand` 出現 0 次）。
+- 公開站 12 次破壞快取取樣：**新版 12／舊版 0** → A、B 兩台節點都已更新（HAProxy 不會打到舊版）。
+- 線上容器內檔案與本機逐檔 **sha256 相同**：`admin-providers.js 5e2631c4…`、`admin-ia.js cadbafd2…`、
+  `admin.html 293733dc…`、`index.html 41a6f374…`。
+- API 未登入時 `GET /api/admin/providers`、`GET /api/admin/providers/usage`、`PUT /api/admin/providers` 皆 **401**
+  （路由存在且受保護，不是 500）。
+- R2 CDN 仍在服役：`/media/lib/<key>` → 302 → `media.reversalplay.me/…` → 200 `cf-cache-status: HIT`。
+- 壞資料：`listings` 格式異常的 `last_checked_at` 由 **1 → 0** 筆。
+
+**新增的後台頁面（系統與整合 > 外掛與預算，`#system/providers`）**
+
+- 逐類別：啟用／關閉、供應商代碼、每日／每月／單筆上限（TWD）、金鑰（加密存放，留白＝不變更）、
+  「測試連線」、「刪除金鑰」；另有全站每日／每月預算與最近 50 筆用量。
+- 今日額度用盡（`fuse=tripped`）或達 8 成（`warn`）會顯示警示；頁面明講「未啟用走免費路徑、不會花費」「0＝不花錢」。
+- **刻意不改 provider 的執行邏輯、也不自動啟用任何付費供應商** → 上線後仍是四類全關、`provider_secrets` 0 筆、無付費。
+- 之後若要啟用付費供應商：**三台節點必須同一組 `V3_PROVIDER_SECRET`**，否則跨節點解不開金鑰（頁面已寫明）。
+- 測試：`v3/test/admin-providers.test.js`（6 個，含 TWD payload、清除金鑰、額度警示、金鑰狀態文案、
+  空用量提示）；`test/v3-compose.test.js` 與 `v3/test/deploy-v3-workflow.test.js` 同步更新 5155 的期望。
+
+**⚠️ 仍待 Owner 本人確認（我沒有管理員密碼，無法代登入看畫面）**
+
+- 開 `https://jibbyrenth.reversalplay.me/admin.html#system/providers`，確認五個類別卡與「最近用量」符合預期。
+- 前台：進「許願房」後回「找房」再重整，應停在**找房**（不是許願房）。
+- 想確認爬蟲健康：看「房源與資料 > 抓取範圍與排程」的「最近一輪結果」（**不要**看 `last_seen_at` 當健康指標）。
+
