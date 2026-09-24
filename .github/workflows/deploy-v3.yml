@@ -331,8 +331,6 @@ jobs:
             python3 -c 'import json; d=json.load(open("/tmp/v3-health.json")); assert d.get("ok") is True'
             curl -fsS -o /dev/null http://127.0.0.1:5153/
             curl -fsS -o /dev/null http://127.0.0.1:5153/login.html
-            # 2026-09-24：收回 5155 別名埠。原本這裡會再對 http://127.0.0.1:5155 做一次同樣的檢查，
-            # 但那只是同一個容器的第二個埠對應；公開入口早已走 HAProxy 25153，5155 已無用途。
             RUNNING="$(docker inspect -f '{{.State.Status}}' 591-tracker-v3)"
             [ "$RUNNING" = "running" ]
             CFG_IMAGE="$(docker inspect -f '{{.Config.Image}}' 591-tracker-v3)"

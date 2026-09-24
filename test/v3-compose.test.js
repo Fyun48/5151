@@ -15,11 +15,12 @@ function serviceBlock(yaml, name) {
   return rest.slice(0, next === -1 ? rest.length : next);
 }
 
-test("v3 docker service binds 5153/5155 and mounts historical dbs read-only", () => {
+test("v3 docker service binds 5153 only (5155 alias reclaimed 2026-09-24) and mounts historical dbs read-only", () => {
   const compose = readFileSync(path.join(root, "docker-compose.yml"), "utf8");
   const v3 = serviceBlock(compose, "591-tracker-v3");
   assert.match(v3, /127\.0\.0\.1:5153:5153/);
-  assert.match(v3, /127\.0\.0\.1:5155:5153/);
+  // 2026-09-24：5155 別名埠已收回（公開入口走 HAProxy 25153），不得再發佈。
+  assert.doesNotMatch(v3, /127\.0\.0\.1:5155:5153/);
   assert.match(v3, /\$\{V3_DATA_ROOT:-\/mnt\/Storage1\/docker_data\/591-tracker-v3\}:\/data/);
   assert.match(v3, /591-tracker-v2:\/v2-data:ro/);
   assert.match(v3, /591-tracker:\/v1-data:ro/);
@@ -37,7 +38,7 @@ test("CasaOS compose lists v3 as the only app on port 5153", () => {
   assert.match(casaos, /^  main: 591-tracker-v3\s*$/m);
   assert.match(casaos, /591-tracker-v3:/);
   assert.match(casaos, /port_map: "5153"/);
-  assert.match(casaos, /127\.0\.0\.1:5155:5153/);
+  assert.doesNotMatch(casaos, /127\.0\.0\.1:5155:5153/);
   assert.match(casaos, /jibbyrenth\.reversalplay\.me/);
   assert.doesNotMatch(casaos, /c5151\.reversalplay\.me/);
   assert.doesNotMatch(casaos, /^  591-tracker:\s*$/m);
@@ -59,7 +60,7 @@ test("OPS console is a separate loopback service on 5154", () => {
   // v3 仍是唯一 live app，cloudflared 仍指向 v3；OPS 不得取代 v3
   const v3 = serviceBlock(compose, "591-tracker-v3");
   assert.match(v3, /127\.0\.0\.1:5153:5153/);
-  assert.match(v3, /127\.0\.0\.1:5155:5153/);
+  assert.doesNotMatch(v3, /127\.0\.0\.1:5155:5153/);
   const tunnel = serviceBlock(compose, "cloudflared");
   assert.match(tunnel, /cloudflared/);
   assert.doesNotMatch(tunnel, /5154/);
