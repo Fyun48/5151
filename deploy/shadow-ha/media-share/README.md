@@ -71,6 +71,51 @@ systemctl daemon-reload && systemctl enable --now 5151-media-mount-guard.timer
 | 媒體 metadata | 三台 `listMemberMediaFor(1)` 結果一致（`media_count:3`、`tag_count:2`，`driver=postgres`）— 資料表本就走 PG，不是孤島 |
 | 公開站 | 重建過程中與完成後皆 200（重建 web-A／web-B 時由另一台承接） |
 
+## Cloudflare R2（CDN 直送；2026-09-24 起可選）
+
+除了上面「三個節點共享同一份檔案」之外，會員素材庫的**公開顯示檔**可以再交給 Cloudflare R2，
+由 CDN 直接送給瀏覽器（位元組不經過 NAS）。開關是 `MEDIA_SERVE=local|r2`，**預設 `local`＝行為完全不變**。
+
+### 規則（資安與著作權）
+
+| 檔案 | 去哪裡 | 原因 |
+|---|---|---|
+| `member-media/<hash>.jpg`（已浮水印顯示圖） | **R2 → CDN 直送** | 本來就是給人看的圖 |
+| `member-media/<hash>_t.jpg`（縮圖） | **R2 → CDN 直送** | 同上 |
+| `member-media/<hash>_o.jpg`（未浮水印原圖） | **只在本機** | 程式刻意標記不對外；`r2KeyForMemberMedia()` 對它一律回空字串 |
+| `self-photos/<hash>.(jpg\|png\|webp)`（身分自拍） | **只在本機** | 敏感個資 |
+| 591 等外部平台的物件圖（`listings.cover`） | **維持外連** | 不重製他人內容（2026-09-24 決策） |
+
+- **寫入**：`local` 模式只寫本機；`r2` 模式「R2 ＋ 本機」雙寫，R2 失敗＝整筆失敗（寧可請使用者重試，
+  也不要出現「DB 有、CDN 沒有」的圖）。本機那份同時是備援。
+- **讀取**：`r2` 模式下 `/media/lib/:file` 以 **302 導向 CDN**（302 帶 5 分鐘快取、路徑以 `.jpg` 結尾
+  → Cloudflare 會快取這個轉址，只有第一次回到源站）。URL 格式不變，因此擁有權檢查
+  （`ownsMediaUrl`）、`isMemberMediaUrl`、listing 儲存與通知信都不必改。
+- **快取**：CDN 物件 `cache-control: public, max-age=604800`（7 天）。刪除／重新浮水印後會**主動清除
+  CF 快取**（需要 `R2_PURGE_TOKEN`，僅 Cache Purge 權限）；即使清除失敗，最慢 7 天自然失效。
+- **回退**：把 `MEDIA_SERVE` 改回 `local` 並重建容器即可（本機檔案一直都在，圖片不會掉）。
+
+### 需要的環境變數（`MEDIA_SERVE=r2` 時）
+
+| 變數 | 說明 |
+|---|---|
+| `MEDIA_SERVE` | `r2` 或 `local`（預設） |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 的 S3 憑證（`/home/cline/.secrets/cloudflare/r2.env`） |
+| `R2_BUCKET` | `5151-media` |
+| `R2_ENDPOINT` | `https://<account>.r2.cloudflarestorage.com` |
+| `R2_MEDIA_DOMAIN` | `https://media.reversalplay.me`（自訂網域 → CNAME `public.r2.dev`，proxied） |
+| `R2_ZONE_ID` / `R2_PURGE_TOKEN` | 選擇性；有設才會主動清快取（權杖只有 Cache Purge 權限） |
+
+⚠️ **不能放進 `.env`**：`deploy-v3.yml` 每次發版都會用 `printf … > .env` 覆寫 web 節點的 `.env`。
+web-A／web-B 請寫在**主機 compose 的 `environment:`**（發版不會覆寫 compose）；正式站寫在
+`/mnt/Storage1/apps/5151/.env`（發版會覆寫 compose，但**不動 `.env`**）。
+
+### 實測（2026-09-24）
+
+- R2 物件：`PUT 200`、`HEAD 200`、`DELETE 204`、刪除後 `HEAD 404`
+- CDN：`cf-cache-status` 第一次 `MISS`、之後 `HIT`；`cache-control: public, max-age=604800`
+- 清除快取：`POST /zones/<id>/purge_cache` → `success: true`
+
 ## 回退
 
 1. 三份 compose 各刪掉那兩行 → 重建容器（回到各節點本機目錄；原本的檔案都還在，未被刪除）。
