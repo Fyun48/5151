@@ -120,7 +120,8 @@ cat v3/scripts/kind-column-verify.mjs | ssh root@casa-nas 'docker exec -i -e LIM
 - F3 剩餘項與 F2 的「外框外」回退（見第一節表格）。
 - 端到端（正式 SQL 對 PG 真實資料）的 kind 計數比對：腳本已寫但在 PG 被回填佔用時
   count 查詢會撞 `statement_timeout`／連線被中止 ⇒ 排在 `kind_keys` 回填完成、PG 閒置時執行。
-- `docs/handoffs/pr-b-pr-body.md` 之外，仍有 PR-A 的證據文件與 GATE-1～12 表待補。
+- **GATE-1～12 證據表**：已建立 `docs/handoffs/gate-1-12-evidence-20260924.md`（判定 PASS／PARTIAL／NOT_RUN／BLOCKED／**FAIL**，
+  含可重現證據位置與缺口；其中 **GATE-12 判為 FAIL**：實跑顯示 20 個 PG 依賴測試因缺 PG 而 skip）。
 
 
 - F3 剩餘項（`q`、`filter ≠ all`、`sort=fit_desc`、評分／per-user 類 settings）——將以 repo 既有的
