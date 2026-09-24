@@ -1,0 +1,25 @@
+name: 5151-shadow-haproxy-b
+
+# Synology（TORI_NAS01，192.168.0.220）上的第二份 HAProxy。
+#
+# 為什麼需要它：Cloudflare Tunnel 的 ingress 是 `http://127.0.0.1:25153`，而 cloudflared
+# 解析 `127.0.0.1` 是「該台主機自己」——所以要在 Synology 補第二個 connector，就必須在
+# Synology 本機也有一個 25153 的入口（＝這份 HAProxy）。
+# 兩台的 HAProxy 都是 roundrobin 到同一組 web-a／web-b，因此任一主機掛掉都還有入口。
+#
+# 與 CasaOS 上的 `5151-haproxy` 成對（那份在 /opt/5151-shadow/haproxy/）。發版流程不碰它們。
+services:
+  5151-haproxy-B:
+    container_name: 5151-haproxy-B
+    image: haproxy:2.9-alpine
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:25433:25433"
+      - "0.0.0.0:25434:25434"
+      - "0.0.0.0:25153:15153"
+    volumes:
+      # ⚠️ 單檔 bind mount 綁的是 inode：要改設定只能「就地改寫」（例如 python open(path,'w')），
+      # 用 `awk … > f.new && mv f.new f` 換檔不會生效（容器還看到舊 inode）。
+      # 改完先 `docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`
+      # 再 `docker exec 5151-haproxy-B kill -s HUP 1`。詳見 runbook §6。
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro

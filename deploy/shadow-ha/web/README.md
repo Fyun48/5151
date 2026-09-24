@@ -15,18 +15,26 @@ HAProxy round-robin 兩台；公開站經 Cloudflare Tunnel 進 CasaOS 的 `2515
 
 ```
 CasaOS  (CASAOS_HOST=192.168.0.140)
-├─ 5151-web-A        APP_ROLE=web   (0.0.0.0:15153 -> 5153)
-├─ 5151-haproxy      (haproxy.cfg，web 段；對外 0.0.0.0:25153)
-└─ 5151-cloudflared-A  tunnel（目前唯一的 connector；host net）
+├─ 5151-web-A            APP_ROLE=web   (0.0.0.0:15153 -> 5153)
+├─ 5151-haproxy          web 段對外 0.0.0.0:25153（＋pg_rw 25433／pg_ro 25434）
+├─ 591-tracker-tunnel    公開 tunnel（`5151`）的 connector #1
+└─ 5151-cloudflared-A    shadow 測試 tunnel（`5151-shadow-web`）的 connector
 
 Synology (SYNOLOGY_HOST=192.168.0.220)
-└─ 5151-web-B        APP_ROLE=web   (0.0.0.0:15153 -> 5153)
+├─ 5151-web-B            APP_ROLE=web   (0.0.0.0:15153 -> 5153)
+├─ 5151-haproxy-B        同上，web 段對外 0.0.0.0:25153
+├─ 591-tracker-tunnel-b  公開 tunnel（`5151`）的 connector #2（2026-09-24 補上）
+└─ 5151-cloudflared-B    shadow 測試 tunnel 的 connector
 ```
 
-> 原始設計是「同一條 tunnel 兩個 connector（A/B 各一）」，**目前只跑 CasaOS 的
-> `5151-cloudflared-A`**；Synology 上沒有 B connector（`5151-cloudflared-B` 未部署）。
-> tunnel 的 ingress → `127.0.0.1:25153`（= CasaOS 的 HAProxy）→ 輪詢 A/B 兩台 web。
-> 詳見 `docs/infra/containers.md`。
+> **公開入口（`jibbyrenth`）＝ tunnel `5151`（`3adb90bf-e31e-43ab-88af-5606b47fca01`）
+> → `http://127.0.0.1:25153` → 各主機自己的 HAProxy → roundrobin web-a／web-b。**
+> 兩台主機各有一個 connector 加入這條 tunnel，所以**任一主機整台掛掉都還有入口**。
+> 2026-09-24 入口層演練：停掉 CasaOS 的 `591-tracker-tunnel` 約 30 秒，公開站 **32/32 次全部 200**
+> （由 Synology 的 connector ＋ `5151-haproxy-B` 接手）；設定與可重跑步驟見
+> `deploy/shadow-ha/cloudflared/`。
+> ⚠️ `5151-cloudflared-A／B` 接的是**另一條** shadow 測試 tunnel（`5151-shadow-web`，ingress 指
+> `192.168.0.140:25153`），與公開站無關，不要混用（名稱很像，容易誤判）。
 
 - web 節點綁 **0.0.0.0**：另一台的 HAProxy health check 要連得到（綁 127.0.0.1 只有本機可見
   → 跨主機節點一律 DOWN）。
@@ -94,10 +102,13 @@ SESSION_SECRET='<同一組>' PG_URL='postgres://…@<haproxy>:25433/<db>' SYNOLO
 
 ## 尚未做到
 
-- **tunnel 仍是單點**：只有 CasaOS 的 `5151-cloudflared-A`；Synology 沒有第二個 connector。
-  CasaOS 整台掛掉時，HAProxy 與 Web 的冗餘派不上用場（入口就斷了）。
-- `crawler` 的 shadow compose 尚未收進本目錄（跑在 CasaOS、共用 web-a 的 data）；
-  Synology 的 `5151-worker` 用 web-b compose 的 `profiles: ["worker"]` 關著（正式站的 worker 已在做同一批工作）。
+- **SQLite 孤島還沒移植（web 層 HA 的最後一塊）**：`v3/src/searchProfiles.js` 等仍是純 SQLite，
+  兩台 web 各寫各的 → 線上「儲存設定」可能只落在回應你的那一台、列表看起來像空的。
+  2026-09-23 的暫時解法是把正式站的 `DATA_DIR`（v3.db＋媒體）對齊到兩台 web
+  （工具：`/home/cline/scripts/5151-align/`）；**正解是移植到 PostgreSQL**。
+- **媒體沒有共享儲存**：`member-media`／`self-photos` 上傳只落在處理請求的那台主機。
+- `crawler` 的 shadow compose 尚未收進本目錄（2026-09-23 已停用 `5151-crawler`：它與 web-A 共用
+  同一份 SQLite 且與正式站容器自身的爬蟲重複）。Synology 的 `5151-worker` 也是 profile 關閉、未執行。
 
 ## 實際佈署狀態
 
