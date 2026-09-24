@@ -280,10 +280,13 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 **驗收證據（實際輸出）**
 
 - deploy run `35967608157` **completed success**。
-- 線上 v3 image：`ghcr.io/fyun48/5151@sha256:8b9e50dc15e96ab88afff55b94372f01aa32f7d15ade6b2b55dc27885521824c`（就是這次建的 digest）。
-- 正式站容器埠：`127.0.0.1:5153->5153/tcp`（沒有 5155，上一版的收回維持住）。
-- 線上容器內檔案與本機 **sha256 相同**：`index.html 8ce5008d…`、`notify.js d3bcd098…`（代表前台與 Discord 訊息程式都是這一版）。
-- 公開站 `https://jibbyrenth.reversalplay.me/` 200；**12 次破壞快取取樣 12／12 都含 `data-watch-view="confirmed"`**（A、B 兩台節點都已更新）。
+- 線上 v3 image：`ghcr.io/fyun48/5151@sha256:8b9e50dc15e96ab88afff55b94372f01aa32f7d15ade6b2b55dc27885521824c`
+  （就是這次建的 digest）。
+- 正式站容器埠：`127.0.0.1:5153->5153/tcp`（沒有 5155；上一版的收回維持住）。
+- 線上容器內檔案與本機 **sha256 相同**：`index.html 8ce5008d…`、`notify.js d3bcd098…`
+  （代表前台與 Discord 訊息程式都是這一版）。
+- 公開站 `https://jibbyrenth.reversalplay.me/` 200；**12 次破壞快取取樣 12／12 都含
+  `data-watch-view="confirmed"`**（A、B 兩台節點都已更新）。
 - 瀏覽器（本機假後端、三筆假物件）驗證：子檢視各只顯示對應卡片、已確定下架卡 220px vs 一般卡 332px、
   統計標籤「疑似同源」、0 console error。
 
@@ -291,4 +294,4 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 
 - 前台特別關注：點「特別關注」後應出現「全部／確認下架中／已確定下架」，勾選後「取消關注已選」可整批退出。
 - 已確定下架的卡片應明顯比其他卡片矮（沒有照片、單行標題）。
-- Discord：收到費用變更＝紫色、全新物件＝金黃、確認下架中＝紅色；同房源不會重複貼同一段說明。
+- Discord：費用變更＝紫色、全新物件＝金黃、確認下架中＝紅色；同房源不會重複貼同一段說明。
