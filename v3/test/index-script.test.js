@@ -944,3 +944,36 @@ test("safeListingHtml uses a tag whitelist instead of a loose blacklist", () => 
   assert.match(out, /<b>採光<\/b>/);
   assert.doesNotMatch(out, /img|href|evil|onerror/i);
 });
+
+test("特別關注可切換下架狀態子檢視，並可整批取消關注", () => {
+  const html = pub("index.html");
+  assert.match(html, /id="watchViewRow"/);
+  assert.match(html, /data-watch-view="all"/);
+  assert.match(html, /data-watch-view="pending"/);
+  assert.match(html, /data-watch-view="confirmed"/);
+  assert.match(html, /function matchesWatchView\(/);
+  assert.match(html, /function paintWatchViewRow\(/);
+  assert.match(html, /paintWatchViewRow\(\);/);
+  assert.match(html, /id="unwatchSelectedBtn"/);
+  assert.match(html, /取消關注已選/);
+  assert.match(html, /watched: false/);
+  assert.match(html, /已確定下架排最後/);
+});
+
+test("已確定下架的卡片改用低密度樣式（不是再壓低透明度）", () => {
+  const html = pub("index.html");
+  assert.match(html, /item\.offline_confirmed \? "off-off" : ""/);
+  assert.match(html, /\.item\.off-off,[\s\S]{0,160}grid-template-columns: 44px minmax\(0, 1fr\)/);
+  assert.match(html, /\.item\.off-off \.item-cover \{ display: none; \}/);
+  assert.match(html, /\.item\.off-off \.item-details \.fees,[\s\S]{0,200}\.item\.off-off \.mrt-line/);
+  // 下架中的合併卡片先把費差／規格行收起來，避免被撐高。
+  assert.match(html, /\.item\.offline:not\(\.off-off\) \.same-house-fee,[\s\S]{0,80}\.item\.offline:not\(\.off-off\) \.same-house-meta \{ display: none; \}/);
+});
+
+test("搜尋設定的統計框寫「疑似同源」", () => {
+  const html = pub("index.html");
+  assert.match(html, /<span>疑似同源<\/span>/);
+  assert.match(html, /\["疑似同源", st\.suspected\]/);
+  assert.doesNotMatch(html, /<span>疑似<\/span>/);
+});
+
