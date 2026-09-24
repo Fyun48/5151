@@ -788,7 +788,7 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.match(html, /recheck\?fresh=1/);
   assert.match(html, /併入同房源/);
   assert.match(html, /function mergeSelectedListings/);
-  assert.match(html, /確認下架中/);
+  assert.match(html, /物件暫離/);
   assert.match(html, /只打特別關注/);
   assert.match(html, /body.merge-selecting .item:has\(\.item-cover.empty\)/);
   assert.doesNotMatch(html, /listing-status off-sure/);
@@ -945,22 +945,50 @@ test("safeListingHtml uses a tag whitelist instead of a loose blacklist", () => 
   assert.doesNotMatch(out, /img|href|evil|onerror/i);
 });
 
-test("特別關注可切換下架狀態子檢視，並可整批取消關注", () => {
+test("特別關注的子檢視預設只看還在的，並可整批取消關注", () => {
   const html = pub("index.html");
   assert.match(html, /id="watchViewRow"/);
-  assert.match(html, /data-watch-view="all"/);
-  assert.match(html, /data-watch-view="pending"/);
-  assert.match(html, /data-watch-view="confirmed"/);
+  // 子按鈕只有兩個：物件暫離／已下架；沒有「全部」（預設就是都不選，只看還在的）。
+  assert.match(html, /data-watch-view="pending" aria-pressed="false">物件暫離/);
+  assert.match(html, /data-watch-view="confirmed" aria-pressed="false">已下架/);
+  assert.doesNotMatch(html, /data-watch-view="all"/);
+  assert.match(html, /let watchView = ""/);
   assert.match(html, /function matchesWatchView\(/);
+  // 預設（子按鈕都沒選）要排除暫離與已下架。
+  assert.match(html, /return !offline && !confirmed;/);
+  // 再點同一個＝取消選取，回到預設。
+  assert.match(html, /watchView = watchView === next \? "" : next;/);
   assert.match(html, /function paintWatchViewRow\(/);
   assert.match(html, /paintWatchViewRow\(\);/);
   assert.match(html, /id="unwatchSelectedBtn"/);
   assert.match(html, /取消關注已選/);
   assert.match(html, /watched: false/);
-  assert.match(html, /已確定下架排最後/);
 });
 
-test("已確定下架的卡片改用低密度樣式（不是再壓低透明度）", () => {
+test("批次按鈕放在浮動列，勾選後往下捲也點得到", () => {
+  const html = pub("index.html");
+  const dock = html.slice(html.indexOf('id="mergeDock"'), html.indexOf('id="ownerFab"'));
+  assert.ok(dock.length > 0, "mergeDock 應該存在");
+  for (const id of [
+    "selectedCount",
+    "selectPageBtn",
+    "clearSelectBtn",
+    "compareSelectedBtn",
+    "hideSelectedBtn",
+    "unwatchSelectedBtn",
+    "mergeConfirmBtn",
+  ]) {
+    assert.match(dock, new RegExp(`id="${id}"`), `${id} 應該在浮動列裡`);
+  }
+  // 列表上方不再有 bulk bar（按鈕搬走後就不需要了）。
+  assert.doesNotMatch(html, /id="bulkBar"/);
+  assert.doesNotMatch(html, /\$\("bulkBar"\)/);
+  // 勾了任何一筆就把浮動列顯示出來。
+  assert.match(html, /const show = n >= 1;/);
+  assert.match(html, /#mergeDock \.dock-count/);
+});
+
+test("已下架的卡片改用低密度樣式（不是再壓低透明度）", () => {
   const html = pub("index.html");
   assert.match(html, /item\.offline_confirmed \? "off-off" : ""/);
   assert.match(html, /\.item\.off-off,[\s\S]{0,160}grid-template-columns: 44px minmax\(0, 1fr\)/);

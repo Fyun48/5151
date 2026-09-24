@@ -888,14 +888,28 @@
       z-index: 95;
       gap: 8px;
       align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
       padding: 8px;
+      max-width: min(96vw, 760px);
       background: var(--paper);
       border: 1px solid var(--line);
       border-radius: var(--radius-lg);
+      box-shadow: 0 6px 22px rgba(15, 23, 42, 0.2);
     }
     body.merge-selecting #mergeDock,
     #mergeDock.on { display: flex; }
-    #mergeDock button { min-height: var(--touch); min-width: var(--touch); padding: 0 14px; }
+    #mergeDock button { min-height: var(--touch); min-width: var(--touch); padding: 0 14px; white-space: nowrap; }
+    /* 勾選後的批次操作改放在這條浮動列：畫面往下捲也點得到，不必回頭找列表上方的按鈕。 */
+    #mergeDock .dock-count { font-size: var(--text-sm); color: var(--muted); padding: 0 4px; white-space: nowrap; }
+    #mergeDock .compare-hint { width: 100%; margin: 0; }
+    @media (max-width: 767px) {
+      /* 手機：單列橫滑，固定在底部；按鈕高 44px，不會蓋掉太多畫面。 */
+      #mergeDock { left: 12px; right: 12px; transform: none; max-width: none; justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
+      #mergeDock .compare-hint { display: none; }
+    }
+    /* .chip-row 是 display:flex，會蓋掉 UA 的 [hidden]；子檢視列只有「特別關注」才該出現。 */
+    #watchViewRow[hidden] { display: none; }
     .bulk-bar .compare-hint {
       width: 100%;
       margin: 0;
@@ -1797,7 +1811,7 @@
     }
     .match-peer a { color: var(--ink); font-weight: 700; }
     .item.offline { opacity: 0.78; }
-    /* 2026-09-24：已確定下架（確認期滿）改成低密度摘要列——不佔版面，但仍看得見、點得進去。
+    /* 2026-09-24：已下架（確認期滿）改成低密度摘要列——不佔版面，但仍看得見、點得進去。
        做法是減少欄位與行數，不是再壓低透明度（避免對比低於 4.5:1）。
        同房源合併卡片一起收斂：先把「費差／規格」那種長文字行收掉，避免整張卡片被撐高。 */
     .item.off-off,
@@ -3503,10 +3517,9 @@
           <button class="chip" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
           </div>
-          <div class="chip-row" id="watchViewRow" hidden role="group" aria-label="特別關注：要不要看已下架的物件">
-          <button type="button" class="chip on" data-watch-view="all" aria-pressed="true">全部</button>
-          <button type="button" class="chip" data-watch-view="pending" aria-pressed="false">確認下架中</button>
-          <button type="button" class="chip" data-watch-view="confirmed" aria-pressed="false">已確定下架</button>
+          <div class="chip-row" id="watchViewRow" hidden role="group" aria-label="特別關注：要不要看暫離或已下架的物件">
+          <button type="button" class="chip" data-watch-view="pending" aria-pressed="false">物件暫離</button>
+          <button type="button" class="chip" data-watch-view="confirmed" aria-pressed="false">已下架</button>
           </div>
           <p class="chip-row-label" id="kindRowLabel">房屋類型</p>
           <p class="chip-row-hint" id="kindRowHint">整層與套房是隔局，不能同時選。只選其中一個、沒指定建築樣式時，大樓與公寓／華廈都會列入。大樓與公寓可複選；店面與倉庫只看標題且不能同時選。電梯是加條件，大樓一定有電梯。</p>
@@ -3543,16 +3556,6 @@
           <button class="chip" id="rentSortBtn" data-sort="price">租金</button>
           <button class="chip commute-sort" data-sort="commute_asc" hidden>離公司近</button>
           <button class="chip commute-sort" data-sort="commute_desc" hidden>離公司遠</button>
-          </div>
-          <div class="bulk-bar" id="bulkBar">
-            <span id="selectedCount">已選 0 筆</span>
-            <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
-            <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
-            <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
-            <button type="button" class="primary" id="hideSelectedBtn">不再顯示已選</button>
-            <button type="button" class="primary" id="unwatchSelectedBtn" hidden>取消關注已選</button>
-            <button type="button" class="primary" id="mergeSelectedBtn" hidden>併入同房源</button>
-            <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
           </div>
         </div>
         </div>
@@ -4355,9 +4358,16 @@
     <span class="panel-fab-icon" id="expandPanelIcon">&lt;|&gt;</span>
     <span class="panel-fab-label" id="expandPanelLabel">功能表展開</span>
   </button>
-  <div id="mergeDock" role="toolbar" aria-label="併入同房源" hidden>
-    <button type="button" class="ghost" id="mergeCancelBtn">取消</button>
+  <div id="mergeDock" role="toolbar" aria-label="已選物件的批次操作" hidden>
+    <span class="dock-count" id="selectedCount">已選 0 筆</span>
+    <button type="button" class="ghost" id="selectPageBtn">全選本頁</button>
+    <button type="button" class="ghost" id="clearSelectBtn">取消勾選</button>
+    <button type="button" class="ghost" id="compareSelectedBtn" disabled>比較（0／3）</button>
+    <button type="button" class="ghost" id="hideSelectedBtn">不再顯示已選</button>
+    <button type="button" class="ghost" id="unwatchSelectedBtn" hidden>取消關注已選</button>
+    <button type="button" class="ghost" id="mergeCancelBtn" hidden>取消</button>
     <button type="button" class="primary" id="mergeConfirmBtn" hidden>併入同房源</button>
+    <p class="compare-hint" id="compareHint" hidden>自選 2～3 筆比較（可跨屋源），只列有差異的欄。</p>
   </div>
   <button type="button" class="primary" id="ownerFab" hidden>我刊登的房子</button>
   <!-- 手機版：捲動後仍能就地開 Q&A／意見（低干擾、左下角、避開右下的回頂與刊登 FAB）。開啟後保留目前頁面位置。 -->
@@ -4724,8 +4734,9 @@
     }
     $("status").textContent = "正在載入…";
     let filter = "all";
-    // 特別關注的子檢視：切換要看「進行中／確認下架中／已確定下架」。只影響畫面，不動查詢與配額。
-    let watchView = "all";
+    // 特別關注的子檢視：預設只看還在刊登的；「物件暫離」「已下架」要自己點子按鈕切過去。只影響畫面，不動查詢與配額。
+    // ""＝預設（只看還在的）、"pending"＝物件暫離、"confirmed"＝已下架。只影響畫面，不動查詢與配額。
+    let watchView = "";
     let kinds = ["whole"];
     let listOffset = 0;
     let listCursor = null;
@@ -5476,8 +5487,8 @@
       return `租金 ${item.price || ""} ${item.price_unit || "元/月"}`.trim();
     }
     function listingStatusLabel(item) {
-      if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "確認已下架";
-      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "確認下架中";
+      if (Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true) return "已下架";
+      if (Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline") return "物件暫離";
       if (item?.last_event === "relist" || (item?.last_event === "same_source" && item?.offline === 0)) return "重新上架";
       return "刊登中";
     }
@@ -6193,7 +6204,7 @@
       if (key === "hidden") return hidden || dup;
       if (key === "offline") return offline && !confirmed;
       if (key === "suspected") return Boolean(item.match_level) && !confirmed && !dup && !hidden;
-      // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
+      // 「物件暫離」（pending）留在一般列表（灰階）；只有「已下架」才排除。
       if (dup || confirmed || hidden) return false;
       if (key === "all") return !watched;
       if (key === "unseen") return !viewed;
@@ -7392,9 +7403,9 @@
       if (!item.offline) return "";
       const day = item.offline_at ? String(item.offline_at).slice(0, 10) : "";
       if (item.offline_confirmed) {
-        return ` · 確認已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
+        return ` · 已下架${day ? `（自 ${esc(day)} 起找不到）` : ""}`;
       }
-      return ` · 確認下架中${day ? `（${esc(day)} 起）` : ""}`;
+      return ` · 物件暫離${day ? `（${esc(day)} 起）` : ""}`;
     }
 
     function tags(item) {
@@ -7409,8 +7420,8 @@
       else if (item.match_verdict === "yes") bits.push('<span class="tag verdict-yes">已確認：同一間</span>');
       if (item.match_verdict === "no") bits.push('<span class="tag verdict-no">已確認：不同物件</span>');
       if (item.last_event === "update" && !item.cost_change) bits.push('<span class="tag same">內容更新</span>');
-      if (item.offline_confirmed) bits.push('<span class="tag off-sure">確認已下架</span>');
-      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">確認下架中</span>');
+      if (item.offline_confirmed) bits.push('<span class="tag off-sure">已下架</span>');
+      else if (item.offline || item.last_event === "offline") bits.push('<span class="tag off">物件暫離</span>');
       if (item.has_elevator) bits.push('<span class="tag lift">有電梯</span>');
       if (item.watched) bits.push('<span class="tag watch">特別關注</span>');
       if (item.viewed) bits.push('<span class="tag viewed">已瀏覽</span>');
@@ -7502,12 +7513,16 @@
       const dock = $("mergeDock");
       if (!dock) return;
       const n = selected.size;
-      const show = (mergeSelectMode && n >= 1) || n >= 2;
+      // 勾了任何一筆就把批次操作列浮出來：列表往下捲也點得到，不必回頭找列表上方的按鈕。
+      const show = n >= 1;
       dock.hidden = !show;
       dock.classList.toggle("on", show);
       document.body.classList.toggle("merge-selecting", mergeSelectMode);
       const confirm = $("mergeConfirmBtn");
       if (confirm) confirm.hidden = n < 2;
+      // 「取消」只在合併選取模式出現；平時「取消勾選」已經在做同一件事。
+      const cancel = $("mergeCancelBtn");
+      if (cancel) cancel.hidden = !mergeSelectMode;
     }
     function exitMergeSelect() {
       mergeSelectMode = false;
@@ -7593,13 +7608,14 @@
       }
       mergeAutoScroll(y);
     }
-    /** 特別關注的子檢視：確認下架中＝已下架但確認期未滿；已確定下架＝確認期滿（不佔名額）。 */
+    /** 特別關注的子檢視：物件暫離＝已下架但確認期未滿；已下架＝確認期滿（不佔名額）。 */
     function matchesWatchView(item, view) {
-      const confirmed = Number(item?.offline_confirmed) === 1;
-      const offline = Number(item?.offline) === 1;
+      const confirmed = Number(item?.offline_confirmed) === 1 || item?.offline_confirmed === true;
+      const offline = Number(item?.offline) === 1 || item?.offline === true || item?.last_event === "offline";
       if (view === "pending") return offline && !confirmed;
       if (view === "confirmed") return confirmed;
-      return true;
+      // 預設（兩個子按鈕都沒選）：只看還在的物件。暫離與已下架要自己點子按鈕切過去。
+      return !offline && !confirmed;
     }
 
     /** 子檢視那一列只有在「特別關注」清單才有意義。 */
@@ -7610,12 +7626,11 @@
 
     function updateBulkBar() {
       const n = selected.size;
-      $("bulkBar").classList.toggle("on", n > 0);
-      $("selectedCount").textContent = `已選 ${n} 筆`;
+      // 批次按鈕已全部搬到浮動列（#mergeDock），列表上方不再有 bulk bar。
+      const count = $("selectedCount");
+      if (count) count.textContent = `已選 ${n} 筆`;
       const compareBtn = $("compareSelectedBtn");
       const hint = $("compareHint");
-      const mergeBtn = $("mergeSelectedBtn");
-      if (mergeBtn) mergeBtn.hidden = n < 2;
       // 「取消關注已選」只在特別關注清單出現：那是配額管理清單，需要能一次退出多筆。
       const unwatchBtn = $("unwatchSelectedBtn");
       if (unwatchBtn) unwatchBtn.hidden = filter !== "watched";
@@ -7635,6 +7650,8 @@
           hint.hidden = n < 2;
           hint.textContent = "自選 2～3 筆比較（可跨屋源），只列有差異的欄。";
         }
+        // 手機版把提示收在按鈕的 tooltip，避免浮動列變太高。
+        if (compareBtn) compareBtn.title = hint.textContent;
       }
     }
 
@@ -7674,7 +7691,7 @@
         ["title", "標題", (row) => String(row.title || "").trim()],
         ["source", "來源", (row) => listingSourceLabel(row)],
         ["offline", "物件狀態", (row) => (
-          Number(row.offline_confirmed) === 1 ? "確認已下架" : Number(row.offline) === 1 ? "下架確認中" : "刊登中"
+          Number(row.offline_confirmed) === 1 ? "已下架" : Number(row.offline) === 1 ? "物件暫離" : "刊登中"
         )],
       ];
       const rows = [];
@@ -7816,13 +7833,9 @@
       listCache = (Array.isArray(items) ? items : []).map(normalizeListingText);
       items = listCache;
       // 特別關注的子檢視只裁畫面，不動 listCache（卡片查詢與批次操作仍要能找到被收起的下架物件）。
+      // 預設（子按鈕都沒選）只留還在的物件；要看暫離或已下架得自己點上面的子按鈕。
       if (filter === "watched") {
-        if (watchView !== "all") items = items.filter((item) => matchesWatchView(item, watchView));
-        // 已確定下架排最後：那批已經結束了，先看你還來得及處理的。
-        items = items
-          .map((item, idx) => ({ item, idx }))
-          .sort((a, b) => (Number(a.item.offline_confirmed) === 1) - (Number(b.item.offline_confirmed) === 1) || a.idx - b.idx)
-          .map((row) => row.item);
+        items = items.filter((item) => matchesWatchView(item, watchView));
       }
       lastStats = st || {};
       paintWatchChip();
@@ -7831,22 +7844,22 @@
         const q = $("q").value.trim();
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
-        else if (filter === "watched" && watchView !== "all") {
+        else if (filter === "watched" && watchView) {
           msg = watchView === "pending"
-            ? "目前沒有正在確認下架中的特別關注物件。591 關閉或刪除的刊登會先列在這裡核對，滿設定天數仍找不到就改成「已確定下架」。"
-            : "目前沒有已確定下架的特別關注物件。這些不佔特別關注名額，所以不會壓縮你的配額。";
+            ? "目前沒有物件暫離的特別關注物件。591 關閉或刪除的刊登會先列在這裡核對，滿設定天數仍找不到就改成「已下架」。"
+            : "目前沒有已下架的特別關注物件。這些不佔特別關注名額，所以不會壓縮你的配額。";
         }
         else if (filter === "watched") {
           const used = watchedCount();
           msg = used
-            ? `特別關注配額仍佔 ${used} 筆，但目前清單沒有可顯示的物件。已確認下架的不佔名額；若按鈕仍鎖住，請重新整理後再取消一筆。`
+            ? `特別關注配額仍佔 ${used} 筆，但目前沒有還在刊登的物件。用上面的「物件暫離」或「已下架」就能看到它們；已下架的不佔名額。`
             : "目前沒有特別關注的物件。在卡片按「特別關注」或左滑即可加入；一般會員最多 6 筆，贊助會員最多 15 筆。";
         } else if (filter === "hidden") {
           msg = "目前沒有已隱藏的物件。";
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
-          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成確認已下架，並從「全部」與這個篩選的數量扣除。";
+          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成已下架，並從「全部」與這個篩選的數量扣除。";
         } else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked || $("hasParking")?.checked) {
@@ -8526,7 +8539,7 @@
       if (off?.gone) offBits.push(`新標下架 ${off.gone} 筆`);
       if (off?.rechecked) offBits.push(`再核對 ${off.rechecked} 筆`);
       if (off?.restored) offBits.push(`恢復上架 ${off.restored} 筆`);
-      if (off?.confirmed) offBits.push(`確認已下架 ${off.confirmed} 筆`);
+      if (off?.confirmed) offBits.push(`已下架 ${off.confirmed} 筆`);
       if (!offBits.length && off?.checked) offBits.push(`已核對 ${off.checked} 筆是否仍在架`);
       const offBit = offBits.length ? `｜${offBits.join("、")}` : "";
       if (result.errors?.length) {
@@ -12397,7 +12410,6 @@
         $("hideSelectedBtn").disabled = false;
       }
     };
-    $("mergeSelectedBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeConfirmBtn")?.addEventListener("click", () => mergeSelectedListings());
     $("mergeCancelBtn")?.addEventListener("click", () => exitMergeSelect());
     function kitHoverFine() {
@@ -12525,9 +12537,11 @@
 
     document.querySelectorAll("[data-watch-view]").forEach((btn) => {
       btn.onclick = () => {
-        watchView = btn.dataset.watchView || "all";
+        const next = btn.dataset.watchView || "";
+        // 再點同一個＝取消選取，回到預設（只看還在的物件）。
+        watchView = watchView === next ? "" : next;
         document.querySelectorAll("[data-watch-view]").forEach((other) => {
-          const on = other === btn;
+          const on = other.dataset.watchView === watchView;
           other.classList.toggle("on", on);
           other.setAttribute("aria-pressed", on ? "true" : "false");
         });
@@ -12536,9 +12550,9 @@
           keep: !preview,
           paintPreview: preview || undefined,
           busyText: watchView === "confirmed"
-            ? "正在載入已確定下架的物件…"
+            ? "正在載入已下架的物件…"
             : watchView === "pending"
-              ? "正在載入確認下架中的物件…"
+              ? "正在載入物件暫離的物件…"
               : "正在載入特別關注…",
         });
       };
@@ -13027,7 +13041,7 @@
     }
     function dockEventLabel(item) {
       if (item.type === "offline") {
-        return Number(item.offline_confirmed) === 1 ? "確認已下架" : "確認下架中";
+        return Number(item.offline_confirmed) === 1 ? "已下架" : "物件暫離";
       }
       if (item.type === "fee_update") return "費用變更";
       return eventText[item.type] || item.type_label || item.type;
