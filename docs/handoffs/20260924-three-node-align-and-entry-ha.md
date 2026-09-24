@@ -110,15 +110,27 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 6. ~~**VS Code dev tunnel（`cline-server`）的 1006**~~ → **2026-09-24 使用者確認已正常**。
    根因是「新舊 CLI 版本並存造成下載鎖死鎖」（log 一直印 `Another instance is still downloading the server`），
    清掉 `~/.vscode-server/cli/servers/.locks/*` 後以同版 CLI 重啟即恢復。
+   同日稍晚又斷一次（`vscode-tunnel tunnel status` 回 `{"tunnel":null}`、主機上完全沒有 tunnel 行程）：
+   根因是前一次重啟用的 `/tmp/restart-tunnel.sh` 直接呼叫 CLI、**沒帶 `VSCODE_CLI_DATA_DIR`**，
+   CLI 改去預設目錄 `~/.vscode/cli` 找憑證 → 卡在 GitHub device login（同時兩個實例並存造成下載死鎖）。
+   已於 **2026-09-24 修復並恢復上線**（`"tunnel":"Connected"`、`last_fail_reason: null`）。
+   **完整手冊（PATH 1 Cloudflare SSH／PATH 2 Dev Tunnel、用戶端設定、持久化缺口與選項）：
+   [`docs/runbooks/cline-server-remote-access.md`](../runbooks/cline-server-remote-access.md)。**
 7. **後台可自行開關付費外掛** → **2026-09-24 已完成**：新增後台頁「系統與整合 > 外掛與預算」
    （`v3/public/admin-providers.js`、`admin.html` 面板、`admin-ia.js` 索引），可逐類別啟用／關閉、
    設定每日／每月／單筆上限、填金鑰（加密存放）、測試連線、刪金鑰，並有全站預算與用量紀錄。
    測試 `v3/test/admin-providers.test.js` 6/6；UI 以真實後台版面截圖驗證（0 console error）。
 8. **前台重整預設分頁** → **2026-09-24 已修**：原本切到許願房會把 `#demand` 寫進網址且回到找房不清掉，
    導致之後每次重整都被帶回許願房；現在只有明確帶 `#demand`／`#wish` 的網址才會停在許願房。
-6. **VS Code dev tunnel（`cline-server`）的 1006**：dev box（cline-dev）上 `/tmp/vscode-tunnel.log`
+6. ~~**VS Code dev tunnel（`cline-server`）的 1006**：dev box（cline-dev）上 `/tmp/vscode-tunnel.log`
    顯示 `NoAttachedServerError` 多次、且同時存在兩個 server 版本（`Stable-7debcd0e…` 與
-   `Stable-2242ebbb…`）。重啟 tunnel 會中斷目前連線，需使用者同意後再做。
+   `Stable-2242ebbb…`）。重啟 tunnel 會中斷目前連線，需使用者同意後再做。~~
+   → **2026-09-24 已修並上線**（根因有兩個：沒帶 `VSCODE_CLI_DATA_DIR` 導致憑證找不到 →
+   卡在 device login；以及兩個 tunnel 實例並存造成 `downloading the server` 死鎖）。
+   **剩下唯一未完成項是「持久化」**：容器沒有 systemd／dbus，官方 `code tunnel service install`
+   實測失敗（`Error creating dbus session…`），要撐過容器重啟只能改容器啟動流程（P1）或用 DSM
+   工作排程器（P2）——兩者都需要 Owner 決定。連線手冊（含用戶端步驟與選項）見
+   [`docs/runbooks/cline-server-remote-access.md`](../runbooks/cline-server-remote-access.md)。
 
 ## 4. 發版（2026-09-24 02:0x UTC）：#473 ＋ #476 ＋ 2.4 ＋ #477
 
