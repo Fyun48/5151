@@ -3984,6 +3984,11 @@ function getLastSystemCoveringAt() {
   return String(settingKey("lastSystemCoveringAt") || "");
 }
 
+// 純讀：兩個「整輪抓取完成」的時間戳（coveringBookkeepingAsync.js 的 SQLite 分支用）。
+export function coveringBookkeeping() {
+  return { lastCoveringAt: getLastCoveringAt(), lastSystemCoveringAt: getLastSystemCoveringAt() };
+}
+
 export function isSystemCoveringDue(now = Date.now()) {
   const last = Date.parse(getLastSystemCoveringAt());
   if (!Number.isFinite(last)) return true;

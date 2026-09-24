@@ -133,7 +133,6 @@ import {
   resumeIdleIfNeeded,
   pauseIdleMembers,
   linkOauthIdentity,
-  isSystemCoveringDue,
   listDemand,
   getDemand,
   createDemand,
@@ -3484,6 +3483,8 @@ function queueGeoBackfill(settings = getSettings()) {
     });
 }
 
+import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
+
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
     if (!tickGate.isStale()) {
@@ -3513,7 +3514,7 @@ async function tick(reason = "schedule") {
       console.warn("閒置暫停失敗：", error.message);
     }
     const now = Date.now();
-    const systemDue = reason === "force" || reason === "startup" || isSystemCoveringDue(now);
+    const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
     if (
       reason === "manual"
       && !systemDue
