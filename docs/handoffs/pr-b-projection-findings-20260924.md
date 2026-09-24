@@ -36,7 +36,28 @@
 4. 依 ChatGPT 指令文件要求，回填**不得**直接以舊 SQLite 為真相、也不得先 `TRUNCATE` 再慢慢補；
    應以 PG 主列驅動、分批可重跑、同批一致、並在寫入路徑改為「主列＋投影同交易」之後執行。
 
-## 3. 待辦（PR-B 實作項）
+## 4. 回填執行紀錄（2026-09-24，Owner 已批准）
+
+工具：`v3/scripts/projection-backfill.mjs`（以 PG 主列驅動、分批、可中斷可重跑、失敗不中斷）。
+執行方式：`docker cp` 進容器後 `docker exec -d` 背景執行，日誌 `/tmp/backfill.log`。
+
+```
+{"at":"2026-09-24T13:23:41Z","missingBefore":86522,"batch":200,"maxRows":0}
+{"done":1000,"failed":0,"sec":23}
+{"done":5000,"failed":0,"sec":106}
+{"done":9000,"failed":0,"sec":194}      ← 約 45 列/秒、失敗 0
+```
+
+執行中的查核（13:27:05Z，同一支唯讀查核腳本）：
+
+| 指標 | 回填前（12:56Z） | 13:27Z（進行中） |
+|---|---|---|
+| `projection` | 32,863 | **42,563** |
+| `missing` | 86,533 | **76,984**（其中 visible 76,401） |
+| `orphaned` / 重複 / `post_id` NULL | 0 / 0 / 0 | 0 / 0 / 0 ✓ |
+
+預估總時間約 30–35 分鐘；完成後會再跑一次查核，`missing` 應為 0（或僅剩回填期間新增的極少數列）。
+**注意**：本回填只寫 `listing_search_projection`（衍生表，可由主列重建），不動 `listings`；如中斷直接重跑即可（會跳過已有投影的列）。
 
 1. `/api/public/listings` 改 async、driver-aware；public cache 改 async loader（錯誤不得快取成空）。
 2. 會員搜尋移除「查詢不支援 → SQLite」與例外回退（F2／F3），失敗回 503 及穩定錯誤碼。
