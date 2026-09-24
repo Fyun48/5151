@@ -68,3 +68,20 @@ test("kind=shop,warehouse：commercial 群組以 OR 串接", () => {
   assert.match(text, /%,shop,%/);
   assert.match(text, /%,warehouse,%/);
 });
+
+test("wholeFloorOnly：kind 為空時套用整層過濾（等效 isWholeFloorHome）", () => {
+  const deps = stubDeps({ getSettings: () => ({ wholeFloorOnly: true }) });
+  const result = buildListingSearchSql({ ...ARGS }, deps);
+  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 160)}`);
+  assert.match(JSON.stringify(result), /%,whole,%/);
+});
+
+test("wholeFloorOnly：kind 有值時**不**套用整層過濾（Node 會 skipWholeFloor）", () => {
+  // db.js:6480 / 7183：passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) })
+  const deps = stubDeps({ getSettings: () => ({ wholeFloorOnly: true }) });
+  const result = buildListingSearchSql({ ...ARGS, kind: "suite" }, deps);
+  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 160)}`);
+  const text = JSON.stringify(result);
+  assert.doesNotMatch(text, /%,whole,%/);
+  assert.match(text, /kind_keys LIKE/); // kind 條件本身仍在
+});

@@ -115,7 +115,6 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
     Number(settings.minBuildingFloors) > 0 ||
-    settings.wholeFloorOnly === true ||
     (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
     (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
     Number(settings.commuteKm) > 0
@@ -151,6 +150,15 @@ export function buildListingSearchSql(args = {}, deps = {}) {
     params.push(areaMax);
   }
   appendKindClauses(kind, clauses, params);
+  // wholeFloorOnly 下推。語意依據 db.js:6480 / db.js:7183：
+  //   passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) })
+  // 只要 kind 有值，Node 就跳過整層過濾（kind 晶片已表達偏好），所以這裡必須用完全一樣的
+  // 判斷（Boolean(kind)，不做 trim），否則有選 kind 時會多濾掉 Node 會保留的列。
+  // 投影的 displayFilter 只含 low_floor／rooftop，不含整層，所以不會重複套用。
+  if (settings.wholeFloorOnly === true && !Boolean(kind)) {
+    clauses.push("p.kind_keys LIKE ?");
+    params.push("%,whole,%");
+  }
   // filter === "all": confirmed-offline / dup / hidden / watched are excluded.
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
