@@ -4348,14 +4348,22 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
     }
     await writer.syncProjection(canonical);
     const event = existing ? "listing_updated" : "listing_added";
+    // 變更紀錄是輔助資料，但 PG 內失敗會「毒化整個交易」→ 用 SAVEPOINT 隔離：
+    // 失敗只回捲這一段，主列與投影仍會提交（否則 catch 起來後 COMMIT 會變成 ROLLBACK，變成靜默資料遺失）。
     try {
+      await client.query("SAVEPOINT change_log");
       await writer.bumpRevision({
         entityType: "listing",
         entityId: postId,
         eventType: event,
       });
+      await client.query("RELEASE SAVEPOINT change_log");
     } catch (error) {
-      // 變更紀錄是輔助資料：與 SQLite 路徑（upsertListing 內的 try/catch）一致，失敗只警告。
+      try {
+        await client.query("ROLLBACK TO SAVEPOINT change_log");
+      } catch {
+        // 交易已不可用就讓外層處理
+      }
       console.warn("變更紀錄寫入失敗（不影響入庫）：", error?.message || error);
     }
     return event;
