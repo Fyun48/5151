@@ -86,7 +86,12 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
    證據：`v3/test/settings-driver-parity.test.js` 離線 4/4 ＋ live 1/1（PG 寫入後讀回）。
    **媒體（member-media／self-photos）仍需要共享儲存**——那是 web 層 HA 剩下的最後一項。
 2. **`5151-crawler` 與 `5151-worker` 已停用**；若日後要恢復，先確認它們不會再寫各節點自己的 SQLite。
-2. **2.4（provider／budget）修好 PG provider 設定後再重發**（見 §1.3）。
+2. ~~**2.4（provider／budget）修好 PG provider 設定後再重發**（見 §1.3）~~
+   → **誤判已釐清，不需要動 provider 設定**（SQLite 與 PG 一致、都是未啟用）；
+   真正要修的是診斷寫入（PR #477）→ 已隨發版上線（見 §4）。
+   ⚠️ **要啟用付費 provider 之前**：三台必須設**同一組** `V3_PROVIDER_SECRET`
+   （`budgetGuard.js` 的 `activeSecret()` 依序取 `V3_PROVIDER_SECRET` → `AUTH_PASSWORD` →
+   `"v3-local-provider-secret"`），否則在某一台加密的憑證到別台解不開 → 該 category 一律走 fallback。
 3. 爬蟲「重新確認」量能長期偏低（過去 6 小時每 10 分鐘約 1 筆；24 小時內只確認 91 筆，
    但近 3 天新增 8,364 筆）→ 查 591 是否在擋。
 4. `listings` 有 1 列 `last_checked_at` 內容壞掉（`post_id=2414061000`）。
@@ -95,3 +100,26 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 6. **VS Code dev tunnel（`cline-server`）的 1006**：dev box（cline-dev）上 `/tmp/vscode-tunnel.log`
    顯示 `NoAttachedServerError` 多次、且同時存在兩個 server 版本（`Stable-7debcd0e…` 與
    `Stable-2242ebbb…`）。重啟 tunnel 會中斷目前連線，需使用者同意後再做。
+
+## 4. 發版（2026-09-24 02:0x UTC）：#473 ＋ #476 ＋ 2.4 ＋ #477
+
+- **內容**：#473（寫入 fail-closed）、#476（會員設定島嶼 → PG）、2.4（provider／budget）、
+  #477（診斷用量紀錄去噪 ＋ 吞錯）。
+- **流程**：build（`manual_owner`，digest `sha256:b64f85eca735b1c3ea4b2cdfd1484e89cd667996abb9f2550839aa79a9d3cce7`）
+  → predeploy check → deploy（`sha=4660f2cd46c07f2632a4cf87256d3f3103622ee9`、
+  `confirmation=DEPLOY-PRODUCTION`）→ 三個容器 revision 皆 = `4660f2cd…`
+  （`591-tracker-v3`、`5151-web-A`、`5151-web-B`）。
+- **驗收證據（本次實查）**：
+  - 公開站 **`https://jibbyrenth.reversalplay.me/`** → **200**。入口 tunnel `5151` 為 `healthy`、
+    8 條連線（＝2 個 connector 實例各 4 條）。兩條 connector 皆在跑（`591-tracker-tunnel`／
+    `591-tracker-tunnel-b`）。
+    ⚠️ **`5151.clinehelptw.dpdns.org` 不是本站網址**（對外 DNS 沒有這個委派、tunnel ingress 也沒有），
+    不要再拿它當公開站測試（本次一度誤判為停機）。
+  - 三台的 `/app/src/providers/executeWithProvider.js` md5 都是 `ad47e491e2`（＝合併後的本機檔）。
+  - **#477 生效**：發版後 `provider_usage_logs` 只新增 **2 筆**（修正前約 14 筆/分鐘、3 天 6 萬筆）。
+  - **#476 生效（端到端，唯讀）**：在正式站容器內以已部署的程式碼呼叫 `getSettingsAsync(1)`
+    （容器 `DB_DRIVER=postgres`）得到 73 個鍵、`settingProfiles` 2 個、
+    `activeProfileId=p-1789370842700`、`watchDistricts` 7、`intervalMinutes` 3 → 與 PG 直查一致
+    ⇒ **公開站在 web-A／web-B 之間輪流時不會再出現空設定**。
+  - 發版前已把 `user_settings`（186 列）／`user_search_profiles`（3 筆）從正式站 SQLite upsert 進 PG
+    （§1.5）；PG 現在是 `user_settings=229`／`profiles=4`（含 PG 原有的列）。
