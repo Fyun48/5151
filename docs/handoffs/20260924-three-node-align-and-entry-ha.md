@@ -346,3 +346,25 @@ Owner 看完 §8 的畫面後提出的兩點修正。
 - `activate-rental-marketplace-pra-workflow.test.js` 的 src manifest 測試在**工作區未提交**時會失敗
   （它比對工作區 `v3/src` 與 git HEAD），提交後即通過。
 
+
+
+### 9.4 發版（PR #490）
+
+**Release identity**
+
+- source SHA：`d8fbf88ce357c576ed86bce14ed0a5ed223bcc61`（PR #490 squash merge）
+- image digest：`sha256:e00a272324f69ab7dec2eed35d18884ba52a37f8997c82c3a560596e96719b56`
+- predeploy run `35977876097`（success）；build image run `35977878808`（success）；
+  deploy run `35978536748`（success）；master Tests run `35977738852`（success）；PR Tests run `35977375414`（success）
+
+**驗收證據（實際輸出）**
+
+- `591-tracker-v3` 與 `5151-web-A` 的 `org.opencontainers.image.revision` 都是 `d8fbf88c…`。
+- 容器內檔案與本機 **sha256 相同**（兩台都一樣）：
+  `/app/public/index.html` = `1d830bb009bb7c5ed0b87b8100f6e3541e170a25c588def36e5ce784d77a4b60`、
+  `/app/src/notify.js` = `b2e0bb88ad2e19661889d585d3c2bd895cd7780a6ce5609d9239a3961c50a5c9`。
+- 正式站埠仍只有 `127.0.0.1:5153->5153/tcp`；舊的 `5155` 對外埠筆數 = **0**。
+- 公開站 `https://jibbyrenth.reversalplay.me/` **200**；破壞快取取樣：**8/8 含「物件暫離」**、
+  **4/4 含 `dock-count`**、`id="bulkBar"` 出現 **0** 次 → A、B 兩台節點都已更新。
+- 本機完整測試 1614 pass／1 fail，唯一失敗是「2000 列路線快取需在 1.5s 內」的效能時序測試
+  （本機同時跑瀏覽器驗證造成；與本次前端／文案改動無關，CI 的完整套件已 pass）。
