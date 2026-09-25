@@ -15,6 +15,7 @@
 // 容器內的部署映像較舊（缺新 exports ✗），直接跑會得到 SyntaxError ✓。
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { buildListRequestContextFromPg, buildListListingsClauses } from "../src/db.js";
+import { districtClosureIds } from "../src/listingSearchNodePg.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 
 const COLS_43 = `post_id, source, source_id, source_key, url, price, price_num,
@@ -94,8 +95,15 @@ try {
   const exec = async (sql, params = []) => (await drv.query(toPostgresSql(sql), params)).rows;
   const context = await buildListRequestContextFromPg(exec);
   // 官方 builder（含 district closure ✓）—— 不自行拼行政區條件 ✗
+  // 行政區條件必須走 **PG 路徑** ✓（照 `listingSearchNodePg.js:204`）：
+  //     districtIds = await districtClosureIds(exec, { districtNames }) ✓
+  // ✗ 不可傳 `districts:` —— 那會讓 builder 走 **SQLite 的 recursive CTE** ⇒ PG 回 42P19 ✓
+  //（本 CI 已實測：`recursive reference to query "district_related" ...` ✗）。
+  // 其餘組裝（`SELECT … FROM listings ${built.where} ORDER BY post_id` ✓）與正式路徑逐字相同 ✓。
+  const districtNames = [process.env.DISTRICT || "西屯區"];
+  const districtIds = await districtClosureIds(exec, { districtNames });
   const built = buildListListingsClauses({
-    filter: "all", districts: [process.env.DISTRICT || "西屯區"],
+    filter: "all", districts: [], districtIds,
     settings: {}, uid: 0, voteUid: 0, context,
   });
   console.log(`COLAB-WHERE ${JSON.stringify({ where: String(built.where).slice(0, 120), params: built.params.length })}`);
