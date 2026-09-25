@@ -27,6 +27,22 @@
   - 反例回歸 ✓：`refresh_time: "1小時前"` ＋ 不同 `first_seen_at` ⇒ `newest` 必須 `[2,1]` ✓（實測通過 ✓）
   - 護欄 ✓：寬候選欄位必須含 `first_seen_at`／`last_seen_at`／`source_id`／`url` ✓
     （後三者是 `preferPrimaryListing()` 的 tie-break ✓）
+- `v3/test/listing-search-entry-columns.test.js` ✓（裁決 §2.2）
+  - 從 **`searchListingsAsync()`** 進入、**只給 driver、不注入 `deps`** ✓ ⇒ 走正式預設 ✓
+  - 逐欄比對**實際送出的候選 SELECT** 等於官方 `LIST_CANDIDATE_COLUMNS` ✓，
+    並在**入口層**守住 `first_seen_at`／`last_seen_at`／`source_id`／`url` ✓（§2.1 回歸 ✓）
+  - 為什麼必要 ✓：`pg-provider-canaries.test.js` 直接呼叫 `searchListingsNodePg()` 並自行帶 deps ✗
+    ⇒ 繞過正式入口，**不能**證明正式路徑 ✓
+
+### 3b. 本批 CI 狀態（等待中 ✓）
+| SHA | Job | 狀態 |
+|---|---|---|
+| `32c02b7`（含全部撤回 ✓） | Tests | `in_progress` ✓ |
+| `41a8ad9`（本批最終 ✓） | Tests | `pending` ✓ |
+| 兩者 | Code review (advisory) | `success` ✓ |
+| 更早的 `af7e80b`／`e2ff73e` 等 | Tests | `cancelled` ✓（被後續 push 取代 ✓，**非失敗** ✓） |
+⇒ 依裁決 §7：**最終提交後等該 SHA 的 CI 完成再判定** ✓。
+
 
 ## 4. 可重跑命令（本地）
 
