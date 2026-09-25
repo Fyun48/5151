@@ -1,13 +1,17 @@
-// PR-B／F3 第一項：`sources` 篩選不再落在外框外。
+// F3（PR-B）：sources／areaMax 的 SQL 下推——**依隔離實測關回外框外**。
 //
-// 背景：`listingSearchSql.js` 的 PG SQL 路徑原本只要帶 kind／sources／q 就 outOfEnvelope → 回退 SQLite（F2）。
-// 這裡先把語意最單純的 `sources` 補上：呼叫端（server.js:3759）已用 authorizedListingSources() 驗證與授權，
-// 所以 SQL 端只做集合比對，不會繞過權限。
+// 背景（2026-09-24 隔離實測，生產資料；每個案例用全新 driver 連線以排除連線池串聯污染）：
+//   baseline 989ms ✓、q=電梯 878ms ✓
+//   sources=591 30,042ms ✗、areaMax=35 30,054ms ✗、wholeFloorOnly 30,066ms ✗（皆被逾時中止）
+// 原因：現行查詢結構（`p.*` 條件搭配 `post_id IN (SELECT …)`）在這些條件下讓 plan 崩掉。
+// F2 已移除回退 ⇒ 若維持開啟，會員帶這些設定的搜尋會變成 503 ⇒ 因此關回外框外，改走 PG-fed Node。
+//
+// 等價性證據仍然有效（sources 授權在呼叫端、areaMax 依 floors.js:412-415 的 NULL 語意），
+// 缺的是**可索引的表達**（B6）；屆時以「等價性 ＋ 效能」兩項一起驗收才開放。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildListingSearchSql } from "../src/listingSearchSql.js";
 
-// 依賴清單可能變動 → 用 Proxy 對任何屬性都給 stub（測試只關心 sources 條件本身）。
 function stubDeps(overrides = {}) {
   const base = {
     resolveUserId: () => 0,
@@ -19,49 +23,37 @@ function stubDeps(overrides = {}) {
     appendPriceCeilingCandidates: () => {},
     ...overrides,
   };
-  return new Proxy(base, {
-    get: (target, name) => (name in target ? target[name] : () => {}),
-    has: () => true,
-  });
+  return new Proxy(base, { get: (t, n) => (n in t ? t[n] : () => {}), has: () => true });
 }
 
 const ARGS = { districts: ["中山區"], allowAllDistricts: true };
 
-test("sources：不再 outOfEnvelope，且產生 p.source IN (?, ?) 與對應參數", () => {
-  const result = buildListingSearchSql({ ...ARGS, sources: "591,sinyi" }, stubDeps());
-  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 200)}`);
-  const text = JSON.stringify(result);
-  assert.match(text, /p\.source IN \(\?, \?\)/);
-  assert.match(text, /"591"/);
-  assert.match(text, /"sinyi"/);
+test("sources：依實測關回外框外（30,042ms 逾時；改走 PG-fed Node）", () => {
+  const built = buildListingSearchSql({ ...ARGS, sources: "591,sinyi" }, stubDeps());
+  assert.equal(built?.ok, false);
+  assert.equal(built.reason, "sources");
 });
 
-test("sources：單一來源只產生一個參數", () => {
-  const result = buildListingSearchSql({ ...ARGS, sources: "591" }, stubDeps());
-  assert.match(JSON.stringify(result), /p\.source IN \(\?\)/);
+test("sources：未指定時仍在外框內，且不產生來源條件（既有行為不變）", () => {
+  const built = buildListingSearchSql({ ...ARGS, sources: "" }, stubDeps());
+  assert.notEqual(built?.ok, false);
+  assert.doesNotMatch(JSON.stringify(built), /p\.source IN/);
 });
 
-test("sources：未指定時不產生來源條件（既有行為不變）", () => {
-  const result = buildListingSearchSql({ ...ARGS }, stubDeps());
-  assert.doesNotMatch(JSON.stringify(result), /p\.source IN/);
+test("areaMax：依實測關回外框外（30,054ms 逾時）", () => {
+  const built = buildListingSearchSql({ ...ARGS }, stubDeps({ getSettings: () => ({ areaMax: 35 }) }));
+  assert.equal(built?.ok, false);
+  assert.equal(built.reason, "settings");
 });
 
-test("areaMax：不再 outOfEnvelope，且產生 NULL-通過的面積上限條件", () => {
-  const deps = stubDeps({ getSettings: () => ({ areaMax: 35 }) });
-  const result = buildListingSearchSql({ ...ARGS }, deps);
-  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 200)}`);
-  const text = JSON.stringify(result);
-  assert.match(text, /p\.area IS NULL OR p\.area <= \?/);
-  assert.match(text, /35/);
+test("areaMax：0／未設定時仍在外框內，且不產生面積條件（既有行為不變）", () => {
+  const built = buildListingSearchSql({ ...ARGS }, stubDeps({ getSettings: () => ({ areaMax: 0 }) }));
+  assert.notEqual(built?.ok, false);
+  assert.doesNotMatch(JSON.stringify(built), /p\.area IS NULL/);
 });
 
-test("areaMax：0／未設定時不產生面積條件（既有行為不變）", () => {
-  const deps = stubDeps({ getSettings: () => ({ areaMax: 0 }) });
-  assert.doesNotMatch(JSON.stringify(buildListingSearchSql({ ...ARGS }, deps)), /p\.area <=/);
-});
-
-test("q 已於 F3 下推（lower() 統一兩邊 LIKE 語意，實測 6 案全部一致）", () => {
+test("q 仍在外框內（實測 878ms ✓，是唯一通過效能閘門的 F3 能力）", () => {
   const built = buildListingSearchSql({ ...ARGS, q: "電梯" }, stubDeps());
-  assert.notEqual(built?.ok, false, "q 應在 envelope 內");
+  assert.notEqual(built?.ok, false);
   assert.match(JSON.stringify(built), /lower\(title\) LIKE lower\(\?\)/);
 });
