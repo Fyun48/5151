@@ -26,7 +26,6 @@ import {
   listListingsFitSqlFirst,
   listListingsSqlFirst,
   listingSearchBuildContext,
-  LIST_CANDIDATE_COLUMNS_NARROW,
   preloadDecorationProviderAsync,
 } from "./db.js";
 import { searchListingsNodePg } from "./listingSearchNodePg.js";
@@ -96,16 +95,14 @@ export async function searchListingsAsync(args = {}, options = {}) {
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     // 一律走 PG-fed Node：不先跑 SQL-first（省掉一次註定要丟棄的查詢；也不建立 repository）。
-    // 候選欄位：**只**在這條列表路徑用實測的窄版（43 → 23 欄 ✓，
-    // 見 `test/listing-search-pipeline-read-audit.test.js`）；呼叫端有注入 deps 時一律尊重 ✗
-    //（測試／診斷不受影響 ✓），統計／明細／爬蟲各自用自己的 context ✓。
-    const deps = options.deps || {
-      ...listingSearchBuildContext(),
-      candidateColumns: LIST_CANDIDATE_COLUMNS_NARROW,
-    };
+    // ✗ 窄欄位實驗已撤回（astra 2026-09-25 裁決 §2.1）：`listingEffectiveUpdatedAt()` 需要
+    // `first_seen_at`（refresh_time 是相對時間或缺絕對時間時 ✓）⇒ 窄清單會改變 `newest` 排序
+    //（反例：寬 [2,1] vs 窄 [1,2] ✓，且分頁前排序錯了 hydration 救不回 ✓）。
+    // 審計工具保留（`test/listing-search-*-read-audit.test.js` ✓）；要再縮欄位必須先有**完整 parity**
+    //（寬版與優化版的總數／順序／角色／卡片狀態完全相同 ✓），不能只憑動態讀取紀錄 ✓。
     return await searchListingsNodePg(args, {
       pgDriver,
-      deps,
+      deps: options.deps || listingSearchBuildContext(),
       decorationLoader: options.decorationLoader,
     });
   } catch (error) {

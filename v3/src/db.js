@@ -4065,19 +4065,20 @@ export function currentSearchKeys() {
  * 只適用於**增強型**資料（crawlSources／searchKeys）；安全相關的 isolation 仍為必要 ✓。
  */
 /**
- * 表存在性快取（**跨 `safeExecFactory` 實例共享** ✓）。
+ * 表存在快取：**請求內**（每個 `safeExecFactory` 實例一份 ✓）。
  *
- * 為什麼要共享：原本每個工廠各自一個 `Map` ⇒ 同一次搜尋會對同一批表**重複探測**
- * （實測 1 列搜尋共 19 筆查詢，其中 `SELECT to_regclass($1) AS reg` **佔 5 筆** ✗，
- * 見 `test/listing-search-query-count.test.js` ✓）。
+ * ✗ 已撤回的作法：以 table name 為 key 的**模組全域**共享快取 —— 它無法區分
+ * database／search_path／schema ⇒ 別的 executor／schema 的結果會污染這個請求 ✗
+ *（astra 反例：executor A 確認 settings 存在後，schema 不同的 executor B 不再探測，
+ *  直接執行查詢 ⇒ `42P01` ✓）。空探測結果也不能被當成「已證明存在」而寫入共享狀態 ✓。
  *
- * 只快取**正結果** ✓：表存在是 schema 事實（只會被 migration 改變 ✓）⇒ 可長期快取 ✓；
- * 「不存在」**不快取** ✗ ⇒ 之後的 migration 建表必須能被看到 ✓。
+ * 只快取**正結果** ✓；「不存在」**不快取** ✗（migration 建表後必須能被看到 ✓）。
+ * 必要 schema 的存在性屬**啟動／測試 setup** 的責任 ✓；
+ * 不得把「缺少必要表」當成空資料而放寬來源／搜尋範圍 ✗（settings／users／user_settings 等尤其 ✓）。
+ * 「有表但沒資料」與「根本缺表」必須分別處理 ✓。
  */
-const SAFE_TABLE_EXISTS = new Map();
-
 function safeExecFactory(exec, degraded) {
-  const exists = SAFE_TABLE_EXISTS;
+  const exists = new Map();
   const tableOf = (sql) => (String(sql).match(/\bFROM\s+([A-Za-z_][\w.]*)/) || [])[1] || "";
   return async (sql, params = []) => {
     const table = tableOf(sql);
@@ -4190,8 +4191,11 @@ export async function buildSearchKeysFromPg(exec, settingsTable = "settings", gl
   )).map(coverFromRow);
   const coverUrls = coveringJobsFromMembers(covers, { excludeRooftop: false }).map((job) => job.searchUrl);
   const keys = [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
-  // 8 秒 memo（語意同 SQLite 的 storedSearchKeys ✓）：同一波請求不再每次全表 DISTINCT ✓。
-  const stored = await storedSearchKeysFromPg(exec);
+  // ✗ 跨請求 TTL memo 已撤回（astra 裁決 §2.3）：模組全域快取沒有 database／schema／交易範圍
+  // ⇒ 第一個請求取得的 keys 會被後續（甚至另一個 executor／快照）沿用，破壞 PG 單一快照契約 ✗
+  //（反例：第二個 executor 本來會回 new-key，實際仍拿到 old-key 且**呼叫 0 次** ✓）。
+  // 必要重用只留在**同一 request／同一 PG transaction**；要跨請求快取必須另做版本化設計 ✓。
+  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
   return expandSearchKeysAgainst(stored, keys);
 }
 
@@ -4199,21 +4203,6 @@ let searchKeyMemo = { at: 0, stored: null };
 
 function invalidateSearchKeyMemo() {
   searchKeyMemo = { at: 0, stored: null };
-  pgSearchKeyMemo = { at: 0, stored: null };
-}
-
-// PG 側的同一份 memo ✓（語意與 SQLite 的 `storedSearchKeys()` 相同：8 秒 TTL ✓）。
-// 刻意**不與 SQLite 共用** ✗：過渡期兩邊資料可能不同 ⇒ 共用快取會讓一個 driver 拿到另一個的結果 ✗。
-let pgSearchKeyMemo = { at: 0, stored: null };
-
-async function storedSearchKeysFromPg(exec) {
-  const now = Date.now();
-  if (pgSearchKeyMemo.stored && now - pgSearchKeyMemo.at <= 8000) return pgSearchKeyMemo.stored;
-  const stored = (await exec("SELECT DISTINCT search_key FROM listings"))
-    .map((row) => row.search_key)
-    .filter(Boolean);
-  pgSearchKeyMemo = { at: now, stored };
-  return stored;
 }
 
 /**
@@ -6562,7 +6551,15 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
   last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
 /**
- * **列表路徑專用**的候選欄位（窄版 ✓）。
+ * ✗ **已撤回（astra 2026-09-25 裁決 §2.1）**：本常數不再被任何正式入口使用 ✗。
+ * 撤回原因：窄清單刪掉 `first_seen_at` ⇒ 改變 `newest` 排序（`listingEffectiveUpdatedAt()` 在
+ * refresh_time 是相對時間或缺可解析絕對時間時會讀它 ✓；反例：寬 `[2,1]` vs 窄 `[1,2]` ✓），
+ * 而**分頁前的排序錯了，頁面 hydration 救不回來** ✗。
+ * 動態讀取紀錄只證明「走過的分支」，不能據此刪掉其他分支的必要輸入 ✗
+ *（漏掉的還包括 `preferPrimaryListing()` 讀的 `last_seen_at`、tie-break 的 `source_id`／`url`、
+ *  含附加費價格、個人自有房源、fit／通勤等條件分支 ✓）。
+ * ⇒ 要再縮欄位，驗收必須是「寬版與優化版的總數／順序／角色／卡片狀態**完全相同**」✓，
+ *   審計清單只能輔助 ✓，不能代替 parity ✗。
  *
  * 為什麼存在：實測（`v3/test/listing-search-pipeline-read-audit.test.js` ✓）用 Proxy 量測真實管線
  * （`buildListListingsRows` ＋ `paginateListListingsRows` ✓）對候選列的讀取 ⇒ 非 `fit_desc` 模式
@@ -6578,11 +6575,7 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
  * ⚠️ `fit_desc`（`applyCachedCoords` 複製整列 ✗）目前讀不到全部欄位也沒問題（複製只是變小 ✓），
  * 但若未來在候選階段新增「需要被移除欄位」的邏輯，這個清單必須同步更新 ✗（由上述審計測試的護欄擋 ✓）。
  */
-export const LIST_CANDIDATE_COLUMNS_NARROW = `post_id, source, price, price_num,
-  title, address, area_name, floor_name, kind_name, tags,
-  lat, lng, geo_source, location_class, match_post_id, match_level,
-  match_verdict, offline, offline_confirmed, hidden, hidden_at,
-  refresh_time, contact_uid`;
+// （23 欄窄清單常數已於本批刪除 ✓；撤回理由見上方註解 ✓。）
 
 /**
  * 搜尋路徑的同步後處理：與 stats 的 `buildListingStatsRows` 同一個精神——
