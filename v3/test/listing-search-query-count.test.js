@@ -46,7 +46,8 @@ test("量測：PG 列表路徑每次搜尋的查詢數與分佈（離線基準�
   assert.equal(typeof runSearch, "function", "listingSearchNodePg.js 應匯出搜尋函式");
 
   const pgDriver = countingDriver();
-  const args = { filter: "all", districts: [], sort: "price_asc", limit: 20, offset: 0, uid: 0, voteUid: 0, settings: {} };
+  // 參數名必須與正式入口一致 ✓（裁決 §3：實際是 userId／matchVoteUserId，不是 uid／voteUid ✗）。
+  const args = { filter: "all", districts: [], sort: "price_asc", limit: 20, offset: 0, userId: 0, matchVoteUserId: 0, settings: {} };
   const deps = listingSearchBuildContext();
   const outcome = await runSearch(args, { pgDriver, deps })
     .catch((error) => ({ error: String(error && error.message || error) }));
@@ -64,10 +65,17 @@ test("量測：PG 列表路徑每次搜尋的查詢數與分佈（離線基準�
     const key = match ? match[1] : "other";
     byTable[key] = (byTable[key] || 0) + 1;
   }
-  console.log(`QC-TOTAL ${pgDriver.queries.length}`);
+  // ⚠️ 明確分列：`QC-TOTAL` 原本印的是**兩次合計** ✗，容易誤讀成單次成本 ✓。
+  console.log(`QC-TOTAL-RUN1 ${firstRun} QC-TOTAL-RUN2 ${secondRun} QC-TOTAL-ALL ${pgDriver.queries.length}`);
   console.log(`QC-BY-TABLE ${JSON.stringify(byTable)}`);
   console.log(`QC-SQL ${JSON.stringify(pgDriver.queries.map((q) => String(q.sql).replace(/\s+/g, " ").slice(0, 56)))}`);
   console.log(`QC-OUTCOME ${JSON.stringify(outcome && outcome.error ? { error: outcome.error } : { ok: true })}`);
 
-  assert.ok(pgDriver.queries.length > 0, "應該要發出至少一個查詢");
+  // ✗ 原本吃掉兩次例外、只斷言 queries > 0 ⇒ **搜尋失敗也可能綠燈** ✗（裁決 §3 點名）。
+  // 改成：兩次都必須成功 ✓，且第二次不得比第一次貴 ✓。
+  assert.equal(outcome?.error, undefined, `第一次搜尋不得失敗：${outcome?.error || ""}`);
+  assert.equal(secondOutcome?.error, undefined, `第二次搜尋不得失敗：${secondOutcome?.error || ""}`);
+  assert.ok(firstRun > 0, "第一次應該要發出至少一個查詢");
+  assert.ok(secondRun > 0, "第二次應該要發出至少一個查詢");
+  assert.ok(secondRun <= firstRun, `第二次查詢數不得多於第一次（${secondRun} vs ${firstRun}）`);
 });
