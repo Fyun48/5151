@@ -387,6 +387,20 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 ⇒ 另一事實修正 ✓：`user_listing_flags` **不是空表** ✓（`n_live_tup = 705` ✓）；先前讀到 0 ✗
 是因為**完全沒有統計**時的佔位值 ✓ —— 沒有統計時 `n_live_tup` 不可信 ✓。
 
+### 候選欄位審計（① 的第一步）
+- `LIST_CANDIDATE_COLUMNS` **只在 `v3/src/db.js`** ✓（單一來源 ✓）；投影輔助在 `v3/src/listingSearchProjection.js` ✓。
+- 以 `grep -o 'row\.[a-z_]*'` 掃候選階段檔案（`listingSearchAsync.js`／`listingSearchSql.js`／
+  `listDistrictSql.js`／`listPriceSql.js`／`listKeep.js`／`listingSearchProjection.js`／
+  `repository/listingFields.js`／`listingSearchNodePg.js`）只得到 **10 個欄位** ✓：
+  `post_id`(7)／`updated_at`(3)／`name`(3)／`key`(3)／`total_monthly_cost`／`rent`／`match_post_id`／`lat`／`lng`／`group_key` ✓。
+- ✗ **但這不完整**：管線大量使用**解構**與其他變數名（`r.`／`candidate.`／`item.`／`{ district }` ✗）⇒
+  `grep` 審計會**低估**使用面 ✗ ⇒ 依此直接刪欄位**不安全** ✗。
+- ⇒ **改採嚴謹可證法**：新增**Proxy 讀取審計測試** ✓ —— 把候選列包成 `Proxy` ✓、記錄實際被讀取的鍵 ✓，
+  跑一次真正的搜尋管線（既有 fixture ✓）⇒ 得到**有證據的最小欄位集** ✓；再據此縮減投影 ✓，
+  並以既有 parity／contract 測試（totalMatched／排序／角色不變 ✓）守住等價性 ✓。
+- ⇒ 這條路**零生產風險** ✓（不先改 `db.js` ✗）、可重跑 ✓、且結果可寫進 PR 當證據 ✓。
+
+
 
 
 
