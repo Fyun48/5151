@@ -1,8 +1,15 @@
-// F3（PR-B）：kind 篩選下推 PG SQL。
+// F3（PR-B）：kind 篩選——**依實測結果關回外框外**。
 //
-// 述詞逐行鏡射 floors.js:matchesHousingKind（rentalMode／appearance 群組／commercial 群組／
-// elevatorRequired），每個 has(key) = kind_keys LIKE '%,key,%'。
-// 等價性已在真實資料上驗證：v3/scripts/kind-parity-probe.mjs（14 種查詢 × 2,000 列，mismatch=0）。
+// 背景（2026-09-24 實測，生產資料）：
+//   • kind=""           → count 查詢 388ms ✓
+//   • kind=whole／apartment／building → count 查詢 **30,0xx ms** ✗ 被連線逾時中止
+//   原因：`p.kind_keys LIKE '%,key,%'` 無法使用索引；而 F2 已移除回退 ⇒ 若維持下推，
+//   線上帶分類晶片的搜尋會變成 503。
+//   ⇒ 暫時關回外框外，改走 PG-fed Node 路徑（實測正確、約 1.3 秒）。
+//   ⇒ 待 B6 提供可索引的 kind 表達（例如投影布林欄位）後，再以「A/B 對照 + 效能」兩項一起驗收才開放。
+//
+// 本檔保留「關回外框外」的回歸護欄；述詞結構的等價性證據（探針 mismatch=0、生產資料 5,000/5,000、
+// 端到端 12 案一致）仍然有效，只是**效能**不允許它走 SQL-first。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildListingSearchSql } from "../src/listingSearchSql.js";
@@ -18,70 +25,25 @@ function stubDeps(overrides = {}) {
     appendPriceCeilingCandidates: () => {},
     ...overrides,
   };
-  return new Proxy(base, {
-    get: (target, name) => (name in target ? target[name] : () => {}),
-    has: () => true,
-  });
+  return new Proxy(base, { get: (t, n) => (n in t ? t[n] : () => {}), has: () => true });
 }
 
 const ARGS = { districts: ["中山區"], allowAllDistricts: true };
-const build = (kind) => buildListingSearchSql({ ...ARGS, kind }, stubDeps());
 
-test("kind 空字串：不產生任何 kind_keys 條件（既有行為不變）", () => {
-  assert.doesNotMatch(JSON.stringify(build("")), /kind_keys/);
+test("kind 一律回外框外（實測 30 秒逾時；改走 PG-fed Node）", () => {
+  for (const kind of ["whole", "apartment", "apartment,building", "suite,yafang", "shop,warehouse", "elevator"]) {
+    const built = buildListingSearchSql({ ...ARGS, kind }, stubDeps());
+    assert.equal(built?.ok, false, `${kind} 應回外框外`);
+    assert.equal(built.reason, "kind");
+  }
 });
 
-test("kind=apartment：改以 apartment_huaxia 比對（kindsToQuery 的正規化）", () => {
-  const result = build("apartment");
-  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 160)}`);
-  const text = JSON.stringify(result);
-  assert.match(text, /kind_keys LIKE \?/);
-  assert.match(text, /%,apartment_huaxia,%/);
+test("kind 為空字串時仍在外框內，且不產生 kind_keys 條件（既有行為不變）", () => {
+  const built = buildListingSearchSql({ ...ARGS, kind: "" }, stubDeps());
+  assert.notEqual(built?.ok, false);
+  assert.doesNotMatch(JSON.stringify(built), /kind_keys/);
 });
 
-test("kind=whole：要求 ,whole, 集合（整層）", () => {
-  const text = JSON.stringify(build("whole"));
-  assert.match(text, /%,whole,%/);
-});
-
-test("kind=building：外觀群組 + elevatorRequired 的合取條件都要出現", () => {
-  const text = JSON.stringify(build("building"));
-  assert.match(text, /%,building,%/);
-  assert.match(text, /%,elevator,%/);
-});
-
-test("kind=suite,yafang：legacy 模式只要求 legacy key ＋ 外觀特例群組（不要求 suite）", () => {
-  // 實測語意：kindsToQuery() 會把 yafang 歸為 legacy rental（rentalMode=legacy, legacyRental=yafang），
-  // 且因為 appearance/commercial 皆空、rentalOn 為真 → effectiveAppearanceCategories() 回傳特例
-  // [building, apartment_huaxia]。這與 kind-parity-probe.mjs 的述詞一致（mismatch=0）。
-  const text = JSON.stringify(build("suite,yafang"));
-  assert.match(text, /%,yafang,%/);
-  assert.match(text, /\(p\.kind_keys LIKE \? OR p\.kind_keys LIKE \?\)/);
-  assert.match(text, /%,building,%/);
-  assert.match(text, /%,apartment_huaxia,%/);
-  assert.doesNotMatch(text, /%\,\s*suite\s*,%/);
-});
-
-test("kind=shop,warehouse：commercial 群組以 OR 串接", () => {
-  const text = JSON.stringify(build("shop,warehouse"));
-  assert.match(text, /\(p\.kind_keys LIKE \? OR p\.kind_keys LIKE \?\)/);
-  assert.match(text, /%,shop,%/);
-  assert.match(text, /%,warehouse,%/);
-});
-
-test("wholeFloorOnly：kind 為空時套用整層過濾（等效 isWholeFloorHome）", () => {
-  const deps = stubDeps({ getSettings: () => ({ wholeFloorOnly: true }) });
-  const result = buildListingSearchSql({ ...ARGS }, deps);
-  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 160)}`);
-  assert.match(JSON.stringify(result), /%,whole,%/);
-});
-
-test("wholeFloorOnly：kind 有值時**不**套用整層過濾（Node 會 skipWholeFloor）", () => {
-  // db.js:6480 / 7183：passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) })
-  const deps = stubDeps({ getSettings: () => ({ wholeFloorOnly: true }) });
-  const result = buildListingSearchSql({ ...ARGS, kind: "suite" }, deps);
-  assert.notEqual(result?.ok, false, `不該落在外框外：${JSON.stringify(result)?.slice(0, 160)}`);
-  const text = JSON.stringify(result);
-  assert.doesNotMatch(text, /%,whole,%/);
-  assert.match(text, /kind_keys LIKE/); // kind 條件本身仍在
+test("外框外的原因字串穩定（呼叫端可依賴）", () => {
+  assert.equal(buildListingSearchSql({ ...ARGS, kind: "whole" }, stubDeps())?.reason, "kind");
 });

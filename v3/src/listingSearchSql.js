@@ -121,6 +121,12 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   //（server.js:3759），所以這裡只做集合比對，不會繞過權限。
   const sourceKeys = (Array.isArray(args.sources) ? args.sources : String(args.sources || "").split(/[,|]/))
     .map((item) => String(item || "").trim()).filter(Boolean);
+  // ⚠️ kind 的 SQL 下推（F3）在 2026-09-24 被實測推翻：帶 kind 的 count 查詢在生產資料上需要
+  // **>30 秒**並被連線逾時中止（`kind=""` 只要 388ms；whole／apartment／building 三種都是 30,0xx ms）。
+  // 原因是 `p.kind_keys LIKE '%,key,%'` 無法使用索引。F2 已移除回退 ⇒ 若維持下推，
+  // 線上帶分類晶片的搜尋會變成 503。因此**暫時關回外框外**，改走 PG-fed Node 路徑
+  // （實測結果正確、約 1.3 秒）。待 B6 提供可索引的 kind 表達（例如投影布林欄位）後再開放。
+  if (kind) return outOfEnvelope("kind");
   if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
 
   const uid = deps.resolveUserId(userId);
