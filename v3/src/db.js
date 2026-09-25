@@ -4060,8 +4060,11 @@ function expandSearchKeys(keys) {
   return [...out];
 }
 
-function searchWhere(searchKeys, clauses, params) {
-  const keys = expandSearchKeys(searchKeys === undefined ? currentSearchKeys() : searchKeys);
+function searchWhere(searchKeys, clauses, params, context = null) {
+  // astra6 §0.2：searchKeys 未給時原本會讀 SQLite（currentSearchKeys()）✗。
+  // 由 PG 建立 request context 的路徑改傳 context.searchKeys，避免請求內讀 SQLite。
+  const resolved = searchKeys === undefined ? (context && context.searchKeys !== undefined ? context.searchKeys : currentSearchKeys()) : searchKeys;
+  const keys = expandSearchKeys(resolved);
   if (keys?.length) {
     clauses.push(`(
       search_key IN (${keys.map(() => "?").join(",")})
@@ -4071,14 +4074,17 @@ function searchWhere(searchKeys, clauses, params) {
   }
 }
 
-function listingVisibilityClauses(clauses, params) {
+function listingVisibilityClauses(clauses, params, context = null) {
   // The expiry predicate below is sufficient for reads. An UPDATE here would
   // wait up to busy_timeout for a crawler/importer even when no row expires.
   const stamp = new Date().toISOString();
   const openSelf = sqlOpenSelfListing(stamp);
   clauses.push(openSelf.sql);
   params.push(...openSelf.params);
-  const disabled = (getCrawlSources().items || [])
+  // astra6 §0.2：這兩個原本都讀 SQLite（getCrawlSources()／sqlExcludeFixtureRows(db)）；
+  // PG 路徑改由 context 提供（request context 由 PG 建立一次），避免請求內讀 SQLite。
+  const crawl = context && context.crawlSources ? context.crawlSources : getCrawlSources();
+  const disabled = (crawl.items || [])
     .filter((row) => !row.enabled)
     .map((row) => row.id);
   if (disabled.length) {
@@ -4086,7 +4092,7 @@ function listingVisibilityClauses(clauses, params) {
     params.push(...disabled);
   }
   clauses.push(hpDisplayReadySql("listings"));
-  const isolation = sqlExcludeFixtureRows(db, "listings");
+  const isolation = context && context.isolation ? context.isolation : sqlExcludeFixtureRows(db, "listings");
   clauses.push(isolation.sql);
   params.push(...isolation.params);
 }
@@ -6424,16 +6430,16 @@ export function resolveListDistrictNames({ districts = [], settings = null, uid 
 export function buildListListingsClauses({
   filter = "all", kind = "", sources = "", q = "", searchKeys,
   districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
-  districtIds = null,
+  districtIds = null, context = null,
 } = {}, { sqliteDb = db } = {}) {
   const settings = settingsParam || getSettings(uid);
   const districtNames = resolveListDistrictNames({ districts, settings, uid });
   const districtSet = new Set(districtNames);
   const clauses = [];
   const params = [];
-  searchWhere(searchKeys, clauses, params);
+  searchWhere(searchKeys, clauses, params, context);
   if (filter !== "watched") {
-    listingVisibilityClauses(clauses, params);
+    listingVisibilityClauses(clauses, params, context);
     if (Array.isArray(districtIds)) {
       // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
       // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
