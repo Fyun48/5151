@@ -1,4 +1,20 @@
-# PR-B 量測：SQL-first 與 Node 的實際結果差異（same-house affiliate）2026-09-24
+# PR-B 量測：SQL-first 與 Node 的結果差異（same-house affiliate）2026-09-24
+
+> ## ⚠️ 更正（依 astra6 決策文件 §1.1，2026-09-24）
+>
+> 本文件的量測是在**生產 SQLite 快照（`/data/v3.db`）**上做的，屬於「同一份 DB、兩條管線」的比較。
+> 它是**有效的語意反例**（證明未完成同屋源語意的 SQL-first 不等價），
+> **但不可解讀為「生產 PG 第一頁已有 30% 重複」的直接測量** ✗ —— 正式 PG 的影響須另行量測。
+>
+> **PG 端事實（同日唯讀實測，西屯區）**：候選 **6,226**、帶 peer 指標 **2,581（41.5%）**、
+> peer 落在同一候選集合內 **2,526（40.6%）**⇒ 40.6% 是「可能被 Node 排除」的**上界**
+> （實際排除數需 Node 角色推導，不做近似）。
+>
+> 另更正用語：`primary_listing_id` 的來源是 `Number(row.match_post_id) || 0`
+> ⇒ 它只是 **peer 指標**，不是「已選出的 primary」。
+>
+> 後續處置見 `docs/handoffs/pr-b-plan-from-astra6-decisions-20260924.md`（先做 B：PG-fed Node，再做修正版 C）。
+
 
 ## 一、量測方法（可重跑）
 
