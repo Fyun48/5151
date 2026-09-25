@@ -6403,32 +6403,21 @@ export function buildListListingsRows(raw, {
   return rows;
 }
 
-export function listListings({
-  filter = "all",
-  kind = "",
-  sources = "",
-  q = "",
-  sort = "price_asc",
-  limit = 500,
-  offset = 0,
-  searchKeys,
-  districts = [],
-  userId,
-  matchVoteUserId,
-  settings: settingsOverride,
-  sameHouse = true,
-} = {}) {
-  const queryDetails = {};
-  let stageStarted = performance.now();
-  const markStage = (name) => {
-    const now = performance.now();
-    queryDetails[name] = Math.round(now - stageStarted);
-    stageStarted = now;
-  };
-  const uid = resolveUserId(userId);
-  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
-  ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
-  const settings = settingsOverride || getSettings(uid);
+/**
+ * 搜尋路徑的「候選子句」建構：與 `buildListListingsRows` 同一個精神（driver-agnostic、可被 PG 重用）。
+ *
+ * 回傳 `{ clauses, params, where, districtNames, districtSet }`，呼叫端負責實際取資料：
+ * SQLite 用 `db.prepare(...)`，PG 版用同一段 SQL 文字（`?` 由 sqlDialect 轉 `$n`）。
+ *
+ * 註：`q` 一律輸出 `lower(x) LIKE lower(?)`。原因是**實測** SQLite 的 LIKE 對 ASCII 不分大小寫、
+ * PG 分大小寫（6 案中 4 案不一致）；包上 lower() 後兩邊 6 案完全一致，且對 SQLite 而言
+ * 與原本的 `LIKE` 結果相同（CJK 亦不受影響）。這讓同一段文字在兩個 driver 上語意一致。
+ */
+export function buildListListingsClauses({
+  filter = "all", kind = "", sources = "", q = "", searchKeys,
+  districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
+} = {}, { sqliteDb = db } = {}) {
+  const settings = settingsParam || getSettings(uid);
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
     .map(name => String(name || "").trim()).filter(Boolean);
   const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
@@ -6441,7 +6430,7 @@ export function listListings({
     appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
     appendPriceCeilingCandidates(settings, clauses, params);
   } else {
-    applyBrowseIsolation(clauses, params, db, "listings");
+    applyBrowseIsolation(clauses, params, sqliteDb, "listings");
   }
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
@@ -6502,15 +6491,48 @@ export function listListings({
   if (q) {
     const like = `%${q}%`;
     clauses.push(`(
-      title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?
-      OR IFNULL((
+      lower(title) LIKE lower(?) OR lower(address) LIKE lower(?)
+      OR lower(CAST(post_id AS TEXT)) LIKE lower(?)
+      OR lower(IFNULL((
         SELECT watch_note FROM user_listing_flags f
         WHERE f.post_id = listings.post_id AND f.user_id = ?
-      ), '') LIKE ?
+      ), '')) LIKE lower(?)
     )`);
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  return { clauses, params, where, districtNames, districtSet, requestedDistricts };
+}
+
+export function listListings({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "price_asc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  matchVoteUserId,
+  settings: settingsOverride,
+  sameHouse = true,
+} = {}) {
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const now = performance.now();
+    queryDetails[name] = Math.round(now - stageStarted);
+    stageStarted = now;
+  };
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
+  const settings = settingsOverride || getSettings(uid);
+  const { clauses, params, where, districtNames, districtSet, requestedDistricts } = buildListListingsClauses({
+    filter, kind, sources, q, searchKeys, districts, settings, uid, voteUid,
+  });
   markStage("prepare_ms");
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
   markStage("sql_ms");
