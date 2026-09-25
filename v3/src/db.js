@@ -6368,7 +6368,7 @@ export function buildListListingsRows(raw, {
       ? overlaid
       : filter === "offline" || filter === "suspected"
         ? overlaid.filter((row) => passesPriceFilter(row, settings))
-        : applyListingFilter(overlaid, settings);
+        : applyListingFilter(overlaid, settings, provider);
   markStage("profile_ms");
 
   rows = attachSameHouseRoles(rows, voteUid, provider);
@@ -6394,7 +6394,8 @@ export function buildListListingsRows(raw, {
   const needFit = sort === "fit_desc";
   if (needFit) {
     for (const row of rows) {
-      const located = applyCachedCoords(row, settings);
+      // astra6 §0.2：fit／通勤不可留同步 SQLite 讀取 ⇒ provider 一路傳下去（PG 路徑傳 PG provider）。
+      const located = applyCachedCoords(row, settings, provider);
       const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
         && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
       row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;

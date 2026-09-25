@@ -162,14 +162,14 @@ test("the async hot path decorates PostgreSQL pages and routes unsupported queri
   assert.match(source, /decoration: "full"/);
   // allowUndecorated is diagnostics-only now.
   assert.match(source, /if \(options\.allowUndecorated\) \{/);
-  // B2/B3（astra6 決策）：外框外的查詢改走 PG-fed Node 管線，**不再**回退 SQLite
-  //（回退會在下層換掉資料來源）。降級開關只切引擎（sql_pg／node_pg），不切資料來源。
-  assert.match(source, /if \(!page \|\| searchEngine\(\) === "node_pg"\) \{/);
+  // B2/B3（astra6 §5）：外框外的查詢走 PG-fed Node；正式入口**不得**選到 sql_pg（只有診斷路徑可）。
+  assert.match(source, /if \(!page \|\| searchEngine\(options\) === "node_pg"\) \{/);
   assert.match(source, /return await searchListingsNodePg\(args, \{/);
-  assert.match(source, /export function searchEngine\(\)/);
+  assert.match(source, /export function searchEngine\(options = \{\}\)/);
   assert.doesNotMatch(source, /if \(!page\) return searchListingsSqlite\(args\);/);
-  // SQLite 只保留在 sqlite driver 與 catch 的**測試專用**分支（無環境變數開關）。
-  assert.match(source, /catch \(error\) \{[\s\S]*?if \(options\.sqliteFallback === true\) return searchListingsSqlite\(args\);/);
+  // SQLite 只在 sqlite driver 與「直接呼叫 adapter」的診斷路徑；正式錯誤處理不得保有換庫能力。
+  assert.match(source, /if \(driver !== "postgres"\) return searchListingsSqlite\(args\);/);
+  assert.doesNotMatch(source, /sqliteFallback/);
   assert.equal(typeof searchListingsAsync, "function");
   assert.equal(searchEngine(), "node_pg");   // Owner 2026-09-24：正確性優先 ⇒ 預設走 PG-fed Node
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
