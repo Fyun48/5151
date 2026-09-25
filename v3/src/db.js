@@ -6438,7 +6438,10 @@ export function buildListListingsClauses({
       // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
       // SQLite 路徑維持 appendDistrictCandidates（含原本的 recursive CTE）。
       if (districtIds.length) {
-        clauses.push("post_id = ANY(?)");
+        // PG 專屬表達：closure 以單一陣列參數傳入（避免數萬個佔位符撐爆參數協定）。
+        // 註：`::bigint[]` 讓比較型別明確；實測 candidates 仍為 32 的原因**不是**型別，
+        // 而是 searchWhere 帶了 7 個 crawler URL 條件（與 SQL-first 路徑共用，非本路徑特有）。
+        clauses.push("post_id = ANY(?::bigint[])");
         params.push(districtIds);
       } else {
         clauses.push("1 = 0");
