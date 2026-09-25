@@ -8,6 +8,12 @@
 #   bash v3/scripts/run-in-container.sh v3/scripts/kind-e2e-parity.mjs
 #   bash v3/scripts/run-in-container.sh v3/scripts/q-e2e.mjs -d          # -d：背景執行（寫 /tmp/<name>.log）
 #   ENV="PG_STATEMENT_TIMEOUT_MS=300000" bash v3/scripts/run-in-container.sh ...   # 追加環境變數
+#
+# REMOTE_DIR（預設 /tmp/kk）：同步與執行目錄。
+#   腳本若 import bare specifier（例如 `pg`），**必須**用 REMOTE_DIR=/app/tmpkk，
+#   因為 ESM 由「匯入檔所在目錄」向上解析 node_modules（且不吃 NODE_PATH），
+#   放在 /tmp/kk 時會找不到 /app/node_modules/pg。
+#   例：REMOTE_DIR=/app/tmpkk bash v3/scripts/run-in-container.sh v3/scripts/search-keys-parity.mjs
 set -uo pipefail
 CONTAINER="${CONTAINER:-591-tracker-v3}"
 CASA="${CASA:-casa-nas}"
