@@ -171,7 +171,7 @@ test("the async hot path decorates PostgreSQL pages and routes unsupported queri
   // SQLite 只保留在 sqlite driver 與 catch 的**測試專用**分支（無環境變數開關）。
   assert.match(source, /catch \(error\) \{[\s\S]*?if \(options\.sqliteFallback === true\) return searchListingsSqlite\(args\);/);
   assert.equal(typeof searchListingsAsync, "function");
-  assert.equal(searchEngine(), "sql_pg");
+  assert.equal(searchEngine(), "node_pg");   // Owner 2026-09-24：正確性優先 ⇒ 預設走 PG-fed Node
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(server, /await searchListingsAsync\(args, \{/);
   assert.match(server, /PG_LISTINGS_UNDECORATED/);

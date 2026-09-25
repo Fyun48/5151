@@ -80,13 +80,17 @@ function pageResult(page, listings, extra = {}) {
   };
 }
 
-// B2/B3（astra6 決策）：搜尋引擎降級開關。
+// B2/B3（astra6 決策）：搜尋引擎開關。
 //
-// 只切「引擎」，**不切資料來源**：`sql_pg`＝已證明等價的查詢走 SQL-first；
-// `node_pg`＝整條走 PG-fed Node 管線（較慢但語意一定與 Node 參考管線相同）。
+// **Owner 於 2026-09-24 決定「正確性優先」**：預設為 `node_pg`（PG-fed Node 管線）——
+// 它與 Node 參考管線共用同一份後處理，且已用 A/B 對照在真實 PG 資料上驗證為正確；
+// 缺點是較慢（實測 mean 1.3s／p95 1.9s，event-loop lag p99 262ms）。
+//
+// `sql_pg` 仍保留（快，但現階段 SQL 端缺少 same-house 角色條件 ⇒ 會多回傳約 40% 同源配對列），
+// 需**明確**設定環境變數才會使用：`PG_SEARCH_ENGINE=sql_pg`。
 // 兩者都以 PG 為唯一資料來源；PG 失敗一律 503，不回退 SQLite。
 export function searchEngine() {
-  return String(process.env.PG_SEARCH_ENGINE || "sql_pg") === "node_pg" ? "node_pg" : "sql_pg";
+  return String(process.env.PG_SEARCH_ENGINE || "node_pg") === "sql_pg" ? "sql_pg" : "node_pg";
 }
 
 export async function searchListingsAsync(args = {}, options = {}) {
@@ -95,6 +99,15 @@ export async function searchListingsAsync(args = {}, options = {}) {
 
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
+    // 正確性優先（Owner 2026-09-24）：預設走 PG-fed Node，且**不先跑 SQL-first**
+    // （省掉一次註定要丟棄的查詢；也不建立 repository）。要回到 SQL-first 需明確設 PG_SEARCH_ENGINE=sql_pg。
+    if (searchEngine() === "node_pg") {
+      return await searchListingsNodePg(args, {
+        pgDriver,
+        deps: options.deps || listingSearchBuildContext(),
+        decorationLoader: options.decorationLoader,
+      });
+    }
     const repository = options.repository || createListingsRepository({
       driver: "postgres",
       pgDriver,

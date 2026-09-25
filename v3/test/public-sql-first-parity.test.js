@@ -142,12 +142,9 @@ test("guest SQL-first 只在一模一樣的等價範圍內接手，其餘回退 
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ priceMax: 20000 })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ commuteKm: 5, workLat: 25.093, workLng: 121.525 })), null);
     assert.equal(app.listPublicListingsSqlFirst({ ...guestArgs({}), filter: "watched" }), null);
-    // F3（PR-B）唯一在此路徑下推的項目：areaMax 不再回退。
-    // 語意依 floors.js:412-415（area 為 NULL 不排除 → SQL 用 p.area IS NULL OR p.area <= ?）。
-    // 以 queryDetails.sql_first 斷言（此函式回傳的是頁面結果，不是 builder 物件）。
-    const areaFirst = app.listPublicListingsSqlFirst(guestArgs({ areaMax: 30 }));
-    assert.ok(areaFirst, "areaMax 應在 envelope 內（F3 已下推）");
-    assert.equal(areaFirst.queryDetails?.sql_first, true);
+    // F3 依隔離實測全部關回外框外（areaMax=35 的 count 需 30,054ms 且逾時；見 listing-search-sql-sources.test.js）
+    // ⇒ 訪客路徑的 areaMax 也改為回退 Node，不再走 SQL-first。
+    assert.equal(app.listPublicListingsSqlFirst(guestArgs({ areaMax: 30 })), null);
     // 回退後仍拿得到結果（與改動前一樣走 Node 路徑）
     const fallback = app.listPublicListingsFast(guestArgs({ q: "合成" }));
     assert.ok(fallback.listings.length >= 1);
