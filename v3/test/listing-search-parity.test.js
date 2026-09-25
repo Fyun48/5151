@@ -89,7 +89,14 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   );
 
   // 讀回**展開後的 stored keys** ✓（`searchKeys` ✓；不必猜 URL 格式 ✓）⇒ 取第一個當 fixture 鍵 ✓
-  const pgExec = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
+  // ✗ 必修 #1：context 內部的 SQL 用 `?` 佔位符 ⇒ **必須過 `toPostgresSql()`** 才能給 PG ✗
+  //（CI 實測：`syntax error at or near ")"` / code 42601，堆疊指向 `db.js:4087` 的 `safeExecFactory` ✓）。
+  const pgExec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;
+  // ✗ 必修 #2：CI 拋棄式 PG **沒有 `settings` 表**（實測 `relation "settings" does not exist` ✓）
+  // ⇒ 照既有 parity 檔（如 `job-queue-parity` ✓）的作法先確保必要表存在 ✓。
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  await ensurePgSchema(pgDriver, sqliteDb, { tables: ["settings"] });
   const pgContext = await app.buildListRequestContextFromPg(pgExec);
   const key = (pgContext?.searchKeys || [])[0];
   console.log(`PARITY-CONTEXT ${JSON.stringify({ pgKeys: (pgContext?.searchKeys || []).length, key })}`);
