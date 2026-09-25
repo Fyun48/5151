@@ -13,6 +13,7 @@
 import {
   buildListListingsClauses,
   buildListListingsRows,
+  buildListRequestContextFromPg,
   decorateListListingsPage,
   paginateListListingsRows,
   preloadDecorationProviderAsync,
@@ -143,6 +144,8 @@ export async function searchListingsNodePg(args = {}, { pgDriver, deps = {}, dec
   const built = buildListListingsClauses({
     filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
     districts: args.districts, settings, uid, voteUid,
+    // astra6 §0.2：request context 由 PG 建立一次（crawlSources／isolation），避免請求熱路徑讀 SQLite。
+    context: await buildListRequestContextFromPg(exec),
     // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
     districtIds: filter === "watched" ? null : await districtClosureIds(exec, {
       districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),

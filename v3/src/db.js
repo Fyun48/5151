@@ -4035,6 +4035,37 @@ export function currentSearchKeys() {
   return [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
 }
 
+/**
+ * astra6 2026-09-25 §0.2：由 PG 建立 request context（每個請求一次），避免請求熱路徑讀 SQLite。
+ *
+ * 只放**能精確對應**的資料，避免語意漂移：
+ *   • crawlSources：PG `settings(key, value)` 的 `crawlSources` 鍵（與 SQLite 用同一個鍵名 ✓），
+ *     再套用與 SQLite 路徑完全相同的 `publicCrawlSources(normalizeCrawlSources(...))` ✓。
+ *   • isolation：`fixture_namespace` 的等效 predicate（對應 sqlExcludeFixtureRows 的無 namespace 情形 ✓）。
+ *
+ * 尚未納入（下一步）：`searchKeys`（需 settings 的 searchUrls ＋ crawl covers ＋ distinct search_key 展開），
+ * 目前仍走 SQLite；在補上之前，傳入的 context 不含 searchKeys ⇒ 行為與現況相同（安全）。
+ */
+export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "" } = {}) {
+  if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
+  const row = (await exec(`SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"]))[0];
+  let crawlSources = publicCrawlSources(defaultCrawlSources());
+  if (row && row.value != null) {
+    try {
+      crawlSources = publicCrawlSources(normalizeCrawlSources(
+        typeof row.value === "string" ? JSON.parse(row.value) : row.value,
+      ));
+    } catch {
+      // 解析失敗時落回預設（純函式，不讀 SQLite）；後續可在此加告警。
+    }
+  }
+  const ns = String(namespace || "").trim();
+  const isolation = ns
+    ? { sql: "fixture_namespace = ?", params: [ns] }
+    : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
+  return { crawlSources, isolation };
+}
+
 let searchKeyMemo = { at: 0, stored: null };
 
 function invalidateSearchKeyMemo() {
