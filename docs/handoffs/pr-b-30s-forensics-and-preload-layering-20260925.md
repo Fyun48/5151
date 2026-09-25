@@ -449,6 +449,26 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 - 附帶確認 ✓：`listingDistrictName(row) = row?.district || districtNameFromListing(row)`（`db.js:6336` ✓）
   ⇒ `district` 確實被讀、且 `district` **不在** 43 欄內 ✓（靠 `address` 推導 ✓）。
 
+### 管線級審計結果 ✓ **43 → 22 欄**（已落地成測試 ✓ `v3/test/listing-search-pipeline-read-audit.test.js` ✓）
+手法：真實管線 ＋ `spyProvider`（照 `listing-score.test.js` ✓）＋ 對候選列包 `Proxy`（`get`／`has`／`ownKeys`／`set` ✓）。
+- **`PIPE-SPREAD no`** ✓✓ ⇒ 管線**沒有整列展開** ✗ ⇒ **縮減候選欄位在 SELECT 這層確實有效** ✓（關鍵前提成立 ✓）。
+- **`PIPE-READ-IN-CANDIDATE` ＝ 22 欄** ✓：
+  `post_id`／`source`／`price`／`price_num`／`title`／`address`／`area_name`／`floor_name`／`kind_name`／
+  `tags`／`lat`／`lng`／`geo_source`／`location_class`／`match_post_id`／`match_verdict`／`offline`／
+  `offline_confirmed`／`hidden`／`hidden_at`／`refresh_time`／`contact_uid` ✓
+  ⇒ **可移 21 欄** ✓（含 `source_id`／`source_key`／`extra_fee*`／`price_contain_text`／`address_norm`／
+  `layout`／`role_name`／`contact_name`／`contact_role`／`agency`／`match_level`／`match_rejected`／
+  `last_event`／`first_seen_at`／`last_seen_at`／`listed_by_user_id`／`self_status` 等 ✓）✓
+  —— 注意 `extra_fee*` 不在管線直讀清單 ✓（月總成本由投影表／`computeListingProjection` 提供 ✓）。
+- `PIPE-READ-UNREGISTERED` 初值 6 ✓ ⇒ 全為非 SELECT 來源 ✓、登錄後轉綠 ✓：
+  `fixture_namespace`（fixture 隔離 ✓）／`same_house_split`（同戶裝飾 ✓）／
+  `viewed`／`viewed_at`／`watched`／`watched_at`（`overlayRowsPersonal(flags)` 疊加的個人狀態 ✓）✓
+- **已知限制 ✓（下一步，不可略過 ✗）**：本次只量 `filter:"all"` ＋ 非 `fit_desc` 排序 ✓
+  ⇒ `watched`／`offline`／`suspected`／`fit_desc`／關鍵字等模式需**各跑一次** ✓（同一支測試可參數化 ✓）。
+- 附帶訊息 ✓：測試日誌顯示 `listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first` ✓
+  ⇒ 投影表**已在對齊**、guest 路徑已走 SQL-first ✓ ⇒ 縮欄位可望直接接到既有機制 ✓。
+
+
 
 
 
