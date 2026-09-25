@@ -77,3 +77,16 @@ node --test v3/test/list-sql-first-wiring.test.js v3/test/search-contract-regres
    `run-in-container.sh` 把腳本放 `/app/tmpkk` ⇒ `../src/db.js` 會解析到 **`/app/src/db.js`** ✗（舊碼 ✓）。
 4. **`expandSearchKeysAgainst` 用 `sameSearch()` 正規化比對** ✓ ⇒ 任何 `= ANY(keys)` 改寫都不等價 ✗（會靜默少資料 ✗）。
 5. **審計（動態讀取）≠ parity** ✗ ⇒ 只能輔助 ✓。
+
+## 8. 本批更正我自己先前的紀錄錯誤（誠實簿記）
+
+| 先前回報 | 問題 | 更正後 |
+|---|---|---|
+| 「離線基準 19 筆／請求」 | 用**錯誤參數名**（`uid`／`voteUid` ✗）呼叫 ⇒ **不是正式入口** ✗（裁決 §3 指出） | 正式參數名（`userId`／`matchVoteUserId` ✓）下為 **17 筆／請求** ✓ |
+| 「穩態 19 → 13」 | 13 是**跨請求快取**（`SAFE_TABLE_EXISTS` 共享 ＋ `pgSearchKeyMemo`）的產物 ✗；兩者已依裁決 §2.3／§2.4 **撤回** ✗ | 現況 **run1 = run2 = 17** ✓（純每請求成本 ✓，不含跨請求節省 ✓） |
+| `ab06f0e`「不是效能收益」→ 又改口「是收益」 | 兩次都是**量測設計問題** ✗（先量單次 ✗，後量到的是即將被撤回的全域快取 ✗） | 該改動**已撤回** ✗ ⇒ 不再主張任何收益 ✓ |
+
+⇒ 依裁決 §5：**正式驗收數字一律以真 PG ＋ `client.query` 計數為準** ✓；
+本檔的 **17** 只是**離線診斷基準**（1 列假資料、無配對／分頁／通勤／真 snapshot client ✓），
+**不得**當成驗收數字 ✗。
+
