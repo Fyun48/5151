@@ -46,13 +46,20 @@ test("量測：PG 列表路徑每次搜尋的查詢數與分佈（離線基準�
   assert.equal(typeof runSearch, "function", "listingSearchNodePg.js 應匯出搜尋函式");
 
   const pgDriver = countingDriver();
-  const outcome = await runSearch(
-    { filter: "all", districts: [], sort: "price_asc", limit: 20, offset: 0, uid: 0, voteUid: 0, settings: {} },
-    { pgDriver, deps: listingSearchBuildContext() },
-  ).catch((error) => ({ error: String(error && error.message || error) }));
+  const args = { filter: "all", districts: [], sort: "price_asc", limit: 20, offset: 0, uid: 0, voteUid: 0, settings: {} };
+  const deps = listingSearchBuildContext();
+  const outcome = await runSearch(args, { pgDriver, deps })
+    .catch((error) => ({ error: String(error && error.message || error) }));
+  const firstRun = pgDriver.queries.length;
+  // 第二次（同一 driver／同一 deps）：驗證 `search_key` 的 8 秒 memo 是否真的省下那筆全表
+  // `SELECT DISTINCT search_key FROM listings` ✓。單次量測看不出來 ✗（一次請求本來就只發一次 ✓）。
+  const secondOutcome = await runSearch(args, { pgDriver, deps })
+    .catch((error) => ({ error: String(error && error.message || error) }));
+  const secondRun = pgDriver.queries.length - firstRun;
+  const secondSql = pgDriver.queries.slice(firstRun).map((q) => String(q.sql).replace(/\s+/g, " ").slice(0, 56));
 
   const byTable = {};
-  for (const entry of pgDriver.queries) {
+  for (const entry of pgDriver.queries.slice(0, firstRun)) {
     const match = String(entry.sql).match(/FROM\s+([a-z_]+)/i);
     const key = match ? match[1] : "other";
     byTable[key] = (byTable[key] || 0) + 1;
