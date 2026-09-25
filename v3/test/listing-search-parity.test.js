@@ -46,6 +46,20 @@ function rolesOf(result) {
 //   且鍵必須與**請求 context 的 search-key 展開**相符 ✓（`WHERE search_key IN (…)` ✓，
 //   鍵集來自 settings／searchUrls 展開 ✓ ⇒ 需先摸清其形狀 ✓）。
 //   ⇒ 接通後再把 skip 拿掉 ✓（列為開放項 ✗）。
+//
+// ✅ **接通配方（已由讀碼確認 ✓，下一批照做即可 ✓）**：
+//   1. `sameSearch(a,b)`（`client591.js:81`）**先比對「trim 後完全相等」** ✓ ⇒ 只要 fixture 的
+//      `search_key` **等於** pipeline 實際使用的鍵 ✓ ⇒ **必然匹配** ✓（不必猜 591 URL 格式 ✓）。
+//   2. 因此：先跑一次 context 建構 ✓（PG：`buildListRequestContextFromPg(exec)` ✓；
+//      SQLite：`currentSearchKeys()` ✓，`db.js:4046` ✓）⇒ 讀出它產生的鍵清單 ✓ ⇒ 取第一個 ✓。
+//   3. 兩邊 fixture 的 `search_key` 都設成**那個值** ✓（SQLite 用 `app.sqliteHandle()` ✓、
+//      PG 用 driver ✓；其餘必填欄位：`source_key`／`title`／`url`／`first_seen_at`／`last_seen_at` ✓
+//      ＋ `source='591'`／`offline=0` ✓）。
+//   4. `WHERE` 由 `searchWhere` 以 `search_key IN (…)` 產生 ✓（`db.js:4237` ✓）
+//      ⇒ 有索引可用 ✓（`idx_listings_search` ✓、`idx_listings_list_scan` ✓；`db.js:736/755` ✓）
+//      ⇒ 這也是 A/B 對 43 vs 23 欄做比較時可用的**同一條查詢** ✓。
+//   5. 設定上仍須避開通勤與 `fit_desc` ✗（`settings: {}` ✓、`sort: "newest"` ✓）以避免額外分支 ✓。
+
 test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP || "尚未接通兩邊自建 fixture（見檔頭待辦）⇒ 目前只會空洞通過，故暫緩" }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const pgDriver = await createPostgresDriver({ env: process.env });
