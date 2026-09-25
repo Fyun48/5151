@@ -400,6 +400,23 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
   並以既有 parity／contract 測試（totalMatched／排序／角色不變 ✓）守住等價性 ✓。
 - ⇒ 這條路**零生產風險** ✓（不先改 `db.js` ✗）、可重跑 ✓、且結果可寫進 PR 當證據 ✓。
 
+### 讀取審計結果（已落地成測試 ✓ `v3/test/listing-search-projection-read-audit.test.js` ✓）
+`ComputeListingProjection`（與 Node filter/sort **同一批函式** ✓）對候選列**實際讀取**：
+- `AUDIT-READ-PRESENT`（19 欄 ✓）：`post_id`／`source`／`source_key`／`price`／`price_num`／`extra_fee`／
+  `extra_fees`／`title`／`address`／`area_name`／`floor_name`／`kind_name`／`tags`／`lat`／`lng`／
+  `location_class`／`match_post_id`／`offline`／`refresh_time` ✓
+- `AUDIT-READ-ABSENT`（14 欄 ✓，由 hydration／正規化階段提供 ✓）：`commute_km`／`route_km`／
+  `source_updated_at`／`source_published_at`／`building_type`／`buildingType`／`caseTypeName`／
+  `listing_kind`／`region_id`／`regionid`／`section_id`／`sectionid`／`shape`／`shape_name` ✓
+- **`AUDIT-SPREAD no`** ✓✓：`computeListingProjection` **沒有展開整列** ✗ ⇒ **縮減候選欄位在這一層確實有效** ✓
+  （若它 `{ ...row }` 就會複製全列、縮欄位白做 ✗）。
+- 護欄價值**當場驗證** ✓：初版只登錄 4 個裝飾欄位 ⇒ **測試正確地紅了** ✗（`# fail 1` ✓）、
+  逼出另外 10 個**隱性依賴**（來源別名／舊 schema 變體 ✓）⇒ 登錄後轉綠 ✓。
+- ⇒ 可縮範圍：**43 → 19（＋裝飾／別名 14 於後續階段）** ✓ ⇒ 直接對應實測最大成本
+  （`Index Scan listings` 33,541 buffers ✗）✓；落地時以既有 parity／contract 測試守住
+  `totalMatched`／排序／角色不變 ✓。
+
+
 
 
 
