@@ -6,7 +6,7 @@ const silentExec = async () => [];
 
 test("context：由 PG settings 取得 crawlSources（同名 key），並可套進子句", async () => {
   const exec = async (sql, params) => {
-    assert.match(String(sql), /FROM settings WHERE key = \?/);
+    if (!/FROM settings WHERE key = \?/.test(String(sql))) return [];
     assert.deepEqual(params, ["crawlSources"]);
     return [{ value: JSON.stringify({ items: [{ id: "591", enabled: true }, { id: "sinyi", enabled: false }] }) }];
   };
@@ -32,7 +32,30 @@ test("context：isolation 預設排除 fixture 列；給 namespace 時只保留�
   assert.deepEqual(scoped.isolation.params, ["ns1"]);
 });
 
-test("context：不會提供 searchKeys（在補上 PG 來源前維持現況）", async () => {
-  const context = await buildListRequestContextFromPg(silentExec);
-  assert.equal(context.searchKeys, undefined);
+test("context：searchKeys 由 PG 建立（settings／user_settings／users／crawl_covers／distinct search_key）", async () => {
+  const seen = [];
+  const exec = async (sql) => {
+    const text = String(sql);
+    seen.push(text);
+    if (/FROM settings WHERE key/.test(text)) return [];
+    if (/DISTINCT search_key/.test(text)) return [{ search_key: "https://covers.test/c1" }];
+    if (/FROM crawl_covers/.test(text)) {
+      return [{ id: 1, region_id: 1, section_ids: "[1,2]", price_min: 0, price_max: 0, last_run_at: null, created_at: "" }];
+    }
+    if (/FROM user_settings/.test(text)) {
+      return [{ user_id: 7, key: "searchUrls", value: JSON.stringify(["https://user.test/u7"]) }];
+    }
+    if (/FROM users/.test(text)) return [{ id: 7, role: "member", plan: "free" }];
+    if (/FROM settings/.test(text)) {
+      return [{ key: "searchUrls", value: JSON.stringify(["https://global.test/g"]) }];
+    }
+    return [];
+  };
+  const context = await buildListRequestContextFromPg(exec);
+  assert.ok(Array.isArray(context.searchKeys), "searchKeys 應由 PG 建立");
+  // 走的是 PG 路徑：covers 與展開都使用 PG 查詢（不再掃 SQLite）。
+  assert.ok(seen.some((sql) => /FROM crawl_covers/.test(sql)));
+  assert.ok(seen.some((sql) => /DISTINCT search_key/.test(sql)));
+  assert.ok(context.searchKeys.includes("https://global.test/g"), "全域 searchUrls 應納入");
+  assert.ok(context.searchKeys.length >= 1);
 });

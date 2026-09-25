@@ -129,7 +129,7 @@ import { bumpRevision, ensureDataRevisionTable } from "./dataRevision.js";
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
-import { listCrawlCovers } from "./crawlCovers.js";
+import { coverFromRow, listCrawlCovers } from "./crawlCovers.js";
 import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
@@ -4042,9 +4042,8 @@ export function currentSearchKeys() {
  *   • crawlSources：PG `settings(key, value)` 的 `crawlSources` 鍵（與 SQLite 用同一個鍵名 ✓），
  *     再套用與 SQLite 路徑完全相同的 `publicCrawlSources(normalizeCrawlSources(...))` ✓。
  *   • isolation：`fixture_namespace` 的等效 predicate（對應 sqlExcludeFixtureRows 的無 namespace 情形 ✓）。
- *
- * 尚未納入（下一步）：`searchKeys`（需 settings 的 searchUrls ＋ crawl covers ＋ distinct search_key 展開），
- * 目前仍走 SQLite；在補上之前，傳入的 context 不含 searchKeys ⇒ 行為與現況相同（安全）。
+ *   • searchKeys：與 currentSearchKeys() 同一語意（每使用者 searchUrls ＋ 全域 searchUrls ＋ crawl_covers 的 searchUrl），
+ *     再以同一支 expandSearchKeysAgainst()（stored = PG `SELECT DISTINCT search_key FROM listings`）展開 ⇒ 零語意漂移。
  */
 export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "" } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
@@ -4063,7 +4062,47 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   const isolation = ns
     ? { sql: "fixture_namespace = ?", params: [ns] }
     : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
-  return { crawlSources, isolation };
+  const searchKeys = await buildSearchKeysFromPg(exec, settingsTable);
+  return { crawlSources, isolation, searchKeys };
+}
+
+/**
+ * PG 版 `currentSearchKeys()`（astra6 §0.2）：逐步對應 SQLite 版本，全部重用同一支純函式與同一個 predicate。
+ *   • 使用者清單：與 members.listUserIds 完全相同的 predicate（`deleted_at IS NULL OR deleted_at = ''`）`ORDER BY id`。
+ *   • 每使用者 searchUrls：`user_settings` ＋ `settingsFromRows`（pure）＋ `users(role, plan)`。
+ *   • 全域 searchUrls：`settingsFromRows`（uid=0 分支）。
+ *   • covers：`crawl_covers` → `coverFromRow`（已匯出的同一支）→ `coveringJobsFromMembers`（pure）。
+ *   • 展開：`expandSearchKeysAgainst(PG 的 SELECT DISTINCT search_key, keys)` ⇒ 不再掃 SQLite。
+ */
+export async function buildSearchKeysFromPg(exec, settingsTable = "settings") {
+  const globalRows = await exec(`SELECT key, value FROM ${settingsTable}`);
+  const system = systemCrawlFromRows(globalRows);
+  const globalSettings = settingsFromRows({ globalRows, system });
+  const userRowsAll = await exec("SELECT user_id, key, value FROM user_settings");
+  const users = await exec(
+    "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+  );
+  const urls = [];
+  for (const user of users || []) {
+    const uid = Number(user?.id) || 0;
+    if (!uid) continue;
+    urls.push(
+      ...(settingsFromRows({
+        globalRows,
+        userRows: (userRowsAll || []).filter((row) => Number(row.user_id) === uid),
+        user: { id: uid, role: user.role, plan: user.plan },
+        system,
+      })?.searchUrls || []),
+    );
+  }
+  urls.push(...(globalSettings?.searchUrls || []));
+  const covers = (await exec(
+    "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+  )).map(coverFromRow);
+  const coverUrls = coveringJobsFromMembers(covers, { excludeRooftop: false }).map((job) => job.searchUrl);
+  const keys = [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
+  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  return expandSearchKeysAgainst(stored, keys);
 }
 
 let searchKeyMemo = { at: 0, stored: null };
@@ -4072,23 +4111,33 @@ function invalidateSearchKeyMemo() {
   searchKeyMemo = { at: 0, stored: null };
 }
 
-function expandSearchKeys(keys) {
+/**
+ * 純函式：把 URL 清單展開成資料庫中實際存在的 search_key（語意同 expandSearchKeys）。
+ * PG 路徑以同一支函式展開（stored 由 PG 的 SELECT DISTINCT search_key 取得）⇒ 零語意漂移。
+ */
+export function expandSearchKeysAgainst(storedKeys, keys) {
   if (!keys?.length) return keys;
-  const now = Date.now();
-  let stored = searchKeyMemo.stored;
-  if (!stored || now - searchKeyMemo.at > 8000) {
-    stored = db
-      .prepare("SELECT DISTINCT search_key FROM listings")
-      .all()
-      .map((row) => row.search_key)
-      .filter(Boolean);
-    searchKeyMemo = { at: now, stored };
-  }
   const out = new Set(keys);
-  for (const key of stored) {
+  for (const key of storedKeys || []) {
     if (keys.some((url) => sameSearch(url, key))) out.add(key);
   }
   return [...out];
+}
+
+function storedSearchKeys() {
+  const now = Date.now();
+  if (searchKeyMemo.stored && now - searchKeyMemo.at <= 8000) return searchKeyMemo.stored;
+  const stored = db
+    .prepare("SELECT DISTINCT search_key FROM listings")
+    .all()
+    .map((row) => row.search_key)
+    .filter(Boolean);
+  searchKeyMemo = { at: now, stored };
+  return stored;
+}
+
+function expandSearchKeys(keys) {
+  return expandSearchKeysAgainst(storedSearchKeys(), keys);
 }
 
 function searchWhere(searchKeys, clauses, params, context = null) {
