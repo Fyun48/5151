@@ -6504,43 +6504,61 @@ export function buildListListingsClauses({
   return { clauses, params, where, districtNames, districtSet, requestedDistricts };
 }
 
+/** 排序 → 計數 → 分頁（不含取列與裝飾）。driver-agnostic。 */
+export function paginateListListingsRows(rows, { sort, filter, settings, limit = 500, offset = 0 } = {}) {
+  const sorted = sortListingsRows(rows, sort, { filter, settings });
+  const totalMatched = sorted.length;
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+  const page = sorted.slice(start, start + pageSize);
+  return {
+    page,
+    pageIds: page.map((row) => row.post_id),
+    totalMatched,
+    pageSize,
+    start,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+  };
+}
+
+/** 取列之後的裝飾（lite → peers → finalize）。driver-agnostic：`fullRows` 由呼叫端提供。 */
+export function decorateListListingsPage(page, fullRows, { settings, uid = 0, voteUid = 0, sameHouse = true } = {}) {
+  const fullById = new Map((fullRows || []).map((row) => [Number(row.post_id), row]));
+  // A separate importer may remove a row between the candidate and page reads.
+  return page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+}
+
 /**
- * 搜尋路徑的尾段：排序 → 計數 → 分頁 → hydrate → 裝飾。
+ * 搜尋路徑的尾段（同步版本，給 SQLite 路徑用）：排序 → 計數 → 分頁 → hydrate → 裝飾。
  *
- * `hydrate(pageIds)` 可注入：SQLite 版預設走本模組的 `db`；PG 版傳入 PG 的取列函式，
- * 這樣兩條路徑共用「排序／計數／分頁／裝飾」語意，只有取列來源不同。
+ * PG 版不能走這一支（PG 取列是非同步），改用 `paginateListListingsRows` + `await` + `decorateListListingsPage`；
+ * 三段共用，語意只有取列來源不同。`hydrate(pageIds)` 可注入以覆寫預設的 SQLite 取列。
  */
 export function pageListListingsRows(rows, {
   sort, filter, settings, limit = 500, offset = 0,
   uid = 0, voteUid = 0, sameHouse = true, queryDetails = {},
   hydrate = null, markStage = () => {},
 } = {}) {
-  rows = sortListingsRows(rows, sort, { filter, settings });
+  const paged = paginateListListingsRows(rows, { sort, filter, settings, limit, offset });
   markStage("sort_ms");
 
-  const totalMatched = rows.length;
-  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
-  const start = Math.max(0, Number(offset) || 0);
-  const page = rows.slice(start, start + pageSize);
-  const pageIds = page.map(row => row.post_id);
-  const fullRows = page.length
+  const fullRows = paged.page.length
     ? (hydrate
-      ? hydrate(pageIds)
-      : db.prepare(`SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`).all(...pageIds))
+      ? hydrate(paged.pageIds)
+      : db.prepare(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(",")})`).all(...paged.pageIds))
     : [];
-  const fullById = new Map(fullRows.map(row => [Number(row.post_id), row]));
-  // A separate importer may remove a row between the candidate and page reads.
-  const listings = page.filter(row => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
-    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
-  });
+  const listings = decorateListListingsPage(paged.page, fullRows, { settings, uid, voteUid, sameHouse });
   markStage("hydrate_ms");
   return {
     listings,
-    totalMatched,
-    hasMore: start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
+    totalMatched: paged.totalMatched,
+    hasMore: paged.hasMore,
+    nextOffset: paged.nextOffset,
     queryVersion: 2,
     queryDetails,
   };
@@ -6600,6 +6618,8 @@ export function listingSearchBuildContext() {
     appendDistrictCandidates,
     appendPriceCeilingCandidates,
     memberRegionDistrictNames,
+    // 候選列欄位（B3 的 PG-fed Node 路徑要用同一組欄位，避免兩條路徑取不同欄位）
+    candidateColumns: LIST_CANDIDATE_COLUMNS,
     // Handy for adapters that need to derive PostgreSQL DDL from the SQLite
     // schema (repository/listings.js ensureProjection).
     sqliteDb: db,

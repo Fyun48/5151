@@ -28,6 +28,7 @@ import {
   listingSearchBuildContext,
   preloadDecorationProviderAsync,
 } from "./db.js";
+import { searchListingsNodePg } from "./listingSearchNodePg.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingsRepository } from "./repository/listings.js";
@@ -79,6 +80,15 @@ function pageResult(page, listings, extra = {}) {
   };
 }
 
+// B2/B3（astra6 決策）：搜尋引擎降級開關。
+//
+// 只切「引擎」，**不切資料來源**：`sql_pg`＝已證明等價的查詢走 SQL-first；
+// `node_pg`＝整條走 PG-fed Node 管線（較慢但語意一定與 Node 參考管線相同）。
+// 兩者都以 PG 為唯一資料來源；PG 失敗一律 503，不回退 SQLite。
+export function searchEngine() {
+  return String(process.env.PG_SEARCH_ENGINE || "sql_pg") === "node_pg" ? "node_pg" : "sql_pg";
+}
+
 export async function searchListingsAsync(args = {}, options = {}) {
   const driver = options.driver || resolveDbDriver();
   if (driver !== "postgres") return searchListingsSqlite(args);
@@ -92,9 +102,16 @@ export async function searchListingsAsync(args = {}, options = {}) {
       deps: options.deps || listingSearchBuildContext(),
     });
     const page = await repository.searchPage(args);
-    // Outside the SQL-first envelope the PostgreSQL path would need the Node candidate
-    // scan, which is still SQLite-bound - use the same fallback.
-    if (!page) return searchListingsSqlite(args);
+    // B2/B3（astra6 §3）：外框外的查詢**不再回退 SQLite** —— 那會在下層換掉資料來源
+    // （PG 模式下讀到的是另一個、可能落後的資料庫），也讓「PG 失效不回 SQLite」形同虛設。
+    // 改走 PG-fed Node 管線：候選／個人旗標／裝飾全部來自 PG，後處理與 SQLite Node 路徑共用同一份函式。
+    if (!page || searchEngine() === "node_pg") {
+      return await searchListingsNodePg(args, {
+        pgDriver,
+        deps: options.deps || listingSearchBuildContext(),
+        decorationLoader: options.decorationLoader,
+      });
+    }
 
     const rows = options.hydrate === false ? [] : await repository.hydrate(page.ids);
     if (options.allowUndecorated) {

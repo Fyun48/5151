@@ -147,10 +147,10 @@ test("listingSearchSql rejects incomplete dependency bundles", async () => {
   }), true);
 });
 
-test("the async hot path decorates PostgreSQL pages and falls back to the SQLite chain", async () => {
-  const { searchListingsAsync } = await import("../src/listingSearchAsync.js");
+test("the async hot path decorates PostgreSQL pages and routes unsupported queries to PG+Node", async () => {
+  const { searchListingsAsync, searchEngine } = await import("../src/listingSearchAsync.js");
   const source = readFileSync(path.join(dir, "../src/listingSearchAsync.js"), "utf8");
-  // The pre-existing chain still backs the sqlite driver and every fallback.
+  // The pre-existing chain still backs the sqlite driver.
   assert.match(source, /listListingsSqlFirst\(args\) \|\|/);
   assert.match(source, /listListingsCommuteSqlFirst\(args\) \|\|/);
   assert.match(source, /listListingsFitSqlFirst\(args\) \|\|/);
@@ -160,12 +160,18 @@ test("the async hot path decorates PostgreSQL pages and falls back to the SQLite
   assert.match(source, /await preloadDecorationProviderAsync\(\{ exec, rows, settings, userId, matchVoteUserId, sameHouse \}\)/);
   assert.match(source, /decorateRowsWithProvider\(rows, \{/);
   assert.match(source, /decoration: "full"/);
-  // allowUndecorated is diagnostics-only now, and the SQLite chain is the fallback for the
-  // SQL-first envelope as well as for any preload/decoration failure.
+  // allowUndecorated is diagnostics-only now.
   assert.match(source, /if \(options\.allowUndecorated\) \{/);
-  assert.match(source, /if \(!page\) return searchListingsSqlite\(args\);/);
-  assert.match(source, /catch \(error\) \{[\s\S]*?return searchListingsSqlite\(args\);/);
+  // B2/B3（astra6 決策）：外框外的查詢改走 PG-fed Node 管線，**不再**回退 SQLite
+  //（回退會在下層換掉資料來源）。降級開關只切引擎（sql_pg／node_pg），不切資料來源。
+  assert.match(source, /if \(!page \|\| searchEngine\(\) === "node_pg"\) \{/);
+  assert.match(source, /return await searchListingsNodePg\(args, \{/);
+  assert.match(source, /export function searchEngine\(\)/);
+  assert.doesNotMatch(source, /if \(!page\) return searchListingsSqlite\(args\);/);
+  // SQLite 只保留在 sqlite driver 與 catch 的**測試專用**分支（無環境變數開關）。
+  assert.match(source, /catch \(error\) \{[\s\S]*?if \(options\.sqliteFallback === true\) return searchListingsSqlite\(args\);/);
   assert.equal(typeof searchListingsAsync, "function");
+  assert.equal(searchEngine(), "sql_pg");
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(server, /await searchListingsAsync\(args, \{/);
   assert.match(server, /PG_LISTINGS_UNDECORATED/);
