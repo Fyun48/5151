@@ -43,6 +43,29 @@
 | 更早的 `af7e80b`／`e2ff73e` 等 | Tests | `cancelled` ✓（被後續 push 取代 ✓，**非失敗** ✓） |
 ⇒ 依裁決 §7：**最終提交後等該 SHA 的 CI 完成再判定** ✓。
 
+### 3c. CI 完整結果與 skip 對照（`14fb8c8`，run `36132718164` ✓）
+
+| Job | tests | pass | fail | skipped |
+|---|---:|---:|---:|---:|
+| **Run Tests** | 2610 | **2585** | **0** ✓ | 25 |
+| **Run Tests (PostgreSQL integration)** | 114 | **113** | **0** ✓ | 1 |
+
+- ✓ 裁決 §3 的失敗**已修** ✓（request-context 的 `DISTINCT search_key` 期望；撤回全域 memo 即為修因 ✓）；兩 job **fail 0** ✓
+- ✓ PG job 步驟含 **Initialize containers** ＋ **Export disposable test URLs** ✓ ⇒ CI 本來就用**拋棄式 PG** ✓（正是裁決 §6.3 要的隔離環境 ✓）
+- **一般 job 的 25 skip** ✓：全部為 `PG_TEST_URL not set` 類（該 job 刻意無 PG ✓＝`run-pg-integration.sh` 的 driver 隔離 ✓），
+  含本 PR 新增的 `live PG：正式入口（不注入 deps）…` ✓
+- **PG job 的 1 skip** ✓：`live：種子查詢讀的是 PostgreSQL，不是本機 SQLite`
+  `# SKIP PG_SHADOW_URL is not set（需要匯入正式站資料的影子站；不屬於 CI 必要 gate）` ✓
+  —— 正是裁決 §3 指出的那項 ✓
+
+#### ✗ 由此發現的缺口（裁決要求處理 ✓）
+- 「seed 讀 PG」契約的**另一份同名測試**（一般 job `ok 1565` ✓）**同樣以 `PG_SHADOW_URL` 為 gate** ✗
+  ⇒ **CI 的兩個 job 都不覆蓋**這個契約 ✗ ⇒ 依裁決「同功能的『seed 讀 PG』契約仍要有 CI fixture 覆蓋」✓
+  ⇒ **須新增以 `PG_TEST_URL`（CI 既有拋棄式 PG ✓）為 gate 的 fixture 版** ✓ ⇒ 列為下一批第一項 ✓
+- ⚠️ CI **沒有 lint 步驟** ✗（`Run Tests` 步驟只有 `Install dependencies` → `Run Test Suite` ✓）
+  ⇒ lint 仍須我在**隔離目錄 ＋ lockfile** 自行跑 ✓；現況 **`NOT_RUN`** ✗（不得以 Tests 綠燈冒充 ✓）
+
+
 
 ## 4. 可重跑命令（本地）
 
