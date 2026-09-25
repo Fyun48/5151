@@ -120,9 +120,22 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   await pgDriver.query(
     `INSERT INTO listings (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline)
      VALUES ${seeds.map((_, i) => `($${i * 6 + 1}, '591', $${i * 6 + 2}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6}, 0)`).join(",")}
-     ON CONFLICT (post_id) DO NOTHING`,
+     ON CONFLICT (post_id) DO UPDATE SET
+       source_key = excluded.source_key, search_key = excluded.search_key, title = excluded.title,
+       url = excluded.url, first_seen_at = excluded.first_seen_at, last_seen_at = excluded.last_seen_at,
+       offline = excluded.offline`,
     seeds.flatMap((r) => [r.post_id, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at]),
   );
+  // ✗ 必修（CI 實測 `pg: 0` ✓）：原本 `ON CONFLICT DO NOTHING` 遇到既有 post_id 就**整批不放** ✗
+  // ⇒ 改成 `DO UPDATE` ✓，並**先斷言真的在位**再跑搜尋 ✓（否則「沒種到」與「被前置條件濾掉」會混為一談 ✗）。
+  const pgPresent = (await pgDriver.query(
+    "SELECT COUNT(*)::int AS n FROM listings WHERE source_key LIKE 'parity|%'",
+  )).rows[0].n;
+  const sqlitePresent = sqliteDb.prepare(
+    "SELECT COUNT(*) AS n FROM listings WHERE source_key LIKE 'parity|%'",
+  ).get().n;
+  assert.equal(sqlitePresent, seeds.length, `SQLite fixture 必須在位（實際 ${sqlitePresent}）`);
+  assert.equal(pgPresent, seeds.length, `PG fixture 必須在位（實際 ${pgPresent}）`);
 
   try {
     const viaPg = await searchListingsAsync({ ...args }, { driver: "postgres", pgDriver });
