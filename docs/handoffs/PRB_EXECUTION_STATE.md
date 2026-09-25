@@ -235,6 +235,24 @@ COLAB-SUMMARY {"label":"23cols","runs":5,"wallMsMedian":0.91,"wallMsMin":0.86,"w
   2. **fail-closed** ✓：缺 provider／缺必要 PG 資料時必須**失敗**而非回空 ✓
   3. 風格照既有 parity 檔 ✓（`PG_TEST_URL` gate ⇒ PG job 收斂 ✓、一般 job 正確 skip ✓）
 
+### 3m. A/B 第三次執行：**精確根因＝CI 的 PG 裡 `listings` 沒有資料** ✓✓（無效訊號忠實生效 ✓）
+`ba5ff62` 的 run（`36136500921`，Tests `completed success` ✓）：
+```
+COLAB-KEYS {"count":0}                                   ✗ PG 沒有任何可用 search_key
+COLAB-INVALID {"label":"43cols","rows":0, note:"…量測無效…"}   ✓ 新加的無效訊號正確觸發 ✓
+COLAB-INVALID {"label":"23cols","rows":0, …}             ✓
+COLAB-SUMMARY 43cols: rows 0, wallMsMedian 0.94, rootBuffers 全 0   ← 沒有被誤讀成收益 ✓
+```
+- ⇒ **根因** ✓：CI 的拋棄式 PG 內 `listings` **沒有資料** ✗（`count: 0` ✓）
+  ⇒ 這**同時解釋**了前一版的 `rows 0` ✓，以及**為什麼我的 seed fixture 測試必須自己 `INSERT` 一筆候選** ✓
+  （CI 的 PG 是空的 ✓；只有影子站才有正式站資料 ✓）。
+- ⇒ **修法（下一批機械執行 ✓）**：A/B 必須**自建 fixture**（照 seed 測試那樣自行 `INSERT` ✓），
+  例如數百～數千列、**欄位寬度有變化** ✓，再量 43 vs 23 ✓；並沿用 `COLAB-INVALID` 守門 ✓。
+- ⇒ **設計驗證** ✓：`COLAB-INVALID` ＋ `process.exitCode=1`（步驟 `continue-on-error` ⇒ job 仍綠 ✓）
+  成功阻止了「0.94 ms 被當成 43→23 收益」✗✓ —— 這個訊號是本 PR 值得保留的資產 ✓。
+- ⇒ 教訓補充 ✓：**A/B 的「受測資料前提」必須先驗證** ✗（`COLAB-KEYS count 0` 就是那個前提 ✓）。
+
+
 
 
 
