@@ -65,8 +65,10 @@ jobs:
         image: postgres:16.14-alpine
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: tracker_test
+          # 拋棄式 service container 只綁在 runner 內、job 又是單租戶 ⇒ 用 trust 認證取代寫死的密碼：
+          # CI 檔案裡從此**沒有「帳密字串」**，secret 掃描器也沒有東西可以標記 ✗（比忽略規則更乾淨）。
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -76,12 +78,11 @@ jobs:
           --health-retries 12
 
     env:
-      # 統一的測試連線契約：**不在 YAML 寫出完整連線字串**（避免被 secret 掃描器標記 ✗）；
-      # 由 service container 的非機密變數在步驟內組出（見下一步），且只指向拋棄式測試資料庫。
+      # 統一的測試連線契約：**檔案內沒有帳密**（service container 用 trust 認證，見上）；
+      # 連線 URL 在步驟內以非機密變數組出，且只指向 127.0.0.1 的拋棄式資料庫。
       PGHOST: 127.0.0.1
       PGPORT: "5432"
       PGUSER: postgres
-      PGPASSWORD: postgres
       PGDATABASE: tracker_test
       PG_STATEMENT_TIMEOUT_MS: "300000"
 
@@ -105,8 +106,8 @@ jobs:
         run: |
           set -euo pipefail
           # 應用 driver 讀 PG_URL；live PG 測試讀 PG_TEST_URL（astra §3.3）。兩者都指向本 job 的
-          # 拋棄式 service container，並且在執行時才組出，不落字面值。
-          url="postgres://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+          # 拋棄式 service container（trust 認證 ⇒ URL 不含密碼），且執行時才組出。
+          url="postgres://${PGUSER}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           echo "PG_URL=${url}" >> "$GITHUB_ENV"
           echo "PG_TEST_URL=${url}" >> "$GITHUB_ENV"
 

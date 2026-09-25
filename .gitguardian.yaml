@@ -1,0 +1,14 @@
+# GitGuardian 掃描設定（repo 端，**不含任何憑證**）。
+#
+# 背景：本 repo 的 CI 會起一個**拋棄式** PostgreSQL service container 來跑整合測試。
+# 該容器只綁在 runner 內部、job 為單租戶，且已改用 `POSTGRES_HOST_AUTH_METHOD: trust`
+# （見 .github/workflows/test.yml）⇒ 連線 URL 不含密碼、也不指向任何真實環境。
+#
+# 這裡把「CI 測試用連線 URL」的模式列為忽略，避免每個 PR 都被標記；
+# 若歷史上已存在的 incident 仍顯示紅燈，代表它來自分支歷史的舊 commit
+# ⇒ 請在 GitGuardian 後台把該 incident 標為 false positive／已知測試憑證（一次性）。
+version: 2
+secret:
+  ignored-matches:
+    - name: CI disposable PostgreSQL test URL (127.0.0.1, trust auth)
+      match: postgres://postgres@127\.0\.0\.1:5432/tracker_test
