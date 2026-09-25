@@ -221,6 +221,21 @@ COLAB-SUMMARY {"label":"23cols","runs":5,"wallMsMedian":0.91,"wallMsMin":0.86,"w
 - ⇒ 記取教訓 ✓：**量測必須先驗證「受測查詢真的有回資料」** ✗，否則報告出來的百分比只是雜訊 ✓
   （這是我第 3 次量測設計錯誤 ✓ —— 前兩次：快取量單次 ✗、參數名錯導致 19／13 ✗）。
 
+### 3l. §6.4 parity 現況盤點（唯讀 ✓）與唯一缺口
+**既有** `PG_TEST_URL`-gated parity 檔 ✓（PG job 自動收斂 ✓）：
+`budget`／`crawler-reads`／`crm`／`decoration-data`／`job-queue`／`listing-detail`／`listing-enrich`／
+`listing-fields`／`listing-similarity-admin`／`listing-state-writes`／`listing-stats-parity`
+＋ 本 PR 新增的 `listing-search-entry-live-pg` ✓
+- ✓ 「**PG 熱路徑不得碰 SQLite**」**已有覆蓋** ✓：`v3/test/listing-search-no-sqlite-io.test.js` ✓ ⇒ 直接沿用 ✓
+- ✗ **唯一缺口**：**列表搜尋的「同 fixture 雙向（SQLite vs PG）」parity** ✗
+  —— 既有 parity 是 stats／detail／enrich／job-queue 等 ✓，**沒有 list search** ✗
+- ⇒ **待補（下一批 ✓）**：
+  1. 同 `args`／`settings`／`asOf` 下，以**同一 fixture**比對 SQLite 與 PG 的
+     **集合／`totalMatched`／順序／same-house 角色／個人狀態／分頁** ✓
+  2. **fail-closed** ✓：缺 provider／缺必要 PG 資料時必須**失敗**而非回空 ✓
+  3. 風格照既有 parity 檔 ✓（`PG_TEST_URL` gate ⇒ PG job 收斂 ✓、一般 job 正確 skip ✓）
+
+
 
 
 
