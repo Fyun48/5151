@@ -134,4 +134,13 @@ jobs:
           export DATA_DIR="$(mktemp -d)"
           export WARMS=2
           export RUNS=5
-          node v3/scripts/pg-columns-ab.mjs
+          set +e
+          node v3/scripts/pg-columns-ab.mjs 2>&1 | tee /tmp/colab.txt
+          set -e
+          # 把證據寫進 job summary ✓ ⇒ **持久、可隨時查** ✓（不必再靠人盯 CI ✗）。
+          {
+            echo '### Columns A/B（診斷，非 gate）'
+            echo '```'
+            grep -E 'COLAB-' /tmp/colab.txt || echo '（沒有 COLAB 輸出）'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -59,6 +59,16 @@ function rolesOf(result) {
 //      ⇒ 有索引可用 ✓（`idx_listings_search` ✓、`idx_listings_list_scan` ✓；`db.js:736/755` ✓）
 //      ⇒ 這也是 A/B 對 43 vs 23 欄做比較時可用的**同一條查詢** ✓。
 //   5. 設定上仍須避開通勤與 `fit_desc` ✗（`settings: {}` ✓、`sort: "newest"` ✓）以避免額外分支 ✓。
+//
+// ✅✅ **最後一個關鍵細節（補齊 ✓，否則 parity 永遠不可能一致 ✗）**：
+//   鍵集是**由 `settings`／`searchUrls` 展開**而來的 ✓（`searchWhere` 用的就是那批鍵 ✓）
+//   ⇒ 若兩引擎吃**不同** settings ✗ ⇒ 匹配到的列不同 ✗ ⇒ 集合永遠不會相等 ✗。
+//   ⇒ 正解：在 `ARGS.settings` 裡放**同一組**合成的 591 搜尋 URL ✓（兩次呼叫共用同一物件 ✓），
+//     然後用**同一支 context 建構**讀出**那組設定實際產生的鍵** ✓，
+//     再把**那個鍵**設成兩邊 fixture 的 `search_key` ✓
+//     ⇒ 兩引擎吃的 settings 相同 ✓、鍵相同 ✓、命中列相同 ✓ ⇒ 集合可比 ✓✓。
+//   ⚠️ 具體 URL 格式**不必猜** ✗ —— 鍵一律由 context 建構後**讀回來** ✓（`sameSearch` 先比對 trim 相等 ✓）。
+
 
 test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP || "尚未接通兩邊自建 fixture（見檔頭待辦）⇒ 目前只會空洞通過，故暫緩" }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
