@@ -110,6 +110,28 @@
 3. **避免與其他檔競爭同一張表** ✓（專屬 schema／表前綴 ✓，或讓此檔序列執行 ✓）
 4. **保留** `attempts`／`state`／`lease_owner` 等契約斷言 ✓（不為穩定性拿掉契約 ✗）
 
+### 3f. lint 狀態：**本 repo 未配置 lint ⇒ 不適用（不是「沒跑」）** ✓✓
+依裁決要求「只回報實際執行的 lint／test；沒有跑 lint 就標 `NOT_RUN`」✓，本次以**實證**釐清 ✓：
+
+| 檢查 | 結果 |
+|---|---|
+| eslint／biome／prettier／standard 設定檔（含 `.eslintrc*`、`eslint.config.*`） | **不存在** ✗ |
+| `package.json` 或 `.github/workflows/*.yml` 提及 `eslint` | **0 筆** ✗ |
+| `package.json` 的頂層鍵 | `name, version, private, type, description, scripts, engines, dependencies` ⇒ **連 `devDependencies` 都沒有** ✗ |
+| `scripts` | `start, start:v3, start:ops, dev, dev:v3, dev:ops, test, test:pg, pack:kit` ⇒ **無 `lint`** ✗ |
+| dependencies | `express, pg, sharp, web-push`（僅執行期 ✓） |
+| CI（`test.yml`）步驟 | `Install dependencies` → `Run Test Suite` ⇒ **無 lint 步驟** ✗（Node 22 ✓，與本地 v22.23.2 一致 ✓） |
+
+⇒ **結論** ✓：本 repo **沒有可執行的 lint**（無設定／無依賴／無 script／CI 亦無 ✓）
+⇒ 因此正確標記是 **`lint: N/A（repo 未配置）`** ✓ —— 比 `NOT_RUN` 更精確 ✓，且**不**以 Tests 綠燈冒充 lint 通過 ✓。
+⇒ **不自行安裝 eslint** ✗：沒有 repo 設定可比對 ⇒ 跑出來的結果**無意義** ✗（會變成拿任意規則評別人的碼 ✓）。
+⇒ 證據可一行重現 ✓：`grep -rn eslint package.json .github/workflows/*.yml; ls -a | grep -i eslint` ⇒ 皆無輸出 ✓。
+
+### 3g. 環境對齊（供下一批 lint／A/B 使用 ✓）
+- 本地 Node **v22.23.2** ✓、npm 10.9.8 ✓；`engines.node: ">=22"` ✓；CI 用 Node **22** ✓ ⇒ **一致** ✓
+- `package-lock.json` **存在** ✓（60 KB ✓）⇒ 若日後新增 lint 工具，可用 `npm ci` 鎖定版本 ✓
+
+
 
 - ⚠️ CI **沒有 lint 步驟** ✗（`Run Tests` 步驟只有 `Install dependencies` → `Run Test Suite` ✓）
   ⇒ lint 仍須我在**隔離目錄 ＋ lockfile** 自行跑 ✓；現況 **`NOT_RUN`** ✗（不得以 Tests 綠燈冒充 ✓）
