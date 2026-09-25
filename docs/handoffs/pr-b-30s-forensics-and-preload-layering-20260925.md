@@ -124,10 +124,39 @@ function idFilter(column, ids, driver, offset = 0) {
 套用到 `loadGroupIds`／`loadPeerRows`／`loadListingPrepMap`／`loadListingExtras` ✓（SQLite 路徑完全不變 ✓）。
 驗證：本地 15/15 通過 ✓；容器內 canary 的錯誤由 `08P01` 變為 `57014` ✓（＝上限問題已解 ✓）。
 
-### 待辦（下一步）
-1. 量「全表候選」候選 SELECT：`EXPLAIN (VERBOSE)` ＋ 實際 `SHOW statement_timeout`（釐清 30 秒是**伺服器端**設定）、
-   並找出逾時的確切來源（規劃／掃描／投影 ✓）。
-2. 之後才動手做 §1 的索引／`kind_tokens`（以本次量測為依據 ✓），並以 canary 作為回歸 gate ✓。
+## 七、✦✦✦ 最終定論（受控探針，直接重現）
+
+同一支探針（`pg-explain-forensics.mjs`，`SET LOCAL statement_timeout='3s'` 當閘門）加入
+「**無行政區**」案例後：
+
+| 案例 | `districtIds` | sqlChars | paramCount | outcome | runMs |
+|---|---|---|---|---|---|
+| baseline（西屯區） | 6874 | 1514 | 33 | ok ✓ | 500 |
+| q=電梯 | 6874 | 1808 | 38 | ok ✓ | 489 |
+| kind=whole | 6874 | 1514 | 33 | ok ✓ | 472 |
+| sources=591 | 6874 | 1514 | 33 | ok ✓ | 535 |
+| areaMax=30 | 6874 | 1514 | 33 | ok ✓ | 492 |
+| wholeFloorOnly=1 | 6874 | 1514 | 33 | ok ✓ | 728 |
+| **full-table（`districts: []`）** | **null** ✗ | 1483 | 32 | **statement_timeout(57014)** ✗✗ | **>3000（被閘門中止）** |
+
+### 機制（已用程式碼＋量測雙重確認 ✓）
+1. `districtClosureIds()` 對「無名單或等於全體」**刻意回傳 `null`**（`listingSearchNodePg.js:42` 起 ✓）。
+2. builder 在 `districtIds === null` 時走 `appendDistrictCandidates(districtNames, …)`，
+   而它對**空名單**是 **no-op**（`listDistrictSql.js:41` `if (!selected.size) return;` ✓）
+   ⇒ **SQL 完全沒有行政區子句** ✓ ⇒ 候選查詢變成**對 listings 全表**套其餘條件 ✗。
+3. 因此「有行政區」＝候選 6,647／≤0.7 秒 ✓；「無行政區」＝**同一句 SQL 逾時** ✗✗。
+4. `dbDriverPostgres.js:35`：`statement_timeout: intFromEnv(env, "PG_STATEMENT_TIMEOUT_MS", 15_000)`
+   ⇒ **driver 預設 15 秒** ✗（未設 env 的環境：CI／本機 ✓；容器設 5min ✗）。
+   ⇒ 真實世界（F3 的 30 秒／`Connection terminated unexpectedly`）就是這條路徑 ✓✓。
+
+### 結論（給 astra §1／§3 的依據）
+- **astra6 §1 的可索引性工作是必要的** ✓✓ —— 而且**目標非常明確**：**沒有行政區子句的那句候選 SELECT**
+  （全表掃描 ✗）。不是 `kind_tokens` 的顯示篩選 ✗（那些在 WHERE 根本沒過濾 ✓：kind／areaMax／
+  wholeFloorOnly 皆回傳 6647 列 ✓）。
+- 建議先做：對該查詢 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)`（在 `BEGIN READ ONLY` 內 ✓）找出
+  掃描／排序熱點；再決定索引（候選條件為 `search_key`／`fixture_namespace`／`NOT EXISTS(flags)` ✓）。
+- **§3 效能目標**應以「無行政區」為最壞情況（目前：**逾時** ✗）。
+
 
 
 ### 附註（憑證）

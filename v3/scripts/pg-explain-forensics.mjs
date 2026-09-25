@@ -67,11 +67,14 @@ for (const item of ABILITIES) {
     // ⚠️ 必須像 app 一樣先算好 closure 再以 districtIds 傳入（PG 走 `= ANY(?::bigint[])`）；
     // 否則會掉進 SQLite 專用的 recursive CTE 分支 ⇒ 42P19（實測踩過），量到的就不是真實 SQL。
     const districtNames = item.districtNames ?? [district];
-    const districtIds = await districtClosureIds(runExec, { districtNames, userId: 0 });
+    const closure = await districtClosureIds(runExec, { districtNames, userId: 0 });
+    // districtClosureIds() 對「無名單或等於全體」會**刻意回傳 null**（＝不需要行政區條件）；
+    // 探針必須容忍 null，否則會在測到候選查詢之前就先 TypeError（實測踩過）。
     rec.districtNames = districtNames;
-    rec.districtIds = districtIds.length;
+    rec.districtIds = Array.isArray(closure) ? closure.length : null;
     const built = buildListListingsClauses({
-      filter: "all", districts: districtNames, districtIds, settings: {}, uid: 0, voteUid: 0, context, ...item.args,
+      filter: "all", districts: districtNames, districtIds: closure ?? null,
+      settings: {}, uid: 0, voteUid: 0, context, ...item.args,
     });
     const select = `SELECT ${deps.candidateColumns} FROM listings ${built.where}`;
     rec.sqlChars = select.length;
