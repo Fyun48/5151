@@ -4190,7 +4190,8 @@ export async function buildSearchKeysFromPg(exec, settingsTable = "settings", gl
   )).map(coverFromRow);
   const coverUrls = coveringJobsFromMembers(covers, { excludeRooftop: false }).map((job) => job.searchUrl);
   const keys = [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
-  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  // 8 秒 memo（語意同 SQLite 的 storedSearchKeys ✓）：同一波請求不再每次全表 DISTINCT ✓。
+  const stored = await storedSearchKeysFromPg(exec);
   return expandSearchKeysAgainst(stored, keys);
 }
 
@@ -4198,6 +4199,21 @@ let searchKeyMemo = { at: 0, stored: null };
 
 function invalidateSearchKeyMemo() {
   searchKeyMemo = { at: 0, stored: null };
+  pgSearchKeyMemo = { at: 0, stored: null };
+}
+
+// PG 側的同一份 memo ✓（語意與 SQLite 的 `storedSearchKeys()` 相同：8 秒 TTL ✓）。
+// 刻意**不與 SQLite 共用** ✗：過渡期兩邊資料可能不同 ⇒ 共用快取會讓一個 driver 拿到另一個的結果 ✗。
+let pgSearchKeyMemo = { at: 0, stored: null };
+
+async function storedSearchKeysFromPg(exec) {
+  const now = Date.now();
+  if (pgSearchKeyMemo.stored && now - pgSearchKeyMemo.at <= 8000) return pgSearchKeyMemo.stored;
+  const stored = (await exec("SELECT DISTINCT search_key FROM listings"))
+    .map((row) => row.search_key)
+    .filter(Boolean);
+  pgSearchKeyMemo = { at: now, stored };
+  return stored;
 }
 
 /**
