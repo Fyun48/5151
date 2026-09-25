@@ -348,6 +348,27 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 （**不需要**為它加索引 ✓；這正是 astra 要求「先量再決定」的價值 ✓）。
 ⇒ 探針修正：`FORMAT JSON` 的根在 **`Plan`** 底下 ✗（直接走 root 會得到空節點、buffers 全 0 ✗），已修 ✓。
 
+### 統計新鮮度（唯讀 `pg_stat_user_tables`，`v3/scripts/pg-stats-check.mjs`）
+| 表 | n_live_tup | n_mod_since_analyze | last_autoanalyze |
+|---|---|---|---|
+| **listings** | **122,925** ✗ | 5,429 | 2026-09-25 09:30 ✓ |
+| **user_listing_flags** | **0** ✗ | 0 | **null** ✗✗ |
+| listing_prep | 379 ✓ | 74 | 2026-09-24 ✓ |
+| settings | 28 ✓ | 45 | 2026-09-25 09:17 ✓ |
+| crawl_covers | 38 ✓ | 0 | 2026-09-25 09:31 ✓ |
+| listing_group_members | 0 ✓ | 0 | null ✓ |
+
+⇒ **①`listings` 實際 122,925 列** ✗（先前估「~36k」**是錯的** ✓）⇒ 全區候選的逾時完全說得通 ✓，
+且正好對應 astra §4.3 的「CI fixture 約 12 萬列」✓。
+⇒ **②`user_listing_flags` 完全沒有統計** ✗（0 列、`last_autoanalyze = null` ✓）⇒ 這是計畫
+「估計 577 vs 實際 6,647」✗ 與 **Nested Loop ＋ Join Filter** ✗ 的**直接解釋** ✓
+（planner 用預設選擇率 ⇒ 選了 nested loop ✓；實測 6,907 loops × 每次索引探測 ≈ 13,814 buffers ✓）。
+⇒ **修法**：跑 `ANALYZE user_listing_flags`（**既有發布權限** ✓；astra：索引／設定套用沿用發布權限 ✓），
+**不是**新增無關索引 ✗ —— 改完再取一次 ANALYZE 對照 ✓。
+⇒ 全區（無行政區）要能達標，除統計外仍需**縮減候選欄位**（33,516 buffers ✗）與**限制候選集合**的
+等價手段 ✓；三者都要在不改變 totalMatched／排序／角色的前提下做 ✓。
+
+
 
 
 ## 十七、查詢數超標的組成與**等價**削減計畫（先前定位，尚未實作完）
