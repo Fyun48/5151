@@ -544,6 +544,19 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
   **同步下降** ✓ ⇒ ② 由「改程式」改為「已由 ① 緩解」✓ ✓。
 - ⇒ 保留觸發條件 ✓：**若日後量到 fit 路徑仍是熱點**，再處理複製（且有本地測試可驗 ✓）。
 
+### ✗✓ 鏡像量測限制（已用證據確認，非假設 ✓）
+- 新增 `v3/scripts/pg-columns-ab.mjs` ✓：同一條 WHERE、**43 欄 vs 23 欄**的 SQL 級 A/B ✓
+  （欄位清單字面寫死 ✓，兩側唯一差異就是清單本身 ✓；用 `.Plan` 根節點走樹 ✓、輸出總 buffers 與前三大熱點 ✓）。
+- ✗ **實測結果**：容器內的部署版 `/app/src/db.js` **沒有匯出** `buildListListingsClauses` /
+  `buildListRequestContextFromPg` ✗（`grep -c` = 0 ✓）⇒ 執行即
+  `SyntaxError: does not provide an export named 'buildListListingsClauses'` ✗
+  ⇒ **部署映像比本分支舊** ✗ ⇒ **鏡像無法驗證本分支的改動** ✗（上一批的推論 ✓，現有證據 ✓）。
+- ⇒ **正確的驗證路徑** ✓：CI 的 live PG 整合測試 ✓（它跑本分支程式碼 ＋ 真 PG ✓）；
+  本腳本等**本分支被部署**（或 CI 的真 PG 服務 ✓）之後再跑 ✓，即可量化 43 → 23 的 buffer 降幅 ✓。
+- ⇒ 教訓 ✓：**「在鏡像上量測」只對已部署的程式碼有效** ✗ —— 量測前必須先確認鏡像版本 ✓
+  （本次以 `grep` 匯出清單確認 ✓，而非靠假設 ✓）。
+
+
 
 
 
