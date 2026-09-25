@@ -6347,6 +6347,62 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
   match_verdict, match_rejected, offline, offline_confirmed, hidden, hidden_at,
   last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
+/**
+ * 搜尋路徑的同步後處理：與 stats 的 `buildListingStatsRows` 同一個精神——
+ * 純粹作用在「已取回的候選列」上，driver-agnostic，PostgreSQL 路徑可逐字重用。
+ *
+ * 為什麼要拆：`listListings` 是同步函式，而 PG 取候選是非同步；若把取資料與後處理綁在
+ * 一起，PG 路徑就只能複製一份後處理（必然分岔）。拆開後兩條路徑共用這一段。
+ *
+ * `provider` 會傳給 `attachSameHouseRoles`（不傳時沿用 SQLite 裝飾來源，行為不變）；
+ * `flagMap` 同理（不傳時取自 SQLite）。
+ */
+export function buildListListingsRows(raw, {
+  filter, kind, sources, sort, uid, voteUid, settings, districtSet,
+  provider = null, flagMap = null, markStage = () => {},
+} = {}) {
+  const flags = flagMap || loadFlagMap(db, uid);
+  const overlaid = overlayRowsPersonal(raw, flags, { inPlace: true });
+  let rows =
+    filter === "watched"
+      ? overlaid
+      : filter === "offline" || filter === "suspected"
+        ? overlaid.filter((row) => passesPriceFilter(row, settings))
+        : applyListingFilter(overlaid, settings);
+  markStage("profile_ms");
+
+  rows = attachSameHouseRoles(rows, voteUid, provider);
+  markStage("relations_ms");
+  rows = rows.filter((row) => listingMatchesListFilter(row, filter));
+  rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
+
+  // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
+  if (filter !== "watched") {
+    // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
+    rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+    // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
+    // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
+    if (districtSet.size) {
+      rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+    }
+
+    rows = rows.filter((row) => matchesHousingKind(row, kind));
+    rows = rows.filter((row) => matchesListingSources(row, sources));
+  }
+  markStage("display_ms");
+
+  const needFit = sort === "fit_desc";
+  if (needFit) {
+    for (const row of rows) {
+      const located = applyCachedCoords(row, settings);
+      const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
+        && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
+      row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;
+    }
+  }
+  return rows;
+}
+
 export function listListings({
   filter = "all",
   kind = "",
@@ -6459,45 +6515,9 @@ export function listListings({
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
-  const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
-  let rows =
-    filter === "watched"
-      ? overlaid
-      : filter === "offline" || filter === "suspected"
-        ? overlaid.filter((row) => passesPriceFilter(row, settings))
-        : applyListingFilter(overlaid, settings);
-  markStage("profile_ms");
-
-  rows = attachSameHouseRoles(rows, voteUid);
-  markStage("relations_ms");
-  rows = rows.filter((row) => listingMatchesListFilter(row, filter));
-  rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
-
-  // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
-  if (filter !== "watched") {
-    // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-    rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-    // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
-    // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
-    if (districtSet.size) {
-      rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
-    }
-
-    rows = rows.filter((row) => matchesHousingKind(row, kind));
-    rows = rows.filter((row) => matchesListingSources(row, sources));
-  }
-  markStage("display_ms");
-
-  const needFit = sort === "fit_desc";
-  if (needFit) {
-    for (const row of rows) {
-      const located = applyCachedCoords(row, settings);
-      const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
-        && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
-      row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;
-    }
-  }
+  let rows = buildListListingsRows(raw, {
+    filter, kind, sources, sort, uid, voteUid, settings, districtSet, markStage,
+  });
   rows = sortListingsRows(rows, sort, { filter, settings });
   markStage("sort_ms");
 
