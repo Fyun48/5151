@@ -51,6 +51,10 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     console.log(`PARITY-IDS-PG ${JSON.stringify(idsOf(viaPg).slice(0, 10))}`);
     console.log(`PARITY-IDS-SQLITE ${JSON.stringify(idsOf(viaSqlite).slice(0, 10))}`);
 
+    // ✗ 禁止「空洞通過」✓：先前兩邊都是 `[]` 也能 deepEqual 通過 ✗ ⇒ 先驗證受測資料前提 ✓
+    // （與 `COLAB-INVALID` 同一原則：**受測查詢必須真的回資料** ✓）。
+    assert.ok(idsOf(viaPg).length > 0, `PG 結果不得為空（實際 ${JSON.stringify(idsOf(viaPg))}）`);
+    assert.ok(idsOf(viaSqlite).length > 0, `SQLite 結果不得為空（實際 ${JSON.stringify(idsOf(viaSqlite))}）`);
     // ① 集合與順序 ✓
     assert.deepEqual(idsOf(viaPg), idsOf(viaSqlite), "id 集合與順序必須一致");
     // ② 總數 ✓

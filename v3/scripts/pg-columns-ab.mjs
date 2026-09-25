@@ -106,7 +106,7 @@ try {
     // ✗ 關鍵：`search_key` 必須一起填 ✓ —— builder 的條件是 `search_key IN (…)` ✓，
     //   只填 `source_key` 會讓鍵集為 0 ⇒ 查詢掃到列卻回 0 列 ✗（實測：rootBuffers.hit 2023 但 rows 0 ✓）。
     //   同一個參數在 PG 可重用 ✓（`source_key` 與 `search_key` 共用 $n ✓）⇒ 參數數不變 ✓。
-    tuples.push(`($${base + 1}, 'houseprice', $${base + 2}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, 0)`);
+    tuples.push(`($${base + 1}, '591', $${base + 2}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, 0)`);
     fixtureParams.push(
       900100000 + i,
       `colab|${i}`,
