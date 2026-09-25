@@ -188,6 +188,19 @@ at async measure (v3/scripts/pg-columns-ab.mjs:69)
 - ⇒ 這也再次印證 ✓：**診斷腳本若繞過正式路徑，就會驗到不存在的問題** ✗
   （與 §2.2「canary 注入 deps 繞過正式入口」是同一類錯誤 ✗）⇒ 修法一律**沿正式路徑** ✓。
 
+#### ✗✓ 第三次收斂（連我上一批的建議也不夠準 ✓）
+- 事實 ✓：`listingSearchNodePg.js:216` 用的**就是** `SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id` ✓
+  —— **與我 A/B 的組裝一模一樣** ✓ ⇒ 所以問題**不在**「手拼字串」 ✗，而在 **`built.where` 是怎麼產生的** ✓。
+- 真正的差異 ✓：我傳 `districts: ["西屯區"]` ✗ ⇒ builder 走 **SQLite 的 recursive CTE** ✗ ⇒ 42P19 ✓；
+  **PG 路徑用的是 `districtClosureIds`** ✓（**CI 證據**：skip 清單中即有一支
+  「PG 整合：`districtClosureIds` 走 PG（不得拋錯；不需行政區條件時可為 null）」✓✓）。
+- ⇒ **修法（下一批機械執行 ✓）**：A/B 要以 **PG 的方式**取得行政區條件 ✓
+  （`districtClosureIds` ✓／或 PG 專屬的 clause 產生路徑 ✓），**不要**用 `districts:` 觸發 SQLite CTE ✗；
+  其餘組裝（`SELECT … FROM listings ${where} ORDER BY post_id` ✓）**照抄 `searchListingsNodePg`** ✓ 即可。
+- ⇒ 方法論 ✓：這一題連續三層修正（拼字串 ✗ → 用錯 builder ✗ → **傳錯參數觸發 SQLite 路徑** ✓）
+  全部由**讀既有程式與 CI 訊息**得出 ✓ —— 再次說明「先讀再改、沿正式路徑」是唯一有效率的做法 ✓。
+
+
 
 
 
