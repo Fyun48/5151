@@ -267,7 +267,44 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 
 ⇒ 最佳化目標應是 **`prepare_ms` 與 `relations_ms`**（而非只盯 SQL ✗）；`sql_ms` 只佔 5–10% ✓。
 
-## 十三、查詢數超標的組成與**等價**削減計畫（本輪定位，尚未實作）
+## 十四、CI 綠燈里程碑（2026-09-25）
+
+### 現況（PR #497，run `36112489341`，HEAD `cb61597`）
+| 檢查 | 結果 |
+|---|---|
+| `Run Tests`（一般 job，driver 隔離保留 ✓）| ✅ SUCCESS（2m59s）|
+| `Run Tests (PostgreSQL integration)`（本輪新建的獨立入口 ✓）| ✅ SUCCESS（46s；113 tests／0 skip ✓）|
+| `Review diff with the configured model` | ✅ SUCCESS |
+| `GitGuardian Security Checks` | ✗ FAILURE ← **歷史 incident**（見下）|
+
+### 為達成綠燈所修的 CI 缺陷（全部有 CI 實測依據 ✓）
+1. **`function instr(text, unknown) does not exist` ✗ → 整個 job 崩潰**：`pg-integration-setup` 原本用
+   `ensurePgSchema(..., { indexes: true })`，把 SQLite 的表達式索引 DDL 搬到 PG ✗。改為
+   `importStore(..., { indexes: false })`（表 ＋ 可重現列 ＋ identity 序號重設 ✓），**之後**才逐句建立
+   不含 SQLite 專用函式／語法（`instr`／`julianday`／`strftime`／`datetime`／`date`／`COLLATE NOCASE`／
+   `GLOB`／`printf`）的索引 ✓（CI 實測：`created:132`、只跳過 `listings` ✓）。
+2. **兩個脆弱的原始碼文字斷言 ✗**（`listing-score`／`search-contract-regression`）：依 astra §3.6 改寫為
+   **行為驗證** ✓（顯示篩選套用在全部候選 ✓、分頁只回切片 ✓、裝飾只碰頁面列 ✓、成員行政區來自 settings ✓、
+   公開路徑不需使用者身分 ✓）。一般 job 因此轉綠 ✓。
+3. **GitGuardian 標記硬寫帳密** ✗：CI 內改 `POSTGRES_HOST_AUTH_METHOD: trust`（拋棄式容器、只綁 runner
+   內部 ✓）＋ 連線 URL 改 `postgres://${PGUSER}@…` ✓＋移除 `PGPASSWORD`／密碼字面值 ✓（實測檔案內
+   `PGPASSWORD` 與 `postgres:postgres` 皆 **0 次** ✓）＋ 新增 `.gitguardian.yaml` 忽略該 CI 測試 URL ✓。
+   **殘留**：分支歷史的舊 commit 仍含該字面值 ⇒ GitGuardian incident 需在後台**一次性**標為
+   false positive／已知測試憑證 ✓（不需提供任何 token 給我 ✓；我不會未經同意改寫歷史 ✓）。
+4. **PG 整合 job 的 3 個 live 測試失敗 ✗**：
+   - 私有 schema 缺表（`relation "settings" does not exist`）✗ ⇒ 可選表改用 **`to_regclass` 事前檢查** ✓
+     並把降級記入 `context.degraded`／`queryDetails.contextDegraded` ✓（**不可「送出再吞 42P01」** ✗：
+     在 `BEGIN READ ONLY` 內會讓交易變成 `current transaction is aborted` ✗✗，CI 實測踩過 ✓）。
+   - 「種子查詢讀的是 PostgreSQL」**本質需要匯入正式站資料的影子站** ✗ ⇒ 依 §3.4 以專屬
+     `PG_SHADOW_URL` 明確 gate ✓（skip 訊息寫明理由；不屬 PR-B 必要 gate ✓）。
+
+### 待辦（astra §6 剩餘）
+③ warm A/B（ORDER BY 成本、階段目標）＋ 每請求查詢數進門檻（現 17／21，目標 ≤12／≤16）
+④ 受控副本 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)` → 等價改寫或索引（兩個候選熱點見 §11）
+⑤ 同 fixture 雙向 parity → 分層 perf gate → PR 本文更新
+
+
+## 十五、查詢數超標的組成與**等價**削減計畫（先前定位，尚未實作）
 
 ### 機制（已讀程式碼確認）
 `createDecorationDataLoader` 的 memo 是 **以整個 id 集合為 key** ✗：
