@@ -175,6 +175,20 @@ at async measure (v3/scripts/pg-columns-ab.mjs:69)
   SELECT 清單注入點 ✓），或改用**正式路徑**跑查詢、再對**同一段語句**取 EXPLAIN ✓；
   亦可參考既有 `pg-explain-forensics.mjs` 的合法組裝方式 ✓（它先前產出過有效計畫 ✓）。
 
+#### ✗✓ 再更正（更精確的根因 ✓）：不是「拼字串」而已，是我**用錯 clause builder**
+- 既有證據 ✓：`db.js:6670` 的註解自己寫著
+  > `// SQLite 路徑維持 appendDistrictCandidates（含原本的 recursive CTE）。`
+  ⇒ **PG 路徑並不用那個 recursive CTE** ✓（PG 有自己的一條 ✓）。
+- 而我的 A/B 腳本直接呼叫 `buildListListingsClauses(...)` ＋ 自行拼
+  `SELECT … FROM listings ${where}` ✗ ⇒ 拿到的是**SQLite 風味**（含 `WITH RECURSIVE district_related` ✓）
+  ✗ ⇒ PG 以 **42P19** 拒絕 ✓（錯誤訊息裡的 `district_related` 正是來源 ✓）。
+- ⇒ **正確修法** ✓：A/B 必須用**PG 路徑自己用的那條 clause builder／組裝方式** ✓
+  （即 `searchListingsNodePg` 用的那一套 ✓），並沿用其參數傳遞（含陣列參數 ✓）；
+  **不要**自行以 SQLite 路徑的 builder ＋ 手拼 `SELECT … FROM listings ${where}` ✗。
+- ⇒ 這也再次印證 ✓：**診斷腳本若繞過正式路徑，就會驗到不存在的問題** ✗
+  （與 §2.2「canary 注入 deps 繞過正式入口」是同一類錯誤 ✗）⇒ 修法一律**沿正式路徑** ✓。
+
+
 
 
 
