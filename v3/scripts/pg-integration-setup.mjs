@@ -12,8 +12,11 @@ import { ensurePgSchema } from "../src/pgSchema.js";
 
 const drv = await createPostgresDriver({ env: process.env });
 try {
-  const info = await ensurePgSchema(drv, sqliteHandle(), {});
-  console.log(`PG-SCHEMA ${JSON.stringify({ statements: info.statements, tables: info.tables.length })}`);
+  // ⚠️ 必須 `indexes: false`：SQLite 的索引 DDL 可能含 SQLite 專用語法／函式（例如表達式索引用
+  // `instr(...)`），照搬到 PG 會噴 `function instr(text, unknown) does not exist` 並讓整個 job 崩潰
+  // （CI 實測 ✗）。pgSchema 的註解本來就說明「只要表時要跳過 index DDL」⇒ 這裡只鏡射表。
+  const info = await ensurePgSchema(drv, sqliteHandle(), { indexes: false });
+  console.log(`PG-SCHEMA ${JSON.stringify({ statements: info.statements, tables: info.tables.length, indexes: false })}`);
 } finally {
   await drv.pool.end();
 }
