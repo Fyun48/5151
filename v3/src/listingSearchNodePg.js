@@ -38,7 +38,7 @@ export function canRunNodePg({ pgDriver, deps } = {}) {
  * 這裡改成在 Node 端做 BFS 展開：每步用 PG 原生查詢取「配對雙向鄰居＋個人同屋源群組」，
  * 直到沒有新 id。集合語意與原本的 `UNION` 遞移閉包相同，且完全沒有 dialect 風險。
  */
-async function districtClosureIds(exec, { districtNames = [], userId = 0 } = {}) {
+export async function districtClosureIds(exec, { districtNames = [], userId = 0 } = {}) {
   const { allowed, allKeys } = districtKeyLists(districtNames);
   if (!allowed.length || allowed.length === allKeys.length) return null;
   const prefix = districtKeyPrefixExpression("pg");
@@ -74,17 +74,36 @@ async function districtClosureIds(exec, { districtNames = [], userId = 0 } = {})
   }
 
   // (3) 只在「含種子的連通分量」內取全部 id（＝原本 recursive UNION 的遞移閉包語意）。
+  //
+  // ⚠️ astra6 2026-09-25 §3.2：原版 union-find 沒有 path compression／union-by-size，
+  // 在鏈狀輸入下每次 find 都要走完整條鏈（他實測：1,000 節點 → 999,000 次 parent 走訪）。
+  // 這裡補上 path compression ＋ union-by-size（迭代版，避免長鏈遞迴爆堆疊）。
   const parent = new Map();
+  const size = new Map();
   const find = (x) => {
-    let root = x;
+    let root = parent.get(x) ?? x;
     while (parent.get(root) !== undefined && parent.get(root) !== root) root = parent.get(root);
+    // path compression：把路徑上所有節點直接接到 root
+    let cur = x;
+    while (cur !== root) {
+      const next = parent.get(cur) ?? cur;
+      parent.set(cur, root);
+      if (next === cur) break;
+      cur = next;
+    }
+    parent.set(x, root);
     return root;
   };
   const union = (a, b) => {
-    parent.set(a, parent.get(a) ?? a);
-    parent.set(b, parent.get(b) ?? b);
-    const ra = find(a); const rb = find(b);
-    if (ra !== rb) parent.set(ra, rb);
+    if (!parent.has(a)) { parent.set(a, a); size.set(a, 1); }
+    if (!parent.has(b)) { parent.set(b, b); size.set(b, 1); }
+    let ra = find(a);
+    let rb = find(b);
+    if (ra === rb) return;
+    // union-by-size：小的接到大的，避免鏈化
+    if ((size.get(ra) || 1) < (size.get(rb) || 1)) { const t = ra; ra = rb; rb = t; }
+    parent.set(rb, ra);
+    size.set(ra, (size.get(ra) || 1) + (size.get(rb) || 1));
   };
   for (const [a, b] of edges) union(a, b);
   const seedRoots = new Set(seeds.map((id) => (parent.has(id) ? find(id) : id)));
