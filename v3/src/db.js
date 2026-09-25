@@ -4099,7 +4099,10 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const degraded = [];
   const safe = safeExecFactory(exec, degraded);
-  const row = (await safe(`SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"]))[0];
+  // astra §4.3（每請求查詢數目標 ≤12）：全域 settings 只讀**一次**，crawlSources 直接從同一批列取出
+  // （原本另外再發一筆 `WHERE key = 'crawlSources'` ✗ ⇒ 同一張表、同一批資料查兩次）。
+  const globalRows = await safe(`SELECT key, value FROM ${settingsTable}`);
+  const row = globalRows.find((item) => String(item?.key) === "crawlSources");
   let crawlSources = publicCrawlSources(defaultCrawlSources());
   if (row && row.value != null) {
     try {
@@ -4119,6 +4122,7 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
     // （不送失敗語句 ⇒ 交易不會被標記 aborted ✓）；isolation 仍必須存在（缺就拋錯 ✓）。
     safe,
     settingsTable,
+    globalRows,
   );
   return {
     crawlSources,
@@ -4140,8 +4144,9 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
  *   • covers：`crawl_covers` → `coverFromRow`（已匯出的同一支）→ `coveringJobsFromMembers`（pure）。
  *   • 展開：`expandSearchKeysAgainst(PG 的 SELECT DISTINCT search_key, keys)` ⇒ 不再掃 SQLite。
  */
-export async function buildSearchKeysFromPg(exec, settingsTable = "settings") {
-  const globalRows = await exec(`SELECT key, value FROM ${settingsTable}`);
+export async function buildSearchKeysFromPg(exec, settingsTable = "settings", globalRowsIn = null) {
+  // 呼叫端（buildListRequestContextFromPg）已經讀過全域 settings ⇒ 直接沿用，避免重複查詢 ✓。
+  const globalRows = globalRowsIn || await exec(`SELECT key, value FROM ${settingsTable}`);
   const system = systemCrawlFromRows(globalRows);
   const globalSettings = settingsFromRows({ globalRows, system });
   const userRowsAll = await exec("SELECT user_id, key, value FROM user_settings");

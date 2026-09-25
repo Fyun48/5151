@@ -5,10 +5,13 @@ import { buildListRequestContextFromPg, buildListListingsClauses } from "../src/
 const silentExec = async () => [];
 
 test("context：由 PG settings 取得 crawlSources（同名 key），並可套進子句", async () => {
-  const exec = async (sql, params) => {
-    if (!/FROM settings WHERE key = \?/.test(String(sql))) return [];
-    assert.deepEqual(params, ["crawlSources"]);
-    return [{ value: JSON.stringify({ items: [{ id: "591", enabled: true }, { id: "sinyi", enabled: false }] }) }];
+  const exec = async (sql) => {
+    // astra §4.3：crawlSources 現在與全域 settings 共用**同一筆**查詢（原本另發一筆 WHERE key=? ✗）。
+    if (!/FROM settings/.test(String(sql))) return [];
+    return [{
+      key: "crawlSources",
+      value: JSON.stringify({ items: [{ id: "591", enabled: true }, { id: "sinyi", enabled: false }] }),
+    }];
   };
   const context = await buildListRequestContextFromPg(exec);
   const built = buildListListingsClauses(
