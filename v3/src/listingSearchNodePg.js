@@ -154,7 +154,11 @@ export async function searchListingsNodePg(args = {}, { pgDriver, deps = {}, dec
   const fullRows = paged.page.length
     ? await exec(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(", ")})`, paged.pageIds)
     : [];
-  const listings = decorateListListingsPage(paged.page, fullRows, { settings, uid, voteUid, sameHouse });
+  const listings = decorateListListingsPage(paged.page, fullRows, {
+    settings, uid, voteUid, sameHouse,
+    // astra6 §0.2：PG 路徑必須一路帶著 provider，缺了就會 fallback 到 SQLite 裝飾來源 ⇒ 直接拋錯。
+    provider, requireProvider: true,
+  });
   markStage("hydrate_ms");
 
   return {

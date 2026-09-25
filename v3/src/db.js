@@ -6544,13 +6544,21 @@ export function paginateListListingsRows(rows, { sort, filter, settings, limit =
 }
 
 /** 取列之後的裝飾（lite → peers → finalize）。driver-agnostic：`fullRows` 由呼叫端提供。 */
-export function decorateListListingsPage(page, fullRows, { settings, uid = 0, voteUid = 0, sameHouse = true } = {}) {
+export function decorateListListingsPage(page, fullRows, {
+  settings, uid = 0, voteUid = 0, sameHouse = true, provider = null, requireProvider = false,
+} = {}) {
+  // ⚠️ astra6 2026-09-25 §0.2（已證實）：原版沒把 provider 交給下面的 decorateListingLite／
+  // finalizeListingDecorate，而這兩個函式缺 provider 時會 fallback 到 sqliteDecorationProvider()
+  // ⇒ PG 路徑會偷偷讀 SQLite。PG 呼叫端必須傳 requireProvider: true，缺 provider 直接拋錯。
+  if (requireProvider && !provider) {
+    throw new Error("decorateListListingsPage: PG 路徑必須提供 decoration provider（不得回退 SQLite）");
+  }
   const fullById = new Map((fullRows || []).map((row) => [Number(row.post_id), row]));
   // A separate importer may remove a row between the candidate and page reads.
   return page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid, provider);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid, provider });
   });
 }
 
