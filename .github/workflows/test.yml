@@ -49,3 +49,57 @@ jobs:
         run: |
           set -euo pipefail
           npm test
+
+  # astra6 §6：在真實 PostgreSQL 上再跑一輪 —— provider 護欄、單一快照、PG context（不得回讀 SQLite）
+  # 這幾件事只有在真的 PG 上才會被抓到（本機預設是 SQLite）。
+  test-postgres:
+    name: Run Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DB_DRIVER: postgres
+      # app 的慣例是整串連線字串（容器實測：只有 PG_URL ＋ DB_DRIVER，沒有 PGHOST 等分散變數）
+      PG_URL: postgres://postgres:postgres@127.0.0.1:5432/tracker_test
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: tracker_test
+      PG_STATEMENT_TIMEOUT_MS: "300000"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Test Suite (PostgreSQL)
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test

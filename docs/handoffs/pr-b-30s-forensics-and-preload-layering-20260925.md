@@ -71,7 +71,42 @@ baseline 989ms／`q` 878ms（皆為 `Connection terminated unexpectedly` ✗）
 3. **是否保留 `sql_pg`**：本 session 已把正式入口移除（`19d3821`）；若 astra 要保留作為
    debug 入口，需指定「僅測試可達」的形式 ✓。
 
-## 五、下一步（我會繼續做，不等裁決的項目）
-- warm p95（`RUNS=5`）＋ 用 `RUNS` 對照 preload 分層前後（有/無 `peers:false`）。
-- B4 決定性（`asOf`、明確候選順序）→ CI PG service container（讓 provider／LIMIT／SQLite I/O
-  回歸**先真的失敗**）→ 版本化回填 → 分層 gate ＋ PR 本文改寫。
+## 六、✦✦ 重大發現：大候選集合時 `node_pg` 會以 `08P01` 打斷連線（＝ 30 秒現象的同類根因）
+
+CI canary（`v3/test/pg-provider-canaries.test.js`，在容器內以真實 schema 執行）在**無行政區**
+（`districts: []` ⇒ 候選＝全表 ~36k）時失敗：
+
+```
+not ok 2 - PG 整合：真實 PG 上跑完整路徑（node_pg）
+error: 'bind message has 36300 parameter formats but 0 parameters'
+code: '08P01'
+  async loadListingPrepMap (src/repository/decorationData.js:173)
+  async memo (…/decorationData.js:264)
+  async Object.prepMap (…/decorationData.js:334)
+  async preloadDecorationProviderAsync (src/db.js:3221)
+  async searchListingsNodePgInner (src/listingSearchNodePg.js:213)
+```
+
+### 判讀
+- PostgreSQL 的擴充查詢協定以 **int16** 表示參數個數／格式 ⇒ **每個 statement 最多 32,767 個參數** ✗。
+  本例是 **36,300** 個佔位符 ⇒ 超過後 `pg` 送出格式陣列卻沒有對應參數 ⇒ `08P01` ⇒ **連線被打斷** ✗✗。
+- 這是**既存缺陷** ✗（不是我這輪 preload 分層造成的）：`prepIds` 的大小由候選集合（＋match／peer id）
+  決定，改動前後同量級 ✓；先前探針用 `districts: [西屯區]`（候選 6,625 ✓）所以沒踩到 ✓✓。
+- ⇒ **F3 的「30 秒／`Connection terminated unexpectedly`」高度可能就是這個** ✓（大候選集合 ⇒ 逾協定上限
+  ⇒ 連線被打斷；客戶端等到 timeout 才放棄 ⇒ 看起來像 30 秒 ✗）。
+- 這也說明 astra6 §1 的「索引／`kind_tokens`＋GIN」**不是**這個現象的解 ✗。
+
+### 修法（下一步，建議）
+1. **改用單一陣列參數綁定** ✓✓：`post_id = ANY(?::bigint[])`（app 已有先例：行政區 closure 就是這樣傳 ✓）
+   ⇒ 一個參數取代上萬個佔位符 ✓，一次解決上限問題 ✓。
+2. 或**分批（chunk）** 查詢 ✓：以 `PG_MAX_BIND_PARAMS`（pgSchema.js 已有常數 ✓）為上限切段 ✓，
+   但陣列綁定更簡單且更快 ✓。
+3. 受影響的 loader（皆為 `IN (${ids.map(() => "?")})` 形式 ✗，需逐一確認）：
+   `loadListingPrepMap`／`loadListingExtras`／`loadGroupIds`／`loadPeerRows`（`decorationData.js`）✓。
+4. 修完後：**canary 就是回歸 gate** ✓（`districts: []` 全表案例已在 canary 內 ✓，CI 會紅燈 ✓）。
+
+### 附註（憑證）
+容器實測環境只有 `PG_URL`（整串連線字串）＋ `DB_DRIVER=postgres`，**沒有** `PGHOST` 等分散變數 ✓
+⇒ canary 的略過條件改為「真的能建出可用的 PG driver」✓（不能只檢查 `PGHOST` ✗）；
+CI 的 PG job 也一併帶上 `PG_URL` ✓。**連線字串值只在容器環境／`~/.secrets`，不得進 repo 或對話** ✓。
+
