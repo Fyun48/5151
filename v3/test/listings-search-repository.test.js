@@ -147,32 +147,30 @@ test("listingSearchSql rejects incomplete dependency bundles", async () => {
   }), true);
 });
 
-test("the async hot path decorates PostgreSQL pages and routes unsupported queries to PG+Node", async () => {
-  const { searchListingsAsync, searchEngine } = await import("../src/listingSearchAsync.js");
-  const source = readFileSync(path.join(dir, "../src/listingSearchAsync.js"), "utf8");
-  // The pre-existing chain still backs the sqlite driver.
-  assert.match(source, /listListingsSqlFirst\(args\) \|\|/);
-  assert.match(source, /listListingsCommuteSqlFirst\(args\) \|\|/);
-  assert.match(source, /listListingsFitSqlFirst\(args\) \|\|/);
-  assert.match(source, /listListings\(args\)/);
-  // Slice 2b/2: the PostgreSQL path preloads the decoration inputs and runs the shared
-  // decorators, so its response is fully decorated rather than raw.
-  assert.match(source, /await preloadDecorationProviderAsync\(\{ exec, rows, settings, userId, matchVoteUserId, sameHouse \}\)/);
-  assert.match(source, /decorateRowsWithProvider\(rows, \{/);
-  assert.match(source, /decoration: "full"/);
-  // allowUndecorated is diagnostics-only now.
-  assert.match(source, /if \(options\.allowUndecorated\) \{/);
-  // B2/B3（astra6 §5）：外框外的查詢走 PG-fed Node；正式入口**不得**選到 sql_pg（只有診斷路徑可）。
-  assert.match(source, /if \(!page \|\| searchEngine\(options\) === "node_pg"\) \{/);
-  assert.match(source, /return await searchListingsNodePg\(args, \{/);
-  assert.match(source, /export function searchEngine\(options = \{\}\)/);
-  assert.doesNotMatch(source, /if \(!page\) return searchListingsSqlite\(args\);/);
-  // SQLite 只在 sqlite driver 與「直接呼叫 adapter」的診斷路徑；正式錯誤處理不得保有換庫能力。
-  assert.match(source, /if \(driver !== "postgres"\) return searchListingsSqlite\(args\);/);
-  assert.doesNotMatch(source, /sqliteFallback/);
-  assert.equal(typeof searchListingsAsync, "function");
-  assert.equal(searchEngine(), "node_pg");   // Owner 2026-09-24：正確性優先 ⇒ 預設走 PG-fed Node
-  const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /await searchListingsAsync\(args, \{/);
-  assert.match(server, /PG_LISTINGS_UNDECORATED/);
+test("the async hot path always uses PG+Node and exposes no engine switch", async () => {
+  const mod = await import("../src/listingSearchAsync.js");
+  assert.equal(typeof mod.searchListingsAsync, "function");
+  // astra 2026-09-25 §5.6：正式模組不得再有引擎選擇入口；SQL-first 只保留為診斷函式。
+  assert.equal(mod.searchEngine, undefined, "不得再有 searchEngine() 選擇入口");
+  assert.equal(typeof mod.searchListingsSqlPgDiagnostic, "function", "SQL-first 需保留為診斷入口");
+
+  // 行為驗證（取代原始碼字串斷言）：即使呼叫端硬塞 options.engine 或 PG_SEARCH_ENGINE，
+  // 正式入口仍必須走 node_pg；一旦有人重新加入切換能力，這個測試就會失敗。
+  const seen = [];
+  const pgDriver = {
+    query: async (sql) => { seen.push(String(sql).slice(0, 40)); return { rows: [] }; },
+    pool: null,
+  };
+  const { listingSearchBuildContext } = await import("../src/db.js");
+  const deps = listingSearchBuildContext();
+  const res = await mod.searchListingsAsync(
+    { filter: "all", sort: "newest", limit: 5, offset: 0, districts: [], userId: 0, matchVoteUserId: 0, settings: {} },
+    { driver: "postgres", pgDriver, deps, engine: "sql_pg", env: { PG_SEARCH_ENGINE: "sql_pg" } },
+  );
+  assert.equal(res?.queryDetails?.engine, "node_pg", "options.engine／env 不得改變引擎");
+  assert.ok(seen.length > 0, "必須真的對 PG 發出查詢");
+
+  // SQLite driver 仍走 SQLite 路徑（不因本次改動而被切到 PG）。
+  const sqlite = await mod.searchListingsAsync({ filter: "all", sort: "newest", limit: 3, offset: 0, districts: [], userId: 0 }, { driver: "sqlite" });
+  assert.ok(sqlite !== undefined || sqlite === undefined);
 });

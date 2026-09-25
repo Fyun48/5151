@@ -80,17 +80,13 @@ function pageResult(page, listings, extra = {}) {
   };
 }
 
-// B2/B3（astra6 §5）：搜尋引擎選擇。
+// B2/B3（astra6 §5）＋ astra 2026-09-25 §5.6：**正式模組沒有引擎選擇入口**。
 //
-// **正式入口一律 `node_pg`**（PG-fed Node，與參考管線共用後處理；Owner 2026-09-24 決定正確性優先）。
-//
-// `sql_pg`（SQL-first）**不得由正式請求選到** ✗：baseline／q 都已量到約 40% 的 total 差異，
-// 且四個能力因效能關閉 ⇒ 沒有一個可正常上線的剩餘能力。
-// 因此這裡**不讀環境變數**（避免正式部署誤用未達 gate 的引擎），
-// 只有明確傳 `options.engine = "sql_pg"` 的診斷／測試／benchmark 路徑才能使用。
-export function searchEngine(options = {}) {
-  return options.engine === "sql_pg" ? "sql_pg" : "node_pg";
-}
+// 正式請求一律 `node_pg`（PG-fed Node，與參考管線共用後處理；Owner 2026-09-24 正確性優先）。
+// `sql_pg`（SQL-first）不得由正式請求選到 ✗：baseline／q 都有約 40% 的 total 差異，且四個能力
+// 因效能關閉 ⇒ 沒有可上線的剩餘能力。因此這裡**不接受 `options.engine`、也不讀環境變數**；
+// 需要 SQL-first 對照時，改由檔尾的診斷入口 `searchListingsSqlPgDiagnostic()` 直接呼叫
+// （只有測試 helper／診斷腳本可以 import 它，不經正式 handler）。
 
 export async function searchListingsAsync(args = {}, options = {}) {
   const driver = options.driver || resolveDbDriver();
@@ -98,61 +94,60 @@ export async function searchListingsAsync(args = {}, options = {}) {
 
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
-    // 正確性優先（Owner 2026-09-24）：預設走 PG-fed Node，且**不先跑 SQL-first**
-    // （省掉一次註定要丟棄的查詢；也不建立 repository）。要回到 SQL-first 需明確設 PG_SEARCH_ENGINE=sql_pg。
-    if (searchEngine(options) === "node_pg") {
-      return await searchListingsNodePg(args, {
-        pgDriver,
-        deps: options.deps || listingSearchBuildContext(),
-        decorationLoader: options.decorationLoader,
-      });
-    }
-    const repository = options.repository || createListingsRepository({
-      driver: "postgres",
+    // 一律走 PG-fed Node：不先跑 SQL-first（省掉一次註定要丟棄的查詢；也不建立 repository）。
+    return await searchListingsNodePg(args, {
       pgDriver,
-      schema: options.schema || "",
       deps: options.deps || listingSearchBuildContext(),
+      decorationLoader: options.decorationLoader,
     });
-    const page = await repository.searchPage(args);
-    // B2/B3（astra6 §3）：外框外的查詢**不再回退 SQLite** —— 那會在下層換掉資料來源
-    // （PG 模式下讀到的是另一個、可能落後的資料庫），也讓「PG 失效不回 SQLite」形同虛設。
-    // 改走 PG-fed Node 管線：候選／個人旗標／裝飾全部來自 PG，後處理與 SQLite Node 路徑共用同一份函式。
-    if (!page || searchEngine(options) === "node_pg") {
-      return await searchListingsNodePg(args, {
-        pgDriver,
-        deps: options.deps || listingSearchBuildContext(),
-        decorationLoader: options.decorationLoader,
-      });
-    }
-
-    const rows = options.hydrate === false ? [] : await repository.hydrate(page.ids);
-    if (options.allowUndecorated) {
-      return pageResult(page, rows, {
-        hydrated: options.hydrate === false ? "ids_only" : "raw",
-        decoration: "skipped",
-      });
-    }
-
-    const userId = Number(args.userId) || 0;
-    const matchVoteUserId = args.matchVoteUserId == null ? userId : Number(args.matchVoteUserId) || 0;
-    const sameHouse = args.sameHouse !== false;
-    const settings = args.settings || null;
-    const exec = options.exec
-      || ((sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
-    const provider = options.decorationProvider
-      || (await preloadDecorationProviderAsync({ exec, rows, settings, userId, matchVoteUserId, sameHouse }));
-    const listings = decorateRowsWithProvider(rows, {
-      settings,
-      userId,
-      provider,
-      sameHouse,
-      matchVoteUserId,
-    });
-    return pageResult(page, listings, { hydrated: "decorated", decoration: "full" });
   } catch (error) {
     // F2／astra6 §5：PostgreSQL 失敗時**不回退 SQLite**，且**移除正式可達的換庫能力** ✗。
     // 診斷／測試要比較 SQLite adapter 時，直接呼叫 searchListingsSqlite()，不要讓正式錯誤處理保留這個選項。
     if (isListingSearchUnavailable(error)) throw error;
     throw new ListingSearchUnavailableError(error);
   }
+}
+
+/**
+ * 診斷／對照專用：舊的 SQL-first（`sql_pg`）路徑。
+ *
+ * astra 2026-09-25 §5.6：這個 dispatcher **不得**由正式 handler、環境變數或 `options.engine` 切入；
+ * 只有測試 helper／診斷腳本可以直接 import。**不支援的案例一律回報 unsupported** ✗ ——
+ * 不得偷偷改跑 Node 之後把成績標成 SQL。
+ */
+export async function searchListingsSqlPgDiagnostic(args = {}, options = {}) {
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  const repository = options.repository || createListingsRepository({
+    driver: "postgres",
+    pgDriver,
+    schema: options.schema || "",
+    deps: options.deps || listingSearchBuildContext(),
+  });
+  const page = await repository.searchPage(args);
+  if (!page) return { unsupported: true, reason: "sql-first envelope 不支援此查詢" };
+
+  const rows = options.hydrate === false ? [] : await repository.hydrate(page.ids);
+  if (options.allowUndecorated) {
+    return pageResult(page, rows, {
+      hydrated: options.hydrate === false ? "ids_only" : "raw",
+      decoration: "skipped",
+    });
+  }
+
+  const userId = Number(args.userId) || 0;
+  const matchVoteUserId = args.matchVoteUserId == null ? userId : Number(args.matchVoteUserId) || 0;
+  const sameHouse = args.sameHouse !== false;
+  const settings = args.settings || null;
+  const exec = options.exec
+    || ((sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
+  const provider = options.decorationProvider
+    || (await preloadDecorationProviderAsync({ exec, rows, settings, userId, matchVoteUserId, sameHouse }));
+  const listings = decorateRowsWithProvider(rows, {
+    settings,
+    userId,
+    provider,
+    sameHouse,
+    matchVoteUserId,
+  });
+  return pageResult(page, listings, { hydrated: "decorated", decoration: "full" });
 }

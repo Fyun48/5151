@@ -201,7 +201,9 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
       districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),
       userId: voteUid,
     }),
-  });
+    // astra 2026-09-25 §2.1：明確表示「這裡沒有 SQLite 可讀」——隔離子句必須來自 context，
+    // 缺 context.isolation 時 builder 會直接拋錯，不得靜默降級或偷讀 SQLite。
+  }, { sqliteDb: null });
   markStage("prepare_ms");
   // 取「全部」候選：不在這裡 LIMIT，否則 totalMatched 會被候選上限截斷。
   const raw = await exec(`SELECT ${candidateColumns} FROM listings ${built.where}`, built.params);
@@ -211,11 +213,13 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
 
   const loader = decorationLoader || createDecorationDataLoader({ exec, driver: "postgres" });
   const [flagMap, provider] = await Promise.all([
-    loader.personalFlagMap(voteUid),
+    // astra6 §2.2：清單狀態 flags 用**觀看者 uid**（SQLite 參考管線同位置為 loadFlagMap(db, uid)）。
+    loader.personalFlagMap(uid),
     // 候選階段：只載入候選篩選／關係判定必需的部分（peers: false ⇒ 略過頁面專用的
     // peers 2-hop 與 groupMembers；astra6 §3 preload 分層）。
     preloadDecorationProviderAsync({
       exec, loader, rows: raw, settings, userId: uid, matchVoteUserId: voteUid, sameHouse, peers: false,
+      flagUserId: uid,
     }),
   ]);
   markStage("preload_ms");
@@ -236,6 +240,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   const pageProvider = paged.page.length
     ? await preloadDecorationProviderAsync({
       exec, loader, rows: paged.page, settings, userId: uid, matchVoteUserId: voteUid, sameHouse,
+      flagUserId: uid,
     })
     : provider;
   markStage("preload_page_ms");

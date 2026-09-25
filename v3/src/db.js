@@ -3155,6 +3155,8 @@ export async function preloadDecorationProviderAsync({
   // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
   loader: loaderIn = null,
   peers: loadPeers = true,
+  // astra6 §2.2：清單狀態 flags 的**擁有者**（＝觀看者 uid）；未給時沿用 userId。
+  flagUserId = null,
 } = {}) {
   if (typeof exec !== "function") throw new Error("preloadDecorationProviderAsync requires exec");
   const list = Array.isArray(rows) ? rows : [];
@@ -3167,7 +3169,11 @@ export async function preloadDecorationProviderAsync({
   const loader = loaderIn || createDecorationDataLoader({ exec, driver });
   const candidateIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
   const onPage = new Set(candidateIds);
-  const personalFlags = await loader.personalFlagMap(voteUid);
+  // astra6 §2.2：**清單狀態 flags（hidden／viewed／watched）屬觀看者 uid**；配對投票／
+  // split／同戶關係才用 voteUid。原本此處誤用 voteUid，會讓 uid≠voteUid 時（例如以他人
+  // 視角檢視）拿到錯的隱藏／已看清單。SQLite 參考管線在同一位置用的是 loadFlagMap(db, uid)。
+  const flagUid = Number(flagUserId ?? userId) || 0;
+  const personalFlags = await loader.personalFlagMap(flagUid);
   const personalIndex = await loader.personalIndex(voteUid);
   const splitPairs = await loader.splitPairSet(voteUid);
 
@@ -4171,7 +4177,25 @@ function searchWhere(searchKeys, clauses, params, context = null) {
   }
 }
 
-function listingVisibilityClauses(clauses, params, context = null) {
+/**
+ * 瀏覽／清單的 fixture 隔離子句（單一來源）。
+ *
+ * astra6 §2.1：原本兩處（`listingVisibilityClauses` 與 watched 分支）都會**回退讀 SQLite**
+ * （`sqlExcludeFixtureRows(db, …)` ⇒ `PRAGMA table_info(listings)`），即使 request context 已帶
+ * isolation。PG/Node 路徑必須由 context 提供，缺了要**明確失敗**，不得靜默降級 ——
+ * `tableColumns()` 會吞掉例外並可能退成 `1=1`，那會讓 fixture 列外洩到產品畫面。
+ */
+function browseIsolationClause(context, sqliteDb, table = "listings") {
+  if (context && context.isolation) return context.isolation;
+  if (sqliteDb == null) {
+    throw new Error(
+      "browseIsolationClause: PG/Node 路徑必須提供 context.isolation（不得回退讀 SQLite）",
+    );
+  }
+  return sqlExcludeFixtureRows(sqliteDb, table);
+}
+
+function listingVisibilityClauses(clauses, params, context = null, { sqliteDb = db } = {}) {
   // The expiry predicate below is sufficient for reads. An UPDATE here would
   // wait up to busy_timeout for a crawler/importer even when no row expires.
   const stamp = new Date().toISOString();
@@ -4189,7 +4213,7 @@ function listingVisibilityClauses(clauses, params, context = null) {
     params.push(...disabled);
   }
   clauses.push(hpDisplayReadySql("listings"));
-  const isolation = context && context.isolation ? context.isolation : sqlExcludeFixtureRows(db, "listings");
+  const isolation = browseIsolationClause(context, sqliteDb, "listings");
   clauses.push(isolation.sql);
   params.push(...isolation.params);
 }
@@ -6536,7 +6560,7 @@ export function buildListListingsClauses({
   const params = [];
   searchWhere(searchKeys, clauses, params, context);
   if (filter !== "watched") {
-    listingVisibilityClauses(clauses, params, context);
+    listingVisibilityClauses(clauses, params, context, { sqliteDb });
     if (Array.isArray(districtIds)) {
       // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
       // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
@@ -6555,7 +6579,13 @@ export function buildListListingsClauses({
     }
     appendPriceCeilingCandidates(settings, clauses, params);
   } else {
-    applyBrowseIsolation(clauses, params, sqliteDb, "listings");
+    // astra6 §2.1：watched 原本直接 `applyBrowseIsolation(…, sqliteDb, …)` ⇒ 讀 SQLite
+    // （`PRAGMA table_info(listings)`）。改走與 listingVisibilityClauses 同一條 context 路徑
+    // （隔離子句本身相同），PG 缺 context 時明確失敗。watched 不受行政區／價格／顯示篩選
+    // 限制的既有契約不變。
+    const isolation = browseIsolationClause(context, sqliteDb, "listings");
+    clauses.push(isolation.sql);
+    params.push(...isolation.params);
   }
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
