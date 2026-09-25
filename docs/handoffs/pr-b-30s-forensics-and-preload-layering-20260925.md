@@ -524,6 +524,27 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 `for f in list-query-regression search-contract-regression listing-score listing-search-projection list-display-filter list-sql-first-wiring; do timeout 260 node --test v3/test/$f.test.js; done` ✓
 ⇒ **上一批的紅線解除** ✗✓：縮欄位改動**現在可以做、且有本地回歸網** ✓（僅 `node_modules` 相關工具如 eslint 仍需 CI ✓）。
 
+### ① 縮欄位已落地 ✓（`22e3c27`）
+- `db.js` ✓：新增 `export const LIST_CANDIDATE_COLUMNS_NARROW`（**23 欄** ✓，含 `match_level` ✓），
+  附量測依據與「使用範圍刻意最小」說明 ✓。
+- `listingSearchAsync.js` ✓：PG 列表路徑在「**自己建 deps**」時覆寫 `candidateColumns` 為窄版 ✓；
+  **呼叫端注入 deps 時一律尊重** ✓（測試／診斷不受影響 ✓）。
+- **未動** ✓：統計（`listingStatsBuildContext` ✓）、明細（`listingDetailAsync` ✓）、
+  爬蟲（`crawlerReads` ✓、`db.js:3618` 超集 ✓）、SQLite `listListings` ✓。
+- 本地驗證 ✓：7 檔共 **31 個測試全綠** ✓（含 `list-query-regression` 15/15 ✓、142.5 s ✓）。
+
+### ② 追查「整列複製」：兩處，且**都不該盲改** ✗✓（改為「已由 ① 緩解」✓）
+- `applyCachedCoords`（`db.js:5773` ✓）：**只在**「`commuteKm>0` ＋ 有工作點 ＋ trusted geo ＋
+  查得到路線」時 `return { ...row, route_* }` ✓ ⇒ 複製是**有條件**的 ✓；其餘**原樣回傳** ✓。
+- 管線端 `needFit` 分支 ✓：`listingFitFields({ ...located, commute_km: km }, settings)` ✓
+  ⇒ **這才是 `fit_desc` 整列展開的來源** ✓。
+- ⇒ 兩處展開**可能都是刻意的** ✓：provider 的列來自**共用快取** ✗ ⇒ 就地改寫會**污染快取** ✗
+  （比複製更糟 ✗）⇒ **不盲改** ✗。
+- ⇒ 而且 **① 已把成本降下來** ✓：被複製的物件由 **43 欄 → 23 欄** ✓ ⇒ `fit_desc` 的複製成本
+  **同步下降** ✓ ⇒ ② 由「改程式」改為「已由 ① 緩解」✓ ✓。
+- ⇒ 保留觸發條件 ✓：**若日後量到 fit 路徑仍是熱點**，再處理複製（且有本地測試可驗 ✓）。
+
+
 
 
 
