@@ -133,8 +133,19 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     console.log(`PARITY-IDS-PG ${JSON.stringify(idsOf(viaPg).slice(0, 10))}`);
     console.log(`PARITY-IDS-SQLITE ${JSON.stringify(idsOf(viaSqlite).slice(0, 10))}`);
 
-    // ✗ 禁止「空洞通過」✓：先前兩邊都是 `[]` 也能 deepEqual 通過 ✗ ⇒ 先驗證受測資料前提 ✓
-    // （與 `COLAB-INVALID` 同一原則：**受測查詢必須真的回資料** ✓）。
+    // ✗ 診斷必須放在斷言**之前** ✓（否則一失敗就看不到 —— A/B 教過的教訓 ✓）。
+    // `queryDetails` 由 envelope 回傳 ✓（含候選數／階段耗時／降級清單 ✓）⇒ 用它分辨
+    // 「fixture 沒種到」✗ 與「前置條件把它濾掉」✗。
+    console.log(`PARITY-DETAILS-PG ${JSON.stringify(viaPg?.queryDetails ?? null)}`);
+    console.log(`PARITY-DETAILS-SQLITE ${JSON.stringify(viaSqlite?.queryDetails ?? null)}`);
+    try {
+      const nPg = (await pgDriver.query("SELECT COUNT(*)::int AS n FROM listings WHERE source_key LIKE 'parity|%'")).rows[0].n;
+      const nSqlite = sqliteDb.prepare("SELECT COUNT(*) AS n FROM listings WHERE source_key LIKE 'parity|%'").get().n;
+      console.log(`PARITY-FIXTURE-PRESENT ${JSON.stringify({ pg: nPg, sqlite: nSqlite })}`);
+    } catch (error) {
+      console.log(`PARITY-FIXTURE-PRESENT ${JSON.stringify({ error: String(error && error.message || error) })}`);
+    }
+
     assert.ok(idsOf(viaPg).length > 0, `PG 結果不得為空（實際 ${JSON.stringify(idsOf(viaPg))}）`);
     assert.ok(idsOf(viaSqlite).length > 0, `SQLite 結果不得為空（實際 ${JSON.stringify(idsOf(viaSqlite))}）`);
     // ① 集合與順序 ✓
