@@ -194,6 +194,8 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   // astra §5.5（B4）：request context 由 PG 建立一次（crawlSources／isolation／searchKeys／**asOf**）。
   const context = await buildListRequestContextFromPg(exec);
   queryDetails.asOf = context.asOf;
+  // 可選資料的降級清單（缺表時為非空）——放進 queryDetails 讓它可被量測與告警，不得靜默 ✗。
+  queryDetails.contextDegraded = context.degraded || [];
   const built = buildListListingsClauses({
     filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
     districts: args.districts, settings, uid, voteUid,

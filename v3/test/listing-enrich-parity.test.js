@@ -300,9 +300,13 @@ test("live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metr
 // 種子查詢的 live 驗證：影子站（＝正式站資料的匯入）有候選，本機 SQLite fixture 沒有，
 // 所以要能明確分辨「讀的是哪一個 store」。跑完把自己新增的工作刪掉。
 test("live：種子查詢讀的是 PostgreSQL，不是本機 SQLite", async (t) => {
-  const url = process.env.PG_TEST_URL;
+  // 這個測試**本質上需要「影子站」**（＝正式站資料的匯入）：它斷言 PG 分支挑得到候選 ✗，
+  // 而 CI 的拋棄式 PG 是空的 ⇒ 不能用 PG_TEST_URL 假裝有影子站 ✗。
+  // 依 astra §3.4「必要測試不得 skip」：此測試**不是** PR-B 的必要 gate，故以專屬 PG_SHADOW_URL
+  // 明確 gate（理由寫在使用者可見的 skip 訊息與 CI 文件中）。
+  const url = process.env.PG_SHADOW_URL;
   if (!url) {
-    t.skip("PG_TEST_URL is not set (live listing enrich seed)");
+    t.skip("PG_SHADOW_URL is not set（需要匯入正式站資料的影子站；不屬於 CI 必要 gate）");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

@@ -4056,6 +4056,25 @@ export function currentSearchKeys() {
 }
 
 /**
+ * 可選資料的讀取：表不存在（42P01）時回傳空集合並把表名記進 `degraded`。
+ *
+ * 為什麼要這樣：request context 的 `crawlSources`／`searchKeys` 是**增強**（來源偏好、搜尋鍵展開），
+ * 不該因為某個部署／測試 fixture 沒有那些表就讓整個搜尋失敗 ✗；但**安全相關的 `isolation` 一律必要** ✓
+ * （缺了照樣拋錯）。降級一律**記錄**在 context.degraded 與 queryDetails 裡，不得靜默 ✗。
+ */
+async function optionalRows(exec, sql, params, degraded, label) {
+  try {
+    return await exec(sql, params);
+  } catch (err) {
+    if (String(err?.code) === "42P01") {
+      degraded.push(label);
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
  * astra6 2026-09-25 §0.2：由 PG 建立 request context（每個請求一次），避免請求熱路徑讀 SQLite。
  *
  * 只放**能精確對應**的資料，避免語意漂移：
@@ -4067,7 +4086,10 @@ export function currentSearchKeys() {
  */
 export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "" } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
-  const row = (await exec(`SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"]))[0];
+  const degraded = [];
+  const row = (await optionalRows(
+    exec, `SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"], degraded, settingsTable,
+  ))[0];
   let crawlSources = publicCrawlSources(defaultCrawlSources());
   if (row && row.value != null) {
     try {
@@ -4082,11 +4104,28 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   const isolation = ns
     ? { sql: "fixture_namespace = ?", params: [ns] }
     : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
-  const searchKeys = await buildSearchKeysFromPg(exec, settingsTable);
+  const searchKeys = await buildSearchKeysFromPg(
+    // 可選資料（settings／user_settings／users／crawl_covers／listings）：缺表時降級為空並記錄，
+    // 不讓搜尋整個失敗 ✓；isolation 仍必須存在（缺就拋錯 ✓）。
+    async (sql, params = []) => {
+      try {
+        return await exec(sql, params);
+      } catch (err) {
+        if (String(err?.code) === "42P01") {
+          degraded.push(String(sql).replace(/\s+/g, " ").slice(0, 60));
+          return [];
+        }
+        throw err;
+      }
+    },
+    settingsTable,
+  );
   return {
     crawlSources,
     isolation,
     searchKeys,
+    // 降級清單（空表示全部來源都讀到了）；呼叫端會放進 queryDetails 供證據，不允許靜默 ✗。
+    degraded,
     // astra §5.5（B4）：**固定 asOf**。`REPEATABLE READ` 只固定資料快照，不固定 JS 的「現在時間」✗；
     // 整個請求共用同一個時間戳 ⇒ 開啟中物件（expiry）等時間相關條件在同一請求內一致、可重現。
     asOf: new Date().toISOString(),
