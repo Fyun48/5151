@@ -507,6 +507,24 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
    ⇒ **不得盲改熱路徑** ✗ ⇒ 縮欄位的改動**必須由 CI 驗證** ✓；
    在能本地重現套件之前，此改動不進主線 ✗（astara 紅線：先量、再改、且可驗證 ✓）。
 
+### ✗✓ 更正第三點：驗證牆已解 —— **本地可驗證**（真相：慢，不是卡 ✓）
+逐檔實測（單檔 ＋ `timeout` ✓）：
+| 檔案 | 結果 | 耗時 |
+|---|---|---|
+| `list-query-regression` | **15/15 ✓** `exit=0` | **124.7 s** ✗（慢 ✓） |
+| `search-contract-regression` | 1/1 ✓ | 快 ✓ |
+| `listing-score` | 6/6 ✓ | 快 ✓ |
+| `listing-search-projection` | 3/3 ✓ | 快 ✓ |
+| `list-display-filter` | 1/1 ✓ | 快 ✓ |
+| `list-sql-first-wiring` | 3/3 ✓ | 快 ✓ |
+
+⇒ 先前「跑既有套件會卡住」✗ 是**誤判** ✓：真相是**基準契約檔很慢** ✓（124.7 s ✓，
+超過我原先給的 45–240 s 批次預算 ✗ 而被我讀成 hang ✗）⇒ **本地驗證完全可行** ✓✓。
+⇒ 可用驗證指令（單檔逐一、給足時間 ✓）：
+`for f in list-query-regression search-contract-regression listing-score listing-search-projection list-display-filter list-sql-first-wiring; do timeout 260 node --test v3/test/$f.test.js; done` ✓
+⇒ **上一批的紅線解除** ✗✓：縮欄位改動**現在可以做、且有本地回歸網** ✓（僅 `node_modules` 相關工具如 eslint 仍需 CI ✓）。
+
+
 
 
 
