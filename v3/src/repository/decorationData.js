@@ -114,14 +114,27 @@ export async function loadPersonalSameHouseIndex(exec, userId) {
   };
 }
 
+// ⚠️ astra6 §0.1 實測（2026-09-25）：PG 的擴充查詢協定以 **int16** 表示參數個數與格式
+// ⇒ **單一 statement 最多 32,767 個參數**。用 `IN ($1,$2,…)` 傳上萬個 id 會踩到：
+//     08P01 bind message has 36300 parameter formats but 0 parameters
+// 而且會**直接打斷連線**（實測：無行政區的全表候選 36,300 個 id ⇒ node_pg 失敗；
+// 極可能就是「30 秒／Connection terminated unexpectedly」的根因）。
+// ⇒ PG 改用**單一陣列參數**綁定（app 已有先例：行政區 closure 用 `= ANY(?::bigint[])`）；
+//    SQLite 維持原本的 IN 佔位符。
+function idFilter(column, ids, driver, offset = 0) {
+  if (driver === "postgres") return { sql: `${column} = ANY(?::bigint[])`, params: [ids] };
+  return { sql: `${column} IN (${inList(ids, driver, offset)})`, params: ids };
+}
+
 // listingGroups.groupIdForPost for a whole page in one round trip.
 export async function loadGroupIds(exec, postIds, driver = "sqlite") {
   const map = new Map();
   const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
   if (!ids.length) return map;
+  const filter = idFilter("post_id", ids, driver);
   const rows = await exec(
-    `SELECT post_id, group_id FROM listing_group_members WHERE post_id IN (${inList(ids, driver)})`,
-    ids,
+    `SELECT post_id, group_id FROM listing_group_members WHERE ${filter.sql}`,
+    filter.params,
   );
   for (const row of rows || []) map.set(Number(row.post_id), String(row.group_id || ""));
   return map;
@@ -140,13 +153,14 @@ export async function loadGroupIds(exec, postIds, driver = "sqlite") {
 export async function loadPeerRows(exec, ids, driver = "sqlite") {
   const list = [...new Set((ids || []).map(normalizeId).filter(Boolean))];
   if (!list.length) return [];
-  const first = inList(list, driver, 0);
-  const second = inList(list, driver, list.length);
+  // PG 以單一陣列參數綁定（見 idFilter 的說明）；SQLite 沿用兩個 IN 清單。
+  const byPost = idFilter("post_id", list, driver);
+  const byMatch = idFilter("match_post_id", list, driver, list.length);
   const rows = await exec(
     `SELECT ${PEER_COLUMNS}
        FROM listings
-       WHERE post_id IN (${first}) OR match_post_id IN (${second})`,
-    [...list, ...list],
+       WHERE ${byPost.sql} OR ${byMatch.sql}`,
+    [...byPost.params, ...byMatch.params],
   );
   return (rows || []).map((row) => normalizeRow(row, NUMERIC_KEYS.peer));
 }
@@ -170,7 +184,8 @@ export async function loadListingPrepMap(exec, postIds, driver = "sqlite") {
   const map = new Map();
   const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
   if (!ids.length) return map;
-  const rows = await exec(`SELECT * FROM listing_prep WHERE post_id IN (${inList(ids, driver)})`, ids);
+  const filter = idFilter("post_id", ids, driver);
+  const rows = await exec(`SELECT * FROM listing_prep WHERE ${filter.sql}`, filter.params);
   for (const row of rows || []) map.set(Number(row.post_id), normalizeRow(row, NUMERIC_KEYS.prep));
   return map;
 }
@@ -196,9 +211,10 @@ export async function loadListingExtras(exec, postIds, driver = "sqlite") {
   const map = new Map();
   const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
   if (!ids.length) return map;
+  const filter = idFilter("post_id", ids, driver);
   const rows = await exec(
-    `SELECT ${EXTRAS_COLUMNS} FROM listings WHERE post_id IN (${inList(ids, driver)})`,
-    ids,
+    `SELECT ${EXTRAS_COLUMNS} FROM listings WHERE ${filter.sql}`,
+    filter.params,
   );
   for (const row of rows || []) {
     map.set(Number(row.post_id), normalizeRow(row, NUMERIC_KEYS.peer));

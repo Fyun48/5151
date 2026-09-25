@@ -13,6 +13,7 @@ import { searchListingsNodePg } from "./src/listingSearchNodePg.js";
 const drv = await createPostgresDriver({ env: process.env });
 const deps = listingSearchBuildContext();
 const district = process.env.DISTRICTS || "西屯區";
+const RUNS = Math.max(1, Number(process.env.RUNS) || 1);
 const ABILITIES = [
   { label: "baseline", args: {} },
   { label: "q=電梯", args: { q: "電梯" } },
@@ -27,21 +28,30 @@ for (const item of ABILITIES) {
     filter: "all", sort: "newest", limit: 50, offset: 0, districts: [district],
     userId: 0, matchVoteUserId: 0, settings: {}, ...item.args,
   };
-  const rec = { label: item.label };
-  const t0 = Date.now();
-  try {
-    // pgDriver 帶 pool ⇒ 走單一快照（REPEATABLE READ READ ONLY）
-    const res = await searchListingsNodePg(args, { pgDriver: { query: (s, p) => drv.query(s, p), pool: drv.pool }, deps });
-    rec.totalMs = Date.now() - t0;
-    rec.stages = res?.queryDetails?.stages || null;
-    rec.candidates = res?.queryDetails?.candidates ?? null;
-    rec.totalMatched = res?.totalMatched ?? null;
-    rec.returned = res?.listings?.length ?? null;
-    rec.outcome = "ok";
-  } catch (err) {
-    rec.totalMs = Date.now() - t0;
-    rec.outcome = `error(${err?.code || err?.name || "?"}): ${String(err?.message || "").slice(0, 140)}`;
+  const rec = { label: item.label, runs: RUNS, ms: [] };
+  let last = null;
+  for (let i = 0; i < RUNS; i += 1) {
+    const t0 = Date.now();
+    try {
+      // pgDriver 帶 pool ⇒ 走單一快照（REPEATABLE READ READ ONLY）
+      last = await searchListingsNodePg(args, { pgDriver: { query: (s, p) => drv.query(s, p), pool: drv.pool }, deps });
+      rec.ms.push(Date.now() - t0);
+      rec.outcome = "ok";
+    } catch (err) {
+      rec.ms.push(Date.now() - t0);
+      rec.outcome = `error(${err?.code || err?.name || "?"}): ${String(err?.message || "").slice(0, 140)}`;
+      break;
+    }
   }
+  const sorted = [...rec.ms].sort((a, b) => a - b);
+  rec.p50 = sorted[Math.floor(sorted.length / 2)];
+  rec.p95 = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
+  rec.cold = rec.ms[0];
+  rec.warm = rec.ms.length > 1 ? Math.round(rec.ms.slice(1).reduce((s, v) => s + v, 0) / (rec.ms.length - 1)) : null;
+  rec.candidates = last?.queryDetails?.candidates ?? null;
+  rec.totalMatched = last?.totalMatched ?? null;
+  rec.returned = last?.listings?.length ?? null;
+  // 每請求的 PG 查詢數（單一快照下仍可數）
   console.log(`PGSTAGE ${JSON.stringify(rec)}`);
 }
 

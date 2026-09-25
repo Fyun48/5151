@@ -96,14 +96,39 @@ code: '08P01'
   ⇒ 連線被打斷；客戶端等到 timeout 才放棄 ⇒ 看起來像 30 秒 ✗）。
 - 這也說明 astra6 §1 的「索引／`kind_tokens`＋GIN」**不是**這個現象的解 ✗。
 
-### 修法（下一步，建議）
-1. **改用單一陣列參數綁定** ✓✓：`post_id = ANY(?::bigint[])`（app 已有先例：行政區 closure 就是這樣傳 ✓）
-   ⇒ 一個參數取代上萬個佔位符 ✓，一次解決上限問題 ✓。
-2. 或**分批（chunk）** 查詢 ✓：以 `PG_MAX_BIND_PARAMS`（pgSchema.js 已有常數 ✓）為上限切段 ✓，
-   但陣列綁定更簡單且更快 ✓。
-3. 受影響的 loader（皆為 `IN (${ids.map(() => "?")})` 形式 ✗，需逐一確認）：
-   `loadListingPrepMap`／`loadListingExtras`／`loadGroupIds`／`loadPeerRows`（`decorationData.js`）✓。
-4. 修完後：**canary 就是回歸 gate** ✓（`districts: []` 全表案例已在 canary 內 ✓，CI 會紅燈 ✓）。
+### ✦ 更正（同一日、實測後）：§1 的索引工作**是必要的** —— 我上一段「不需要」的推論是錯的 ✗
+修掉 `08P01`（見上）之後，**同一個 canary 全表案例**的錯誤變成：
+
+```
+error: 'canceling statement due to statement timeout'
+code: '57014'
+  async searchListingsNodePgInner (src/listingSearchNodePg.js:207)   ← 候選 SELECT
+```
+
+⇒ **真正的 30 秒 = 候選 SELECT 的 statement timeout（57014），而且只在「大候選集合」發生** ✓✓。
+先前的探針之所以只量到 0.4–1.0 秒，是因為它傳了 `districts: [西屯區]`（候選 **6,625** ✓），
+而 canary 是 `districts: []`（候選 **~36k** ✗）⇒ **不是同一個查詢** ✗✗。這是我上一段的推論錯誤 ✓，
+在此更正：**astra6 §1（候選查詢的可索引性）確實必要** ✓；§3 的效能目標也必須以「全表候選」為最壞情況 ✓。
+
+### 修正一：`08P01`（已完成 ✓）
+`src/repository/decorationData.js` 新增成對 helper：
+
+```js
+// PG 的擴充協定以 int16 表示參數個數/格式 ⇒ 單一 statement 上限 32,767。
+// IN ($1,$2,…) 傳上萬 id ⇒ 08P01（並打斷連線）。
+function idFilter(column, ids, driver, offset = 0) {
+  if (driver === "postgres") return { sql: `${column} = ANY(?::bigint[])`, params: [ids] };
+  return { sql: `${column} IN (${inList(ids, driver, offset)})`, params: ids };
+}
+```
+套用到 `loadGroupIds`／`loadPeerRows`／`loadListingPrepMap`／`loadListingExtras` ✓（SQLite 路徑完全不變 ✓）。
+驗證：本地 15/15 通過 ✓；容器內 canary 的錯誤由 `08P01` 變為 `57014` ✓（＝上限問題已解 ✓）。
+
+### 待辦（下一步）
+1. 量「全表候選」候選 SELECT：`EXPLAIN (VERBOSE)` ＋ 實際 `SHOW statement_timeout`（釐清 30 秒是**伺服器端**設定）、
+   並找出逾時的確切來源（規劃／掃描／投影 ✓）。
+2. 之後才動手做 §1 的索引／`kind_tokens`（以本次量測為依據 ✓），並以 canary 作為回歸 gate ✓。
+
 
 ### 附註（憑證）
 容器實測環境只有 `PG_URL`（整串連線字串）＋ `DB_DRIVER=postgres`，**沒有** `PGHOST` 等分散變數 ✓
