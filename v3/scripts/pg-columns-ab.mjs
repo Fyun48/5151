@@ -102,8 +102,15 @@ try {
   // 其餘組裝（`SELECT … FROM listings ${built.where} ORDER BY post_id` ✓）與正式路徑逐字相同 ✓。
   const districtNames = [process.env.DISTRICT || "西屯區"];
   const districtIds = await districtClosureIds(exec, { districtNames });
+  // 受測語句**必須真的回資料** ✓（§3k 教訓：`rows: 0` ⇒ 百分比只是雜訊 ✗）。
+  // 鍵集改由 **PG 自身**取得 ✓ —— 不可沿用 SQLite 風味的 context 鍵（與鏡射列對不上 ⇒ 0 列 ✗）。
+  const keyRows = await drv.query(
+    "SELECT DISTINCT search_key FROM listings WHERE COALESCE(search_key, '') <> '' LIMIT 20",
+  );
+  const searchKeys = keyRows.rows.map((row) => row.search_key).filter(Boolean);
+  console.log(`COLAB-KEYS ${JSON.stringify({ count: searchKeys.length })}`);
   const built = buildListListingsClauses({
-    filter: "all", districts: [], districtIds,
+    filter: "all", districts: [], districtIds, searchKeys,
     settings: {}, uid: 0, voteUid: 0, context,
   });
   console.log(`COLAB-WHERE ${JSON.stringify({ where: String(built.where).slice(0, 120), params: built.params.length })}`);
@@ -120,6 +127,15 @@ try {
   }
   for (const label of Object.keys(runs)) {
     const list = runs[label];
+    if (!list[0].endToEnd.rows) {
+      // ✗ 退化量測必須顯性標記 ✓：診斷步驟是 continue-on-error ⇒ 非零碼不會讓 job 變紅 ✓，
+      // 但會在日誌留下明確的「量測無效」訊號 ✓，避免雜訊被誤讀成 43→23 的收益 ✗。
+      console.log(`COLAB-INVALID ${JSON.stringify({
+        label, rows: 0,
+        note: "受測查詢沒回任何資料 ⇒ 本次量測無效，不可當成欄位寬度的差異",
+      })}`);
+      process.exitCode = 1;
+    }
     const wall = list.map((r) => r.endToEnd.wallMs).sort((a, b) => a - b);
     console.log(`COLAB-SUMMARY ${JSON.stringify({
       label, runs: list.length,
