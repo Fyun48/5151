@@ -26,8 +26,10 @@ export function districtKeyLists(names) {
  * SQLite 用 instr/substr；PostgreSQL 用 split_part（`city|district|`）。
  */
 export function districtKeyPrefixExpression(dialect = "sqlite") {
+  // 注意：SQLite 版本的 prefix 是 `cityId|districtId`（**不帶尾端 `|`**，與 known 的 key 同格式），
+  // 所以 PG 版也必須完全相同，否則 IN/NOT IN 比對不到（實測踩過）。
   if (String(dialect) === "pg") {
-    return `(split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2) || '|')`;
+    return `(split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2))`;
   }
   return prefix;
 }
