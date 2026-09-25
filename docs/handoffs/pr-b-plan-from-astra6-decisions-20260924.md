@@ -73,7 +73,79 @@
   tar-format 備份的完整性、回退不得「人工清除 WAL」。
 - 先備 30 分鐘低流量窗口（實際停機以演練為準）；先處理 standby 並確認追上，再處理 primary；不可同時重啟兩台。
 
-## C. 目前狀態
+## D. B3 實作規格（已讀過程式接縫，2026-09-24）
+
+### D1. 為什麼不能用「複製一份後處理鏈」
+
+`listListings`（`db.js`）目前是「SQLite 取候選 → 一串 Node 後處理 → 排序／分頁／計數」的單一長函式，
+後處理鏈（`db.js:6460` 起）依賴大量閉包變數：`uid`／`voteUid`／`filter`／`kind`／`sources`／`settings`／
+`districtSet`／`sort`／`listingInMemberScope`／`queryDetails`／`markStage`。
+若在新路徑複製一份，之後任何修正都會分岔 ⇒ **必須先抽成共用函式**。
+
+### D2. 要抽出的三段（行為保持不變，先用完整套件驗證）
+
+| 抽出物 | 內容 | 驗證 |
+|---|---|---|
+| `buildListClauses(args, deps)` | 現有 clauses 建構（`searchWhere`／可見性／行政區／價格上限／filter 分支／q 等）| 與改動前 SQL 文字一致（可加臨時斷言比對）|
+| `listPostProcess(raw, ctx)` | `loadFlagMap`／`overlayRowsPersonal` → filter 分支（`watched`／`offline`／`suspected`／其餘 `applyListingFilter`）→ `attachSameHouseRoles` → `listingMatchesListFilter` → `keepSelfListingForViewer` → 顯示篩選（含 `skipWholeFloor`）→ 行政區集合 → `matchesHousingKind` → `matchesListingSources` → fit 分數 | 既有測試全綠（特別是同屋源、個人旗標、顯示篩選相關）|
+| `listSortPaginate(rows, ctx)` | 排序（`newest`／價格／`fit_desc`）＋ keyset/offset 分頁＋`totalMatched`／`hasMore`／`nextCursor` | 既有分頁測試（含 cursor 走訪）|
+
+`listListings(args)` 改為：`buildListClauses` → SQLite 取候選 → `listPostProcess` → `listSortPaginate`。
+**不得改變任何既有行為**；這一階段只有結構改變。
+
+### D3. `searchListingsNodePg`（新能力）
+
+```js
+// v3/src/listingSearchNodePg.js（新增）
+export async function searchListingsNodePg(args, { pgDriver, deps }) {
+  const clauses = buildListClauses(args, deps);            // 與 Node 路徑同一份
+  const raw = await pgQueryCandidates(pgDriver, clauses);  // 同一組條件，取「全部」候選（不得先 LIMIT）
+  const exec = (sql, params) => pgDriver.query(toPostgresSql(sql), params).then(r => r.rows);
+  const provider = await preloadDecorationProviderAsync({   // PG 版的裝飾資料來源（已存在）
+    exec, rows: raw, settings: args.settings, userId: args.userId,
+    matchVoteUserId: args.matchVoteUserId, sameHouse: args.sameHouse,
+  });
+  const flagMap = /* PG 版個人旗標（loader.personalFlagMap(voteUid)） */;
+  const rows = listPostProcess(raw, { ...ctx, flagMap, provider });   // 與 SQLite 版共用
+  return listSortPaginate(rows, ctx);
+}
+```
+
+要點（依 astra6 決策）：
+1. **同一份**業務函式；候選、peer、personal groups、split votes、個人旗標、`listing_prep`、來源啟用**全部從 PG**。
+2. provider 缺資料時 **不得** fallback 到 SQLite（寧可 503）。
+3. **不得**先 `LIMIT` 再過濾；不得用候選上限截斷 `totalMatched`。
+4. 降級開關只允許 `sql_pg` / `node_pg`（不得切換資料來源）；PG 失敗 → 503 ＋ 既有穩定錯誤碼。
+5. 效能要量：p95、RSS、event-loop lag、PG 查詢數（必要欄位＋批量 preload）。
+
+### D4. 接線（B2 與 B3 一起交付）
+
+`listingSearchAsync.js` 目前兩處仍指向 SQLite，必須同時改掉：
+
+```js
+if (!page) return searchListingsSqlite(args);                       // ← 改為 searchListingsNodePg(args, …)
+...
+if (options.sqliteFallback === true) return searchListingsSqlite(args);  // ← 僅測試用；確保正式入口不可達
+```
+
+`options.sqliteFallback` 不得有任何環境變數或正式路徑能開啟；測試專用選項要在型別／註解上寫明。
+
+### D5. 這一階段不做的事
+
+- 不動投影欄位（那是 B6）。
+- 不動 SQL builder 的能力範圍（`sql_pg` 仍只服務已證明等價者）。
+- 不做配對邊的傳遞合併。
+- 不引入角色快取（astra6：第一版不值得）。
+
+### D6. 風險與檢查點
+
+| 風險 | 檢查點 |
+|---|---|
+| 抽出後處理鏈造成行為改變 | 抽完先跑完整套件（預期與 `1da20f5` 相同：僅 1 個已證明環境性失敗）|
+| PG 候選查詢效能 | 量 p95 與 PG 查詢數；必要欄位與批量 preload；必要時分批但保留完整配對上下文 |
+| 新路徑與舊路徑分岔 | 兩者共用同一份 `listPostProcess`／`listSortPaginate`；不允許複製 |
+| 誤把測試用 SQLite 選項當逃生門 | grep 全 repo 確認 `sqliteFallback` 只出現在測試與註解 |
+
 
 - 已完成：B1（PG 事實）；B2/B3 尚未開始（本計畫的第一步實作目標）。
 - 先前已完成且不受影響：投影完整性歸零、`kind`／`q`／`sources`／`areaMax`／`wholeFloorOnly` 下推（各自等價性證據）、
