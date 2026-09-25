@@ -267,8 +267,34 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 
 ⇒ 最佳化目標應是 **`prepare_ms` 與 `relations_ms`**（而非只盯 SQL ✗）；`sql_ms` 只佔 5–10% ✓。
 
-### 待辦
-1. B4：固定 `asOf` ＋ 明確候選順序（`REPEATABLE READ` 不固定 JS 現在時間）。
+## 十三、查詢數超標的組成與**等價**削減計畫（本輪定位，尚未實作）
+
+### 機制（已讀程式碼確認）
+`createDecorationDataLoader` 的 memo 是 **以整個 id 集合為 key** ✗：
+```js
+const keyOf = (ids) => [...new Set(ids.map(normalizeId).filter(Boolean))].sort((a,b) => a-b).join(",");
+memo(cache.prep, keyOf(ids), () => loadListingPrepMap(exec, ids, driver));   // 同一個 loader、不同集合 ⇒ 再查一次
+```
+⇒ 「候選集合」與「頁面集合」的 key 不同 ✗ ⇒ `prep`／`extras`／`groupIds` 各查 **2 次** ✗
+（＝本輪 preload 分層新增的成本 ✓：省下 peer 展開，但多吃 3 筆查詢 ✓）。
+`groupMemberRows(groupId)` 則是**每個 group 一筆** ✗（頁面 ≤50 列 ⇒ 最多 50 筆 ✗）。
+
+### 實測組成（baseline ≈ 19 筆）✓
+context 6（crawlSources／settings／user_settings／users／crawl_covers／distinct search_key ✗）
+＋ closure 2 ＋ 候選 1 ＋ flags 1 ＋ personalIndex 1 ＋ splitPairs 1 ＋ peers(兩跳) 2
+＋ groupIds 2 ＋ groupMembers n ＋ prep 2 ＋ extras 2 ＋ routeCache 1 ＋ mrtCache 1 ＋ routeJobs 1
+＋ 頁面列 1 ⇒ 約 19 ✓（`q=電梯` 29 ⇒ 多出 10 筆，待查 ✗）。
+
+### 等價削減（**不改變任何語意** ✓，astra §4.3「查詢數：一般 ≤12、通勤 ≤16」）
+1. **memo 改成以 id 為單位** ✓（保留 per-id row map，只對「缺少的 id」發查詢 ✓）⇒
+   `prep`／`extras`／`groupIds` 由 2 次降為 1 次 ✓，且集合重疊時天然不重查 ✓。
+2. **`groupMemberRows` 批次化** ✓：一次 `= ANY(?)` 查多個 group ✓（同一套陣列綁定 ✓）。
+3. **context 合併** ✗（6 → 2～3）：可把 `settings`／`crawlSources` 併為一次、`users`／`user_settings` 併為一次 ✓；
+   若要更進一步需評估快取（跨請求）⇒ 需 astra 同意 ✗，因為那會影響「設定變更的可見延遲」。
+4. `q=電梯` 多出的 10 筆需定位（疑似 `searchWhere` 的 `expandSearchKeys`／chunked 或額外的 prep 集合 ✗）。
+
+三項完成後才可能達到 ≤12 ✓；在此之前 **不宣稱**效能 gate 通過 ✓。
+
 2. 受控副本上的 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)`（見 §11 的兩個候選熱點）。
 3. 補四個 loader 的大清單測試（>32,767、>65,535）＋ 同 fixture 雙向 parity。
 4. `prepare`／`relations` 的等價優化（不縮小候選集合、不改變角色／總數／排序語意）＋ 查詢數降到門檻內。
