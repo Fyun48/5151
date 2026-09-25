@@ -6504,6 +6504,48 @@ export function buildListListingsClauses({
   return { clauses, params, where, districtNames, districtSet, requestedDistricts };
 }
 
+/**
+ * 搜尋路徑的尾段：排序 → 計數 → 分頁 → hydrate → 裝飾。
+ *
+ * `hydrate(pageIds)` 可注入：SQLite 版預設走本模組的 `db`；PG 版傳入 PG 的取列函式，
+ * 這樣兩條路徑共用「排序／計數／分頁／裝飾」語意，只有取列來源不同。
+ */
+export function pageListListingsRows(rows, {
+  sort, filter, settings, limit = 500, offset = 0,
+  uid = 0, voteUid = 0, sameHouse = true, queryDetails = {},
+  hydrate = null, markStage = () => {},
+} = {}) {
+  rows = sortListingsRows(rows, sort, { filter, settings });
+  markStage("sort_ms");
+
+  const totalMatched = rows.length;
+  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+  const start = Math.max(0, Number(offset) || 0);
+  const page = rows.slice(start, start + pageSize);
+  const pageIds = page.map(row => row.post_id);
+  const fullRows = page.length
+    ? (hydrate
+      ? hydrate(pageIds)
+      : db.prepare(`SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`).all(...pageIds))
+    : [];
+  const fullById = new Map(fullRows.map(row => [Number(row.post_id), row]));
+  // A separate importer may remove a row between the candidate and page reads.
+  const listings = page.filter(row => fullById.has(Number(row.post_id))).map((row) => {
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
+    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  });
+  markStage("hydrate_ms");
+  return {
+    listings,
+    totalMatched,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+    queryVersion: 2,
+    queryDetails,
+  };
+}
+
 export function listListings({
   filter = "all",
   kind = "",
@@ -6540,32 +6582,9 @@ export function listListings({
   let rows = buildListListingsRows(raw, {
     filter, kind, sources, sort, uid, voteUid, settings, districtSet, markStage,
   });
-  rows = sortListingsRows(rows, sort, { filter, settings });
-  markStage("sort_ms");
-
-  const totalMatched = rows.length;
-  const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
-  const start = Math.max(0, Number(offset) || 0);
-  const page = rows.slice(start, start + pageSize);
-  const fullRows = page.length ? db.prepare(
-    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
-  ).all(...page.map(row => row.post_id)) : [];
-  const fullById = new Map(fullRows.map(row => [Number(row.post_id), row]));
-  // A separate importer may remove a row between the candidate and page reads.
-  const listings = page.filter(row => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
-    const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+  return pageListListingsRows(rows, {
+    sort, filter, settings, limit, offset, uid, voteUid, sameHouse, queryDetails, markStage,
   });
-  markStage("hydrate_ms");
-  return {
-    listings,
-    totalMatched,
-    hasMore: start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
-    queryVersion: 2,
-    queryDetails,
-  };
 }
 
 // Dependency bundle for the shared SQL-first builder (listingSearchSql.js). The
