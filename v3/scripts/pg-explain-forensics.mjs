@@ -29,6 +29,9 @@ const ABILITIES = [
   { label: "sources=591", args: { sources: "591" } },
   { label: "areaMax=30", args: { areaMax: 30 } },
   { label: "wholeFloorOnly=1", args: { wholeFloorOnly: 1 } },
+  // ★ 最壞情況：無行政區（canary 在此觸發 57014）。districtNames 留空 ⇒ 由 app 自己的
+  //   districtClosureIds 決定 closure（若它回傳巨量 id，就是候選查詢變慢的真正來源）。
+  { label: "full-table (districts=[])", args: {}, districtNames: [] },
 ];
 
 function classify(err) {
@@ -63,9 +66,12 @@ for (const item of ABILITIES) {
     const context = await buildListRequestContextFromPg(runExec);
     // ⚠️ 必須像 app 一樣先算好 closure 再以 districtIds 傳入（PG 走 `= ANY(?::bigint[])`）；
     // 否則會掉進 SQLite 專用的 recursive CTE 分支 ⇒ 42P19（實測踩過），量到的就不是真實 SQL。
-    const districtIds = await districtClosureIds(runExec, { districtNames: [district], userId: 0 });
+    const districtNames = item.districtNames ?? [district];
+    const districtIds = await districtClosureIds(runExec, { districtNames, userId: 0 });
+    rec.districtNames = districtNames;
+    rec.districtIds = districtIds.length;
     const built = buildListListingsClauses({
-      filter: "all", districts: [district], districtIds, settings: {}, uid: 0, voteUid: 0, context, ...item.args,
+      filter: "all", districts: districtNames, districtIds, settings: {}, uid: 0, voteUid: 0, context, ...item.args,
     });
     const select = `SELECT ${deps.candidateColumns} FROM listings ${built.where}`;
     rec.sqlChars = select.length;
