@@ -271,6 +271,20 @@ COLAB-FIXTURE {"requested":500,"present":500} ✓     COLAB-KEYS {"count":20} �
 - ⇒ **§6.5 取捨的依據** ✓：窄欄位的**確定收益＝payload 減半** ✓；若要把窄欄位留在正式路徑 ✓，
   仍必須先有**完整 parity**（集合／`totalMatched`／順序／角色／卡片狀態完全相同 ✓）⇒ 這是 §6.4 的工作 ✓。
 
+### 3o. parity 實作前的 API 確認（唯讀 ✓）——並發現**範圍比原估大** ✗
+1. **`buildListRequestContextFromPg()` 回傳**（`db.js:4146` ✓）：
+   `{ crawlSources, isolation, searchKeys, degraded, asOf }` ✓
+   - ⇒ `searchKeys` ＝ **展開後的 stored keys** ✓✓ ⇒ **可直接當兩邊 fixture 的 `search_key`** ✓（不必猜 URL 格式 ✓）
+   - ⇒ **B4 的 `asOf` 已存在** ✓（`new Date().toISOString()` ✓，註解自述「整個請求共用同一個時間戳」✓）
+     ⇒ B4 待辦是**把它真正串到相對時間／primary 比較／排序** ✗（**不是**新增欄位 ✓）
+2. **`currentSearchKeys()`**（`db.js:4046` ✓）回傳的是 **URL 清單** ✗（user ＋ global ＋ `crawl_covers` ✓、trim／dedupe ✓），**不是 key** ✗
+3. ✗ **新發現（影響實作範圍）**：SQLite 的鍵集來自**它自己 DB 的 `settings`／`user_settings`**
+   ✗（**不是** `args.settings` ✗）⇒ 要兩引擎集合相等 ✓ ⇒ **必須兩邊都種相同的 settings 來源** ✓
+   （PG 側的 settings 來自 `pg-integration-setup` 的鏡射列 ✓；SQLite 側來本機 fixture ✓）
+   ⇒ **parity 測試的實作要點** ✓：兩邊各補種相同的 `settings`／`user_settings`（含同一組 `searchUrls` ✓），
+     或以**不依賴 settings 的 args** 建立可達集合 ✓ —— 明示為開放項 ✗，不可略過 ✓。
+
+
 
 
 
