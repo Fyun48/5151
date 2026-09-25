@@ -40,6 +40,12 @@ KEYS-DIFF    {"onlyPg":22,"onlySqlite":0,"same":6}
 - 腳本若 import bare specifier（如 `pg`），**必須** `REMOTE_DIR=/app/tmpkk`：ESM 由「匯入檔所在
   目錄」向上找 `node_modules`，且**不吃 `NODE_PATH`** ⇒ 放 `/tmp/kk` 會找不到 `/app/node_modules/pg`。
 - `toPostgresSql` **不在** `dbDriverPostgres.js` ⇒ builder 用 `?` 佔位符時，於腳本本地轉 `$n`。
+- **本機長時間套件**：用工具的前景指令跑長套件時，輸出常整批不落地（逾時被中斷），
+  用 `nohup ... &` 背景跑也**會被下一個指令關閉終端而殺掉**（實測 `pgrep` 已無程序）。
+  正解：`setsid nohup node --test ... > /tmp/w1.out 2>&1 < /dev/null & disown`
+  ⇒ 完全脫離終端、可存活，之後用**短指令**（`pgrep -cf 'node --test'`、`tail`）追蹤。
+  本機寬套件（list-sql-first＋provider＋PG context＋context＋listings repository＋async hot path
+  ＋public-sql-first-parity）共 **24/24 通過**（fail 0，約 70 秒）。
 
 ## 待辦（後續）
 - `onlyPg` 的逐項來源分解（users／covers 各貢獻幾個）—— 目前僅以總數與表列數解釋。
