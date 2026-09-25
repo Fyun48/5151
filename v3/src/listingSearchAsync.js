@@ -26,6 +26,7 @@ import {
   listListingsFitSqlFirst,
   listListingsSqlFirst,
   listingSearchBuildContext,
+  LIST_CANDIDATE_COLUMNS_NARROW,
   preloadDecorationProviderAsync,
 } from "./db.js";
 import { searchListingsNodePg } from "./listingSearchNodePg.js";
@@ -95,9 +96,16 @@ export async function searchListingsAsync(args = {}, options = {}) {
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     // 一律走 PG-fed Node：不先跑 SQL-first（省掉一次註定要丟棄的查詢；也不建立 repository）。
+    // 候選欄位：**只**在這條列表路徑用實測的窄版（43 → 23 欄 ✓，
+    // 見 `test/listing-search-pipeline-read-audit.test.js`）；呼叫端有注入 deps 時一律尊重 ✗
+    //（測試／診斷不受影響 ✓），統計／明細／爬蟲各自用自己的 context ✓。
+    const deps = options.deps || {
+      ...listingSearchBuildContext(),
+      candidateColumns: LIST_CANDIDATE_COLUMNS_NARROW,
+    };
     return await searchListingsNodePg(args, {
       pgDriver,
-      deps: options.deps || listingSearchBuildContext(),
+      deps,
       decorationLoader: options.decorationLoader,
     });
   } catch (error) {

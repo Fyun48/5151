@@ -6528,6 +6528,29 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
   last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
 /**
+ * **列表路徑專用**的候選欄位（窄版 ✓）。
+ *
+ * 為什麼存在：實測（`v3/test/listing-search-pipeline-read-audit.test.js` ✓）用 Proxy 量測真實管線
+ * （`buildListListingsRows` ＋ `paginateListListingsRows` ✓）對候選列的讀取 ⇒ 非 `fit_desc` 模式
+ * 只需下列 **23 欄** ✓（`suspected` 唯一額外讀取是 `match_level` ✓），其餘 20 欄從未被讀 ✗。
+ * 動機是實測最大的成本中心：候選查詢抓 43 個寬欄位 ⇒ `Index Scan listings` 吃 33,541 buffers
+ *（≈268 MB、約每列 5 buffers ✗，見 handoff §逐節點歸因 ✓）。
+ *
+ * 使用範圍**刻意最小** ✓：只給 PostgreSQL 列表路徑（`listingSearchAsync.js` 的 `searchListingsNodePg`
+ * 呼叫 ✓）覆寫 `candidateColumns` ✓。**不動** `listingStatsBuildContext`（統計 ✓）、
+ * **不動** `listingDetailAsync` / `crawlerReads`（明細／爬蟲另有需求 ✓）、
+ * **不動** SQLite 的 `listListings`（非本次量測對象 ✓）。
+ *
+ * ⚠️ `fit_desc`（`applyCachedCoords` 複製整列 ✗）目前讀不到全部欄位也沒問題（複製只是變小 ✓），
+ * 但若未來在候選階段新增「需要被移除欄位」的邏輯，這個清單必須同步更新 ✗（由上述審計測試的護欄擋 ✓）。
+ */
+export const LIST_CANDIDATE_COLUMNS_NARROW = `post_id, source, price, price_num,
+  title, address, area_name, floor_name, kind_name, tags,
+  lat, lng, geo_source, location_class, match_post_id, match_level,
+  match_verdict, offline, offline_confirmed, hidden, hidden_at,
+  refresh_time, contact_uid`;
+
+/**
  * 搜尋路徑的同步後處理：與 stats 的 `buildListingStatsRows` 同一個精神——
  * 純粹作用在「已取回的候選列」上，driver-agnostic，PostgreSQL 路徑可逐字重用。
  *
