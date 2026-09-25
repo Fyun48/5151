@@ -154,6 +154,28 @@
 - repo 內路徑 ⇒ `import "../src/db.js"` 正確解析 ✓（**不會**再讀到舊部署映像 ✗）
 - `continue-on-error: true` ✓ ⇒ **診斷不當 gate** ✓（不影響通過條件 ✓），數字作為 PR 證據 ✓
 
+### 3j. A/B 診斷首次執行：**我的腳本 SQL 組裝錯誤** ✗（非產品問題 ✓）
+`51a8e4a` 的 CI ✓：兩 job 仍**全綠** ✓（PG `115/114/0/1` ✓、一般 `2611/2585/0/26` ✓）；
+`COLAB-WHERE` 有印出 ✓ 但 **`COLAB-SUMMARY` 缺席** ✗ ⇒ 步驟在印出 WHERE 之後失敗 ✓（`continue-on-error` ✓ 故 job 不受影響 ✓）。
+
+**錯誤（精確）** ✓：
+```
+error: recursive reference to query "district_related" must not appear within its non-recursive term
+code: '42P19'   position: 3462
+at async measure (v3/scripts/pg-columns-ab.mjs:69)
+```
+- **根因** ✗：`built.where` 內含 **`WITH RECURSIVE` 的 district closure** ✓，而我把語句拼成
+  `SELECT ${columns} FROM listings ${where} ORDER BY post_id` ✗ ⇒ `WITH` 子句被塞到 `FROM` 之後 ✗
+  ⇒ 語法結構錯誤 ⇒ PG 回 42P19 ✓。
+- **明確界線** ✓：這是**診斷腳本**的錯 ✗，**不是產品路徑的錯** ✓ —— 同一顆 PG 上
+  `115/114/0 fail` ✓ 全過 ✓ ⇒ 應用自身的查詢沒問題 ✓。
+- **修法（下一批機械執行 ✓）**：**不要自行包 `SELECT … FROM listings ${where}`** ✗。
+  正確做法是把 builder 產生的**完整語句**（含其 `WITH RECURSIVE` 前綴 ✓）整段交給
+  `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)` ✓ —— 即先取得完整 statement（或其
+  SELECT 清單注入點 ✓），或改用**正式路徑**跑查詢、再對**同一段語句**取 EXPLAIN ✓；
+  亦可參考既有 `pg-explain-forensics.mjs` 的合法組裝方式 ✓（它先前產出過有效計畫 ✓）。
+
+
 
 
 
