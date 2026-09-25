@@ -468,6 +468,28 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 - 附帶訊息 ✓：測試日誌顯示 `listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first` ✓
   ⇒ 投影表**已在對齊**、guest 路徑已走 SQL-first ✓ ⇒ 縮欄位可望直接接到既有機制 ✓。
 
+### 模式矩陣結果 ✓ —— 最終欄位集（`READS`＝被讀欄位數／`SPREAD`＝是否整列展開）
+| 模式 | READS | SPREAD |
+|---|---|---|
+| `filter:"all"` / `price_asc` | 32 | 0 ✓ |
+| `filter:"watched"` | **12** ✓ | 0 ✓ |
+| `filter:"offline"` | 14 ✓ | 0 ✓ |
+| `filter:"suspected"` | 15 ✓ | 0 ✓ |
+| `filter:"all"` / `refresh_desc` ＋kind＋sources | 30 ✓ | 0 ✓ |
+| **`filter:"all"` / `fit_desc`** | **54** ✗ | **1** ✗ |
+
+- ⇒ **非 `fit_desc` 模式：候選欄位 43 → 23** ✓（22 ＋ `match_level` ✓——`suspected` 唯一額外讀取 ✓）
+  ⇒ **可移 20 欄** ✓ ⇒ 這是縮減 SELECT 的**最終依據** ✓。
+- ⇒ **`fit_desc` 是唯一例外** ✗：`applyCachedCoords` **複製整列** ✗（`db.js:6322` 上方註解自述
+  "cloning wide rows" ✓）⇒ 該模式讀滿 43 欄 ✗ ⇒ **縮 SELECT 對它收益有限** ✗
+  ⇒ 需另外把 clone 改成就地／延後（後續工作 ✓，**不可略過** ✗）。
+- ⇒ 護欄已就位 ✓：`PIPE-SPREAD-MODES` 斷言「整列展開只允許發生在 `fit_desc`」✓
+  ⇒ 若哪天擴散到別的排序，測試會紅 ✗（避免縮欄位後才發現白做 ✓）。
+- ⇒ `watched`(12)／`offline`(14)／`suspected`(15) 讀得**更少** ✓ ⇒ 這些分支走更短路徑
+  （跳過 `applyListingFilter`／display filters ✓）⇒ 佐證「分層成本」模型 ✓。
+- 測試狀態：`exit=0`／`pass 1`／`fail 0` ✓。
+
+
 
 
 

@@ -96,17 +96,40 @@ function auditingRows(rows, reads, spreads) {
 test("審計：候選階段（篩選＋分頁）對候選列實際讀取哪些欄位", () => {
   const reads = new Set();
   const spreads = [];
+  const perMode = [];
   const record = { calls: [] };
   const provider = spyProvider(record);
 
-  const filtered = buildListListingsRows(auditingRows(ROWS, reads, spreads), {
-    filter: "all", kind: "", sources: "", sort: "price_asc",
-    uid: 0, voteUid: 0, settings: { areaMax: 30 }, districtSet: new Set(), provider, flagMap: new Map(),
-  });
-
-  const paged = paginateListListingsRows(auditingRows(filtered, reads, spreads), {
-    sort: "price_asc", filter: "all", settings: {}, limit: 1, offset: 0,
-  });
+  // 模式矩陣：每個 filter／sort 走的是**不同的分支** ⇒ 必須各量一次才知道最終欄位集 ✓
+  // （已知限制：只用單一模式量會低估 ✗。）
+  const MODES = [
+    { filter: "all", sort: "price_asc" },
+    { filter: "watched", sort: "price_asc" },
+    { filter: "offline", sort: "price_asc" },
+    { filter: "suspected", sort: "price_asc" },
+    { filter: "all", sort: "fit_desc" },
+    { filter: "all", sort: "refresh_desc", kind: "整層住家", sources: "591" },
+  ];
+  for (const mode of MODES) {
+    const modeReads = new Set();
+    const modeSpreads = [];
+    const filtered = buildListListingsRows(auditingRows(ROWS, modeReads, modeSpreads), {
+      filter: mode.filter, kind: mode.kind || "", sources: mode.sources ?? "", sort: mode.sort,
+      uid: 0, voteUid: 0, settings: { areaMax: 30 }, districtSet: new Set(), provider, flagMap: new Map(),
+    });
+    paginateListListingsRows(auditingRows(filtered, modeReads, modeSpreads), {
+      sort: mode.sort, filter: mode.filter, settings: {}, limit: 1, offset: 0,
+    });
+    for (const key of modeReads) reads.add(key);
+    spreads.push(...modeSpreads);
+    perMode.push({ mode, modeReads, spreadCount: modeSpreads.length });
+    console.log(`PIPE-MODE ${JSON.stringify(mode)} READS=${modeReads.size} SPREAD=${modeSpreads.length}`);
+  }
+  const base = perMode[0].modeReads;
+  for (const entry of perMode.slice(1)) {
+    const extra = [...entry.modeReads].filter((key) => !base.has(key)).sort();
+    console.log(`PIPE-MODE-EXTRA ${JSON.stringify(entry.mode)} ${JSON.stringify(extra)}`);
+  }
 
   const all = [...reads].sort();
   const candidate = candidateColumns();
@@ -132,6 +155,14 @@ test("審計：候選階段（篩選＋分頁）對候選列實際讀取哪些�
 
   assert.ok(all.length > 0, "審計應量到至少一個欄位讀取");
   assert.deepEqual(missing, [], `候選階段讀到未登錄的欄位：${missing.join(", ")}`);
-  assert.equal(spreads.length, 0, "管線對候選列做了整列展開（ownKeys）⇒ 縮欄位在此層無效 ✗");
+  // 逐模式驗證「是否整列展開」✓：非 `fit_desc` 一律不得展開 ✓；
+  // `fit_desc` 已知會經 `applyCachedCoords` 複製整列 ✗（`db.js:6322` 上方註解即言 "cloning wide rows" ✓）
+  // ⇒ 縮減 SELECT 對該模式收益有限 ⇒ 需另外把 clone 改成就地或延後（後續工作 ✓，不可略過 ✗）。
+  const spreadModes = perMode.filter((entry) => entry.spreadCount > 0).map((entry) => entry.mode);
+  console.log(`PIPE-SPREAD-MODES ${JSON.stringify(spreadModes)}`);
+  const nonFitSpread = spreadModes.filter((mode) => mode.sort !== "fit_desc");
+  assert.deepEqual(nonFitSpread, [], `非 fit_desc 模式不得整列展開：${JSON.stringify(nonFitSpread)}`);
+  assert.deepEqual(spreadModes, [{ filter: "all", sort: "fit_desc" }],
+    "整列展開應只發生在 fit_desc（若變動請重新評估縮欄位的收益）");
 });
 
