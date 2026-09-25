@@ -121,11 +121,13 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   //（server.js:3759），所以這裡只做集合比對，不會繞過權限。
   const sourceKeys = (Array.isArray(args.sources) ? args.sources : String(args.sources || "").split(/[,|]/))
     .map((item) => String(item || "").trim()).filter(Boolean);
-  // ⚠️ kind 的 SQL 下推（F3）在 2026-09-24 被實測推翻：帶 kind 的 count 查詢在生產資料上需要
-  // **>30 秒**並被連線逾時中止（`kind=""` 只要 388ms；whole／apartment／building 三種都是 30,0xx ms）。
-  // 原因是 `p.kind_keys LIKE '%,key,%'` 無法使用索引。F2 已移除回退 ⇒ 若維持下推，
-  // 線上帶分類晶片的搜尋會變成 503。因此**暫時關回外框外**，改走 PG-fed Node 路徑
-  // （實測結果正確、約 1.3 秒）。待 B6 提供可索引的 kind 表達（例如投影布林欄位）後再開放。
+  // ⚠️ 2026-09-24 隔離實測（生產資料、每個案例全新連線）：以下能力雖然「語意等價」，但在現行
+  // 查詢結構下會讓 plan 崩掉、count 查詢需 **30,0xx ms** 並被逾時中止：
+  //   kind（已關）／sources／areaMax／wholeFloorOnly；baseline 只要 989ms、q 只要 878ms。
+  // F2 已移除回退 ⇒ 若維持開啟，會員帶這些設定或晶片的搜尋會變成 503。
+  // 因此全部關回外框外，改走 PG-fed Node 路徑（正確、約 1.3 秒）。
+  // 待 B6 提供可索引的表達（投影布林欄位／索引）後，再以「等價性 ＋ 效能」兩項一起驗收才開放。
+  if (sourceKeys.length) return outOfEnvelope("sources");
   if (kind) return outOfEnvelope("kind");
   if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
 
@@ -133,9 +135,13 @@ export function buildListingSearchSql(args = {}, deps = {}) {
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   const settings = settingsOverride || deps.getSettings(uid);
   // F3 逐項補齊（PR-B）：areaMax 已下推（語意見 floors.js:412-415：area 為 NULL 時視為通過）。
+  // ⚠️ 2026-09-24 隔離實測：areaMax／wholeFloorOnly 在現行查詢結構下 count 需 30,0xx ms（逾時）；
+  //   與 kind／sources 一起關回外框外（改走 PG-fed Node）。見上方註解。
   if (
     Number(settings.priceMin) > 0 || Number(settings.priceMax) > 0 ||
     Number(settings.minBuildingFloors) > 0 ||
+    Number(settings.areaMax) > 0 ||
+    settings.wholeFloorOnly === true ||
     (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
     (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
     Number(settings.commuteKm) > 0
