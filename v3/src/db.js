@@ -4056,22 +4056,33 @@ export function currentSearchKeys() {
 }
 
 /**
- * 可選資料的讀取：表不存在（42P01）時回傳空集合並把表名記進 `degraded`。
+ * 可選資料的讀取包裝：**事前**以 `to_regclass` 檢查表是否存在，缺表就回傳空集合並記錄 ✗。
  *
- * 為什麼要這樣：request context 的 `crawlSources`／`searchKeys` 是**增強**（來源偏好、搜尋鍵展開），
- * 不該因為某個部署／測試 fixture 沒有那些表就讓整個搜尋失敗 ✗；但**安全相關的 `isolation` 一律必要** ✓
- * （缺了照樣拋錯）。降級一律**記錄**在 context.degraded 與 queryDetails 裡，不得靜默 ✗。
+ * 為什麼不能「送出去再吞 42P01」✗：在交易內（單一快照路徑就是 `BEGIN READ ONLY`）一個失敗語句會把
+ * 交易標記為 aborted ⇒ 之後每個查詢都變成 `current transaction is aborted, commands ignored until end
+ * of transaction block` ✗✗（CI 實測踩過）。事前檢查完全不送失敗語句，交易保持乾淨 ✓。
+ *
+ * 只適用於**增強型**資料（crawlSources／searchKeys）；安全相關的 isolation 仍為必要 ✓。
  */
-async function optionalRows(exec, sql, params, degraded, label) {
-  try {
-    return await exec(sql, params);
-  } catch (err) {
-    if (String(err?.code) === "42P01") {
-      degraded.push(label);
-      return [];
+function safeExecFactory(exec, degraded) {
+  const exists = new Map();
+  const tableOf = (sql) => (String(sql).match(/\bFROM\s+([A-Za-z_][\w.]*)/) || [])[1] || "";
+  return async (sql, params = []) => {
+    const table = tableOf(sql);
+    if (table) {
+      if (!exists.has(table)) {
+        const rows = await exec("SELECT to_regclass(?) AS reg", [table]);
+        // 真 PG 一定回一列（reg 為名稱或 NULL）；若探測沒有回列（例如單元測試的 stub）⇒ 視為未知、
+        // 照常執行原查詢 ✓，不要因此把一個存在的表誤判成缺表 ✗。
+        exists.set(table, rows?.length ? Boolean(rows[0]?.reg) : true);
+      }
+      if (!exists.get(table)) {
+        degraded.push(table);
+        return [];
+      }
     }
-    throw err;
-  }
+    return exec(sql, params);
+  };
 }
 
 /**
@@ -4087,9 +4098,8 @@ async function optionalRows(exec, sql, params, degraded, label) {
 export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "" } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const degraded = [];
-  const row = (await optionalRows(
-    exec, `SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"], degraded, settingsTable,
-  ))[0];
+  const safe = safeExecFactory(exec, degraded);
+  const row = (await safe(`SELECT value FROM ${settingsTable} WHERE key = ?`, ["crawlSources"]))[0];
   let crawlSources = publicCrawlSources(defaultCrawlSources());
   if (row && row.value != null) {
     try {
@@ -4105,19 +4115,9 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
     ? { sql: "fixture_namespace = ?", params: [ns] }
     : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
   const searchKeys = await buildSearchKeysFromPg(
-    // 可選資料（settings／user_settings／users／crawl_covers／listings）：缺表時降級為空並記錄，
-    // 不讓搜尋整個失敗 ✓；isolation 仍必須存在（缺就拋錯 ✓）。
-    async (sql, params = []) => {
-      try {
-        return await exec(sql, params);
-      } catch (err) {
-        if (String(err?.code) === "42P01") {
-          degraded.push(String(sql).replace(/\s+/g, " ").slice(0, 60));
-          return [];
-        }
-        throw err;
-      }
-    },
+    // 可選資料（settings／user_settings／users／crawl_covers／listings）：缺表時**事前跳過**並記錄
+    // （不送失敗語句 ⇒ 交易不會被標記 aborted ✓）；isolation 仍必須存在（缺就拋錯 ✓）。
+    safe,
     settingsTable,
   );
   return {
