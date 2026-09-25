@@ -93,6 +93,35 @@ async function measure(drv, label, columns, where, params) {
 const drv = await createPostgresDriver({ env: process.env });
 try {
   const exec = async (sql, params = []) => (await drv.query(toPostgresSql(sql), params)).rows;
+
+  // CI 拋棄式 PG 內 `listings` **是空的** ✗（實測 `COLAB-KEYS count 0` ✓）⇒ A/B 必須**自建 fixture** ✓。
+  // 照 seed fixture 測試的作法自行 INSERT ✓：只帶 5 個無 DEFAULT 的 NOT NULL 欄 ＋ `offline` ✓
+  //（其餘靠 schema DEFAULT ✓）。`source_key` 用可辨識前綴 ✓ 以便收尾清理 ✓。
+  const fixtureRows = Number(process.env.FIXTURE_ROWS || 500);
+  const iso = new Date().toISOString();
+  const tuples = [];
+  const fixtureParams = [];
+  for (let i = 0; i < fixtureRows; i += 1) {
+    const base = i * 6;
+    tuples.push(`($${base + 1}, 'houseprice', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, 0)`);
+    fixtureParams.push(
+      900100000 + i,
+      `colab|${i}`,
+      `fixture 標題 ${i} ${"寬欄位代表".repeat(i % 3)}`,
+      `https://example.test/colab/${i}`,
+      iso,
+      iso,
+    );
+  }
+  await drv.query(
+    `INSERT INTO listings (post_id, source, source_key, title, url, first_seen_at, last_seen_at, offline)
+     VALUES ${tuples.join(",")} ON CONFLICT (post_id) DO NOTHING`,
+    fixtureParams,
+  );
+  const fixturePresent = await drv.query(
+    "SELECT COUNT(*)::int AS n FROM listings WHERE source_key LIKE 'colab|%'",
+  );
+  console.log(`COLAB-FIXTURE ${JSON.stringify({ requested: fixtureRows, present: fixturePresent.rows[0].n })}`);
   const context = await buildListRequestContextFromPg(exec);
   // 官方 builder（含 district closure ✓）—— 不自行拼行政區條件 ✗
   // 行政區條件必須走 **PG 路徑** ✓（照 `listingSearchNodePg.js:204`）：
@@ -149,5 +178,7 @@ try {
     })}`);
   }
 } finally {
+  // 收尾清掉自建 fixture ✓（只用可辨識前綴 ✓，不動其他資料 ✓）。
+  await drv.query("DELETE FROM listings WHERE source_key LIKE 'colab|%'").catch(() => {});
   await drv.close();
 }
