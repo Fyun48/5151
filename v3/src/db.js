@@ -3151,6 +3151,10 @@ export async function preloadDecorationProviderAsync({
   matchVoteUserId = null,
   sameHouse = true,
   driver = "postgres",
+  // 分層（astra6 §3）：`peers: false` 只載入候選階段必需的部分（personalFlagMap／personalIndex／
+  // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
+  loader: loaderIn = null,
+  peers: loadPeers = true,
 } = {}) {
   if (typeof exec !== "function") throw new Error("preloadDecorationProviderAsync requires exec");
   const list = Array.isArray(rows) ? rows : [];
@@ -3159,22 +3163,30 @@ export async function preloadDecorationProviderAsync({
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
   if (!list.length) return preloadedDecorationProvider({ userId: voteUid });
 
-  const loader = createDecorationDataLoader({ exec, driver });
-  const pageIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
-  const onPage = new Set(pageIds);
+  // 傳入 loader 時沿用其 memo（呼叫端會在候選階段與頁面階段各呼叫一次）。
+  const loader = loaderIn || createDecorationDataLoader({ exec, driver });
+  const candidateIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
+  const onPage = new Set(candidateIds);
   const personalFlags = await loader.personalFlagMap(voteUid);
   const personalIndex = await loader.personalIndex(voteUid);
   const splitPairs = await loader.splitPairSet(voteUid);
 
   const peers = new Map();
-  const prepIds = new Set(pageIds);
-  if (sameHouse) {
-    const seeds = new Set(pageIds);
-    for (const row of list) {
-      const mid = Number(row.match_post_id) || 0;
-      if (mid) seeds.add(mid);
-      for (const pid of personalIndex.peers(row.post_id)) seeds.add(pid);
-    }
+  // 候選階段（`peers: false`）仍需要 prep／extras 涵蓋「候選本身 ＋ 其 match_post_id ＋
+  // personalIndex 的 peer id」——`attachSameHouseRoles()` 就是靠這些 id 取 extras（db.js:3353）。
+  // 這一段全是記憶體運算（O(candidates)），真正的 I/O 在下面的 2-hop fan-out。
+  const prepIds = new Set(candidateIds);
+  for (const row of list) {
+    const mid = Number(row.match_post_id) || 0;
+    if (mid) prepIds.add(mid);
+    for (const pid of personalIndex.peers(row.post_id)) prepIds.add(pid);
+  }
+  // ⚠️ peers／groupMembers 的唯一消費者 loadSameHousePeers() 只在「裝飾」路徑被呼叫
+  // （db.js:3443，於 decorateListingLite 內）⇒ 這批逐列 I/O 屬**頁面層**，可延後到分頁後
+  // 只對 paged.page 載入（astra6 §3「preload 分層」）。呼叫端以同一個 loader 呼叫兩次，
+  // loader 內有 memo ⇒ 重疊的 id 不會重查。
+  if (sameHouse && loadPeers) {
+    const seeds = new Set(prepIds);
     let frontier = [...seeds];
     for (let hop = 0; hop < 2 && frontier.length; hop += 1) {
       const fetched = await loader.peerRowsFor(frontier);
@@ -3198,10 +3210,12 @@ export async function preloadDecorationProviderAsync({
   }
 
   const groupIds = new Map();
-  for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
   const groupMembers = new Map();
-  for (const gid of new Set([...groupIds.values()].filter(Boolean))) {
-    groupMembers.set(gid, await loader.groupMemberRows(gid));
+  if (loadPeers) {
+    for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
+    for (const gid of new Set([...groupIds.values()].filter(Boolean))) {
+      groupMembers.set(gid, await loader.groupMemberRows(gid));
+    }
   }
   const prep = new Map();
   for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);

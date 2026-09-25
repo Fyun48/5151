@@ -212,7 +212,11 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   const loader = decorationLoader || createDecorationDataLoader({ exec, driver: "postgres" });
   const [flagMap, provider] = await Promise.all([
     loader.personalFlagMap(voteUid),
-    preloadDecorationProviderAsync({ exec, rows: raw, settings, userId: uid, matchVoteUserId: voteUid, sameHouse }),
+    // 候選階段：只載入候選篩選／關係判定必需的部分（peers: false ⇒ 略過頁面專用的
+    // peers 2-hop 與 groupMembers；astra6 §3 preload 分層）。
+    preloadDecorationProviderAsync({
+      exec, loader, rows: raw, settings, userId: uid, matchVoteUserId: voteUid, sameHouse, peers: false,
+    }),
   ]);
   markStage("preload_ms");
 
@@ -226,10 +230,19 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   const fullRows = paged.page.length
     ? await exec(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(", ")})`, paged.pageIds)
     : [];
+  // 頁面層：peers／groupMembers 的唯一消費者 loadSameHousePeers() 只在裝飾路徑被呼叫
+  // （db.js:3443，於 decorateListingLite 內）⇒ 只對「這一頁」載入（astra6 §3）。
+  // 沿用同一個 loader，重疊 id 由 loader 的 memo 吸收，避免重複查詢。
+  const pageProvider = paged.page.length
+    ? await preloadDecorationProviderAsync({
+      exec, loader, rows: paged.page, settings, userId: uid, matchVoteUserId: voteUid, sameHouse,
+    })
+    : provider;
+  markStage("preload_page_ms");
   const listings = decorateListListingsPage(paged.page, fullRows, {
     settings, uid, voteUid, sameHouse,
     // astra6 §0.2：PG 路徑必須一路帶著 provider，缺了就會 fallback 到 SQLite 裝飾來源 ⇒ 直接拋錯。
-    provider, requireProvider: true,
+    provider: pageProvider, requireProvider: true,
   });
   markStage("hydrate_ms");
 
