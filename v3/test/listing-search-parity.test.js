@@ -72,10 +72,54 @@ function rolesOf(result) {
 
 test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP || "尚未接通兩邊自建 fixture（見檔頭待辦）⇒ 目前只會空洞通過，故暫緩" }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const app = await import("../src/db.js");
   const pgDriver = await createPostgresDriver({ env: process.env });
+  const sqliteDb = app.sqliteHandle();
+  const SEED = 900300001;
+
+  // ✗ 關鍵前提（§3o）：SQLite 的鍵集來自**它自己 DB 的 settings**，不是 `args.settings` ✗
+  // ⇒ 兩邊必須種**同一組 `settings.searchUrls`** ✓，否則匹配列不同、集合永遠不等 ✗。
+  const URL_591 = "https://rent.591.com.tw/list?region=1&section=2%2C3&order=posttime&orderType=desc";
+  const args = { ...ARGS, settings: { searchUrls: [URL_591] } };
+  sqliteDb.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+    .run("searchUrls", JSON.stringify([URL_591]));
+  await pgDriver.query(
+    "INSERT INTO settings (key, value) VALUES ('searchUrls', $1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    [JSON.stringify([URL_591])],
+  );
+
+  // 讀回**展開後的 stored keys** ✓（`searchKeys` ✓；不必猜 URL 格式 ✓）⇒ 取第一個當 fixture 鍵 ✓
+  const pgExec = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  const pgContext = await app.buildListRequestContextFromPg(pgExec);
+  const key = (pgContext?.searchKeys || [])[0];
+  console.log(`PARITY-CONTEXT ${JSON.stringify({ pgKeys: (pgContext?.searchKeys || []).length, key })}`);
+  assert.ok(key, "必須取得一個展開後的 search_key（否則無法建立兩引擎可達 fixture）");
+
+  const iso = new Date().toISOString();
+  const seeds = [0, 1, 2].map((i) => ({
+    post_id: SEED + i, source: "591", source_key: `parity|${i}`, search_key: key,
+    title: `parity ${i}`, url: `https://example.test/parity/${i}`,
+    first_seen_at: iso, last_seen_at: iso, offline: 0,
+  }));
+  const insertSqlite = sqliteDb.prepare(
+    `INSERT OR REPLACE INTO listings
+     (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of seeds) {
+    insertSqlite.run(row.post_id, row.source, row.source_key, row.search_key, row.title, row.url,
+      row.first_seen_at, row.last_seen_at, row.offline);
+  }
+  await pgDriver.query(
+    `INSERT INTO listings (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline)
+     VALUES ${seeds.map((_, i) => `($${i * 6 + 1}, '591', $${i * 6 + 2}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6}, 0)`).join(",")}
+     ON CONFLICT (post_id) DO NOTHING`,
+    seeds.flatMap((r) => [r.post_id, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at]),
+  );
+
   try {
-    const viaPg = await searchListingsAsync({ ...ARGS }, { driver: "postgres", pgDriver });
-    const viaSqlite = await searchListingsAsync({ ...ARGS }, { driver: "sqlite" });
+    const viaPg = await searchListingsAsync({ ...args }, { driver: "postgres", pgDriver });
+    const viaSqlite = await searchListingsAsync({ ...args }, { driver: "sqlite" });
 
     console.log(`PARITY-KEYS-PG ${JSON.stringify(Object.keys(viaPg || {}))}`);
     console.log(`PARITY-KEYS-SQLITE ${JSON.stringify(Object.keys(viaSqlite || {}))}`);
@@ -93,8 +137,8 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP || "�
     // ③ same-house 角色／個人狀態 ✓
     assert.deepEqual(rolesOf(viaPg), rolesOf(viaSqlite), "same-house 角色必須一致");
     // ④ 分頁 ✓（offset 一頁）
-    const nextPg = await searchListingsAsync({ ...ARGS, offset: ARGS.limit }, { driver: "postgres", pgDriver });
-    const nextSqlite = await searchListingsAsync({ ...ARGS, offset: ARGS.limit }, { driver: "sqlite" });
+    const nextPg = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "postgres", pgDriver });
+    const nextSqlite = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "sqlite" });
     assert.deepEqual(idsOf(nextPg), idsOf(nextSqlite), "第二頁必須一致");
   } finally {
     if (typeof pgDriver?.close === "function") await pgDriver.close();
