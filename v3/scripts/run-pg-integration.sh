@@ -24,4 +24,9 @@ while IFS= read -r f; do
 done < <(grep -rl PG_TEST_URL v3/test/*.test.js | sort)
 
 echo "[pg] 執行 ${#files[@]} 個整合測試檔"
-exec node --test "${files[@]}"
+# 序列執行（astra 2026-09-25 裁決 §3「檢查並行」）：
+#   CI 的 PG 測試**共用同一個拋棄式 PG 實例** ⇒ 多檔並行時，別的檔會在同一張表上操作
+#   （實例：`job-queue-parity` 的 claim 被其他檔搶走剛排進去的那筆 ⇒ 偶發紅 ✗，
+#     根因分析見 docs/handoffs/PRB_EXECUTION_STATE.md §3e ✓）。
+#   序列化是最小且對症的做法 ✓ —— 不以「重跑後綠」結案 ✗。
+exec node --test --test-concurrency=1 "${files[@]}"
