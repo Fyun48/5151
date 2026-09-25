@@ -416,6 +416,25 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
   （`Index Scan listings` 33,541 buffers ✗）✓；落地時以既有 parity／contract 測試守住
   `totalMatched`／排序／角色不變 ✓。
 
+### ✗ 對上一節的更正：19 欄是**必要但不充分**
+真正的候選階段是 **`buildListListingsRows`**（`db.js:6540` ✓，已 export ✓）＋
+**`pageListListingsRows`**（`db.js:6758` ✓，已 export ✓），而前者：
+- **就地改寫**候選列（`overlayRowsPersonal(raw, flags, { inPlace: true })` ✓）；
+- 讀 `row.district`（**由 `address` 推導** ✓，`district` 不在 43 欄內 ✓）；
+- 走 `applyListingFilter`（`db.js:6322` ✓）／`passesDisplayFilters`／`listingMatchesListFilter`／
+  `keepSelfListingForViewer`／`matchesHousingKind`／`matchesListingSources` ✓；
+- `sort === "fit_desc"` 時讀 `route_km` 並**寫入** `row.fit_score` ✓；
+- 需要注入 `provider`／`flagMap` ✓（否則落到同步 SQLite ✗：`loadFlagMap`／`attachSameHouseRoles` ✓）。
+
+⇒ 因此 `computeListingProjection` 的 19 欄**只覆蓋推導欄位** ✗ ✓；
+⇒ **完整最小欄位集必須由「管線級 Proxy 審計」決定** ✓ —— 在既有 parity／contract 測試的 fixture 上，
+把候選列包 `Proxy` ✓、注入 fake `flagMap`（`new Map()` ✓）與 `provider` ✓，依序跑
+`buildListListingsRows` ✓、再包一次 Proxy 跑 `pageListListingsRows` ✓，即得「篩選／排序／分頁」的
+真實讀取集合 ✓。
+⇒ **在此之前不動 `db.js` 的候選 SELECT** ✗ —— 以**不足**的欄位集去改，會改壞管線且可能不會被現有測試抓到 ✗
+（這正是本專案「先量、再改」的紅線 ✓）。
+
+
 
 
 
