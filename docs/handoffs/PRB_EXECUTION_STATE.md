@@ -200,6 +200,28 @@ at async measure (v3/scripts/pg-columns-ab.mjs:69)
 - ⇒ 方法論 ✓：這一題連續三層修正（拼字串 ✗ → 用錯 builder ✗ → **傳錯參數觸發 SQLite 路徑** ✓）
   全部由**讀既有程式與 CI 訊息**得出 ✓ —— 再次說明「先讀再改、沿正式路徑」是唯一有效率的做法 ✓。
 
+### 3k. A/B 第二次執行：**機制修好了 ✓ 但資料集退化（0 列）** ✗（不得當證據 ✓）
+`aec1bd2` 的 CI ✓（run `36135802665`，Tests `completed success` ✓）——A/B 步驟**這次有產出** ✓：
+```
+COLAB-WHERE  { … "params": 10 }
+COLAB-SUMMARY {"label":"43cols","runs":5,"wallMsMedian":1.04,"wallMsMin":1.01,"wallMsMax":5.01,
+               "rows":0,"payloadKB":0,"rootBuffers":{hit:0,read:0,dirtied:0,tempRead:0,tempWritten:0}, hot:[Sort…]}
+COLAB-SUMMARY {"label":"23cols","runs":5,"wallMsMedian":0.91,"wallMsMin":0.86,"wallMsMax":0.96, …同上…}
+```
+- ✓ **已修好的部分**：不再有 42P19 ✓（走 PG 的 `districtClosureIds` ✓）；緩衝區**只取根節點** ✓；
+  A/B 交替 ＋ 暖機 ✓；端到端 wall／rows／payload 都有量 ✓；`Sort` 為熱點＝查詢確實執行過 ✓
+- ✗ **退化點**：**`rows: 0`** ⇒ 查詢**沒撈到任何資料** ⇒ `wallMsMedian 1.04 vs 0.91`
+  （≈1 ms、`rootBuffers` 全 0 ✓）**不具任何意義** ✗ —— **我明確不把這個差異當成 43→23 的收益** ✗
+- 可能原因 ✓：`WHERE` 含 `search_key IN (?…)`（10 個參數 ✓），而 CI 的拋棄式 PG 內是
+  `pg-integration-setup` 鏡射的**少量可重現列** ✓ ⇒ 這些列的 `search_key` 與我算出的鍵**對不上** ⇒ 0 列 ✓
+- ⇒ **修法（下一批機械執行 ✓）**：讓 A/B 的量測查詢**一定能撈到資料** ✓ ——
+  ① 以 **PG 自身**取得鍵集（`SELECT DISTINCT search_key FROM listings` ✓）再帶入 ✓；
+  ② 或改用**不依賴鍵集**的候選查詢（例如只以 `offline` 等固定條件 ✓）當 A/B 的受測語句 ✓；
+  ③ 並**斷言 `rows > 0`** ✗ 否則直接標記「量測無效」✓（避免再次產出退化數字 ✓）。
+- ⇒ 記取教訓 ✓：**量測必須先驗證「受測查詢真的有回資料」** ✗，否則報告出來的百分比只是雜訊 ✓
+  （這是我第 3 次量測設計錯誤 ✓ —— 前兩次：快取量單次 ✗、參數名錯導致 19／13 ✗）。
+
+
 
 
 
