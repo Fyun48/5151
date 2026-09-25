@@ -116,3 +116,19 @@ jobs:
         run: |
           set -euo pipefail
           npm run test:pg
+
+      # 43 欄 vs 23 欄 A/B（astra 2026-09-25 裁決 §5A／§6.3）——**診斷、非 gate** ✓。
+      #   • 用同一顆已由 pg-integration-setup 灌好 schema ＋ 可重現列的拋棄式 PG ✓
+      #   • DATA_DIR 指向獨立暫存目錄 ✓（不可繼承正式 /data —— `db.js` 的 import 會初始化 SQLite ✓）
+      #   • 腳本在 repo 內 ⇒ `import "../src/db.js"` 正確解析到 `v3/src/db.js` ✓（不是舊部署映像 ✗）
+      #   • 已修正：SQL 一律過 toPostgresSql()、只用根節點 buffers（不逐節點加總）、
+      #     端到端 wall／rows／payload、A/B 交替 ＋ 暖機 ✓
+      - name: Columns A/B (diagnostic, non-gating)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          export DATA_DIR="$(mktemp -d)"
+          export WARMS=2
+          export RUNS=5
+          node v3/scripts/pg-columns-ab.mjs

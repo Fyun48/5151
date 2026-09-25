@@ -131,6 +131,30 @@
 - 本地 Node **v22.23.2** ✓、npm 10.9.8 ✓；`engines.node: ">=22"` ✓；CI 用 Node **22** ✓ ⇒ **一致** ✓
 - `package-lock.json` **存在** ✓（60 KB ✓）⇒ 若日後新增 lint 工具，可用 `npm ci` 鎖定版本 ✓
 
+### 3h. CI 全綠（`4878902`，run `36134589639` ✓）＋ 一個操作陷阱 ✓
+
+| Job | tests | pass | **fail** | skipped |
+|---|---:|---:|---:|---:|
+| Run Tests | 2611 | 2585 | **0** ✓ | 26 |
+| Run Tests (PostgreSQL integration) | 115 | 114 | **0** ✓ | 1 |
+
+- 一般 job 的 skip 由 25 → **26** ✓：**＋1 就是本 PR 新增的 PG-gated seed fixture 測試** ✓（該 job 無 PG ⇒ 正確跳過 ✓）
+- PG job 仍為 **1 skip** ✓ ⇒ 新測試在該 job **確實執行** ✓✓ ⇒ **裁決 §3 的 seed 契約缺口以 CI 證據關閉** ✓✓
+- ✗ **操作陷阱（已實測）**：`gh run view --job <id> --log` 在**整條 run 尚未完成**時會回
+  `logs will be available when it is complete` 並輸出**空檔** ✗ ⇒ **日誌是以整條 run 為閘，不是以 job 為閘** ✓
+  （先前數次「抓不到日誌」的真正原因 ✓，不必再猜 ✓）
+- ✗ **推送節奏陷阱（已犯 2 次）**：在 run 尚未完成時推送**任何** commit（**含純文件** ✗）都會
+  **取消該 run** ✓ ⇒ 規則：**要等目前 run 結束再批次推送** ✓（本檔即為此而合併推送 ✓）
+
+### 3i. 已加入 CI 的 A/B 診斷步驟（§5A／§6.3 ✓）
+`.github/workflows/test.yml` 於 `Run PostgreSQL integration tests` **之後**新增
+`Columns A/B (diagnostic, non-gating)` ✓：
+- 同一顆已灌好 schema ＋ 可重現列的**拋棄式 PG** ✓（不需另行建環境 ✓）
+- `DATA_DIR="$(mktemp -d)"` ✓（§6.3：不可繼承正式 `/data` ✓）
+- repo 內路徑 ⇒ `import "../src/db.js"` 正確解析 ✓（**不會**再讀到舊部署映像 ✗）
+- `continue-on-error: true` ✓ ⇒ **診斷不當 gate** ✓（不影響通過條件 ✓），數字作為 PR 證據 ✓
+
+
 
 
 - ⚠️ CI **沒有 lint 步驟** ✗（`Run Tests` 步驟只有 `Install dependencies` → `Run Test Suite` ✓）
