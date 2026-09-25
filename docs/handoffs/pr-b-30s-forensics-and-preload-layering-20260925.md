@@ -621,3 +621,15 @@ context 6（crawlSources／settings／user_settings／users／crawl_covers／dis
 
 
 
+
+### ③ 查詢數清點（唯讀 ✓）—— 查詢數**不是固定的 12** ✗
+- `listingSearchNodePg.js` ✓（列表路徑）**5 個基座查詢** ✓：
+  `seeds`（:49 ✓）／`linked`（`match_post_id`，:57 ✓）／same-house members（:64 ✓）／
+  **candidate SELECT**（:216 ✓）／page hydration（`SELECT * … IN (…)`，:242 ✓）。
+- `repository/decorationData.js` ✓：**14+ 個查詢點** ✗✗ —— `user_listing_flags`（:64 ✓）、
+  :72／:93／:135／:159／:172／:197／`listing_prep`(:218 ✓)／:228／:245／:263／:278／:293 ✓。
+- ⇒ **結論** ✓：總查詢數**不是常數** ✗，而是由「管線實際叫到哪些裝飾方法」決定 ✓
+  （`flags`／`personalIndex`／`splitPairs`／`prep`／`peerRows`／`extras` ✓）。
+  ⇒ 所以 ③ 的順序必須是：**先量**每次搜尋實際發出幾個查詢 ✓（用假 `pgDriver` 包計數器 ✓，
+  可離線跑 ✓）⇒ **再**把 `flags`／`personalIndex`／`splitPairs` 三筆併成一筆 ✓。
+- ⇒ 尚未做（下一批 ✓）：量測查詢數 ＋ 合併；本批只完成清點與方法 ✓。
