@@ -4064,8 +4064,20 @@ export function currentSearchKeys() {
  *
  * 只適用於**增強型**資料（crawlSources／searchKeys）；安全相關的 isolation 仍為必要 ✓。
  */
+/**
+ * 表存在性快取（**跨 `safeExecFactory` 實例共享** ✓）。
+ *
+ * 為什麼要共享：原本每個工廠各自一個 `Map` ⇒ 同一次搜尋會對同一批表**重複探測**
+ * （實測 1 列搜尋共 19 筆查詢，其中 `SELECT to_regclass($1) AS reg` **佔 5 筆** ✗，
+ * 見 `test/listing-search-query-count.test.js` ✓）。
+ *
+ * 只快取**正結果** ✓：表存在是 schema 事實（只會被 migration 改變 ✓）⇒ 可長期快取 ✓；
+ * 「不存在」**不快取** ✗ ⇒ 之後的 migration 建表必須能被看到 ✓。
+ */
+const SAFE_TABLE_EXISTS = new Map();
+
 function safeExecFactory(exec, degraded) {
-  const exists = new Map();
+  const exists = SAFE_TABLE_EXISTS;
   const tableOf = (sql) => (String(sql).match(/\bFROM\s+([A-Za-z_][\w.]*)/) || [])[1] || "";
   return async (sql, params = []) => {
     const table = tableOf(sql);
@@ -4074,7 +4086,13 @@ function safeExecFactory(exec, degraded) {
         const rows = await exec("SELECT to_regclass(?) AS reg", [table]);
         // 真 PG 一定回一列（reg 為名稱或 NULL）；若探測沒有回列（例如單元測試的 stub）⇒ 視為未知、
         // 照常執行原查詢 ✓，不要因此把一個存在的表誤判成缺表 ✗。
-        exists.set(table, rows?.length ? Boolean(rows[0]?.reg) : true);
+        const present = rows?.length ? Boolean(rows[0]?.reg) : true;
+        if (!present) {
+          // 缺表 ⇒ 回空集合並記錄；**不快取負結果** ✗（migration 建表後必須看得到 ✓）。
+          degraded.push(table);
+          return [];
+        }
+        exists.set(table, true);
       }
       if (!exists.get(table)) {
         degraded.push(table);
