@@ -489,6 +489,25 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
   （跳過 `applyListingFilter`／display filters ✓）⇒ 佐證「分層成本」模型 ✓。
 - 測試狀態：`exit=0`／`pass 1`／`fail 0` ✓。
 
+### 改 SELECT 前的兩項決定性檢查（本批新增 ✓）
+1. **投影計算不會污染候選欄位集** ✓✓：`computeListingProjection` 只被**寫入路徑**呼叫
+   （`repository/writePath.js:361` ✓）與 `syncListingProjection`（投影維護 ✓）⇒
+   **讀取路徑不會拿候選列去算投影** ✓ ⇒ 我先前擔心「23 欄漏掉投影所需的
+   `extra_fee*`／`first_seen_at`／`last_seen_at`／`source_updated_at`／`source_published_at`」**不成立** ✓
+   （該擔心已解除 ✓；但若未來把投影計算搬進讀取路徑，這裡會立刻變成必須補的 5 欄 ✗ ⇒ 已記錄 ✓）。
+2. ✗ **真正的新風險（改動範圍）**：`candidateColumns` 有**兩個消費者** ✗ ——
+   - 列表路徑 ✓：`listingSearchNodePg.js:216`（`SELECT ${candidateColumns} FROM listings … ORDER BY post_id` ✓）
+     ＋ `db.js:6813`（SQLite 路徑 ✓）
+   - **統計路徑** ✗：`repository/listingStats.js:133`（`SELECT ${context.candidateColumns} …` ✓）
+   ⇒ 縮欄位**只能針對列表路徑的 context** ✓（`db.js:6838` 與 `6859` 是兩個 context 建構點 ✓），
+   **統計必須留在寬欄位** ✓（它有獨立的 `listing-stats-parity.test.js` ✓）。
+3. ✗ **驗證能力限制（實測）**：本地 `node --test` 跑既有套件（`list-query-regression`／
+   `search-contract-regression`／`listing-search-projection`／`listing-score`／`list-display-filter` ✓）
+   **會卡住** ✗（240 s 只輸出 `TAP version 13` 一行 ✓；且本地無 `node_modules` ✗）
+   ⇒ **不得盲改熱路徑** ✗ ⇒ 縮欄位的改動**必須由 CI 驗證** ✓；
+   在能本地重現套件之前，此改動不進主線 ✗（astara 紅線：先量、再改、且可驗證 ✓）。
+
+
 
 
 
