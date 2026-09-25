@@ -191,11 +191,13 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     stageStarted = now;
   };
 
+  // astra §5.5（B4）：request context 由 PG 建立一次（crawlSources／isolation／searchKeys／**asOf**）。
+  const context = await buildListRequestContextFromPg(exec);
+  queryDetails.asOf = context.asOf;
   const built = buildListListingsClauses({
     filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
     districts: args.districts, settings, uid, voteUid,
-    // astra6 §0.2：request context 由 PG 建立一次（crawlSources／isolation），避免請求熱路徑讀 SQLite。
-    context: await buildListRequestContextFromPg(exec),
+    context,
     // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
     districtIds: filter === "watched" ? null : await districtClosureIds(exec, {
       districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),
@@ -206,7 +208,10 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   }, { sqliteDb: null });
   markStage("prepare_ms");
   // 取「全部」候選：不在這裡 LIMIT，否則 totalMatched 會被候選上限截斷。
-  const raw = await exec(`SELECT ${candidateColumns} FROM listings ${built.where}`, built.params);
+  // astra §5.5（B4）：明確候選順序。Node 後處理（同戶角色、配對）會依輸入列順序走訪，
+  // 沒有 ORDER BY 時順序由 PG 掃描計畫決定 ⇒ 不可重現。以 post_id 排序固定輸入，
+  // 使「同一份資料＋同一組 args＋同一個 asOf」得到同一個結果。
+  const raw = await exec(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`, built.params);
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
   queryDetails.engine = "node_pg";

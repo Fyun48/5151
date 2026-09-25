@@ -3219,9 +3219,9 @@ export async function preloadDecorationProviderAsync({
   const groupMembers = new Map();
   if (loadPeers) {
     for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
-    for (const gid of new Set([...groupIds.values()].filter(Boolean))) {
-      groupMembers.set(gid, await loader.groupMemberRows(gid));
-    }
+    // astra §4.3：成員列改為**一次查詢**取回（原本每 group 一筆 ✗，頁面可能數十個 group）。
+    const gids = [...new Set([...groupIds.values()].filter(Boolean))];
+    for (const [gid, rows] of await loader.groupMemberRowsFor(gids)) groupMembers.set(gid, rows);
   }
   const prep = new Map();
   for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
@@ -4083,7 +4083,14 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
     ? { sql: "fixture_namespace = ?", params: [ns] }
     : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
   const searchKeys = await buildSearchKeysFromPg(exec, settingsTable);
-  return { crawlSources, isolation, searchKeys };
+  return {
+    crawlSources,
+    isolation,
+    searchKeys,
+    // astra §5.5（B4）：**固定 asOf**。`REPEATABLE READ` 只固定資料快照，不固定 JS 的「現在時間」✗；
+    // 整個請求共用同一個時間戳 ⇒ 開啟中物件（expiry）等時間相關條件在同一請求內一致、可重現。
+    asOf: new Date().toISOString(),
+  };
 }
 
 /**
@@ -4198,7 +4205,9 @@ function browseIsolationClause(context, sqliteDb, table = "listings") {
 function listingVisibilityClauses(clauses, params, context = null, { sqliteDb = db } = {}) {
   // The expiry predicate below is sufficient for reads. An UPDATE here would
   // wait up to busy_timeout for a crawler/importer even when no row expires.
-  const stamp = new Date().toISOString();
+  // astra §5.5：同一個請求必須共用**同一個**時間戳（context.asOf）；只有沒帶 context 的 SQLite 路徑
+  // 才各自取 now（維持既有行為）。
+  const stamp = (context && context.asOf) || new Date().toISOString();
   const openSelf = sqlOpenSelfListing(stamp);
   clauses.push(openSelf.sql);
   params.push(...openSelf.params);
