@@ -648,3 +648,19 @@ context 6（crawlSources／settings／user_settings／users／crawl_covers／dis
   ② `listings` 被查 **5 次** ✗（candidate SELECT ＋ DISTINCT search_key ＋ hydration ＋ 另兩筆 ✓）；
   ③ 裝飾各自一筆 ✓（`flags`／`same_house`／`votes`／`prep`／`group_members` ✓）⇒ 才是合併候選 ✓。
 
+### ④ `SELECT DISTINCT search_key FROM listings`（全表 ✗）—— 用途已釐清，修法已定 ✓
+- 位置 ✓：**`buildSearchKeysFromPg`**（`db.js:4165` ✓），由 `buildListRequestContextFromPg` 呼叫 ✓。
+- 用途（原始碼自述 ✓）：它是 **PG 版 `currentSearchKeys()`** ✓ —— 把「使用者 searchUrls ＋ 全域 searchUrls ＋
+  `crawl_covers` 的 searchUrl」對照 **`listings` 實際存在的 search_key** 展開 ✓
+  （`expandSearchKeysAgainst(stored, keys)` ✓、**零語意漂移** ✓、且**不掃 SQLite** ✓、也不用對不存在的鍵發查詢 ✓）。
+- ⇒ 這個查詢**語意上必要** ✓（不能直接刪 ✗），但現行寫法對 **122,925 列**做 `DISTINCT` ✗
+  ⇒ 無 `search_key` 索引時就是**全表掃描 ＋ 去重** ✗。
+- ⇒ **較好的修法（等價、免索引）** ✓：改成 `WHERE search_key = ANY($1)` ✓（只針對手上的鍵 ✓）
+  ⇒ 語意等價 ✓（見下「待確認」✓）、掃描量從 12 萬列降到數列 ✓。
+- ⇒ 備援修法 ✓：為 `search_key` 建索引（走**既有發布權限** ✓，astra：索引套用沿用發布流程 ✓）
+  ⇒ 變成 index-only scan ✓；但**先做免索引的那個** ✓（改動更小、可本地驗證 ✓）。
+- ⇒ **待確認（下一批第一步 ✓）**：`expandSearchKeysAgainst(stored, keys)` 是否**只做成員判定** ✓
+  —— 若是 ✓，`= ANY(keys)` 完全等價 ✓；若它還需要「stored 的其他性質」✗，就不能這樣改 ✗
+  （**先讀再改** ✓，不猜 ✓）。
+
+
