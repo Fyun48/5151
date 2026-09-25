@@ -193,13 +193,89 @@ astra 已讀取本檔並指出下列敘述有誤／過度推論，**本節覆蓋
 | §5.6 正式模組不得有引擎入口 | `listingSearchAsync` 移除 `searchEngine()` 與 SQL-first 分支；舊路徑改為 `searchListingsSqlPgDiagnostic()`（不支援回報 `unsupported`）| 原「原始碼字串斷言」改為**行為驗證**：硬塞 `options.engine=sql_pg` 仍走 `node_pg` ✓、`searchEngine` 已不存在 ✓ |
 | §3 CI 缺陷 | PG job 改走獨立入口 `npm run test:pg`（先 `pg-integration-setup.mjs` 鏡射 schema，再跑 canary ＋ 所有 `PG_TEST_URL` 檔）；**不再** job 全域 `DB_DRIVER=postgres`；`PG_URL`／`PG_TEST_URL` 統一到同一拋棄式容器；image 固定 `postgres:16.14-alpine`；canary 移除 `PG_SKIP_CANARIES` 與 42P01 放行（連不上／缺 schema 必失敗）；計數改包 **client.query** 並分開交易控制語句 | canary 在**真 PG** 上 **4/4** ✓（`connects=1`、`wrapperQueries=0`、資料查詢皆走快照 client、BEGIN 存在）；`notify-enqueue-parity` 的模擬 executor 支援 `= ANY(?::bigint[])`／`$n` 與型別轉換 ⇒ 由失敗轉 **ok** ✓ |
 
-## 十、下一步（依裁決 §6 順序）
-1. §4 量測修正：探針把 `areaMax`／`wholeFloorOnly` 放進 `settings`（`wholeFloorOnly` 用 boolean）、
-   每個能力加「必定被排除」的 fixture 並斷言生效；`pg-stage-forensics` 輸出 `queryDetails` 各階段與
-   per-request PG 查詢數；`pg-explain-forensics` 的 `failedAfterMs` 從**失敗階段**起算；
-   移除「普通 EXPLAIN 不受 timeout 影響」的錯誤註解。
-2. B4：固定 `asOf` ＋ 明確候選順序（REPEATABLE READ 不會固定 JS 現在時間）。
-3. 全區候選的 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)`（唯讀）→ 依計畫決定等價改寫或索引 → 鏡像／CI 驗證。
-4. 補四個 loader 的大清單測試（>32,767、>65,535）與同 fixture 的雙向 parity。
+## 十一、§4 量測證據（2026-09-25，探針已依裁決修正）
+
+### 探針修正（§4.1）
+- 能力參數移入 **`settings`**（顯示篩選讀 settings），`wholeFloorOnly` 改 **boolean** ✓；
+  每個能力與 baseline 對照並輸出 `effective` ✓。
+- 新增 `failedStage`／`failedAfterMs`（**從失敗階段起算** ✓，不再沿用 EXPLAIN 耗時 ✓）。
+- 輸出 `paramCount`／`paramTypes`（含 `array[N]`）✓；移除「EXPLAIN 不受 timeout 影響」的錯誤註解 ✓。
+- `pg-stage-forensics` 改為輸出 `queryDetails` 各階段數值 ＋ 每請求 `{connects, clientQueries, txnQueries, wrapperQueries}` ✓。
+
+### 候選 SQL（有行政區 vs 全區；3 秒閘門）
+| 案例 | rows | effective | runMs | EXPLAIN 形狀 | cost |
+|---|---|---|---|---|---|
+| baseline（西屯區） | 6647 | — | 420 | `Merge Anti Join` ＋ **`Index Scan listings_pkey`** | 114,679 |
+| q=電梯 | 968 | **true** ✓ | 222 | `Nested Loop Anti Join` ＋ Index Scan | 163,636 |
+| kind=whole | 6647 | **false** ✗ | 410 | 同 baseline | 114,679 |
+| sources=591 | 6647 | **false** ✗ | 369 | 同 baseline | 114,679 |
+| areaMax=30 | 6647 | **false** ✗ | 400 | 同 baseline | 114,679 |
+| wholeFloorOnly=1 | 6647 | **false** ✗ | 386 | 同 baseline | 114,679 |
+| **full-table（`districts: []`）** | — | — | **57014** ✗（`failedStage=run`、`failedAfterMs=4597`）| **`Seq Scan on listings`** ✗ ＋ `Nested Loop Anti Join` ＋ **`Join Filter`** ✗ | **1,894,939** ✗ |
+
+⇒ `kind`／`sources`／`areaMax`／`wholeFloorOnly` **在候選層不生效** ✗ ⇒ 它們是 **Node 端的顯示篩選** ✓
+（候選 SQL 不縮小集合，與 astra「可以是刻意保留語意」一致 ✓）。
+
+### 全區案例的真實計畫（節錄）
+```
+Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
+  Join Filter: (f.post_id = listings.post_id)                 ← flags 反連接逐列過濾 ✗
+  ->  Seq Scan on public.listings  (cost=0.07..1894923.67 rows=577 width=739)
+        Filter: (... AND listings.search_key = ANY('{…32 個…}')
+                 AND Coalesce(match_verdict,'') <> 'yes'
+                 AND (offline <> 1 OR offline_confirmed <> 1) ...)
+        ->  Index Scan using idx_user_flags_user_post on user_listing_flags f_1
+              Index Cond: ((f_1.user_id = '0') AND (f_1.post_id = listings.post_id))
+        ->  Seq Scan on public.listing_prep p  (cost=0.00..16.44 rows=1 width=8)
+              Filter: (p.display_ready = 1)                        ← hpDisplayReadySql 逐列 subplan ✗
+  ->  Index Scan using idx_user_flags_user_post on user_listing_flags f
+        Index Cond: (f.user_id = '0')   Filter: (f.hidden = 1)
+```
+
+### 兩個候選熱點（**依 astra §4.2：這些是待驗證方向，尚未確診** ✗）
+1. **`hpDisplayReadySql`／`listing_prep` 的逐列 subplan** ✗（計畫中為 `Seq Scan on listing_prep`
+   ＋ `display_ready = 1` 過濾；若 `listing_prep` 不小，等價改寫成 LEFT JOIN 或補
+   `(post_id, display_ready)` 索引都可能是解 ✓）。
+2. **flags 反連接採 `Nested Loop` ＋ `Join Filter`** ✗ 且**估計 577 列 vs 實際 6,647 列** ✗
+   ⇒ 統計估計偏差 ✓（`ANALYZE` 是否生效需確認 ✓）；astra 提到若 `(user_id, post_id)` 唯一，
+   可評估一次 LEFT JOIN／等價 EXISTS 改寫（缺列與 NULL 語意需一致 ✓）。
+
+### 下一步（需受控資料副本）
+在**受控副本**上取 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)`（CI 的 ~12 萬列固定資料集 ✓；
+鏡像端維持 3 秒閘門 ✓，不關 timeout、不強制關 seq scan ✓），並同時記錄 `rows`／`loops`／`buffers`／
+等待與傳輸成本，再決定等價改寫或索引 ✓。
+
+## 十二、剩餘工作（依裁決 §6 順序；本輪量到的新缺口已列入）
+
+### 本輪量到的兩個**具體**缺口（astra §4.3 門檻）
+1. **每請求資料查詢數超標** ✗：實測 `clientQueries` = **19（baseline／kind／sources）／29（q）**，
+   目標是「一般 ≤ 12；通勤 ≤ 16」⇒ 需定位多出的查詢（`q` 多 10 筆，疑似 chunked
+   `prepMap`／`extrasMap`／`groupIds` ✗）。交易控制語句另計（`txnQueries: 2` ✓）。
+2. **階段別耗時集中在 Node 端** ✗（真實路徑、單一快照）：
+   | 階段 | baseline | q=電梯 | 備註 |
+   |---|---|---|---|
+   | total | 5979 | 2722 | 首次（冷）呼叫 |
+   | **prepare_ms** | **1495** | **1088** | builder ＋ PG context ＋ `districtClosureIds` ✗ |
+   | sql_ms | 634 | 299 | 候選查詢 ✓（與 EXPLAIN 相符）|
+   | preload_ms | 311 | 63 | 候選層 preload ✓ |
+   | profile_ms | 244 | 12 | 屬性／價格篩選 ✓ |
+   | **relations_ms** | **2593** | **464** | `attachSameHouseRoles`（O(candidates)）✗ |
+   | display_ms | 230 | 19 | 顯示篩選 ✓ |
+   | sort_ms | 35 | 4 | 分頁排序 ✓ |
+   | preload_page_ms | 258 | 380 | 頁面層 preload ✓ |
+   | hydrate_ms | 169 | 389 | 頁面列 ＋ 裝飾 ✓ |
+
+⇒ 最佳化目標應是 **`prepare_ms` 與 `relations_ms`**（而非只盯 SQL ✗）；`sql_ms` 只佔 5–10% ✓。
+
+### 待辦
+1. B4：固定 `asOf` ＋ 明確候選順序（`REPEATABLE READ` 不固定 JS 現在時間）。
+2. 受控副本上的 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)`（見 §11 的兩個候選熱點）。
+3. 補四個 loader 的大清單測試（>32,767、>65,535）＋ 同 fixture 雙向 parity。
+4. `prepare`／`relations` 的等價優化（不縮小候選集合、不改變角色／總數／排序語意）＋ 查詢數降到門檻內。
+5. 分層效能 gate（單行政區 C1 ≤1s／C4 ≤2s；全區 C1 ≤2s／C4 ≤4s；查詢數；event-loop lag p99 ≤50ms）
+   ＋ warm p95（暖機 ≥5、量測 50 請求；冷啟另列）＋ PR 本文更新。
+   ※ 註：`run-in-container.sh -d` 目前只帶 `PG_STATEMENT_TIMEOUT_MS`，`RUNS` 不會傳進容器
+   ⇒ 暖機量測需用 `ssh … docker exec -e RUNS=…`（或之後把 ENV 支援補進腳本 ✓）。
+
 
 

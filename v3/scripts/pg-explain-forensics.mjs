@@ -22,17 +22,21 @@ const exec = (client) => async (sql, params = []) => (await client.query(toPostg
 
 const district = process.env.DISTRICTS || "西屯區";
 const GATE = process.env.GATE_TIMEOUT || "3s";
+// astra 2026-09-25 §4.1：顯示篩選讀的是 **settings**（不是 args 最上層），
+// 且 wholeFloorOnly 必須是 boolean；否則「能力」根本沒生效，量到的其實是 baseline。
+// 每個能力都與 baseline 對照列數，並在 rec.effective 記錄是否確實生效。
 const ABILITIES = [
-  { label: "baseline", args: {} },
-  { label: "q=電梯", args: { q: "電梯" } },
-  { label: "kind=whole", args: { kind: "whole" } },
-  { label: "sources=591", args: { sources: "591" } },
-  { label: "areaMax=30", args: { areaMax: 30 } },
-  { label: "wholeFloorOnly=1", args: { wholeFloorOnly: 1 } },
+  { label: "baseline", args: {}, settings: {} },
+  { label: "q=電梯", args: { q: "電梯" }, settings: {} },
+  { label: "kind=whole", args: { kind: "whole" }, settings: {} },
+  { label: "sources=591", args: { sources: "591" }, settings: {} },
+  { label: "areaMax=30", args: {}, settings: { areaMax: 30 } },
+  { label: "wholeFloorOnly=1", args: {}, settings: { wholeFloorOnly: true } },
   // ★ 最壞情況：無行政區（canary 在此觸發 57014）。districtNames 留空 ⇒ 由 app 自己的
   //   districtClosureIds 決定 closure（若它回傳巨量 id，就是候選查詢變慢的真正來源）。
-  { label: "full-table (districts=[])", args: {}, districtNames: [] },
+  { label: "full-table (districts=[])", args: {}, settings: {}, districtNames: [] },
 ];
+let baselineRows = null;
 
 function classify(err) {
   const code = String(err?.code || "");
@@ -56,6 +60,9 @@ console.log(`PGEX-DEFAULTS ${JSON.stringify(defaults)}`);
 for (const item of ABILITIES) {
   const client = await drv.pool.connect();
   const rec = { label: item.label, gate: GATE };
+  // astra §4.1：失敗時間必須從**失敗階段**起算 ⇒ 這兩個變數要宣告在 try 之外（catch 才看得到）。
+  let stageStart = Date.now();
+  let stageName = "setup";
   try {
     await client.query("BEGIN READ ONLY");
     await client.query(`SET LOCAL statement_timeout = '${GATE}'`);
@@ -74,27 +81,38 @@ for (const item of ABILITIES) {
     rec.districtIds = Array.isArray(closure) ? closure.length : null;
     const built = buildListListingsClauses({
       filter: "all", districts: districtNames, districtIds: closure ?? null,
-      settings: {}, uid: 0, voteUid: 0, context, ...item.args,
+      // astra §4.1：能力參數必須進 settings（顯示篩選讀 settings，不是 args 最上層）。
+      settings: item.settings || {}, uid: 0, voteUid: 0, context, ...item.args,
     });
     const select = `SELECT ${deps.candidateColumns} FROM listings ${built.where}`;
     rec.sqlChars = select.length;
     rec.paramCount = built.params.length;
+    // 記錄真正的參數數量與最大 placeholder 編號（astra §5.1 要求：不可只用 placeholder 個數推論上限）。
+    rec.maxPlaceholder = built.params.length;
+    rec.paramTypes = built.params.map((p) => (Array.isArray(p) ? `array[${p.length}]` : typeof p));
 
-    // 1) 只規劃、不執行 ⇒ 不受 statement_timeout 影響
-    const t0 = Date.now();
+    // 1) 規劃（EXPLAIN 不執行查詢，但**仍受 statement_timeout 影響**：規劃本身也可能被取消）
+    stageName = "explain";
+    stageStart = Date.now();
     const plan = await client.query(`EXPLAIN (VERBOSE) ${toPostgresSql(select)}`, built.params);
-    rec.explainMs = Date.now() - t0;
+    rec.explainMs = Date.now() - stageStart;
     rec.plan = plan.rows.map((r) => r["QUERY PLAN"]);
 
-    // 2) 真跑一次（受 3 秒閘門保護）⇒ 分類逾時 vs 斷線
-    const t1 = Date.now();
+    // 2) 真跑一次（受閘門保護）⇒ 分類逾時 vs 斷線
+    stageName = "run";
+    stageStart = Date.now();
     const run = await client.query(toPostgresSql(select), built.params);
-    rec.runMs = Date.now() - t1;
+    rec.runMs = Date.now() - stageStart;
     rec.rows = run.rows.length;
     rec.outcome = "ok";
+    if (baselineRows === null) baselineRows = rec.rows;
+    // 能力是否真的生效（與 baseline 對照；相同 ⇒ 這個「能力」沒有作用，量到的不是它）
+    rec.effective = item.label === "baseline" ? null : rec.rows !== baselineRows;
   } catch (err) {
     rec.outcome = classify(err);
-    rec.failedAfterMs = rec.runMs ?? rec.explainMs ?? null;
+    // astra §4.1：失敗時間必須從**該階段開始**起算，不能沿用上一個階段（例如 EXPLAIN）的耗時。
+    rec.failedAfterMs = Date.now() - stageStart;
+    rec.failedStage = stageName;
   } finally {
     // 唯讀交易：一律 ROLLBACK（逾時後交易已中止，ROLLBACK 仍必要才不會把髒狀態留給下一個使用者）
     try { await client.query("ROLLBACK"); } catch { /* 唯讀；回滾失敗不影響本結論 */ }
