@@ -6413,21 +6413,39 @@ export function buildListListingsRows(raw, {
  * PG 分大小寫（6 案中 4 案不一致）；包上 lower() 後兩邊 6 案完全一致，且對 SQLite 而言
  * 與原本的 `LIKE` 結果相同（CJK 亦不受影響）。這讓同一段文字在兩個 driver 上語意一致。
  */
+/** 行政區名稱解析（單一來源；共用 builder 與 PG-fed Node 路徑都用它）。 */
+export function resolveListDistrictNames({ districts = [], settings = null, uid = 0 } = {}) {
+  const requested = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  return requested.length ? requested : memberRegionDistrictNames(settings || getSettings(uid));
+}
+
 export function buildListListingsClauses({
   filter = "all", kind = "", sources = "", q = "", searchKeys,
   districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
+  districtIds = null,
 } = {}, { sqliteDb = db } = {}) {
   const settings = settingsParam || getSettings(uid);
-  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map(name => String(name || "").trim()).filter(Boolean);
-  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  const districtNames = resolveListDistrictNames({ districts, settings, uid });
   const districtSet = new Set(districtNames);
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
   if (filter !== "watched") {
     listingVisibilityClauses(clauses, params);
-    appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
+    if (Array.isArray(districtIds)) {
+      // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
+      // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
+      // SQLite 路徑維持 appendDistrictCandidates（含原本的 recursive CTE）。
+      if (districtIds.length) {
+        clauses.push("post_id = ANY(?)");
+        params.push(districtIds);
+      } else {
+        clauses.push("1 = 0");
+      }
+    } else {
+      appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
+    }
     appendPriceCeilingCandidates(settings, clauses, params);
   } else {
     applyBrowseIsolation(clauses, params, sqliteDb, "listings");
@@ -6501,7 +6519,7 @@ export function buildListListingsClauses({
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  return { clauses, params, where, districtNames, districtSet, requestedDistricts };
+  return { clauses, params, where, districtNames, districtSet };
 }
 
 /** 排序 → 計數 → 分頁（不含取列與裝飾）。driver-agnostic。 */

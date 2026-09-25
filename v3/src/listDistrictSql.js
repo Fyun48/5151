@@ -14,6 +14,24 @@ export function ensureDistrictCandidateIndex(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_district_prefix ON listings(${prefix})`);
 }
 
+// 行政區鍵的共用知識（給需要自行組查詢的 driver 用；B3b 的 PG closure 就靠它）。
+export function districtKeyLists(names) {
+  const selected = new Set(names || []);
+  const allowed = known.filter(row => selected.has(row.name)).map(row => row.key);
+  return { allowed, allKeys };
+}
+
+/**
+ * 行政區前綴的 SQL 表達式（同一份知識、兩種 dialect）：
+ * SQLite 用 instr/substr；PostgreSQL 用 split_part（`city|district|`）。
+ */
+export function districtKeyPrefixExpression(dialect = "sqlite") {
+  if (String(dialect) === "pg") {
+    return `(split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2) || '|')`;
+  }
+  return prefix;
+}
+
 // Keep unrecognised/legacy keys for the existing address/title fallback.
 // This is a conservative candidate reduction, not a new district classifier.
 export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor } = {}) {

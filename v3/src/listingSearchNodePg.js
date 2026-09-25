@@ -16,7 +16,9 @@ import {
   decorateListListingsPage,
   paginateListListingsRows,
   preloadDecorationProviderAsync,
+  resolveListDistrictNames,
 } from "./db.js";
+import { districtKeyLists, districtKeyPrefixExpression } from "./listDistrictSql.js";
 import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -26,6 +28,72 @@ export const NODE_PG_QUERY_VERSION = 2;
 /** 呼叫端可用它決定「能不能跑 PG＋Node」（不能就跑 503，而不是偷讀 SQLite）。 */
 export function canRunNodePg({ pgDriver, deps } = {}) {
   return Boolean(pgDriver && typeof pgDriver.query === "function" && deps?.candidateColumns);
+}
+
+/**
+ * B3b：在 PG 端算出行政區候選的「關係 closure」，回傳 id 陣列（或 null＝不需要過濾）。
+ *
+ * 為什麼不用 CTE：Node 路徑原本的 recursive CTE 有**多個 recursive 分支**，PostgreSQL 只允許一個
+ * （`recursive reference to query "district_related" must not appear within its non-recursive term`）。
+ * 這裡改成在 Node 端做 BFS 展開：每步用 PG 原生查詢取「配對雙向鄰居＋個人同屋源群組」，
+ * 直到沒有新 id。集合語意與原本的 `UNION` 遞移閉包相同，且完全沒有 dialect 風險。
+ */
+async function districtClosureIds(exec, { districtNames = [], userId = 0 } = {}) {
+  const { allowed, allKeys } = districtKeyLists(districtNames);
+  if (!allowed.length || allowed.length === allKeys.length) return null;
+  const prefix = districtKeyPrefixExpression("pg");
+  const marks = (n) => Array.from({ length: n }, () => "?").join(",");
+
+  // (1) 種子：落在所選行政區（或無法辨識的舊鍵）的 post_id。
+  const seeds = (await exec(
+    `SELECT post_id FROM listings WHERE (${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
+    [...allowed, ...allKeys],
+  )).map((row) => Number(row.post_id)).filter(Boolean);
+
+  // (2) 關係邊：配對雙向（無向圖）＋（選用）該使用者的同屋源群組。
+  //     不把 id 清單當 SQL 參數（closure 可達數萬筆，會撐爆參數協定）；改在 Node 端算連通分量。
+  const edges = [];
+  const linked = await exec("SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0");
+  for (const row of linked) {
+    const a = Number(row.post_id) || 0;
+    const b = Number(row.match_post_id) || 0;
+    if (a && b) edges.push([a, b]);
+  }
+  if (userId > 0) {
+    const members = await exec("SELECT post_id, group_key FROM user_same_house_members WHERE user_id = ?", [userId]);
+    const byGroup = new Map();
+    for (const row of members) {
+      const key = String(row.group_key || "");
+      if (!key) continue;
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key).push(Number(row.post_id) || 0);
+    }
+    for (const list of byGroup.values()) {
+      for (let i = 1; i < list.length; i += 1) edges.push([list[0], list[i]]);   // 群組＝完全圖（以第一筆為代表連出）
+    }
+  }
+
+  // (3) 只在「含種子的連通分量」內取全部 id（＝原本 recursive UNION 的遞移閉包語意）。
+  const parent = new Map();
+  const find = (x) => {
+    let root = x;
+    while (parent.get(root) !== undefined && parent.get(root) !== root) root = parent.get(root);
+    return root;
+  };
+  const union = (a, b) => {
+    parent.set(a, parent.get(a) ?? a);
+    parent.set(b, parent.get(b) ?? b);
+    const ra = find(a); const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  for (const [a, b] of edges) union(a, b);
+  const seedRoots = new Set(seeds.map((id) => (parent.has(id) ? find(id) : id)));
+  const ids = new Set(seeds);
+  for (const [a, b] of edges) {
+    if (seedRoots.has(find(a))) { ids.add(a); ids.add(b); }
+    if (seedRoots.has(find(b))) { ids.add(a); ids.add(b); }
+  }
+  return [...ids];
 }
 
 export async function searchListingsNodePg(args = {}, { pgDriver, deps = {}, decorationLoader = null } = {}) {
@@ -56,6 +124,11 @@ export async function searchListingsNodePg(args = {}, { pgDriver, deps = {}, dec
   const built = buildListListingsClauses({
     filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
     districts: args.districts, settings, uid, voteUid,
+    // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
+    districtIds: filter === "watched" ? null : await districtClosureIds(exec, {
+      districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),
+      userId: voteUid,
+    }),
   });
   markStage("prepare_ms");
   // 取「全部」候選：不在這裡 LIMIT，否則 totalMatched 會被候選上限截斷。
