@@ -50,16 +50,19 @@ jobs:
           set -euo pipefail
           npm test
 
-  # astra6 §6：在真實 PostgreSQL 上再跑一輪 —— provider 護欄、單一快照、PG context（不得回讀 SQLite）
-  # 這幾件事只有在真的 PG 上才會被抓到（本機預設是 SQLite）。
+  # astra §3（2026-09-25）：PG 專屬回歸必須在**真 PG**上跑，但**不得**用 job 全域 DB_DRIVER=postgres
+  # 把一般 job 的 SQLite／預設 driver 測試整批改成 PG（那會漏測並掩蓋隔離問題）。
+  # 因此這裡走獨立入口 `npm run test:pg`：先鏡射 schema，再跑 canary ＋ 所有 PG_TEST_URL-gated 整合測試。
+  # 資料庫是**拋棄式**的：絕不把生產連線交給 Actions（PG_URL 只在本 job 指向 service container）。
   test-postgres:
-    name: Run Tests (PostgreSQL)
+    name: Run Tests (PostgreSQL integration)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     services:
       postgres:
-        image: postgres:16
+        # 固定版本，避免 CI 隨上游漂移（正式環境是 PG 16.14）
+        image: postgres:16.14-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -73,14 +76,9 @@ jobs:
           --health-retries 12
 
     env:
-      DB_DRIVER: postgres
-      # app 的慣例是整串連線字串（容器實測：只有 PG_URL ＋ DB_DRIVER，沒有 PGHOST 等分散變數）
+      # 統一的測試連線契約：應用 driver 讀 PG_URL，live PG 測試讀 PG_TEST_URL（astra §3.3）
       PG_URL: postgres://postgres:postgres@127.0.0.1:5432/tracker_test
-      PGHOST: 127.0.0.1
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: tracker_test
+      PG_TEST_URL: postgres://postgres:postgres@127.0.0.1:5432/tracker_test
       PG_STATEMENT_TIMEOUT_MS: "300000"
 
     steps:
@@ -98,8 +96,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Test Suite (PostgreSQL)
+      - name: Run PostgreSQL integration tests
         shell: bash
         run: |
           set -euo pipefail
-          npm test
+          npm run test:pg

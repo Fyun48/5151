@@ -159,8 +159,47 @@ function idFilter(column, ids, driver, offset = 0) {
 
 
 
-### 附註（憑證）
-容器實測環境只有 `PG_URL`（整串連線字串）＋ `DB_DRIVER=postgres`，**沒有** `PGHOST` 等分散變數 ✓
-⇒ canary 的略過條件改為「真的能建出可用的 PG driver」✓（不能只檢查 `PGHOST` ✗）；
-CI 的 PG job 也一併帶上 `PG_URL` ✓。**連線字串值只在容器環境／`~/.secrets`，不得進 repo 或對話** ✓。
+## 八、✦ astra 裁決後的更正（2026-09-25，必須以本節為準）
+
+astra 已讀取本檔並指出下列敘述有誤／過度推論，**本節覆蓋前文**：
+
+1. **PG 16 的 query parameter 上限是 65,535，不是 32,767** ✗（前文寫錯）。
+   單憑「36,306 個 placeholder」不能證明超過協定上限，錯誤訊息裡的 format count 也不必然等於
+   應用傳入的清單長度 ⇒ 需另記錄真正的 `params.length`、最大 placeholder 編號與原始錯誤。
+   `= ANY(bigint[])` 的改法**保留** ✓，但要補「真的跑到四個 loader」的大清單測試
+   （>32,767 與 >65,535 個 ID，驗證回讀集合完整）；**不能**用「錯誤碼從 08P01 變成 57014」
+   單獨證明陣列修復已通過（後者是候選 SELECT 早在 loader 之前就 timeout ✗）。
+2. **三組事件不是同一個原因** ✗：舊 `sql_pg count` 的 30 秒斷線、新 `node_pg` preload 的 `08P01`、
+   新全區候選的 `57014` 是**不同 SQL／不同階段**。目前已定位的是「全區候選逾時」；
+   歷史 30 秒斷線不可一律歸因於此。
+3. **不可宣稱「4.5–10× 優化」** ✗：先前 3.0–6.6 秒是**行政區過濾**的小候選案例，與 F3 的全區案例
+   不是同一個查詢；兩者不可相減。
+4. **`onlySqlite=0`／`onlyPg=22` 不是「零語意漂移」驗收** ✗：兩側使用者資料不同
+   （容器 SQLite 4 位 vs PG 28 位）⇒ 不具可比性。要驗收需**同一 fixture／快照**、雙向集合差為 0、
+   `totalMatched` 相等，再看順序與回傳狀態。
+5. **`districts: []` 不一定等於全區** ✓：`resolveListDistrictNames()` 會退回會員設定的行政區
+   ⇒ 必須分開測「請求名單為空但會員有設定」與「解析後確實為空」。後者不加行政區子句是**正確語意** ✓，
+   不能當成程式缺陷。
+6. **Sequential Scan 不自動代表缺索引** ✓：要看 rows／loops／buffers／等待與傳輸成本。
+7. **CI 的 15 秒推論作廢** ✗：workflow 明確設 `PG_STATEMENT_TIMEOUT_MS=300000`（5 分鐘），
+   不是 driver 預設 15 秒 ⇒ 不可再用「CI 沒設 env 所以必踩 15 秒」解釋 CI 結果。
+
+## 九、本輪依裁決完成的修正（2026-09-25）
+
+| 裁決 | 實作 | 驗證 |
+|---|---|---|
+| §2.1 watched／瀏覽隔離**不得回退讀 SQLite** | 新增 `browseIsolationClause(context, sqliteDb, table)`：有 context 用 context、`sqliteDb==null` **明確拋錯**；`listingVisibilityClauses` 接受 `{ sqliteDb }`；watched 分支改走同一條；`node_pg` 以 `{ sqliteDb: null }` 呼叫 | 新增 `listing-search-no-sqlite-io.test.js`：**以間諜計數**存取嘗試，all／watched／hidden／unseen／viewed 皆為 **0** ✓；缺 isolation 必拋錯 ✓；SQLite 路徑不受影響 ✓（8/8）|
+| §2.2 flags 消費端必須用 uid | `preloadDecorationProviderAsync` 新增 `flagUserId`（`personalFlags` 依它載入；`personalIndex`／`splitPairSet` 仍依 voteUid）；`node_pg` 的 `flagMap` 改 `personalFlagMap(uid)` | 新增 `listing-search-pipeline-flags-identity.test.js`：**真正走完 node_pg**、uid=101／voteUid=202 兩人 watched／hidden／viewed 相反，涵蓋 `all` 對稱、`hidden`、`unseen`，並斷言所有 flags 查詢都以 uid 發出（4/4）|
+| §5.6 正式模組不得有引擎入口 | `listingSearchAsync` 移除 `searchEngine()` 與 SQL-first 分支；舊路徑改為 `searchListingsSqlPgDiagnostic()`（不支援回報 `unsupported`）| 原「原始碼字串斷言」改為**行為驗證**：硬塞 `options.engine=sql_pg` 仍走 `node_pg` ✓、`searchEngine` 已不存在 ✓ |
+| §3 CI 缺陷 | PG job 改走獨立入口 `npm run test:pg`（先 `pg-integration-setup.mjs` 鏡射 schema，再跑 canary ＋ 所有 `PG_TEST_URL` 檔）；**不再** job 全域 `DB_DRIVER=postgres`；`PG_URL`／`PG_TEST_URL` 統一到同一拋棄式容器；image 固定 `postgres:16.14-alpine`；canary 移除 `PG_SKIP_CANARIES` 與 42P01 放行（連不上／缺 schema 必失敗）；計數改包 **client.query** 並分開交易控制語句 | canary 在**真 PG** 上 **4/4** ✓（`connects=1`、`wrapperQueries=0`、資料查詢皆走快照 client、BEGIN 存在）；`notify-enqueue-parity` 的模擬 executor 支援 `= ANY(?::bigint[])`／`$n` 與型別轉換 ⇒ 由失敗轉 **ok** ✓ |
+
+## 十、下一步（依裁決 §6 順序）
+1. §4 量測修正：探針把 `areaMax`／`wholeFloorOnly` 放進 `settings`（`wholeFloorOnly` 用 boolean）、
+   每個能力加「必定被排除」的 fixture 並斷言生效；`pg-stage-forensics` 輸出 `queryDetails` 各階段與
+   per-request PG 查詢數；`pg-explain-forensics` 的 `failedAfterMs` 從**失敗階段**起算；
+   移除「普通 EXPLAIN 不受 timeout 影響」的錯誤註解。
+2. B4：固定 `asOf` ＋ 明確候選順序（REPEATABLE READ 不會固定 JS 現在時間）。
+3. 全區候選的 `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF)`（唯讀）→ 依計畫決定等價改寫或索引 → 鏡像／CI 驗證。
+4. 補四個 loader 的大清單測試（>32,767、>65,535）與同 fixture 的雙向 parity。
+
 
