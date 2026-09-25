@@ -333,6 +333,8 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 而且不要吞掉同步輸出 ✓。
 
 
+## 十七、查詢數超標的組成與**等價**削減計畫（先前定位，尚未實作完）
+
 ### 機制（已讀程式碼確認）
 `createDecorationDataLoader` 的 memo 是 **以整個 id 集合為 key** ✗：
 ```js
