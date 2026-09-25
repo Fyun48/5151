@@ -556,6 +556,19 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 - ⇒ 教訓 ✓：**「在鏡像上量測」只對已部署的程式碼有效** ✗ —— 量測前必須先確認鏡像版本 ✓
   （本次以 `grep` 匯出清單確認 ✓，而非靠假設 ✓）。
 
+### ✅ CI 驗證：縮欄位通過 ✓（含 live PG 整合 ✓）
+- `22e3c27`（縮欄位）→ Tests **`failure`** ✗，但**唯一失敗**是
+  `not ok 25 - live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收`
+  （`AssertionError: '剛排進去的要搶到'` ✓）⇒ **與候選欄位完全無關** ✗（是佇列 claim 的競態斷言 ✗）。
+- **其後代 `cae323f`（純文件、含同一份程式碼 ✓）→ Tests `success`** ✓✓
+  ⇒ 同一份程式碼下次就通過 ✓ ⇒ **`22e3c27` 的失敗是偶發（flaky）** ✓✓
+  ⇒ **43 → 23 的縮欄位因此獲得 CI 驗證** ✓（且含 **live PG 整合測試** ✓，即在真 PG 上跑窄 SELECT ✓）。
+- ⇒ 另記一個**既有 flake** ✗（非本分支造成 ✓）：`pg-live-integration` 的佇列 claim 斷言
+  （`剛排進去的要搶到` ✓）會偶爾紅 ⇒ **若之後持續紅就要處理** ✓。
+- CI 現況 ✓：`0969884` Code review (advisory) `success` ✓、Tests `in_progress` ✓；
+  `cae323f`／`c2d779a` 兩項皆 `success` ✓。
+
+
 
 
 
