@@ -81,6 +81,11 @@ test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收",
   try {
     await ensurePgSchema(driver, db, { tables: ["job_queue"] });
     await jobQueue.ensurePgJobQueueIndex(driver);
+    // 清掉**自己前綴**的殘留列 ✓（根因機制 #2）：`priority` 只保證同優先權內依 `created_at ASC` 排序 ✓，
+    // 所以先前 10,000 優先權的殘留會排在我們前面 ✓，搭配 `claim` 的 `LIMIT 5` 可能把剛排進去的擠出去 ✗。
+    // ⚠️ 機制 #1（CI 多檔並行，別的檔在同一張 `job_queue` 上 claim 走我們那筆 ✗）**尚未解決** ✗
+    //    —— 需要真正的隔離（專屬 schema／表前綴，或此檔序列執行 ✓），不以重跑結案 ✗。
+    await driver.query("DELETE FROM job_queue WHERE idempotency_key LIKE 'live-job-%'");
     const q = jobQueue.createJobQueue({ driver: "postgres", pgPool: driver });
     assert.equal(q.name, "postgres");
     const now = Date.now();
@@ -101,6 +106,8 @@ test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收",
     const afterDone = await q.claim({ workerId: "live-worker", limit: 5, now: now + 1 });
     assert.equal(afterDone.some((row) => row.idempotency_key === key), false, "完成後不該再被搶到");
   } finally {
+    // 收尾清掉自己前綴 ✓（不留給下一次執行 —— 這正是機制 #2 的來源 ✗）。
+    await driver.query("DELETE FROM job_queue WHERE idempotency_key LIKE 'live-job-%'").catch(() => {});
     await driver.close();
   }
 });
