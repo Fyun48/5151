@@ -434,6 +434,22 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 ⇒ **在此之前不動 `db.js` 的候選 SELECT** ✗ —— 以**不足**的欄位集去改，會改壞管線且可能不會被現有測試抓到 ✗
 （這正是本專案「先量、再改」的紅線 ✓）。
 
+### 管線級審計的注入契約（已封閉 ✓，可直接照做）
+讀 `db.js` 後確定，要讓管線在**無 SQLite**下可測 ✓（否則落在同步讀取 ✗）：
+- `attachSameHouseRoles(rows, voteUserId, provider)`（`db.js:3373` ✓）：
+  `const source = provider || sqliteDecorationProvider(voteUserId)` ✗ ⇒ **必須注入 provider** ✓；
+  所需介面＝`personalIndex()`（回傳含 `peers(post_id)` ✓）＋ `extras(ids)`（可迭代 `[id, item]` ✓）✓。
+- `applyListingFilter(rows, settings = getSettings(), provider = null)`（`db.js:6322` ✓）：
+  `warmRouteCache()` 與 `applyCachedCoords(…, provider)` **只在 `settings.commuteKm > 0 且 hasWorkPoint(settings)`** 時才走 ✓
+  ⇒ **審計的 settings 不含 `commuteKm`** ✓ 即可完全避開 provider 與路線快取 ✓。
+- ⇒ 因此審計配方 ✓：`filter:"all"` ✓、`kind:""` ✓、`sources:null` ✓、**`sort` 不用 `fit_desc`** ✓
+  （否則讀 `route_km` 並寫 `fit_score` ✗）、`uid:0` ✓、`voteUid:0` ✓、`districtSet:new Set()` ✓、
+  `flagMap:new Map()` ✓、`provider:{ personalIndex:()=>({peers:()=>[]}), extras:()=>[] }` ✓、`markStage:()=>{}` ✓；
+  再對回傳列**重新包一次 Proxy** 跑 `pageListListingsRows` ✓ ⇒ 同時涵蓋「分頁階段」的讀取 ✓。
+- 附帶確認 ✓：`listingDistrictName(row) = row?.district || districtNameFromListing(row)`（`db.js:6336` ✓）
+  ⇒ `district` 確實被讀、且 `district` **不在** 43 欄內 ✓（靠 `address` 推導 ✓）。
+
+
 
 
 
