@@ -130,7 +130,14 @@ export async function loadGroupIds(exec, postIds, driver = "sqlite") {
 // db.js loadSameHousePeers(): the direct listings neighbours (post_id / match_post_id).
 // The id list appears twice, so the PostgreSQL placeholders must keep counting
 // ($1..$n for the first IN list, then $n+1.. for the second) while SQLite just repeats `?`.
-export async function loadPeerRows(exec, ids, driver = "sqlite", { limit = 8 } = {}) {
+// db.js loadSameHousePeers(): 一頁內所有 post_id 的 peer 列。
+//
+// ⚠️ astra6 2026-09-25 §0.2（已證實）：原版在**整批**共用一個 `LIMIT 8` ✗ ——
+// 80 個頁面 id 只會拿到 8 筆 peer 列，角色／total 的計算看到被截斷的資料（靜默錯誤）。
+// 計算角色與 total 所需的資料**不得截斷**；若要限制「顯示」的 peer 筆數，
+// 必須在角色計算**之後**、以穩定排序另行處理。
+// 效能前提：`listings(match_post_id, post_id)` 索引（astra6 §3.2 的檢查清單）。
+export async function loadPeerRows(exec, ids, driver = "sqlite") {
   const list = [...new Set((ids || []).map(normalizeId).filter(Boolean))];
   if (!list.length) return [];
   const first = inList(list, driver, 0);
@@ -138,8 +145,7 @@ export async function loadPeerRows(exec, ids, driver = "sqlite", { limit = 8 } =
   const rows = await exec(
     `SELECT ${PEER_COLUMNS}
        FROM listings
-       WHERE post_id IN (${first}) OR match_post_id IN (${second})
-       LIMIT ${Number(limit) || 8}`,
+       WHERE post_id IN (${first}) OR match_post_id IN (${second})`,
     [...list, ...list],
   );
   return (rows || []).map((row) => normalizeRow(row, NUMERIC_KEYS.peer));
