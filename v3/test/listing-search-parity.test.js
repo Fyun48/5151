@@ -70,7 +70,7 @@ function rolesOf(result) {
 //   ⚠️ 具體 URL 格式**不必猜** ✗ —— 鍵一律由 context 建構後**讀回來** ✓（`sameSearch` 先比對 trim 相等 ✓）。
 
 
-test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP || "尚未接通兩邊自建 fixture（見檔頭待辦）⇒ 目前只會空洞通過，故暫緩" }, async () => {
+test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const app = await import("../src/db.js");
   const pgDriver = await createPostgresDriver({ env: process.env });
