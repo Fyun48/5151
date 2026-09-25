@@ -81,6 +81,36 @@
   5. 放在 `listing-enrich-parity.test.js` 內 ✓（**沿用該檔既有 import 與 fixture 輔助** ✓，
      避免猜測模組路徑 ✗）
 
+### 3d. seed 契約 fixture 版**已在 CI 執行並通過** ✓✓（`45ff485`，run `36133652882` ✓）
+
+| Job | tests | pass | fail | skipped |
+|---|---:|---:|---:|---:|
+| Run Tests（一般） | completed success ✓ | — | **0** ✓ | — |
+| **Run Tests (PostgreSQL integration)** | **115** ✓（前一版 114 ＋ 1 ＝ 新測試 ✓） | **114** ✓ | **0** ✓ | **1** ✓ |
+
+- ⇒ 新測試 `live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite` ✓
+  **確實被執行且通過** ✓（log 出現該名稱 ✓；PG job 的 **skip 數未增加** ✓＝**沒有**被 skip ✓✓）
+  ⇒ 符合裁決「必要 PG 功能測試不得 skip」✓ ⇒ **裁決 §3 的 seed 契約缺口以 CI 證據關閉** ✓✓
+- 仍為 1 的 skip ✓ 就是 `PG_SHADOW_URL` 那支 ✓（其自身註解已說明定位且非 PR-B 必要 gate ✓，
+  依裁決「需要正式鏡像資料的規模探針可以另列」✓）
+
+### 3e. queue claim 偶發：唯讀根因分析（**修法待實作** ✓）
+`v3/test/job-queue-parity.test.js:72` ✓ —— 測試以 `priority: 10_000` 排入後 `claim({ limit: 5 })` ✓，
+再斷言「剛排進去的要搶到」✓。三個可解釋偶發的機制 ✓（正是裁決要查的隔離／清理時序／並行 ✓）：
+
+| # | 機制 | 為什麼偶發 |
+|---|---|---|
+| 1 | **並行搶同一張表** ✗ | CI 以 `node --test` **多檔並行** ✓ ⇒ 另一個 PG 測試檔在同一張 `job_queue` 上 `claim` ✓ 把我們那筆搶走 ✓ ⇒ 前 5 筆裡沒有它 ✗（**最可能** ✓） |
+| 2 | **殘留 ＋ `LIMIT 5`** ✗ | 測試自己註解已言「影子站還留著先前工作列」✓；`priority` 只保證**同優先權內**依 `created_at ASC` ✓ ⇒ 先前同為 10,000 的殘留排在前面 ✓；殘留 ≥5 筆（前次未清理 ✓）⇒ 被擠出前 5 ✗ |
+| 3 | **時間戳競態** ✗ | `const now = Date.now()` 同時給 enqueue 與 claim ✓；若 enqueue 內部另取時間使 `run_at/available_at` 略大於 `now` ✓ ⇒ claim 看不到 ✗ |
+
+**修法方向** ✓（**不是**「重跑後綠」✗）：
+1. 斷言改為**針對自己那筆** ✓（以 `idempotency_key` 直接查／或確保它一定被回傳 ✓）
+2. 測試前後**清掉自己前綴**的殘留（`WHERE idempotency_key LIKE 'live-job-%'` ✓）
+3. **避免與其他檔競爭同一張表** ✓（專屬 schema／表前綴 ✓，或讓此檔序列執行 ✓）
+4. **保留** `attempts`／`state`／`lease_owner` 等契約斷言 ✓（不為穩定性拿掉契約 ✗）
+
+
 - ⚠️ CI **沒有 lint 步驟** ✗（`Run Tests` 步驟只有 `Install dependencies` → `Run Test Suite` ✓）
   ⇒ lint 仍須我在**隔離目錄 ＋ lockfile** 自行跑 ✓；現況 **`NOT_RUN`** ✗（不得以 Tests 綠燈冒充 ✓）
 
