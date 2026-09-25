@@ -62,6 +62,25 @@
 - 「seed 讀 PG」契約的**另一份同名測試**（一般 job `ok 1565` ✓）**同樣以 `PG_SHADOW_URL` 為 gate** ✗
   ⇒ **CI 的兩個 job 都不覆蓋**這個契約 ✗ ⇒ 依裁決「同功能的『seed 讀 PG』契約仍要有 CI fixture 覆蓋」✓
   ⇒ **須新增以 `PG_TEST_URL`（CI 既有拋棄式 PG ✓）為 gate 的 fixture 版** ✓ ⇒ 列為下一批第一項 ✓
+
+#### ✗✓ 更正上面的「缺口」判斷（我下得太快 ✗）
+- 讀 `v3/test/listing-enrich-parity.test.js:302` 本文後發現：**該測試自己的註解已說明為何必須用 `PG_SHADOW_URL`** ✓：
+  ```
+  // 這個測試本質上需要「影子站」（＝正式站資料的匯入）：它斷言 PG 分支挑得到候選 ✗，
+  // 而 CI 的拋棄式 PG 是空的 ⇒ 不能用 PG_TEST_URL 假裝有影子站 ✗。
+  // 依 astra §3.4「必要測試不得 skip」：此測試不是 PR-B 的必要 gate，故以專屬 PG_SHADOW_URL 明確 gate
+  ```
+- ⇒ 若硬把它改成 `PG_TEST_URL` ✗ ⇒ **會直接失敗** ✗（空 PG ⇒ seed 0 筆 ⇒ `assert.ok(seeded > 0)` 掛 ✓）。
+- ⇒ 裁決要的是**同契約的 CI fixture 版** ✓（不是放寬現有那支 ✗）。設計（下一批機械執行 ✓）：
+  1. 以 `PG_TEST_URL` 為 gate ✓；測試**自己在 PG 建 fixture 候選**
+     （insert 一筆 `source='houseprice'`、`offline=0`、無 `listing_prep` 列 ✓ ⇒ 符合 seed 的候選條件 ✓）
+     ⇒ 這樣就**不需要影子站** ✓，也**不假裝** PG 有正式資料 ✓。
+  2. 斷言 **`seedHousepriceEnrichJobsAsync(..., { driver: "postgres" })` > 0** ✓（挑到剛建的候選 ✓）
+  3. 斷言**本機 SQLite 的 `listing_enrich_jobs` 仍為 0** ✓（PG 模式不得寫本機 SQLite ✓）
+  4. 測試結束**自行清理**（刪掉自己建的候選與工作列 ✓）
+  5. 放在 `listing-enrich-parity.test.js` 內 ✓（**沿用該檔既有 import 與 fixture 輔助** ✓，
+     避免猜測模組路徑 ✗）
+
 - ⚠️ CI **沒有 lint 步驟** ✗（`Run Tests` 步驟只有 `Install dependencies` → `Run Test Suite` ✓）
   ⇒ lint 仍須我在**隔離目錄 ＋ lockfile** 自行跑 ✓；現況 **`NOT_RUN`** ✗（不得以 Tests 綠燈冒充 ✓）
 
