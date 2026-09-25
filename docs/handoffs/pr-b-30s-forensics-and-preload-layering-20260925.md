@@ -663,4 +663,24 @@ context 6（crawlSources／settings／user_settings／users／crawl_covers／dis
   —— 若是 ✓，`= ANY(keys)` 完全等價 ✓；若它還需要「stored 的其他性質」✗，就不能這樣改 ✗
   （**先讀再改** ✓，不猜 ✓）。
 
+### ✗✓ 更正：`= ANY(keys)` 改寫**作廢**（`expandSearchKeysAgainst` 不是成員判定 ✗）
+- 讀原始碼後定案 ✓（`db.js:4207` ✓）：
+  ```js
+  const out = new Set(keys);
+  for (const key of storedKeys || []) {
+    if (keys.some((url) => sameSearch(url, key))) out.add(key);   // ← sameSearch() 正規化比對 ✗
+  }
+  ```
+  ⇒ 它用的是 **`sameSearch(url, key)` 的「同一搜尋」比對** ✗，**不是 `=` 相等** ✓
+  ⇒ `WHERE search_key = ANY($keys)` **不等價** ✗✗（會漏掉正規化後相同的鍵 ⇒ **靜默少資料** ✗）。
+- ⇒ **我的第 4 個猜測退休** ✗✓（前三個：`listing_prep` 熱點 ✗、flags 統計問題 ✗、`to_regclass` 重複 ✗）。
+  若沒先讀這段就改下去，會做出一個**不會報錯、只會少回結果**的 bug ✗✗ —— 這正是「先讀再改」的價值 ✓。
+- ⇒ **正確的兩個修法** ✓：
+  ① **跨請求 memo（照抄 SQLite 既有語意 ✓）**：SQLite 側本來就有 8 秒 memo ✓
+     （`storedSearchKeys()` 的 `searchKeyMemo` ✓，`db.js:4216` ✓）⇒ PG 側補上同一語意 ✓
+     ⇒ 高頻請求下不再每次全表 `DISTINCT` ✓，且**行為不變** ✓。
+  ② **`search_key` 索引**（走**既有發布權限** ✓）⇒ `DISTINCT` 變 index-only scan ✓。
+- ⇒ 判斷 ✓：先做 ①（程式改動、可本地驗證 ✓、零語意風險 ✓）；② 依發布流程評估 ✓。
+
+
 
