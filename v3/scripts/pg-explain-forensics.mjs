@@ -108,6 +108,40 @@ for (const item of ABILITIES) {
     if (baselineRows === null) baselineRows = rec.rows;
     // 能力是否真的生效（與 baseline 對照；相同 ⇒ 這個「能力」沒有作用，量到的不是它）
     rec.effective = item.label === "baseline" ? null : rec.rows !== baselineRows;
+    // 3) astra §4.2：真實執行計畫（只在 ANALYZE=1 時）。用 loops × time 判斷熱點，
+    //    並保留 rows／buffers（astra：seq scan 不自動代表缺索引，要看實際 rows／loops／buffers）。
+    if (process.env.ANALYZE === "1") {
+      stageName = "analyze";
+      stageStart = Date.now();
+      const json = await client.query(
+        `EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) ${toPostgresSql(select)}`,
+        built.params,
+      );
+      rec.analyzeMs = Date.now() - stageStart;
+      const root = json.rows[0]["QUERY PLAN"][0];
+      const nodes = [];
+      const walk = (node, depth = 0) => {
+        nodes.push({
+          node: node["Node Type"],
+          relation: node["Relation Name"] || null,
+          depth,
+          rows: node["Actual Rows"],
+          loops: node["Actual Loops"],
+          totalMs: node["Actual Total Time"],
+          workMs: Math.round((Number(node["Actual Total Time"]) || 0) * (Number(node["Actual Loops"]) || 1) * 100) / 100,
+          hit: node["Shared Hit Blocks"],
+          read: node["Shared Read Blocks"],
+        });
+        for (const child of node["Plans"] || []) walk(child, depth + 1);
+      };
+      walk(root);
+      rec.analyze = {
+        execMs: root["Execution Time"],
+        planningMs: root["Planning Time"],
+        nodes: nodes.length,
+      };
+      rec.analyzeHot = nodes.slice().sort((a, b) => b.workMs - a.workMs).slice(0, 5);
+    }
   } catch (err) {
     rec.outcome = classify(err);
     // astra §4.1：失敗時間必須從**該階段開始**起算，不能沿用上一個階段（例如 EXPLAIN）的耗時。

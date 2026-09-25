@@ -304,7 +304,34 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 ⑤ 同 fixture 雙向 parity → 分層 perf gate → PR 本文更新
 
 
-## 十五、查詢數超標的組成與**等價**削減計畫（先前定位，尚未實作）
+## 十六、EXPLAIN (ANALYZE) 結果與兩個操作教訓（2026-09-25）
+
+### 實測（真實鏡像；`ANALYZE=1`、`EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)`）
+| 能力 | PG execMs | planningMs | rows |
+|---|---|---|---|
+| baseline（西屯區） | **117** | 5.4 | 6694 |
+| q=電梯 | **376** | 11.2 | 983 |
+| kind=whole | **316** | 10.5 | 6694 |
+| sources=591 | **143** | 5.6 | 6694 |
+| areaMax=30 | **162** | 8.1 | 6694 |
+| wholeFloorOnly=1 | **164** | 9.3 | 6694 |
+| **full-table（`districts: []`）** | **57014（逾時）** ✗ | — | — |
+
+⇒ **有行政區時 PG 實際執行只要 117–376 ms** ✓（先前 stage `sql_ms=634` 含 pg 驅動／Node 傳輸 ✓）
+⇒ 請求級成本主要落在 **Node 階段**（`prepare_ms` 900–1500／`relations_ms` 1400–2600 ✓，見 §12）
+⇒ **全區候選仍是唯一會逾時的查詢** ✗（§11 的 `Seq Scan` ＋ `Nested Loop Anti Join`＋`Join Filter` ✓）
+
+### 教訓 1（探針）：`TIMING OFF` 會讓逐節點時間消失 ✗
+`EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON)` 的輸出**沒有** `Actual Total Time` ✗
+⇒ 本次 `analyzeHot`（用 loops × time 排序）全為 0 ✗。逐節點歸因必須改用可得的欄位：
+`Actual Rows`／`Actual Loops`／`Shared Hit/Read Blocks`（astra §4.2 的 rows／loops／buffers ✓）；
+若一定要時間，就得開 timing（並接受量測開銷 ✓）。**修探針的下一步** ✓。
+
+### 教訓 2（流程）：不可把同步輸出丟進 `/dev/null` ✗
+本次 `run-in-container.sh … > /dev/null 2>&1` 同步**失敗但無聲** ✗ ⇒ 容器內跑的是舊版探針（`grep -c analyzeHot` = 0 ✗）
+⇒ 白費一輪 ✓。規則：**同步後一定要用 marker grep 驗證** ✓（`grep -c analyzeHot` = 1 ✓ 才繼續），
+而且不要吞掉同步輸出 ✓。
+
 
 ### 機制（已讀程式碼確認）
 `createDecorationDataLoader` 的 memo 是 **以整個 id 集合為 key** ✗：
