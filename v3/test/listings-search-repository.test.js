@@ -111,7 +111,13 @@ test("listings repository (sqlite) matches the SQL-first chain for ids/order/pag
       checked.push({ sort, ids: page.ids.length, total: page.totalMatched });
     }
     assert.equal(await repo.searchPage({ userId: uid, searchKeys: [], settings, sort: "newest", filter: "watched" }), null);
-    assert.equal(await repo.searchPage({ userId: uid, searchKeys: [], settings, sort: "newest", q: "abc" }), null);
+    // q 已於 F3 下推（lower(x) LIKE lower(?) 統一 SQLite/PG 的 LIKE 語意）：不再回退 null，且能命中 fixture 的 title。
+    const qHit = await repo.searchPage({ userId: uid, searchKeys: [], settings, sort: "newest", q: "合成住宅" });
+    assert.ok(qHit, "q 應在 envelope 內");
+    assert.ok(qHit.totalMatched > 0, "q 應命中 fixture 的 title");
+    const qMiss = await repo.searchPage({ userId: uid, searchKeys: [], settings, sort: "newest", q: "abc" });
+    assert.ok(qMiss, "q 應在 envelope 內");
+    assert.equal(qMiss.totalMatched, 0, "不存在的關鍵字應為 0");
     assert.equal(await repo.searchPage({ userId: uid, searchKeys: [], settings: { ...settings, priceMax: 25000 }, sort: "newest" }), null);
     assert.deepEqual(await repo.hydrate([]), []);
     console.log(JSON.stringify({ ok: true, checked }));
