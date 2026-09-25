@@ -80,17 +80,16 @@ function pageResult(page, listings, extra = {}) {
   };
 }
 
-// B2/B3（astra6 決策）：搜尋引擎開關。
+// B2/B3（astra6 §5）：搜尋引擎選擇。
 //
-// **Owner 於 2026-09-24 決定「正確性優先」**：預設為 `node_pg`（PG-fed Node 管線）——
-// 它與 Node 參考管線共用同一份後處理，且已用 A/B 對照在真實 PG 資料上驗證為正確；
-// 缺點是較慢（實測 mean 1.3s／p95 1.9s，event-loop lag p99 262ms）。
+// **正式入口一律 `node_pg`**（PG-fed Node，與參考管線共用後處理；Owner 2026-09-24 決定正確性優先）。
 //
-// `sql_pg` 仍保留（快，但現階段 SQL 端缺少 same-house 角色條件 ⇒ 會多回傳約 40% 同源配對列），
-// 需**明確**設定環境變數才會使用：`PG_SEARCH_ENGINE=sql_pg`。
-// 兩者都以 PG 為唯一資料來源；PG 失敗一律 503，不回退 SQLite。
-export function searchEngine() {
-  return String(process.env.PG_SEARCH_ENGINE || "node_pg") === "sql_pg" ? "sql_pg" : "node_pg";
+// `sql_pg`（SQL-first）**不得由正式請求選到** ✗：baseline／q 都已量到約 40% 的 total 差異，
+// 且四個能力因效能關閉 ⇒ 沒有一個可正常上線的剩餘能力。
+// 因此這裡**不讀環境變數**（避免正式部署誤用未達 gate 的引擎），
+// 只有明確傳 `options.engine = "sql_pg"` 的診斷／測試／benchmark 路徑才能使用。
+export function searchEngine(options = {}) {
+  return options.engine === "sql_pg" ? "sql_pg" : "node_pg";
 }
 
 export async function searchListingsAsync(args = {}, options = {}) {
@@ -101,7 +100,7 @@ export async function searchListingsAsync(args = {}, options = {}) {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     // 正確性優先（Owner 2026-09-24）：預設走 PG-fed Node，且**不先跑 SQL-first**
     // （省掉一次註定要丟棄的查詢；也不建立 repository）。要回到 SQL-first 需明確設 PG_SEARCH_ENGINE=sql_pg。
-    if (searchEngine() === "node_pg") {
+    if (searchEngine(options) === "node_pg") {
       return await searchListingsNodePg(args, {
         pgDriver,
         deps: options.deps || listingSearchBuildContext(),
@@ -118,7 +117,7 @@ export async function searchListingsAsync(args = {}, options = {}) {
     // B2/B3（astra6 §3）：外框外的查詢**不再回退 SQLite** —— 那會在下層換掉資料來源
     // （PG 模式下讀到的是另一個、可能落後的資料庫），也讓「PG 失效不回 SQLite」形同虛設。
     // 改走 PG-fed Node 管線：候選／個人旗標／裝飾全部來自 PG，後處理與 SQLite Node 路徑共用同一份函式。
-    if (!page || searchEngine() === "node_pg") {
+    if (!page || searchEngine(options) === "node_pg") {
       return await searchListingsNodePg(args, {
         pgDriver,
         deps: options.deps || listingSearchBuildContext(),
@@ -151,11 +150,8 @@ export async function searchListingsAsync(args = {}, options = {}) {
     });
     return pageResult(page, listings, { hydrated: "decorated", decoration: "full" });
   } catch (error) {
-    // F2：PostgreSQL 失效時**不再**回退 SQLite 鏈（失敗要看得見，資料來源也不該默默換掉）。
-    // 正式路徑一律拋出穩定錯誤碼 → /api/listings 回 503。
-    // options.sqliteFallback 只給測試明確開啟，沒有環境變數開關（不留逃生門）。
-    // options.strict 由呼叫端傳入時行為不變（現在已是預設）。
-    if (options.sqliteFallback === true) return searchListingsSqlite(args);
+    // F2／astra6 §5：PostgreSQL 失敗時**不回退 SQLite**，且**移除正式可達的換庫能力** ✗。
+    // 診斷／測試要比較 SQLite adapter 時，直接呼叫 searchListingsSqlite()，不要讓正式錯誤處理保留這個選項。
     if (isListingSearchUnavailable(error)) throw error;
     throw new ListingSearchUnavailableError(error);
   }

@@ -45,12 +45,19 @@ test("PG 失敗時，正是因為不回退，才會拋錯（原始原因被保�
   );
 });
 
-test("測試用 sqliteFallback 明確開啟時才回退（正式路徑沒有這個開關）", async () => {
-  const listed = await searchListingsAsync(
-    IN_ENVELOPE,
-    { driver: "postgres", pgDriver: failingDriver(), sqliteFallback: true },
+test("正式路徑沒有換庫能力：PG 失敗一律拋錯（要比較 SQLite 請直接呼叫 adapter）", async () => {
+  const { searchListingsSqlite } = await import("../src/listingSearchAsync.js");
+  // astra6 §5：正式錯誤處理不得保留回退 SQLite 的能力；診斷／測試直接呼叫 adapter。
+  await assert.rejects(
+    () => searchListingsAsync(IN_ENVELOPE, { driver: "postgres", pgDriver: failingDriver(), sqliteFallback: true }),
+    (error) => {
+      assert.equal(isListingSearchUnavailable(error), true, "sqliteFallback 不應再有任何作用");
+      return true;
+    },
   );
-  assert.ok(listed && typeof listed === "object", "應回傳 SQLite 鏈的結果");
+  // 直接呼叫 SQLite adapter 仍然可用（診斷用途）
+  const listed = searchListingsSqlite({ filter: "all", limit: 1 });
+  assert.ok(listed && typeof listed === "object");
   assert.ok(Array.isArray(listed.listings));
 });
 
