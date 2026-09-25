@@ -332,6 +332,23 @@ Nested Loop Anti Join  (cost=0.35..1894939.42 rows=577 width=739)
 ⇒ 白費一輪 ✓。規則：**同步後一定要用 marker grep 驗證** ✓（`grep -c analyzeHot` = 1 ✓ 才繼續），
 而且不要吞掉同步輸出 ✓。
 
+### 逐節點歸因（`ANALYZE=1`，baseline 西屯區，以 buffers／loops 排序）
+| 節點 | relation | rows | loops | buffers |
+|---|---|---|---|---|
+| Merge Join | — | 6694 | 1 | 33,518 |
+| Index Scan | **listings** | 6694 | 1 | **33,516** ✗ |
+| Index Scan | **user_listing_flags** | 0 | **6,907** ✗ | 13,814 ✗ |
+| Seq Scan | **listing_prep** | 0 | **1** | **13** ✓ |
+
+⇒ **候選欄位寬度是最大成本** ✓（`listings` index scan 33,516 buffers ≈ 262 MB block 存取 ✗；對應 astra §4.2
+「若成本主要是傳輸／Node，優先縮減候選欄位」✓）—— 現行 `LIST_CANDIDATE_COLUMNS` 有 43 個欄位、寬 739 bytes ✓。
+⇒ **flags 反連接逐列執行 6,907 loops** ✗（每候選列一次 index scan ✓）⇒ 等價改寫（讓 PG 選 hash anti join ✓／
+或等效條件重寫 ✓）或統計修正 ✓，這才是「flags 逐列 subquery」的真實量測 ✓。
+⇒ **`listing_prep` 只碰 13 buffers、1 loop** ✓ ⇒ **先前標為候選熱點的猜測被推翻** ✗✓
+（**不需要**為它加索引 ✓；這正是 astra 要求「先量再決定」的價值 ✓）。
+⇒ 探針修正：`FORMAT JSON` 的根在 **`Plan`** 底下 ✗（直接走 root 會得到空節點、buffers 全 0 ✗），已修 ✓。
+
+
 
 ## 十七、查詢數超標的組成與**等價**削減計畫（先前定位，尚未實作完）
 

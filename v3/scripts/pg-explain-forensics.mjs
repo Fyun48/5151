@@ -118,19 +118,25 @@ for (const item of ABILITIES) {
         built.params,
       );
       rec.analyzeMs = Date.now() - stageStart;
-      const root = json.rows[0]["QUERY PLAN"][0];
+      // ⚠️ `FORMAT JSON` 的回傳形狀是 `[ { Plan: {…}, "Planning Time": …, "Execution Time": … } ]`
+      // ✗ —— 根節點在 **Plan** 底下（實測踩過：直接走 root 會得到一個空節點、buffers 全 0 ✗）。
+      const top = json.rows[0]["QUERY PLAN"][0];
+      const root = top.Plan || top;
       const nodes = [];
       const walk = (node, depth = 0) => {
+        const hit = Number(node["Shared Hit Blocks"]) || 0;
+        const read = Number(node["Shared Read Blocks"]) || 0;
         nodes.push({
           node: node["Node Type"],
           relation: node["Relation Name"] || null,
           depth,
           rows: node["Actual Rows"],
           loops: node["Actual Loops"],
-          totalMs: node["Actual Total Time"],
-          workMs: Math.round((Number(node["Actual Total Time"]) || 0) * (Number(node["Actual Loops"]) || 1) * 100) / 100,
-          hit: node["Shared Hit Blocks"],
-          read: node["Shared Read Blocks"],
+          // TIMING OFF 之下這裡是 null ✗（PG 不輸出逐節點時間）⇒ 以 buffers／loops 歸因。
+          timeMs: node["Actual Total Time"] ?? null,
+          buffers: hit + read,
+          hit,
+          read,
         });
         for (const child of node["Plans"] || []) walk(child, depth + 1);
       };
@@ -140,7 +146,12 @@ for (const item of ABILITIES) {
         planningMs: root["Planning Time"],
         nodes: nodes.length,
       };
-      rec.analyzeHot = nodes.slice().sort((a, b) => b.workMs - a.workMs).slice(0, 5);
+      // astra §4.2：以 rows／loops／buffers 排序（有時間時才一併用時間）。
+      rec.analyzeHot = nodes.slice().sort((a, b) => (
+        (b.buffers - a.buffers)
+        || ((b.loops || 0) - (a.loops || 0))
+        || ((Number(b.timeMs) || 0) - (Number(a.timeMs) || 0))
+      )).slice(0, 5);
     }
   } catch (err) {
     rec.outcome = classify(err);
