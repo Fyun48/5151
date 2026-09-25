@@ -116,7 +116,57 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0 
   return [...ids];
 }
 
-export async function searchListingsNodePg(args = {}, { pgDriver, deps = {}, decorationLoader = null } = {}) {
+/**
+ * astra6 §0.2／§3：把「整個請求」包在**單一快照**內。
+ *
+ * 現況：`exec` 每個查詢都走 `pgDriver.query()` ⇒ 各自從 pool checkout ⇒ 不同查詢可能落在
+ * 不同快照（context／closure／候選列／頁面列可能互相不一致），也可能各自排隊造成長尾。
+ * 作法：同一個 client、`BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`，
+ * 之後所有查詢共用它；因為是唯讀交易，結束用 `ROLLBACK` 即可（不需要 COMMIT）。
+ *
+ * 若 driver 沒有 `pool.connect`（單元測試的 fake driver），回傳 null ⇒ 完全不走此路徑，
+ * 行為與過去相同（避免測試需要模擬 pg pool）。
+ */
+function createPgSnapshot(pgDriver) {
+  const pool = pgDriver?.pool;
+  if (!pool || typeof pool.connect !== "function") return null;
+  let client = null;
+  let opened = false;
+  return {
+    driver: {
+      query: async (sql, params) => {
+        if (!client) {
+          client = await pool.connect();
+          await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+          opened = true;
+        }
+        return client.query(sql, params);
+      },
+    },
+    close: async () => {
+      if (!client) return;
+      const conn = client;
+      client = null;
+      try {
+        if (opened) await conn.query("ROLLBACK");
+      } finally {
+        if (typeof conn.release === "function") conn.release();
+      }
+    },
+  };
+}
+
+export async function searchListingsNodePg(args = {}, opts = {}) {
+  const snapshot = createPgSnapshot(opts.pgDriver);
+  if (!snapshot) return searchListingsNodePgInner(args, opts);
+  try {
+    return await searchListingsNodePgInner(args, { ...opts, pgDriver: snapshot.driver });
+  } finally {
+    await snapshot.close();
+  }
+}
+
+async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null } = {}) {
   if (!pgDriver || typeof pgDriver.query !== "function") {
     throw new Error("searchListingsNodePg requires pgDriver");
   }
