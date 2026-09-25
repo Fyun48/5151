@@ -633,3 +633,18 @@ context 6（crawlSources／settings／user_settings／users／crawl_covers／dis
   ⇒ 所以 ③ 的順序必須是：**先量**每次搜尋實際發出幾個查詢 ✓（用假 `pgDriver` 包計數器 ✓，
   可離線跑 ✓）⇒ **再**把 `flags`／`personalIndex`／`splitPairs` 三筆併成一筆 ✓。
 - ⇒ 尚未做（下一批 ✓）：量測查詢數 ＋ 合併；本批只完成清點與方法 ✓。
+
+### ✗✓ 更正：`to_regclass` **不是**重複浪費（我判錯 ✓），`ab06f0e` 非效能收益 ✗
+- 我原先主張「同一探測重複 5 次 ⇒ 快取即省 26%」✗ —— **錯** ✓。實測改動後
+  `QC-TOTAL` **仍是 19** ✗：那 5 個探測是**5 張不同的表**
+  （`settings`／`user_settings`／`users`／`search_profiles`／`listings`(search_key) ✓），
+  **每表一次是正確行為** ✓ ⇒ 快取本來就正確 ✓。
+- ⇒ `ab06f0e` 的性質更正 ✓：**不是效能收益** ✗（19 → 19 ✓），而是無害的重構 ✓
+  （per-instance → 共享快取 ✓，＋ 只快取正結果的語意收緊 ✓）。
+- ⇒ 這是我第 **3** 個被實測推翻的猜測 ✓（前兩個：`listing_prep` 熱點 ✗、flags 統計問題 ✗）
+  —— 再次證明「先量再改」有效 ✓：若照原計畫去改 flags/splitPairs 合併 ✗，也同樣不會動到這個數字 ✓。
+- ⇒ **真正剩下的目標**（依實測清單 ✓）：
+  ① `SELECT DISTINCT search_key FROM listings` ✓ —— **全表** ✗（最可疑 ✓）；
+  ② `listings` 被查 **5 次** ✗（candidate SELECT ＋ DISTINCT search_key ＋ hydration ＋ 另兩筆 ✓）；
+  ③ 裝飾各自一筆 ✓（`flags`／`same_house`／`votes`／`prep`／`group_members` ✓）⇒ 才是合併候選 ✓。
+
