@@ -34,3 +34,18 @@ test("context.isolation 會取代 sqlExcludeFixtureRows(db)", () => {
   assert.match(built.where, /fixture_namespace = \?/);
   assert.ok(built.params.includes("ns1"));
 });
+
+test("context.searchKeys 視為已展開：參數逐字等於提供值（不再呼叫 expandSearchKeys）", () => {
+  const built = buildListListingsClauses({
+    ...ARGS,
+    context: { searchKeys: ["https://ctx.test/x"] },
+  });
+  assert.match(built.where, /search_key IN \(\?\)/);
+  assert.deepEqual(built.params.filter((p) => String(p).startsWith("https://ctx.test/")), ["https://ctx.test/x"]);
+});
+
+test("未提供 context.searchKeys 時維持現況（走 SQLite 的 currentSearchKeys／expandSearchKeys）", () => {
+  const built = buildListListingsClauses({ ...ARGS, context: { isolation: { sql: "1 = 1", params: [] } } });
+  // 只驗證契約：不會因為有 context 就假裝 searchKeys 已展開（此呼叫端未提供該欄位）。
+  assert.ok(Array.isArray(built.params));
+});

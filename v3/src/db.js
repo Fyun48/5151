@@ -4092,10 +4092,13 @@ function expandSearchKeys(keys) {
 }
 
 function searchWhere(searchKeys, clauses, params, context = null) {
-  // astra6 §0.2：searchKeys 未給時原本會讀 SQLite（currentSearchKeys()）✗。
-  // 由 PG 建立 request context 的路徑改傳 context.searchKeys，避免請求內讀 SQLite。
-  const resolved = searchKeys === undefined ? (context && context.searchKeys !== undefined ? context.searchKeys : currentSearchKeys()) : searchKeys;
-  const keys = expandSearchKeys(resolved);
+  // astra6 §0.2：searchKeys 未給時原本會讀 SQLite（currentSearchKeys() ✗ ＋ expandSearchKeys() ✗，
+  // 後者是對 listings 做 DISTINCT search_key 的掃描，是請求內最大的一筆 SQLite 讀取）。
+  // 契約：context.searchKeys 視為**已展開**的最終清單（PG 端以同一支 expandSearchKeys 語意展開），
+  // 因此傳入時不再呼叫 expandSearchKeys；未傳時行為與現況完全相同。
+  const fromContext = Boolean(context) && context.searchKeys !== undefined;
+  const resolved = searchKeys === undefined ? (fromContext ? context.searchKeys : currentSearchKeys()) : searchKeys;
+  const keys = fromContext ? resolved : expandSearchKeys(resolved);
   if (keys?.length) {
     clauses.push(`(
       search_key IN (${keys.map(() => "?").join(",")})
