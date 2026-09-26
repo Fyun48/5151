@@ -1,9 +1,15 @@
 # PR-B 可接續狀態
 
-更新：2026-09-26。**BLOCKED：ChatGPT 執行環境離線，NAS 實測無法接續。**
-PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。不是缺 NAS 憑證；既有通道本輪已成功實跑，現在是執行器斷線。
+更新：2026-09-26 台灣時間 17:08。**BLOCKED：瀏覽器登入被自動核准審查拒絕，NAS 實測無法接續。**
+PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。執行器於約 17:04 恢復，但 scratch 與瀏覽器登入狀態已重設。不是缺 NAS SSH 憑證；既有通道本輪曾成功實跑。
+
+安全登入尚未送出：自動核准審查指出實際提交／憑證來源為 `jibbyteam.cloudflareaccess.com`，可見頁面品牌為 `toriace.cloudflareaccess.com`，目標服務為 `cocodeco.reversalplay.me`；來源不一致，無法確認 Email／驗證碼目的地。這是自動審查拒絕，不是使用者取消。未改用低階瀏覽器操作、其他通道或憑證轉貼來繞過；需使用者確認這些登入網域的授權關係並核准後再處理。NAS 後續測試沒有在背景自動接續。
 
 ## 已提交與驗證
+
+- 最新應用程式 SHA `1d09deee8a4f91acad6774077f704a39edc6e026`：[Tests 36231527187](https://github.com/Fyun48/5151/actions/runs/36231527187) completed/success。一般 2647 tests／2609 pass／0 fail／38 skip；真 PG 143 tests／142 pass／0 fail／1 optional skip。
+- 同 SHA 完整 CI 四案 warm p95：單區 C1 460.94／C4 1136.73 ms；全區 C1 463.03／C4 1525.48 ms。各案 50 次，errors/timeouts 皆 0，SQLite guard PASS，四案 lag gate 本次皆通過。這些不是 NAS 成績。
+- [最新 CI 原始 artifact](https://github.com/Fyun48/5151/actions/runs/36231527187/artifacts/10901884154)。本次狀態更新僅改文件，應用程式仍是上述受測內容；精確 HEAD 與最新 CI 讀 PR。
 
 - 分支：`fix/pr-b-persist-listing-transaction`；base `9c6b7b04f9801717cb6696e8e095fde4c309473f`。最新 HEAD 與 CI 結果讀 PR。
 - `749165e`：完整 42 欄 array 解碼、同一請求的統計／清單候選重用、行政區關係縮減與統計單迴圈。一般 CI 的 4 個來源文字解析測試於下一提交修復，沒有刪掉欄位或排序斷言。
@@ -13,7 +19,7 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 - [CI 原始 artifact](https://github.com/Fyun48/5151/actions/runs/36230822383/artifacts/10902641044)。
 - 版本重用設計與界線：[PRB_CONTENT_REUSE_20260926.md](PRB_CONTENT_REUSE_20260926.md)。每次在當前 PG 快照核對 WHERE、列版本、relation/storage/schema/role/epoch 與完整欄位權限，沒有 search-key TTL 或 query-result memo。
 
-本檔所在提交另加入三處可回復修正：完整讀取 cursor 的交易內 planner 設定、可用既有 source 索引的等價 predicate、無地理條件時省略無作用計算。新增真 PG 測試檢查設定在成功／例外後恢復。這三處尚無 NAS 成績；精確同 SHA CI 結果以 PR 最新區段為準。
+1d09dee 另加入三處可回復修正：完整讀取 cursor 的交易內 planner 設定、可用既有 source 索引的等價 predicate、無地理條件時省略無作用計算。新增真 PG 測試檢查設定在成功／例外後恢復。這三處尚無 NAS 成績；精確同 SHA CI 結果以 PR 最新區段為準。
 
 ## NAS 已實測的界線
 
@@ -25,10 +31,10 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 
 ## 中斷時的可接續環境
 
-ChatGPT 的 `exec_command` 與 `node_repl` 先回報 transport disconnected，重試均為 `409 Conflict, environment_offline: Environment is not connected`。沒有宣稱工作仍會在背景自動接續。
+台灣時間約 16:54，ChatGPT 的 `exec_command` 與 `node_repl` 回報 transport disconnected，重試為 `409 Conflict, environment_offline: Environment is not connected`；約 17:04 已恢復。新的執行環境與瀏覽器已重建，原本本地 scratch 不在，但下列 NAS／code-server 路徑的遠端狀態尚無法讀回。現在的登入阻礙見本檔開頭。
 
 - 既有瀏覽器 IDE：`https://cocodeco.reversalplay.me/?folder=/workspace`。原 `/workspace/5151` 未覆蓋。
-- code-server 的隔離 clone：`/tmp/prb-transfer.it64ho8o/5151`，遠端 `github` 指向權威 GitHub，最後 HEAD 9d415e4。有一份未提交的 `v3/test/pg-candidate-array.test.js` 新測試；已納入本檔所在 GitHub 提交，接續時先比對 diff 再同步。
+- code-server 的隔離 clone：`/tmp/prb-transfer.it64ho8o/5151`，遠端 `github` 指向權威 GitHub，最後 HEAD 9d415e4。有一份未提交的 `v3/test/pg-candidate-array.test.js` 新測試；已納入 1d09dee GitHub 提交，接續時先比對 diff 再同步。
 - NAS 隔離開發根目錄：`/tmp/prb-opt.JoUcLPr0`。其 Git HEAD 仍是舊 baseline／evidence，但應用檔案已逐批套修正；**不可當作同 SHA 正式驗收 checkout**。
 - NAS 原始開發 log／JSON／CPU profiles：上述目錄的 `artifacts/dev/`。包含 diagnostic-baseline、optimized（撤回 JSON transport）、array、reuse、context、content、batches、cursor；complete-cursor patch 未套入，額外設定測試已寫入，但最後測試的完成結果未能讀回。
 - 最後確認已完成的完整 NAS PG 回歸：`content-full-pg.log`，142 tests／141 pass／0 fail／1 optional skip。後續窄欄位／版本／closure 19 項針對性測試全過。
@@ -37,6 +43,8 @@ ChatGPT 的 `exec_command` 與 `node_repl` 先回報 transport disconnected，�
 - 既有 SSH 設定／金鑰／known_hosts 依共享 infra runbook 使用，StrictHostKeyChecking 保持啟用。不要新開 tunnel、不要把機密寫入 repo。正式 `5151_shadow` 不可用於測試 setup／migration／ANALYZE。
 
 ## 恢復後接續
+
+先由使用者確認並核准可信的既有登入服務；遵守安全登入流程，不從聊天接收 Email 驗證碼或其他秘密。
 
 1. 先確認上述 dev runner 已結束、取回完整 logs 與 JSON，核對待提交測試及 GitHub HEAD；保留失敗證據。
 2. 以最新精確 SHA 的新獨立 checkout 執行 `bash v3/scripts/prb-nas-verify.sh <完整 SHA>`；不要對有 patch 的 dev clone 冒稱同 SHA。
