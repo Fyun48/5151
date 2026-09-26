@@ -1,21 +1,5 @@
-// Asynchronous listing-stats hot path (PostgreSQL cutover blocker).
-//
-// `/api/listings` used to answer its counters with the synchronous SQLite `stats()`. With
-// DB_DRIVER=postgres the page came from PostgreSQL while the counters came from SQLite, so the
-// page listed an item and the counters said zero
-// (v3/evidence/pg-rw-drill-20260921/README.md, gap 1 - the last blocker named by
-// v3/POSTGRES_SWITCH_PLAN.md section 2.6).
-//
-// Driver behaviour:
-//   • sqlite (today's production default) - `stats()` exactly as before.
-//   • postgres - repository/listingStats.js reads the inputs from PostgreSQL, the decoration
-//     provider is preloaded through repository/decorationData.js (route cache for
-//     `missingRoute`), and the pure pipeline db.js also uses for SQLite
-//     (`buildListingStatsRows` + `summarizeListingStats`) produces the counters. The numbers
-//     therefore describe the store the list itself reads.
-//
-// One safety valve remains: any failure (a missing table, a connection drop) falls back to the
-// SQLite counters instead of failing the page - and records why in `diagnostics`.
+// PostgreSQL counters use PG settings and a read snapshot. Missing dependencies
+// fail with SEARCH_UNAVAILABLE; SQLite is only used in explicit SQLite mode.
 import {
   buildListingStatsRows,
   listingStatsBuildContext,
@@ -29,9 +13,11 @@ import { createListingStatsRepository } from "./repository/listingStats.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { withPgReadSnapshot } from "./pgReadSnapshot.js";
+import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
 
 export async function listingStatsAsync(
-  { searchKeys, userId, settings, diagnostics } = {},
+  { searchKeys, userId, settings, diagnostics, asOf = null } = {},
   options = {},
 ) {
   const driver = options.driver || resolveDbDriver();
@@ -39,41 +25,41 @@ export async function listingStatsAsync(
 
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
-    const exec = options.exec
-      || ((sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
-    const deps = options.deps || listingStatsBuildContext();
-    const repository = options.repository
-      || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
-    const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics });
-    const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
-      exec,
-      rows: inputs.rows,
-      settings: inputs.settings,
-      userId: inputs.uid,
-      matchVoteUserId: inputs.uid,
-      sameHouse: false,
-    }));
-    const profileRows = buildListingStatsRows({
-      rows: inputs.rows,
-      flagMap: provider.personalFlags(),
-      uid: inputs.uid,
-      settings: inputs.settings,
-      provider,
-    });
-    return summarizeListingStats({
-      profileRows,
-      settings: inputs.settings,
-      statusCounts: inputs.statusCounts,
-      watchedTotal: inputs.watchedTotal,
-      failedRouteJobs: inputs.failedRouteJobs,
-      dbTotal: inputs.dbTotal,
-      provider,
+    return await withPgReadSnapshot(pgDriver, async snapshotDriver => {
+      const exec = options.exec
+        || ((sql, params = []) => snapshotDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
+      const deps = options.deps || listingStatsBuildContext();
+      const repository = options.repository
+        || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
+      const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics, asOf, requestContext: options.requestContext });
+      const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
+        exec,
+        rows: inputs.rows,
+        settings: inputs.settings,
+        userId: inputs.uid,
+        matchVoteUserId: inputs.uid,
+        sameHouse: false,
+        requestContext: inputs.requestContext,
+      }));
+      const profileRows = buildListingStatsRows({
+        rows: inputs.rows,
+        flagMap: provider.personalFlags(),
+        userId: inputs.uid,
+        settings: inputs.settings,
+        provider,
+      });
+      return summarizeListingStats({
+        profileRows,
+        settings: inputs.settings,
+        statusCounts: inputs.statusCounts,
+        watchedTotal: inputs.watchedTotal,
+        failedRouteJobs: inputs.failedRouteJobs,
+        dbTotal: inputs.dbTotal,
+        provider,
+      });
     });
   } catch (error) {
-    // Never fail the page because a counter could not be read from PostgreSQL.
-    if (options.strict) throw error;
-    if (diagnostics) diagnostics.sqlite_fallback = String(error?.message || error);
-    return stats(searchKeys, userId, settings, diagnostics);
+    if (isListingSearchUnavailable(error)) throw error;
+    throw new ListingSearchUnavailableError(error);
   }
 }
-

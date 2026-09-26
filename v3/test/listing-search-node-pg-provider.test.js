@@ -17,14 +17,12 @@ test("PG 路徑缺 provider 時直接拋錯（不得回退 SQLite）", () => {
   );
 });
 
-test("提供 provider 時不會因護欄而拋錯（護欄只檢查有無）", () => {
-  const provider = { personalFlags: () => new Map(), personalIndex: () => ({ peers: () => [] }), splitPairs: () => new Set(), extras: () => [] };
-  assert.doesNotThrow(() => {
-    try {
-      decorateListListingsPage([], [], { settings: {}, uid: 0, provider, requireProvider: true });
-    } catch (error) {
-      // 空頁面不會進到裝飾邏輯；若有其他錯誤（例如 provider 介面不足）不屬於本護欄要測的行為。
-      if (/必須提供 decoration provider/.test(String(error?.message))) throw error;
-    }
-  });
+test("PG provider 介面不完整時明確失敗，完整的空 provider 可以回空頁", async () => {
+  const { preloadedDecorationProvider } = await import("../src/db.js");
+  assert.throws(() => decorateListListingsPage([], [], {
+    settings: {}, uid: 0, provider: {}, requireProvider: true,
+  }), /provider requires prep/);
+  assert.deepEqual(decorateListListingsPage([], [], {
+    settings: {}, uid: 0, provider: preloadedDecorationProvider(), requireProvider: true,
+  }), []);
 });

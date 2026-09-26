@@ -334,7 +334,7 @@ export function publicSameHousePeer(row) {
   };
 }
 
-export function sameHouseBundle(listing, peers = []) {
+export function sameHouseBundle(listing, peers = [], now = Date.now()) {
   const group = displayableGroupMembers([listing, ...peers].filter(Boolean));
   const uniq = [];
   const seen = new Set();
@@ -348,10 +348,10 @@ export function sameHouseBundle(listing, peers = []) {
   const confirmed = uniq.some((row) => (
     row.match_verdict === "yes" || /已確認同一間/.test(String(row.match_detail || ""))
   ));
-  const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row), uniq[0]);
+  const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row, now), uniq[0]);
   const primaryId = Number(primary.post_id);
   const mineId = Number(listing.post_id);
-  const ordered = sortGroupListings(uniq);
+  const ordered = sortGroupListings(uniq, now);
   const visibleIds = new Set(ordered.slice(0, 3).map((row) => Number(row.post_id)));
   const others = ordered
     .filter((row) => Number(row.post_id) !== mineId && visibleIds.has(Number(row.post_id)))

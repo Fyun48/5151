@@ -75,40 +75,45 @@ test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收",
     t.skip("PG_TEST_URL is not set (live job_queue)");
     return;
   }
-  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
-  const { ensurePgSchema } = await import("../src/pgSchema.js");
-  const driver = await createPostgresDriver({ connectionString: url });
-  try {
-    await ensurePgSchema(driver, db, { tables: ["job_queue"] });
-    await jobQueue.ensurePgJobQueueIndex(driver);
-    // 清掉**自己前綴**的殘留列 ✓（根因機制 #2）：`priority` 只保證同優先權內依 `created_at ASC` 排序 ✓，
-    // 所以先前 10,000 優先權的殘留會排在我們前面 ✓，搭配 `claim` 的 `LIMIT 5` 可能把剛排進去的擠出去 ✗。
-    // ⚠️ 機制 #1（CI 多檔並行，別的檔在同一張 `job_queue` 上 claim 走我們那筆 ✗）**尚未解決** ✗
-    //    —— 需要真正的隔離（專屬 schema／表前綴，或此檔序列執行 ✓），不以重跑結案 ✗。
-    await driver.query("DELETE FROM job_queue WHERE idempotency_key LIKE 'live-job-%'");
+  const { withPgFixture } = await import("./fixtures/prb-search.mjs");
+  await withPgFixture(db, async driver => {
     const q = jobQueue.createJobQueue({ driver: "postgres", pgPool: driver });
-    assert.equal(q.name, "postgres");
-    const now = Date.now();
-    const key = "live-job-" + now;
-    // 影子站上還留著先前的工作列，而 claim 的順序是「優先權高者先、其次最舊者先」
-    // （POSTGRES_CLAIM_JOBS_SQL 的 ORDER BY priority DESC, created_at ASC），
-    // 所以用一個正式站不會出現的高優先權（正式站最高是 ON_SCREEN_LISTING = 100），
-    // 保證這一輪搶到的就是剛排進去的這一筆。
-    const enqueued = await q.enqueue({ jobType: "enrich", payload: { post_id: 42 }, idempotencyKey: key, priority: 10_000, now });
-    assert.equal(Number(enqueued.attempts), 0);
+    const now = 1_700_000_000_000;
+    const enqueued = await q.enqueue({ jobType: "enrich", payload: { post_id: 42 }, idempotencyKey: "fixed-clock", now });
+    assert.equal(Number(enqueued.available_at), now, "預設可領取時間必須等於傳入 now");
     const claimed = await q.claim({ workerId: "live-worker", limit: 5, now });
-    const mine = claimed.find((row) => row.idempotency_key === key);
-    assert.ok(mine, "剛排進去的要搶到");
+    assert.equal(claimed.length, 1);
+    const mine = claimed[0];
+    assert.equal(Number(mine.id), Number(enqueued.id));
     assert.equal(mine.state, "leased");
     assert.equal(mine.lease_owner, "live-worker");
-    const done = await q.complete({ jobId: mine.id, workerId: "live-worker", now });
-    assert.equal(done, true);
-    const afterDone = await q.claim({ workerId: "live-worker", limit: 5, now: now + 1 });
-    assert.equal(afterDone.some((row) => row.idempotency_key === key), false, "完成後不該再被搶到");
-  } finally {
-    // 收尾清掉自己前綴 ✓（不留給下一次執行 —— 這正是機制 #2 的來源 ✗）。
-    await driver.query("DELETE FROM job_queue WHERE idempotency_key LIKE 'live-job-%'").catch(() => {});
-    await driver.close();
-  }
+    assert.equal(Number(mine.attempts), 0);
+    assert.equal(await q.complete({ jobId: mine.id, workerId: "other-worker", now }), false);
+    assert.equal(await q.complete({ jobId: mine.id, workerId: "live-worker", now }), true);
+    assert.deepEqual(await q.claim({ workerId: "live-worker", limit: 5, now: now + 1 }), []);
+
+    const retry = await q.enqueue({ jobType: "enrich", idempotencyKey: "retry", maxAttempts: 2, now });
+    await q.claim({workerId:"retry-worker", now, leaseDurationMs:10});
+    assert.equal(await q.reclaimExpired({now:now+11}),1);
+    const reclaimed=await q.claim({workerId:"retry-worker", now:now+11});
+    assert.equal(Number(reclaimed[0].id),Number(retry.id));
+    const failed=await q.fail({jobId:retry.id,workerId:"retry-worker",error:"fixture",now:now+12});
+    assert.equal(failed.state,"pending");
+    assert.equal(failed.attempts,1);
+    assert.deepEqual(await q.claim({workerId:"retry-worker",now:failed.availableAt-1}),[]);
+    assert.equal((await q.claim({workerId:"retry-worker",now:failed.availableAt})).length,1);
+    const dead=await q.fail({jobId:retry.id,workerId:"retry-worker",error:"fixture",now:failed.availableAt});
+    assert.equal(dead.state,"dead");
+    assert.equal(dead.attempts,2);
+  }, {tables:["job_queue"]});
 });
 
+test("PG enqueue uses the supplied clock for immediate availability and honors explicit scheduling", async () => {
+  const values=[];
+  const q=jobQueue.createJobQueue({driver:"postgres",pgPool:{query:async (_sql,params)=>{
+    values.push(params); return {rows:[{available_at:params[4],created_at:params[6]}]};
+  }}});
+  await q.enqueue({jobType:"enrich",now:100});
+  await q.enqueue({jobType:"enrich",now:100,availableAt:200});
+  assert.deepEqual(values.map(p=>[p[4],p[6]]),[[100,100],[200,100]]);
+});

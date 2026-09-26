@@ -47,6 +47,11 @@ const TABLES = [
   "route_cache",
   "mrt_cache",
   "route_jobs",
+
+  "settings",
+  "users",
+  "user_settings",
+  "crawl_covers",
 ];
 
 const STAMP = "2026-09-01T00:00:00.000Z";
@@ -248,7 +253,7 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   // Wiring: the list handler awaits the driver-aware entry point, and the repository refuses a
   // partial dependency bundle (that would otherwise compute wrong counters silently).
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /const listingStats = await listingStatsAsync\(\{ userId: uid, diagnostics: statsDetails \}\);/);
+  assert.match(server, /const page = await loadListingPage\(args\);/);
   const facade = readFileSync(path.join(dir, "../src/listingStatsAsync.js"), "utf8");
   assert.match(facade, /buildListingStatsRows\(\{/);
   assert.match(facade, /summarizeListingStats\(\{/);

@@ -152,7 +152,9 @@ test("the async hot path always uses PG+Node and exposes no engine switch", asyn
   assert.equal(typeof mod.searchListingsAsync, "function");
   // astra 2026-09-25 §5.6：正式模組不得再有引擎選擇入口；SQL-first 只保留為診斷函式。
   assert.equal(mod.searchEngine, undefined, "不得再有 searchEngine() 選擇入口");
-  assert.equal(typeof mod.searchListingsSqlPgDiagnostic, "function", "SQL-first 需保留為診斷入口");
+  assert.equal(mod.searchListingsSqlPgDiagnostic, undefined, "正式模組不得匯出 SQL 實驗入口");
+  const diagnostic = await import("../src/listingSearchSqlPgDiagnostic.js");
+  assert.equal(typeof diagnostic.searchListingsSqlPgDiagnostic, "function");
 
   // 行為驗證（取代原始碼字串斷言）：即使呼叫端硬塞 options.engine 或 PG_SEARCH_ENGINE，
   // 正式入口仍必須走 node_pg；一旦有人重新加入切換能力，這個測試就會失敗。

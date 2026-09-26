@@ -23,6 +23,8 @@ import { districtKeyLists, districtKeyPrefixExpression } from "./listDistrictSql
 import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
+import { listingRequestTime } from "./listingRequestTime.js";
+import { withPgReadSnapshot } from "./pgReadSnapshot.js";
 
 export const NODE_PG_QUERY_VERSION = 2;
 
@@ -116,57 +118,12 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0 
   return [...ids];
 }
 
-/**
- * astra6 §0.2／§3：把「整個請求」包在**單一快照**內。
- *
- * 現況：`exec` 每個查詢都走 `pgDriver.query()` ⇒ 各自從 pool checkout ⇒ 不同查詢可能落在
- * 不同快照（context／closure／候選列／頁面列可能互相不一致），也可能各自排隊造成長尾。
- * 作法：同一個 client、`BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`，
- * 之後所有查詢共用它；因為是唯讀交易，結束用 `ROLLBACK` 即可（不需要 COMMIT）。
- *
- * 若 driver 沒有 `pool.connect`（單元測試的 fake driver），回傳 null ⇒ 完全不走此路徑，
- * 行為與過去相同（避免測試需要模擬 pg pool）。
- */
-function createPgSnapshot(pgDriver) {
-  const pool = pgDriver?.pool;
-  if (!pool || typeof pool.connect !== "function") return null;
-  let client = null;
-  let opened = false;
-  return {
-    driver: {
-      query: async (sql, params) => {
-        if (!client) {
-          client = await pool.connect();
-          await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
-          opened = true;
-        }
-        return client.query(sql, params);
-      },
-    },
-    close: async () => {
-      if (!client) return;
-      const conn = client;
-      client = null;
-      try {
-        if (opened) await conn.query("ROLLBACK");
-      } finally {
-        if (typeof conn.release === "function") conn.release();
-      }
-    },
-  };
-}
-
 export async function searchListingsNodePg(args = {}, opts = {}) {
-  const snapshot = createPgSnapshot(opts.pgDriver);
-  if (!snapshot) return searchListingsNodePgInner(args, opts);
-  try {
-    return await searchListingsNodePgInner(args, { ...opts, pgDriver: snapshot.driver });
-  } finally {
-    await snapshot.close();
-  }
+  args = { ...args, ...listingRequestTime(args.asOf ?? args.context?.asOf) };
+  return withPgReadSnapshot(opts.pgDriver, pgDriver => searchListingsNodePgInner(args, {...opts, pgDriver}));
 }
 
-async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null } = {}) {
+async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null, requestContext = null } = {}) {
   if (!pgDriver || typeof pgDriver.query !== "function") {
     throw new Error("searchListingsNodePg requires pgDriver");
   }
@@ -176,9 +133,9 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   }
 
   const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
-  const uid = deps.resolveUserId ? deps.resolveUserId(args.userId) : Number(args.userId) || 0;
+  // Identity is explicit here; resolveUserId(undefined) consults SQLite.
+  const uid = Number(args.userId) || 0;
   const voteUid = args.matchVoteUserId == null ? uid : Number(args.matchVoteUserId) || 0;
-  const settings = args.settings || (deps.getSettings ? deps.getSettings(uid) : {});
   const sameHouse = args.sameHouse !== false;
   const { filter, kind, sources } = normalizeListQuery(args.filter, args.kind, args.sources);
   const sort = args.sort || "price_asc";
@@ -192,7 +149,8 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   };
 
   // astra §5.5（B4）：request context 由 PG 建立一次（crawlSources／isolation／searchKeys／**asOf**）。
-  const context = await buildListRequestContextFromPg(exec, { asOf: args.asOf });
+  const context = requestContext || await buildListRequestContextFromPg(exec, { asOf: args.asOf });
+  const settings = args.settings || context.settingsForUser(uid);
   queryDetails.asOf = context.asOf;
   // 可選資料的降級清單（缺表時為非空）——放進 queryDetails 讓它可被量測與告警，不得靜默 ✗。
   queryDetails.contextDegraded = context.degraded || [];
@@ -226,7 +184,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     // peers 2-hop 與 groupMembers；astra6 §3 preload 分層）。
     preloadDecorationProviderAsync({
       exec, loader, rows: raw, settings, userId: uid, matchVoteUserId: voteUid, sameHouse, peers: false,
-      flagUserId: uid,
+      flagUserId: uid, requestContext: context,
     }),
   ]);
   markStage("preload_ms");
@@ -234,9 +192,10 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   const rows = buildListListingsRows(raw, {
     filter, kind, sources, sort, uid, voteUid, settings,
     districtSet: built.districtSet, provider, flagMap, markStage,
+    now: context.now, requireProvider: true,
   });
 
-  const paged = paginateListListingsRows(rows, { sort, filter, settings, limit: args.limit, offset: args.offset });
+  const paged = paginateListListingsRows(rows, { sort, filter, settings, limit: args.limit, offset: args.offset, now: context.now });
   markStage("sort_ms");
   const fullRows = paged.page.length
     ? await exec(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(", ")})`, paged.pageIds)
@@ -247,7 +206,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   const pageProvider = paged.page.length
     ? await preloadDecorationProviderAsync({
       exec, loader, rows: paged.page, settings, userId: uid, matchVoteUserId: voteUid, sameHouse,
-      flagUserId: uid,
+      flagUserId: uid, requestContext: context,
     })
     : provider;
   markStage("preload_page_ms");

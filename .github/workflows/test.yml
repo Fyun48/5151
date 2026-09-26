@@ -144,3 +144,19 @@ jobs:
             grep -E 'COLAB-' /tmp/colab.txt || echo '（沒有 COLAB 輸出）'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: PR-B complete page benchmark (disposable fixture)
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PERF_OUTPUT: artifacts/prb-search-benchmark.json
+          PG_STATEMENT_TIMEOUT_MS: "15000"
+        run: timeout 12m node v3/scripts/prb-search-benchmark.mjs
+
+      - name: Upload PR-B performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prb-search-performance
+          path: artifacts/prb-search-benchmark.json
+          if-no-files-found: warn

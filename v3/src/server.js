@@ -1,6 +1,8 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
-import { isListingSearchUnavailable, searchListingsAsync } from "./listingSearchAsync.js";
+import { searchListingsAsync } from "./listingSearchAsync.js";
+import { loadListingPage } from "./listingSearchPage.js";
+import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
 import {
   armMemberExternalFetchAsync,
@@ -3696,6 +3698,7 @@ app.get("/api/state", async (req, res) => {
     listingStats = { ...listingStats, matched: listed.totalMatched };
     events = recentEvents(30, uid);
   } catch (error) {
+    if (sendListingSearchUnavailable(res, error)) return;
     console.warn("讀取物件列表失敗：", error.message);
     listingStats = { ...listingStats, error: error.message };
   }
@@ -3767,47 +3770,15 @@ app.get("/api/listings", async (req, res) => {
     matchVoteUserId: uid,
     sameHouse: req.query.sameHouse !== "0",
   };
-  // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
-  // LIMIT/OFFSET into SQL. Each fast path returns null outside its
-  // exact-equivalence envelope, so fall back to the Node path when it does.
-  // The chain is awaited (searchListingsAsync) so the same handler can serve the
-  // PostgreSQL driver; with DB_DRIVER=sqlite the returned object is unchanged.
-  let listed;
   try {
-    listed = await searchListingsAsync(args, {
-      allowUndecorated: process.env.PG_LISTINGS_UNDECORATED === "1",
-    });
+    const page = await loadListingPage(args);
+    res.setHeader("Server-Timing", `list;dur=${page.timing.query_ms}, stats;dur=${page.timing.stats_ms}`);
+    page.timing.total_ms = Date.now() - started;
+    res.json(page);
   } catch (error) {
-    // F2：PostgreSQL 失效時回 503 + 穩定錯誤碼（不回退 SQLite）。訊息說明原因與下一步。
-    if (isListingSearchUnavailable(error)) {
-      res.status(503).json({
-        error: "資料庫暫時無法連線，清單目前讀不到；請稍後重試，若持續發生請回報。",
-        code: error.code,
-      });
-      return;
-    }
+    if (sendListingSearchUnavailable(res, error)) return;
     throw error;
   }
-  const queryMs = Date.now() - started;
-  const statsStarted = Date.now();
-  const statsDetails = {};
-  // Awaited so the PostgreSQL driver answers the counters from the store the list itself reads
-  // (listingStatsAsync.js); with DB_DRIVER=sqlite the returned object is unchanged.
-  const listingStats = await listingStatsAsync({ userId: uid, diagnostics: statsDetails });
-  const statsMs = Date.now() - statsStarted;
-  res.setHeader("Server-Timing", `list;dur=${queryMs}, stats;dur=${statsMs}`);
-  res.json({
-    stats: { ...listingStats, matched: listed.totalMatched },
-    listings: listed.listings,
-    hasMore: listed.hasMore === true,
-    nextOffset: listed.nextOffset || 0,
-    nextCursor: listed.nextCursor || null,
-    queryVersion: listed.queryVersion || 2,
-    timing: {
-      query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,
-      dataset: listed.totalMatched, stages: listed.queryDetails, stats_stages: statsDetails,
-    },
-  });
 });
 
 app.post("/api/listings/hide-many", (req, res) => {
