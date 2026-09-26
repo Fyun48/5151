@@ -1,9 +1,73 @@
 # PR-B 可接續狀態
 
-更新：2026-09-26，第二批程式提交 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0` 已推送；精確 SHA CI checks 已全部成功。
+更新：2026-09-26，第三批程式 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5` 已推送，精確 SHA CI checks 全部成功。
+**第三批 NAS_NOT_RUN，維持 NOT_READY。**
 **最近完成的 NAS 驗收：受測 SHA `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，結果 `NAS_ACCEPTANCE_FAIL`；
 但 lag 大幅改善，四案有三案達標。**
 PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+
+## 第三批：降低中間配置與可對時的診斷（6703302）
+
+程式 SHA：`6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5`，基於 GitHub `d98cab24b4c4285ce185e702eb979ae6968e543a`。
+[精確 SHA Tests 36240011855](https://github.com/Fyun48/5151/actions/runs/36240011855)：精確 SHA CI checks 全部成功。
+一般 2658／2618 pass／0 fail／40 skip；真 PG 149／148 pass／0 fail／1 optional skip。
+CI p95：294.22／767.91／301.05／778.20 ms；lag p99：17.24／19.97／17.55／21.53 ms，max：18.25／28.82／21.84／31.67 ms。
+四案 CI smoke／lag 通過，但延遲比 ae88ce6 CI 高約 14～26%，尚未證實 NAS 效能改善。
+原始 artifact、hash 與完整取捨記錄於 `evidence/prb-ci-6703302/`；不把 CI 成功代替 NAS。
+
+- PG 版本列逐批以 array values 消費，不再同時保留整個版本查詢結果與完整候選陣列。
+  每筆都查當前快照的版本；完整 42 欄、權限、schema／role／MVCC／storage／epoch 保護不變。
+- canonical stats 每 256 筆完成個人旗標 overlay、profile 過濾與計數，隨即釋放中間物件。
+  保留所有候選與精確總數；全域 watched／offline／dbTotal 只計入一次。自訂 projection 保留原路徑。
+- 新 `stats_profile_sync_ms`／`stats_count_sync_ms` 是同步工作累積值；`stats_reduce_ms` 包含排程等待。
+  不可把它們和舊 `stats_profile_ms`／`stats_count_ms` 的 wall time 直接比較。
+- PG 窄列上限仍為 1,024、寬列 512，沒有用放大批次交換 lag。每請求查詢數並未因此減少。
+- benchmark 加入同一 monotonic clock 上的 GC／tickGap／FETCH／yieldWait spans（每類最多 32 個最長且 ≥20 ms 的事件）、
+  Node process CPU、量測窗與 timeOrigin。空閒 SELECT 1 的 10 次往返基準在正式量測窗外；所有 gate 與 50 次樣本保留。
+  cold EXPLAIN 另納入精確 COUNT 查詢，以區分 server plan 成本與應用端等待。
+- NAS runner 只對它建立的拋棄式 PG 容器取樣 Docker CPU／memory／I/O，保存
+  `postgres-resource-stats.jsonl`／`.err`／`-start.txt`，EXIT cleanup 先停止並 wait 該 sampler，再清除資源。
+  此為粗粒度觀測，沒有每筆 query 的 server execution time，不能單憑它證明某次 FETCH 慢的原因。
+- 本機 Node 22.23.3：40 tests／33 pass／0 fail／7 PG-only skip；真 PG CI 另含 8,705 筆冷／暖版本串流相容性。
+- 不改 fixture、候選、欄位、硬體、暖機／樣本數與門檻；不動正式 5151_shadow、不合併、不部署。
+
+### 對上一輪 lag 歸因的更正
+
+已有數據證明插樁 generator 的 step／slice 很短，並觀測到 GC pause 與排程等待。
+**但各指標最大值沒有時間關聯，不能把 96.113 ms yieldWait 與 59.069 ms GC 相加，宣稱已證明 162 ms 原因。**
+PG parser、其他 I/O callback、JSON serialization 等不全在 generator 的插樁範圍；不能排除未量到的長同步段。
+新增時間線用於確認是否重疊，仍不把重疊直接等同因果；舊 NAS raw JSON／logs／README 保留不改。
+
+### DeepSeek 下一輪指定 NAS
+
+精確 SHA CI 已全綠，請原 CasaOS N3450 透過既有 SSH 執行 **6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5**。
+不要自動改測後續文件 HEAD。指定 SHA 的 runner 用 `bash` 呼叫；後續文件提交會恢復 runner 的 executable bit，內容不變。
+
+```bash
+ssh casa-nas
+cd /mnt/Storage1/prb-acceptance/5151 || exit 1
+test -z "$(git status --porcelain)" || exit 1
+git fetch origin || exit 1
+git checkout --detach 6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5 || exit 1
+test "$(git rev-parse HEAD)" = 6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5 || exit 1
+mkdir -p /mnt/Storage1/prb-acceptance/evidence
+mkdir /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302 || exit 1
+setsid nohup bash -c '
+  bash v3/scripts/prb-nas-verify.sh \
+    6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5 \
+    /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302 \
+    > /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302/runner.log 2>&1
+  prb_run_exit=$?
+  echo "$prb_run_exit" > /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302/runner-exit.txt
+  exit "$prb_run_exit"
+' >/dev/null 2>&1 &
+```
+
+保留完整真 PG 與四案各 50 次、raw JSON／logs、上述 PG resource 檔、映像／主機、runner exit、SHA256SUMS。
+核對實際 sourceSha／checkoutSha 與 module hashes；以 `prb-nas-verify=1` 查容器／network／volume，三項皆應為 0，保存清理紀錄。
+請回傳 heap／RSS／GC、workTimeline 最大 tickGap 附近是否有 GC／FETCH span，以及 idleRoundTripMs／processCpu／PG resource 觀測。
+沒有證據就保留未定論，不把 wall time 全歸為 server CPU，也不以別的 SHA 成績代替。
+新 NAS 證據提交 `evidence/prb-nas-6703302/`，回填 PR 與本文件；任何 FAIL 一律保留。
 
 ## 第二批修正的 NAS 實測（受測 SHA ae88ce6）
 
@@ -18,13 +82,13 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 | 全區 C4 | 4032.71 | 4000 | FAIL | 41.84／162.14 | FAIL | 745.2 | 0／0 |
 
 - **本批用一點延遲換到大幅 lag**：p95 與 `6381f0f` 幾乎相同（單區 +3.0%／+3.1%，全區 −0.1%／+0.4%），
-  但 lag p99 降到原來的 33～39%、max 降到 50～66%。全區 C4 的 **p99 41.84 ms 已在門檻內**，
+  但 lag p99 降到原來約 29～50%、max 降到約 30～66%。全區 C4 的 **p99 41.84 ms 已在門檻內**，
   只剩 **max 162.14 ms** 超標；全區 C4 延遲只超目標 32.71 ms（0.82%）。
 - **lag 定位（不看 p95）**：同步切片已被壓住 —— 四案最大 `step` 6.919／8.149／7.479／7.119 ms、
   最大 `slice` 7.731／9.382／8.918／7.909 ms，都遠低於 50 ms。lag max 等於最大 `tickGap`
-  （44.805／67.228／73.837／162.051 ms）。全區 C4 的 162 ms 是「等待＋GC」疊出來的：
+  （44.805／67.228／73.837／162.051 ms）。全區 C4 同時觀測到以下最大值（未證明它們在同一時段）：
   `pg.fetch.wall` 最大 303.586 ms、`pg.fetch.yieldWait` 最大 96.113 ms、`gc.pause` 最大 59.069 ms
-  （3 次 >50 ms），4 路併發時 I/O 回呼與 GC 連續佔用事件迴圈，10 ms 計時器拿不到機會。
+  （3 次 >50 ms）。需要可對時的事件與更多插樁，才能檢驗 GC／I/O 對 lag 的貢獻。
 - **下一批具體目標**：①降低 fetch／append 期間的配置以壓 GC pause（四案最大 35.7～71.5 ms，>50 ms 共 5 次）；
   ②查 PG fetch wall／yieldWait（round trips 已由 49／44 增至 88／96）；③`stats_ms` 仍是最大階段
   （785.05／1634.92／728.30／1865.29 ms，占 46.3～54.9%），且比上一輪高，切片開銷要一併計入；
@@ -46,7 +110,7 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 | 全區 C1 | 243.43 | 17.27／19.46 | 571.8 | 0／0 |
 | 全區 C4 | 627.09 | 22.66／30.39 | 788.8 | 0／0 |
 
-CI smoke 與四案 lag 均通過、SQLite attempts 0；NAS 尚未跑，不能替代 CasaOS gate。
+該次 CI smoke 與四案 lag 均通過、SQLite attempts 0；後續 ae88ce6 NAS 已跑且 FAIL，見前節。
 本輪 CI 是 Xeon Platinum 8573C，上輪是 EPYC 7763，不能據此推算 NAS 改善幅度。
 插樁同步 step 最大 3.000／7.200／4.274／7.101 ms；slice 最大 4.268／8.035／6.233／8.615 ms；
 yieldWait 最大 6.201／17.168／6.621／17.999 ms。GC pause 與所有工作量見原始 JSON。
