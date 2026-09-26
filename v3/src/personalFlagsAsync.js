@@ -12,9 +12,12 @@
 import {
   adminEmailForUser,
   emptyFlags,
-  setFlags as setFlagsSync,
   stampFlags,
 } from "./personalFlags.js";
+// setFlags() 在 db.js（personalFlags.js 只有 setUserListingFlags 等底層函式）。
+// 2026-09-26 這裡曾誤寫成從 personalFlags.js 匯入，離線測試沒涵蓋本模組所以 CI 沒抓到，
+// 是 build-production-image 的隔離 smoke 測試擋下來的（模組匯入錯誤會讓服務起不來）。
+import { setFlags as setFlagsSync } from "./db.js";
 import { WRITE_PATH_SQL } from "./repository/writePath.js";
 import { watchLimitForActor, watchLimitMessage } from "./watchLimits.js";
 import { groupIdForPost } from "./listingGroupsAsync.js";
