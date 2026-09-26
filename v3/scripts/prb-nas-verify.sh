@@ -7,6 +7,7 @@ sha="${1:?usage: prb-nas-verify.sh <40-character-commit> [output-directory]}"
 root="$(git rev-parse --show-toplevel)"
 git -C "$root" cat-file -e "$sha^{commit}"
 command -v docker >/dev/null
+command -v setsid >/dev/null
 output="${2:-$root/artifacts/prb-nas-$sha}"
 mkdir -p "$output"
 output="$(cd "$output" && pwd)"
@@ -24,8 +25,12 @@ labels=(--label "prb-nas-verify=1" --label "prb-nas-verify.sha=$sha"
         --label "prb-nas-verify.script=v3/scripts/prb-nas-verify.sh")
 cleanup() {
   if [[ -n "$metrics_pid" ]]; then
-    kill "$metrics_pid" >/dev/null 2>&1 || true
+    # This isolated process group contains only our diagnostic sampler and its
+    # docker/sleep children. Docker stats can ignore TERM; never wait for it
+    # before force-stopping the group. No container process is in this group.
+    kill -KILL -- "-$metrics_pid" >/dev/null 2>&1 || kill -KILL "$metrics_pid" >/dev/null 2>&1 || true
     wait "$metrics_pid" >/dev/null 2>&1 || true
+    metrics_pid=""
   fi
   docker rm -f "$app_container" "$pg_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
@@ -62,10 +67,17 @@ done
 [[ "$ready" == true ]] || { docker logs "$pg_container" > "$output/postgres-startup.log" 2>&1; exit 1; }
 docker inspect --format '{{.Image}}' "$pg_container" > "$output/postgres-image.txt"
 docker image inspect --format '{{.Id}}' node:22-bookworm > "$output/node-image.txt"
-# Observe only our disposable PG container. This coarse stream diagnoses CPU /
+# Observe only our disposable PG container. These coarse samples diagnose CPU /
 # memory pressure; it does not assign individual FETCH delays to server CPU.
 date -u +%FT%TZ > "$output/postgres-resource-stats-start.txt"
-docker stats --format '{{json .}}' "$pg_container" \
+# Non-streaming output omits Docker's screen-refresh ANSI sequences. A separate
+# session lets cleanup stop even a stuck docker client without orphaning it.
+setsid bash -c '
+  while :; do
+    docker stats --no-stream --format "{{json .}}" "$1" || exit "$?"
+    sleep 2
+  done
+' prb-pg-sampler "$pg_container" \
   > "$output/postgres-resource-stats.jsonl" 2> "$output/postgres-resource-stats.err" &
 metrics_pid=$!
 # Both mounts preserve worktree .git paths. The original checkout stays read-only.
