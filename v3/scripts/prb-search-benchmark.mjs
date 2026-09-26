@@ -6,7 +6,8 @@ import {execFileSync} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {monitorEventLoopDelay,performance} from 'node:perf_hooks';
+import {monitorEventLoopDelay,performance,PerformanceObserver} from 'node:perf_hooks';
+import {createWorkDiagnostics,withWorkDiagnostics} from '../src/workDiagnostics.js';
 const dir=mkdtempSync(path.join(os.tmpdir(),'prb-perf-'));
 process.env.DATA_DIR=dir;
 process.env.DB_DRIVER='postgres';
@@ -25,11 +26,17 @@ const warms=Math.max(5,Number(process.env.PERF_WARMS)||5);
 const out=path.resolve(process.env.PERF_OUTPUT || 'artifacts/prb-search-benchmark.json');
 const root=fileURLToPath(new URL('../..',import.meta.url));
 const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
-const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','pgCandidateContent.js','dbDriverPostgres.js','listingCandidateRow.js','listDistrictSql.js','cooperative.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
+const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','pgCandidateContent.js','dbDriverPostgres.js','listingCandidateRow.js','listDistrictSql.js','cooperative.js','workDiagnostics.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
 const evidence={status:'RUNNING',target,sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
   node:process.version,hardware:{platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,memoryBytes:os.totalmem()},
   fixture:{version:'prb-fixed-v1',asOf:AS_OF,totalRows,activeRows,chainLength:Math.min(activeRows,1024),description:'120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers'},
-  warms,runs,cases:[]};
+  workDiagnosticsVersion:1,workDiagnosticsDefinitions:{
+    step:'Synchronous generator next() duration; maxUnits is work reported at a checkpoint (rows, peers or comparisons), not a candidate limit.',
+    slice:'Time spent in this generator between explicit yields to I/O; final next() also obeys the 2 ms scheduling budget.',
+    yieldWait:'Elapsed await setImmediate, including other requests, I/O and scheduler delay; not synchronous CPU time.',
+    pgWall:'PG query wall time including server, transport and decoding; submitSync/appendRows.sync measure only the named synchronous section.',
+    gcPause:'Observed GC duration inside the measured window; tickGap includes the nominal 10 ms timer interval.',
+  },warms,runs,cases:[]};
 const save=()=>{mkdirSync(path.dirname(out),{recursive:true});writeFileSync(out,JSON.stringify(evidence,null,2)+'\n');};
 const percentile=(items,p)=>{const a=[...items].sort((a,b)=>a-b);return a[Math.max(0,Math.ceil(a.length*p)-1)]??null;};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -126,14 +133,20 @@ try {
             requestSnapshot:summarize(snapshotPlan.rows[0]['QUERY PLAN'][0])});
         }
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));
+        const work=createWorkDiagnostics();
         const lag=monitorEventLoopDelay({resolution:10});lag.enable();await pause(20);
-        const timer=setInterval(()=>{const m=process.memoryUsage();rss=Math.max(rss,m.rss);heap=Math.max(heap,m.heapUsed);},10);
+        const measuredStart=performance.now();let measuredEnd=Infinity,lastTick=measuredStart;
+        const recordGC=entries=>{for(const entry of entries) if(entry.startTime>=measuredStart&&entry.startTime<measuredEnd) work.record('gc.pause',entry.duration);};
+        const gcObserver=new PerformanceObserver(list=>recordGC(list.getEntries()));gcObserver.observe({entryTypes:['gc']});
+        const timer=setInterval(()=>{const now=performance.now();work.record('eventLoop.tickGap',now-lastTick);lastTick=now;
+          const m=process.memoryUsage();rss=Math.max(rss,m.rss);heap=Math.max(heap,m.heapUsed);},10);
         let next=0;
         try {
-          await Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);}));
+          await withWorkDiagnostics(work,()=>Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);})));
+          measuredEnd=performance.now();
           await pause(20);
-        } finally {clearInterval(timer);lag.disable();}
-        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,expected,
+        } finally {clearInterval(timer);lag.disable();recordGC(gcObserver.takeRecords());gcObserver.disconnect();}
+        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,expected,workDiagnostics:work.snapshot(),
           resultSignature:createHash('sha256').update(baseline).digest('hex'),
           stageP95Ms:Object.fromEntries(Object.entries(stageSamples).map(([key,values])=>[key,percentile(values,.95)])),
           p50Ms:percentile(samples,.5),p95Ms:percentile(samples,.95),maxMs:Math.max(...samples),

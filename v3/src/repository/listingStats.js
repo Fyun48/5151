@@ -60,10 +60,18 @@ export function assertListingStatsDeps(deps = {}) {
 
 export function normalizeStatsCandidateRow(row) {
   if (!row) return row;
-  for (const key of STATS_CANDIDATE_NUMERIC_KEYS) {
-    const value = row[key];
-    if (value != null && typeof value !== "number" && Object.prototype.hasOwnProperty.call(row, key)) row[key] = numberFromPg(value);
-  }
+  // Fixed property reads keep the common already-numeric PG shape monomorphic.
+  // Preserve missing/inherited fields and the original conversion for text schemas.
+  if (row.post_id != null && typeof row.post_id !== "number" && Object.hasOwn(row, "post_id")) row.post_id = numberFromPg(row.post_id);
+  if (row.price_num != null && typeof row.price_num !== "number" && Object.hasOwn(row, "price_num")) row.price_num = numberFromPg(row.price_num);
+  if (row.extra_fee != null && typeof row.extra_fee !== "number" && Object.hasOwn(row, "extra_fee")) row.extra_fee = numberFromPg(row.extra_fee);
+  if (row.hidden != null && typeof row.hidden !== "number" && Object.hasOwn(row, "hidden")) row.hidden = numberFromPg(row.hidden);
+  if (row.offline != null && typeof row.offline !== "number" && Object.hasOwn(row, "offline")) row.offline = numberFromPg(row.offline);
+  if (row.offline_confirmed != null && typeof row.offline_confirmed !== "number" && Object.hasOwn(row, "offline_confirmed")) row.offline_confirmed = numberFromPg(row.offline_confirmed);
+  if (row.match_post_id != null && typeof row.match_post_id !== "number" && Object.hasOwn(row, "match_post_id")) row.match_post_id = numberFromPg(row.match_post_id);
+  if (row.match_rejected != null && typeof row.match_rejected !== "number" && Object.hasOwn(row, "match_rejected")) row.match_rejected = numberFromPg(row.match_rejected);
+  if (row.contact_uid != null && typeof row.contact_uid !== "number" && Object.hasOwn(row, "contact_uid")) row.contact_uid = numberFromPg(row.contact_uid);
+  if (row.listed_by_user_id != null && typeof row.listed_by_user_id !== "number" && Object.hasOwn(row, "listed_by_user_id")) row.listed_by_user_id = numberFromPg(row.listed_by_user_id);
   return row;
 }
 
@@ -140,7 +148,7 @@ export function createListingStatsRepository({
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true, arrayRows: true});
       markStage("candidates_ms");
-      const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)));
+      const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)), {label:"stats.normalize"});
       markStage("normalize_ms");
       const flagMap = await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);

@@ -3173,6 +3173,9 @@ export async function preloadDecorationProviderAsync({
   // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
   loader: loaderIn = null,
   peers: loadPeers = true,
+  // Only the candidate pipeline may omit prep for known non-houseprice rows.
+  // Page decoration and direct callers retain the complete provider contract.
+  candidatePhase = false,
   // astra6 §2.2：清單狀態 flags 的**擁有者**（＝觀看者 uid）；未給時沿用 userId。
   flagUserId = null,
   requestContext = null,
@@ -3193,8 +3196,18 @@ export async function preloadDecorationProviderAsync({
 
   // 傳入 loader 時沿用其 memo（呼叫端會在候選階段與頁面階段各呼叫一次）。
   const loader = loaderIn || createDecorationDataLoader({ exec, driver });
-  const candidateIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
-  const onPage = new Set(candidateIds);
+  const onPage = new Set();
+  const prepIds = new Set();
+  const housepriceIds = new Set();
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const row of list) {
+      const id = Number(row.post_id) || 0;
+      if (id) { onPage.add(id); prepIds.add(id); }
+      if (isHousepriceListing(row)) housepriceIds.add(id);
+      if (++visited % 256 === 0) yield {units:256};
+    }
+  })(), {label:'preload.ids'});
   // astra6 §2.2：**清單狀態 flags（hidden／viewed／watched）屬觀看者 uid**；配對投票／
   // split／同戶關係才用 voteUid。原本此處誤用 voteUid，會讓 uid≠voteUid 時（例如以他人
   // 視角檢視）拿到錯的隱藏／已看清單。SQLite 參考管線在同一位置用的是 loadFlagMap(db, uid)。
@@ -3207,13 +3220,19 @@ export async function preloadDecorationProviderAsync({
   // 候選階段（`peers: false`）仍需要 prep／extras 涵蓋「候選本身 ＋ 其 match_post_id ＋
   // personalIndex 的 peer id」——`attachSameHouseRoles()` 就是靠這些 id 取 extras（db.js:3353）。
   // 這一段全是記憶體運算（O(candidates)），真正的 I/O 在下面的 2-hop fan-out。
-  const prepIds = new Set(candidateIds);
   const relatedIds = new Set();
-  for (const row of list) {
-    const mid = Number(row.match_post_id) || 0;
-    if (mid) { prepIds.add(mid); relatedIds.add(mid); }
-    for (const pid of personalIndex.peers(row.post_id)) { prepIds.add(pid); relatedIds.add(pid); }
-  }
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const row of list) {
+      const mid = Number(row.match_post_id) || 0;
+      if (mid) { prepIds.add(mid); relatedIds.add(mid); }
+      if (personalIndex.size !== 0) for (const pid of personalIndex.peers(row.post_id)) {
+        prepIds.add(pid); relatedIds.add(pid);
+        if (++visited % 256 === 0) yield {units:256};
+      }
+      if (++visited % 256 === 0) yield {units:256};
+    }
+  })(), {label:'preload.relations'});
   // ⚠️ peers／groupMembers 的唯一消費者 loadSameHousePeers() 只在「裝飾」路徑被呼叫
   // （db.js:3443，於 decorateListingLite 內）⇒ 這批逐列 I/O 屬**頁面層**，可延後到分頁後
   // 只對 paged.page 載入（astra6 §3「preload 分層」）。呼叫端以同一個 loader 呼叫兩次，
@@ -3251,11 +3270,30 @@ export async function preloadDecorationProviderAsync({
     for (const [gid, rows] of await loader.groupMemberRowsFor(gids)) groupMembers.set(gid, rows);
   }
   const prep = new Map();
-  for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
+  const requiredPrep = [];
+  const externalIds = [];
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const id of prepIds) {
+      const external = !onPage.has(id);
+      if (external) externalIds.push(id);
+      // Unknown external peers can be houseprice even when all candidates are 591.
+      if (!candidatePhase || external || housepriceIds.has(id)) requiredPrep.push(id);
+      if (++visited % 256 === 0) yield {units:256};
+    }
+  })(), {label:'preload.prepIds'});
+  for (const [id, row] of await loader.prepMap(requiredPrep)) if (row) prep.set(id, row);
   // Candidate rows already contain these fields. Preserve their raw values for
   // partners removed by profile filtering, then fetch only IDs not in that set.
-  const extras = listingExtrasSnapshot(list.filter(row => relatedIds.has(Number(row.post_id))));
-  for (const [id, row] of await loader.extrasMap([...prepIds].filter(id => !onPage.has(id)))) {
+  const extras = new Map();
+  await runStepsAsync((function* () {
+    for (let start = 0; start < list.length; start += 256) {
+      const chunk = list.slice(start, start + 256);
+      for (const [id, row] of listingExtrasSnapshot(chunk.filter(row => relatedIds.has(Number(row.post_id))))) extras.set(id, row);
+      yield {units:chunk.length};
+    }
+  })(), {label:'preload.extras'});
+  for (const [id, row] of await loader.extrasMap(externalIds)) {
     if (row) extras.set(id, row);
   }
 
@@ -3263,7 +3301,10 @@ export async function preloadDecorationProviderAsync({
   const mrtKeys = [];
   const jobKeys = [];
   const commuteOn = Number(conf.commuteKm) > 0 && hasWorkPoint(conf);
+  await runStepsAsync((function* () {
+  let visited = 0;
   for (const row of list) {
+    if (++visited % 256 === 0) yield {units:256};
     const lat = Number(row.lat);
     const lng = Number(row.lng);
     const trusted = isTrustedGeoSource(row.geo_source) && Number.isFinite(lat) && Number.isFinite(lng);
@@ -3278,6 +3319,7 @@ export async function preloadDecorationProviderAsync({
     }
     mrtKeys.push(makeMrtKey(lat, lng));
   }
+  })(), {label:'preload.routes'});
   const routeCache = new Map();
   for (const [key, row] of await loader.routeCacheMap(routeKeys)) if (row) routeCache.set(key, row);
   const mrtCache = new Map();
@@ -3411,34 +3453,54 @@ function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.n
   if (!list.length) return list;
   const source = provider || sqliteDecorationProvider(voteUserId);
   const personal = source.personalIndex();
+  const hasPersonal = voteUserId && personal.size !== 0;
   const byId = new Map();
+  const linked = [];
+  const grouped = new Map();
   let visited = 0;
   for (const row of list) {
-    if (++visited % 256 === 0) yield;
     byId.set(Number(row.post_id), row);
+    if (Number(row.match_post_id) && String(row.match_verdict || "") !== "no") linked.push(row);
+    if (hasPersonal) {
+      const key = personal.groupKey(row.post_id);
+      if (key) {
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(row);
+      }
+    }
+    if (++visited % 256 === 0) yield {label:'relations.index',units:256};
   }
+  if (visited % 256) yield {label:'relations.index',units:visited % 256};
+  visited = 0;
   const missing = new Set();
-  for (const row of list) {
-    if (++visited % 256 === 0) yield;
-    if (String(row.match_verdict || "") === "no") continue;
+  // Most candidates have no relation. Keep their index for resolution without
+  // repeatedly walking them in each relation-only pass. Input order is retained.
+  for (const row of linked) {
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
-    if (voteUserId) {
+    if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+  }
+  if (hasPersonal) for (const members of grouped.values()) {
+    for (const row of members) {
+      if (String(row.match_verdict || "") === "no") continue;
       for (const pid of personal.peers(row.post_id)) {
         if (!byId.has(pid)) missing.add(pid);
+        if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
       }
     }
   }
+  if (visited % 256) yield {label:'relations.missing',units:visited % 256};
   const extras = new Map();
   if (missing.size) {
     for (const [id, item] of source.extras([...missing])) extras.set(id, item);
   }
   const resolve = (id) => byId.get(id) || extras.get(id) || null;
   const splits = source.splitPairs();
-  for (const row of list) {
-    if (++visited % 256 === 0) yield;
+  visited = 0;
+  for (const row of linked) {
+    if (visited && visited % 256 === 0) yield {label:'relations.pairs',units:256};
+    visited++;
     const mid = Number(row.match_post_id) || 0;
-    if (!mid || String(row.match_verdict || "") === "no") continue;
     const peer = resolve(mid);
     if (!peer || String(peer.match_verdict || "") === "no") continue;
     if (housepriceNotDisplayReady(peer, source) || housepriceNotDisplayReady(row, source)) continue;
@@ -3460,15 +3522,9 @@ function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.n
     assignRole(row);
     assignRole(byId.get(mid));
   }
-  if (voteUserId) {
-    const grouped = new Map();
-    for (const row of list) {
-    if (++visited % 256 === 0) yield;
-      const key = personal.groupKey(row.post_id);
-      if (!key) continue;
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(row);
-    }
+  if (visited) yield {label:'relations.pairs',units:(visited - 1) % 256 + 1};
+  if (hasPersonal) {
+    visited = 0;
     for (const members of grouped.values()) {
       const pool = [];
       const seen = new Set();
@@ -3479,17 +3535,28 @@ function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.n
         pool.push(item);
       };
       for (const row of members) {
-        if (++visited % 256 === 0) yield;
         add(row);
-        for (const pid of personal.peers(row.post_id)) add(resolve(pid));
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        for (const pid of personal.peers(row.post_id)) {
+          add(resolve(pid));
+          if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        }
       }
-      const visible = pool.filter((item) => !housepriceNotDisplayReady(item, source));
+      const visible = [];
+      for (const item of pool) {
+        if (!housepriceNotDisplayReady(item, source)) visible.push(item);
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+      }
       if (visible.length < 2) continue;
-      const primary = visible.reduce((best, item) => preferPrimaryListing(best, item, now), visible[0]);
+      let primary = visible[0];
+      for (const item of visible) {
+        primary = preferPrimaryListing(primary, item, now);
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+      }
       const primaryId = Number(primary.post_id);
       const primaryOffline = Number(primary.offline) === 1;
       for (const target of visible) {
-        if (++visited % 256 === 0) yield;
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
         if (!byId.has(Number(target.post_id))) continue;
         target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
         target.same_house_primary_id = primaryId;
@@ -3497,6 +3564,7 @@ function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.n
         target.same_house_personal = true;
       }
     }
+    if (visited % 256) yield {label:'relations.groups',units:visited % 256};
   }
   return list;
 }
@@ -6583,7 +6651,7 @@ function* sortListingsSteps(rows, sort = "price_asc", options = {}) {
 }
 
 export function sortListingsRowsAsync(rows, sort = "price_asc", options = {}) {
-  return runStepsAsync(sortListingsSteps(rows, sort, options));
+  return runStepsAsync(sortListingsSteps(rows, sort, options), {label:'list.sort'});
 }
 
 // All fields used by profile filters, grouping and sorting. Large bodies, photos,
@@ -6614,7 +6682,7 @@ export function buildListListingsRows(...args) {
 }
 
 export function buildListListingsRowsAsync(...args) {
-  return runStepsAsync(buildListListingsSteps(...args));
+  return runStepsAsync(buildListListingsSteps(...args), {label:'list.build'});
 }
 
 function* buildListListingsSteps(raw, {
@@ -6634,7 +6702,7 @@ function* buildListListingsSteps(raw, {
       : filter === "offline" || filter === "suspected"
         ? overlaid.filter(row => passesPriceFilter(row, settings))
         : applyListingFilter(overlaid, settings, provider);
-  });
+  }, 256, 'list.profile');
   markStage("profile_ms");
 
   rows = yield* attachSameHouseRoleSteps(rows, voteUid, provider, now);
@@ -6657,7 +6725,7 @@ function* buildListListingsSteps(raw, {
       if (sources?.length) chunk = chunk.filter((row) => matchesListingSources(row, sources));
     }
     return chunk;
-  });
+  }, 256, 'list.display');
   markStage("display_ms");
 
   const needFit = sort === "fit_desc";
@@ -6777,21 +6845,30 @@ export function buildListListingsClauses({
     params.push(uid);
   }
   if (filter === "all") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `NOT EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.watched <> 0
+    )` : `IFNULL((
       SELECT watched FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 0`);
     params.push(uid);
   }
   if (filter === "unseen") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `NOT EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.viewed <> 0
+    )` : `IFNULL((
       SELECT viewed FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 0`);
     params.push(uid);
   }
   if (filter === "viewed") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.viewed = 1
+    )` : `IFNULL((
       SELECT viewed FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 1`);
@@ -6997,7 +7074,7 @@ export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, s
 }
 
 export function buildListingStatsRowsAsync(options = {}) {
-  return runStepsAsync(transformChunks(options.rows || [], rows => buildListingStatsRows({...options, rows})));
+  return runStepsAsync(transformChunks(options.rows || [], rows => buildListingStatsRows({...options, rows})), {label:'stats.profile'});
 }
 
 export function summarizeListingStatsAsync(options = {}) {
@@ -7008,10 +7085,10 @@ export function summarizeListingStatsAsync(options = {}) {
       const counts = summarizeListingStats({...shared, profileRows: profileRows.slice(start, start + 256),
         statusCounts: {}, watchedTotal: 0, dbTotal: 0});
       for (const key of Object.keys(total)) total[key] += counts[key];
-      yield;
+      yield {units:Math.min(256, profileRows.length - start)};
     }
     return total;
-  })());
+  })(), {label:'stats.count'});
 }
 
 /**

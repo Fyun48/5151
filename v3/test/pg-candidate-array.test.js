@@ -3,8 +3,25 @@ import assert from 'node:assert/strict';
 import { createPostgresDriver } from '../src/dbDriverPostgres.js';
 import { LIST_CANDIDATE_KEYS } from '../src/listingCandidateRow.js';
 import { withPgReadSnapshot, readPgRows } from '../src/pgReadSnapshot.js';
+import { createWorkDiagnostics, withWorkDiagnostics } from '../src/workDiagnostics.js';
 
 const connectionString = process.env.PG_TEST_URL || '';
+test('live PG: narrow reads retain all rows across bounded replies and report batch work',
+  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+    const driver = await createPostgresDriver({ connectionString });
+    const diagnostics = createWorkDiagnostics();
+    try {
+      await withWorkDiagnostics(diagnostics, () => withPgReadSnapshot(driver, async snapshot => {
+        const rows = await readPgRows(snapshot, 'SELECT i::bigint AS post_id FROM generate_series(1,8705) i ORDER BY i');
+        assert.deepEqual(rows.map(r => r.post_id), Array.from({length:8705}, (_,i) => i + 1));
+      }));
+      const metrics = diagnostics.snapshot();
+      assert.equal(metrics['pg.appendRows.sync'].totalUnits, 8705);
+      assert.equal(metrics['pg.appendRows.sync'].maxUnits, 1024);
+      assert.ok(metrics['pg.fetch.yieldWait'].calls >= 8);
+      assert.ok(metrics['pg.fetch.wall'].calls >= 9);
+    } finally { await driver.close(); }
+  });
 test('live PG: complete-read planner settings remain local after success and failure',
   { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
     const driver = await createPostgresDriver({ connectionString, poolOptions:{max:1} });

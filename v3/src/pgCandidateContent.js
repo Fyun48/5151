@@ -1,5 +1,5 @@
-import { setImmediate as yieldToIO } from 'node:timers/promises';
 import { candidateRowFromValues, LIST_CANDIDATE_KEYS, LIST_CANDIDATE_COLUMNS } from './listingCandidateRow.js';
+import { runStepsAsync } from './cooperative.js';
 
 const PREFIX = `SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings `;
 // Relation OID is in the namespace. Inheritance/partitioning is excluded below,
@@ -67,6 +67,7 @@ export async function readCandidateContent({ client, readRows, store, sql, param
   const identity = store.bindIdentity(JSON.stringify([metadata, fields.map(f => [f.name, f.tableID, f.columnID, f.dataTypeID, f.dataTypeModifier])]));
   const selected = await readRows(`SELECT ${VERSION_COLUMNS} FROM listings ${sql.slice(PREFIX.length)}`, params);
   const rows = new Array(selected.length), missing = [], versions = new Map();
+  await runStepsAsync((function* () {
   for (let i = 0; i < selected.length; i++) {
     const row = selected[i];
     const id = Number(row.post_id);
@@ -74,18 +75,23 @@ export async function readCandidateContent({ client, readRows, store, sql, param
     const values = store.get(id, version, identity);
     if (values) rows[i] = candidateRowFromValues(values);
     else { missing.push(id); versions.set(id, { version, index: i }); }
-    if ((i + 1) % 256 === 0) await yieldToIO();
+    if ((i + 1) % 256 === 0) yield {units:256};
   }
+  if (selected.length % 256) yield {units:selected.length % 256};
+  })(), {label:'stats.content.lookup'});
   if (missing.length) {
     const fresh = await readRows(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings WHERE post_id = ANY($1::bigint[])`, [missing], options);
+    await runStepsAsync((function* () {
     for (let i = 0; i < fresh.length; i++) {
       const row = fresh[i], id = Number(row.post_id), selectedVersion = versions.get(id);
       if (!selectedVersion) throw new Error('PG content read returned an unselected candidate');
       store.put(id, selectedVersion.version, identity, row);
       rows[selectedVersion.index] = row;
       versions.delete(id);
-      if ((i + 1) % 256 === 0) await yieldToIO();
+      if ((i + 1) % 256 === 0) yield {units:256};
     }
+    if (fresh.length % 256) yield {units:fresh.length % 256};
+    })(), {label:'stats.content.fill'});
     if (versions.size) throw new Error('PG candidate content missing from the current snapshot');
   }
   return rows;

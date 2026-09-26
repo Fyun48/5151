@@ -233,7 +233,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     // peers 2-hop 與 groupMembers；astra6 §3 preload 分層）。
     preloadDecorationProviderAsync({
       exec, loader, rows: raw, settings, userId: uid, matchVoteUserId: voteUid, sameHouse, peers: false,
-      flagUserId: uid, requestContext: context,
+      flagUserId: uid, requestContext: context, candidatePhase: true,
     }),
   ]);
   markStage("preload_ms");
