@@ -134,14 +134,17 @@ test("guest SQL-first 只在一模一樣的等價範圍內接手，其餘回退 
   runIsolated(`
     ${seedTrickyPool()}
     // 超出 envelope：SQL 端無法表達同樣的語意（關鍵字／房型／來源／fit 排序／屬性篩選／訪客直線距離）
+    // 超出 envelope：SQL 端無法表達同樣的語意（關鍵字／房型／來源／fit 排序／價格上限變體／屬性篩選／訪客直線距離／已關注檢視）
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ q: "合成" })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ kind: "whole" })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ sources: "591" })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ sort: "fit_desc" })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ priceMax: 20000 })), null);
-    assert.equal(app.listPublicListingsSqlFirst(guestArgs({ areaMax: 30 })), null);
     assert.equal(app.listPublicListingsSqlFirst(guestArgs({ commuteKm: 5, workLat: 25.093, workLng: 121.525 })), null);
     assert.equal(app.listPublicListingsSqlFirst({ ...guestArgs({}), filter: "watched" }), null);
+    // F3 依隔離實測全部關回外框外（areaMax=35 的 count 需 30,054ms 且逾時；見 listing-search-sql-sources.test.js）
+    // ⇒ 訪客路徑的 areaMax 也改為回退 Node，不再走 SQL-first。
+    assert.equal(app.listPublicListingsSqlFirst(guestArgs({ areaMax: 30 })), null);
     // 回退後仍拿得到結果（與改動前一樣走 Node 路徑）
     const fallback = app.listPublicListingsFast(guestArgs({ q: "合成" }));
     assert.ok(fallback.listings.length >= 1);
@@ -186,14 +189,14 @@ test("公開 builder：行政區可留空、分頁 SQL 帶 LIMIT，會員路徑�
   assert.equal(buildListingSearchSql({ sort: "newest", districts: [], settings: {} }, deps).ok, false);
 });
 
-test("訪客路由走 SQL-first 分派，且 SQL-first 只抓一頁（不再全撈候選）", () => {
+test("訪客路由走 async driver 分派，SQLite SQL-first 仍只抓一頁", () => {
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /getCachedPublicListings\(query, \(\) => listPublicListingsFast\(\{/);
+  assert.match(server, /await getCachedPublicListings\(query, \(\) => searchPublicListingsAsync\(\{/);
   const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   assert.match(dbSrc, /return listPublicListingsSqlFirst\(args\) \|\| listPublicListings\(args\);/);
   const fast = dbSrc.slice(
     dbSrc.indexOf("export function listPublicListingsSqlFirst"),
-    dbSrc.indexOf("/** Guest/public read of the shared listing pool"),
+    dbSrc.indexOf("/** Public candidates keep the guest scope"),
   );
   assert.match(fast, /built\.pageQuery\(/);
   assert.match(fast, /built\.countQuery\.sql/);

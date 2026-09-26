@@ -1,0 +1,669 @@
+{
+  "status": "CI_SMOKE_PASS",
+  "sourceSha": "3a716ec30621107f60b60720caa05c957036fb3a",
+  "checkoutSha": "52955b71ae96a40d0473562f1ff617b2f27594b5",
+  "moduleHashes": {
+    "db.js": "8db6a614af427f4bbe38f3bf3296a1ca734b772607a08fdd7ce70adb76b9fe53",
+    "listingSearchPage.js": "d3f0ca05e9805b3e88c9122458015f35da75a77c85b7984ab27dd26874d14c64",
+    "listingSearchNodePg.js": "0c45baeb077bdcb36b1fff9ff85440c7e4bf6e6a08a96d87435a11af3995908c",
+    "listingStatsAsync.js": "15679e811fd5fcdc4c29845f28e5b7987f425586772c8ad7fdefa2c8b92a5bb9",
+    "repository/listingStats.js": "1b0b07a9b3addeb68736fe2549cca61bd02fbc26cfc0be95f6eecc4052b9756d"
+  },
+  "node": "v22.23.2",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "memoryBytes": 16766414848
+  },
+  "fixture": {
+    "version": "prb-fixed-v1",
+    "asOf": "2026-09-26T00:00:00.000Z",
+    "totalRows": 120000,
+    "activeRows": 36000,
+    "chainLength": 1024,
+    "description": "120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers"
+  },
+  "warms": 5,
+  "runs": 50,
+  "cases": [
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 1811.638637,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "ms": 0.3341839999993681,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "ms": 0.42456599999968603,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "ms": 0.5125559999996767,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "ms": 0.5108639999998559,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "ms": 0.5263770000001387,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "ms": 37.803313000000344,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($1) OR (",
+          "ms": 55.27815399999963,
+          "rows": 60000
+        },
+        {
+          "sql": "SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0",
+          "ms": 36.27006000000074,
+          "rows": 1023
+        },
+        {
+          "sql": "SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "ms": 0.9791949999998906,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 868.8491260000001,
+          "rows": 18512
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 7.609770999999455,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "ms": 2.9606189999994967,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "ms": 1.1057620000001407,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "ms": 10.731458000000202,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "ms": 3.1970289999999295,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 1.312696999999389,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "ms": 0.7578880000000936,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "ms": 32.96213799999987,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 213.80453000000034,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 3.2663510000002134,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "ms": 1.0556579999993119,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "ms": 66.48416199999974,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "ms": 0.8648259999999937,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "ms": 0.9851539999999659,
+          "rows": null
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 113,
+        "sql_ms": 831,
+        "preload_ms": 87,
+        "profile_ms": 77,
+        "relations_ms": 26,
+        "display_ms": 26,
+        "sort_ms": 16,
+        "preload_page_ms": 4,
+        "hydrate_ms": 3,
+        "stats_ms": 549.7566669999942
+      },
+      "p50Ms": 1586.7672599999933,
+      "p95Ms": 1703.1505990000005,
+      "maxMs": 1790.8746729999984,
+      "lagP99Ms": 168.034303,
+      "lagMaxMs": 242.089983,
+      "rssPeakBytes": 764014592,
+      "heapPeakBytes": 526379296,
+      "queryCount": {
+        "min": 22,
+        "p50": 22,
+        "max": 22
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 1580.0708030000096,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "ms": 0.2689470000041183,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "ms": 0.40625899999577086,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "ms": 0.2627079999947455,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "ms": 0.27741000000969507,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "ms": 0.2961769999965327,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "ms": 7.898037000006298,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($1) OR (",
+          "ms": 46.007142000002204,
+          "rows": 60000
+        },
+        {
+          "sql": "SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0",
+          "ms": 39.770788000008906,
+          "rows": 1023
+        },
+        {
+          "sql": "SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "ms": 0.4246970000094734,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 795.700954999993,
+          "rows": 18512
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 3.8945090000052005,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "ms": 0.32180499999958556,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "ms": 0.2941339999961201,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "ms": 8.80708099999174,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "ms": 1.5551359999954002,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 0.7558660000067903,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "ms": 0.367841999992379,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "ms": 27.329792999997153,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 212.80770200000552,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 0.7958249999937834,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "ms": 0.599724999992759,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "ms": 24.255825000000186,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "ms": 0.3295970000035595,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "ms": 0.4707139999954961,
+          "rows": null
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 472,
+        "sql_ms": 1658,
+        "preload_ms": 604,
+        "profile_ms": 104,
+        "relations_ms": 34,
+        "display_ms": 39,
+        "sort_ms": 23,
+        "preload_page_ms": 461,
+        "hydrate_ms": 6,
+        "stats_ms": 1674.990392000007
+      },
+      "p50Ms": 3977.854094999988,
+      "p95Ms": 4668.290754000016,
+      "maxMs": 4673.474839000002,
+      "lagP99Ms": 238.419967,
+      "lagMaxMs": 564.133887,
+      "rssPeakBytes": 1213231104,
+      "heapPeakBytes": 1040179568,
+      "queryCount": {
+        "min": 22,
+        "p50": 22,
+        "max": 22
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 1708.3013780000038,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "ms": 0.29035900000599213,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "ms": 0.2648510000144597,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "ms": 0.2298190000001341,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "ms": 0.2854619999998249,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "ms": 0.23735000001033768,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "ms": 7.798077999992529,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 852.1750760000141,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 6.5736699999833945,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "ms": 0.28330899999127723,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "ms": 0.2615159999986645,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "ms": 16.844028999999864,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "ms": 1.564741000009235,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 0.7581399999908172,
+          "rows": 51
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 0.3944230000197422,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "ms": 0.2401350000000093,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "ms": 0.4672699999937322,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "ms": 27.2798119999934,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 211.19947200000752,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 0.8128109999815933,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "ms": 0.5636219999869354,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "ms": 20.650981999991927,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "ms": 0.28848600000492297,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "ms": 0.41256899997824803,
+          "rows": null
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 893,
+        "preload_ms": 160,
+        "profile_ms": 147,
+        "relations_ms": 39,
+        "display_ms": 29,
+        "sort_ms": 34,
+        "preload_page_ms": 6,
+        "hydrate_ms": 6,
+        "stats_ms": 510.0982950000034
+      },
+      "p50Ms": 1701.074563000002,
+      "p95Ms": 1750.9891650000063,
+      "maxMs": 1762.490059999982,
+      "lagP99Ms": 280.756223,
+      "lagMaxMs": 381.681663,
+      "rssPeakBytes": 1214885888,
+      "heapPeakBytes": 674417184,
+      "queryCount": {
+        "min": 21,
+        "p50": 21,
+        "max": 21
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 1640.8995679999935,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "ms": 0.21774100000038743,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "ms": 0.27171100000850856,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "ms": 0.22636500000953674,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "ms": 0.2944450000068173,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "ms": 0.2608149999869056,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "ms": 7.871370000008028,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 853.3478790000081,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 6.945071999973152,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "ms": 0.3271220000460744,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "ms": 0.2610749999876134,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "ms": 13.966887000016868,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "ms": 1.5361569999950007,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 0.7538620000123046,
+          "rows": 51
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "ms": 0.39251899998635054,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "ms": 0.2491980000049807,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "ms": 0.3043990000151098,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "ms": 26.735455000016373,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "ms": 212.57144799997332,
+          "rows": 36000
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "ms": 0.7783789999666624,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "ms": 0.5450449999771081,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "ms": 28.256400000012945,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "ms": 0.26657400000840425,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "ms": 1.8764390000142157,
+          "rows": null
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 2497,
+        "preload_ms": 1226,
+        "profile_ms": 200,
+        "relations_ms": 49,
+        "display_ms": 33,
+        "sort_ms": 36,
+        "preload_page_ms": 902,
+        "hydrate_ms": 9,
+        "stats_ms": 1884.486539000005
+      },
+      "p50Ms": 4895.2014590000035,
+      "p95Ms": 5638.952297999989,
+      "maxMs": 5670.709741999977,
+      "lagP99Ms": 404.226047,
+      "lagMaxMs": 814.219263,
+      "rssPeakBytes": 2583490560,
+      "heapPeakBytes": 2391170896,
+      "queryCount": {
+        "min": 21,
+        "p50": 21,
+        "max": 21
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": false
+    }
+  ],
+  "postgres": "16.14",
+  "sqliteAttempts": 0,
+  "nasAcceptance": "NOT_RUN; this machine is not a NAS"
+}

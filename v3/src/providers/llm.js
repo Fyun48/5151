@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "../crawlExecution.js";
 // LLM 同源確認與爬蟲洞察：兩個 category 分開開關，失敗就略過。
 // 不可送整頁 HTML 或會員個資。洞察只當提示，不覆寫已結構化欄位。
 
@@ -125,7 +126,7 @@ async function callOpenAiCompat(cfg, budget, body) {
       response_format: { type: "json_object" },
       messages: body.messages,
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: crawlRequestSignal(AbortSignal.timeout(15000)),
   });
   if (!res.ok) throw new Error(`llm HTTP ${res.status}`);
   const json = await res.json();

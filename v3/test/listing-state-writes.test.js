@@ -32,6 +32,7 @@ const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL stat
 
 // Everything the state write touches plus what the decorated read of it needs.
 const TABLES = [
+  "settings",
   "listings",
   "listing_search_projection",
   "data_revision",

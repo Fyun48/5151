@@ -1,0 +1,56 @@
+{
+  "status": "FAILED",
+  "target": "nas",
+  "sourceSha": "4ee81e7495f63873e302a6451b1bdc51a46cca16",
+  "checkoutSha": "4ee81e7495f63873e302a6451b1bdc51a46cca16",
+  "moduleHashes": {
+    "db.js": "192e98249693112177c467a4340511e78aa9eb00a73bf9df4c41ef5237a10f92",
+    "listingSearchPage.js": "5df4d31a865315d51bc22c775bb54a024fad104d48afa081dc500578c3e55a11",
+    "listingSearchNodePg.js": "320f898a18c2f58143cd90351fb0de73a36edf485ebcdb258acc8d019fc42e3d",
+    "listingStatsAsync.js": "04ede567afb14e9c4888420ece97bf22889e4666f41a4ea6e883ba08afcb0890",
+    "pgReadSnapshot.js": "9d969c281dceda3f91994bd1c735a059d370d12f962fc7952250fbf674f56ecb",
+    "pgCandidateContent.js": "2c0ba621b743965d6106ee57d41b20809ea9b80fd2e92ca6475ae29bb8337dd5",
+    "dbDriverPostgres.js": "30fe9e7569944f25853259ac01acf7b5ddcab92742ade8890ae3d029dc3aaed1",
+    "listingCandidateRow.js": "b76a891673a8ac0719902f42e0d16141d16bd9d66d57d644cdc70ca9462a9f01",
+    "listDistrictSql.js": "ed757a54c3d4a60a21dbd927d5d3169b114efccee0428b6929f537ca8328fc84",
+    "cooperative.js": "fba5403edb3016c7ba39461b1c154d87cda7cc2967cd769b42a6c2ac6fe3a788",
+    "workDiagnostics.js": "76bf8124c30d69803c29c1373d05ea153f757d1790b73f2582ba6f9f50c21bb5",
+    "personalFlags.js": "e5ed7a9ee0414101abdc68af97cd63c12d6747780d1a66df963a34d305ce4514",
+    "repository/listingStats.js": "d71d61b8f88886de35e4fc05ade22d66fd14cba6fbc8a2989459980f000f96ab",
+    "repository/decorationData.js": "266e52c46cd64dbc89e7756fcbb1a63617bb7ec550f18c135b5020c12d6e4a32"
+  },
+  "node": "v22.23.3",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu": "Intel(R) Celeron(R) CPU N3450 @ 1.10GHz",
+    "memoryBytes": 8162942976
+  },
+  "fixture": {
+    "version": "prb-fixed-v1",
+    "asOf": "2026-09-26T00:00:00.000Z",
+    "totalRows": 120000,
+    "activeRows": 36000,
+    "chainLength": 1024,
+    "description": "120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers"
+  },
+  "workDiagnosticsVersion": 2,
+  "workDiagnosticsDefinitions": {
+    "step": "Synchronous generator next() duration; maxUnits is work reported at a checkpoint (rows, peers or comparisons), not a candidate limit.",
+    "slice": "Time spent in this generator between explicit yields to I/O; final next() also obeys the 2 ms scheduling budget.",
+    "yieldWait": "Elapsed await setImmediate, including other requests, I/O and scheduler delay; not synchronous CPU time.",
+    "pgWall": "PG query wall time including server, transport and decoding; submitSync/appendRows.sync measure only the named synchronous section.",
+    "gcPause": "Observed GC duration inside the measured window; tickGap includes the nominal 10 ms timer interval.",
+    "timeline": "At most 32 longest spans >=20 ms per selected category, all on performance.now clock. Overlap is evidence of coincidence, not causation; independent maxima must not be added.",
+    "statsReduce": "Canonical stats profile_sync_ms/count_sync_ms are accumulated synchronous work; reduce_ms includes scheduling. They are not the previous separate profile/count wall stages."
+  },
+  "warms": 5,
+  "runs": 50,
+  "cases": [],
+  "postgres": "16.14",
+  "error": {
+    "code": "57014",
+    "message": "canceling statement due to statement timeout"
+  }
+}

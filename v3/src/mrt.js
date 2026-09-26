@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { distanceKm } from "./geo.js";
 import { MRT_STATIONS } from "./mrtStations.js";
 import { roundCoord } from "./route.js";
@@ -115,7 +116,7 @@ async function osrmWalkKm(fromLat, fromLng, toLat, toLng) {
   lastMrtRouteAt = Date.now();
   const res = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": GEO_UA },
-    signal: AbortSignal.timeout(10000),
+    signal: crawlRequestSignal(AbortSignal.timeout(10000)),
   });
   if (res.status === 429) return { busy: true };
   if (!res.ok) return null;

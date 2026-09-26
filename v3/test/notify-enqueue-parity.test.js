@@ -219,18 +219,46 @@ function deliveredPairs(db, afterId) {
 
 // The PostgreSQL executor, answered by the SQLite fixture: the decoration loader emits $n, the enqueue's
 // builders emit ? and its insert asks for RETURNING - the real driver handles all three.
+//
+// astra 2026-09-25 §3.6：正式碼新增了 **PG 陣列綁定**（`= ANY($n::bigint[])`，見
+// repository/decorationData.js 的 idFilter）⇒ 這個模擬 executor 必須支援它：
+// 展開成 SQLite 的 `IN (?,?,…)` 並移除型別轉換。用**單次左到右掃描**，確保展開後的參數順序
+// 與 placeholder 出現順序一致（分兩趟會把參數順序弄反）。
 function sqliteExecutor(db) {
   return (sql, params = []) => {
-    const order = [];
-    const text = String(sql).replace(/\$(\d+)/g, (_match, n) => {
-      order.push(Number(n) - 1);
-      return "?";
-    });
-    const args = order.length ? order.map((index) => params[index]) : (params || []).slice();
+    const raw = String(sql);
+    const args = [];
+    let cursor = 0;
+    const takePositional = () => { const value = params[cursor]; cursor += 1; return value; };
+    // 單次左到右掃描（含 `?` 形式的 ANY：這個 executor 收到的是**尚未轉成 $n** 的 SQL）。
+    const text = raw.replace(
+      /=\s*ANY\(\s*(\$\d+|\?)(?:::[A-Za-z_]+(?:\[\])?)?\s*\)|::[A-Za-z_]+(?:\[\])?|(\$\d+)|(\?)/gi,
+      (match, anyRef, dollarRef, qmark) => {
+        if (anyRef) {
+          const value = anyRef.startsWith("$")
+            ? params[Number(anyRef.slice(1)) - 1]
+            : takePositional();
+          const values = value == null ? [] : (Array.isArray(value) ? value : [value]);
+          // PG 的空陣列（= ANY('{}')）不匹配任何列 ⇒ 以 IN (NULL) 表達同一語意。
+          if (!values.length) return "IN (NULL)";
+          return `IN (${values.map((v) => { args.push(v); return "?"; }).join(", ")})`;
+        }
+        if (dollarRef) {
+          args.push(params[Number(dollarRef.slice(1)) - 1]);
+          return "?";
+        }
+        if (qmark !== undefined) {
+          args.push(takePositional());
+          return "?";
+        }
+        return "";   // 型別轉換：SQLite 不需要
+      },
+    );
+    const bind = args.length ? args : (params || []).slice();
     if (/returning\s+id/i.test(text) || /^\s*select/i.test(text)) {
-      return db.prepare(text).all(...args).map((row) => ({ ...row }));
+      return db.prepare(text).all(...bind).map((row) => ({ ...row }));
     }
-    const info = db.prepare(text).run(...args);
+    const info = db.prepare(text).run(...bind);
     return [{ id: Number(info.lastInsertRowid) || 0, changes: Number(info.changes) || 0 }];
   };
 }

@@ -40,7 +40,7 @@ const insertRevision = (db, id, entityId = 1) => db.prepare(
 
 function fakePgDriver({ onQuery = null } = {}) {
   const calls = [];
-  return {
+  const driver = {
     calls,
     async exec(sql) {
       calls.push({ kind: "exec", sql });
@@ -50,7 +50,24 @@ function fakePgDriver({ onQuery = null } = {}) {
       if (onQuery) onQuery(sql, params);
       return { rows: [], rowCount: 0 };
     },
+    // persistListing 於 PR-B 起把主列／投影／變更紀錄包在同一交易（PR-B F7/G9）→ 假 driver 也要支援。
+    async withTransaction(fn) {
+      calls.push({ kind: "begin", sql: "BEGIN" });
+      const client = {
+        query: (sql, params = []) => driver.query(sql, params),
+        connect: () => client,
+      };
+      try {
+        const result = await fn(client);
+        calls.push({ kind: "commit", sql: "COMMIT" });
+        return result;
+      } catch (error) {
+        calls.push({ kind: "rollback", sql: "ROLLBACK" });
+        throw error;
+      }
+    },
   };
+  return driver;
 }
 
 test("data_revision 的序號校正 SQL 對齊 max(id) + 1（且不會把領先的序號調低）", () => {

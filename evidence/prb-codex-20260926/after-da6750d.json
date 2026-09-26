@@ -1,0 +1,1232 @@
+{
+  "status": "CI_SMOKE_PASS",
+  "target": "ci",
+  "sourceSha": "da6750d470e52070a6dcefd365254b4a05375c23",
+  "checkoutSha": "4caa193e50345b12aa6c285cd01bb733eb21c201",
+  "moduleHashes": {
+    "db.js": "f72620a235e619a02adb4a543e50bfb6b091cccdc6872ff423f99a9b07911a74",
+    "listingSearchPage.js": "d3f0ca05e9805b3e88c9122458015f35da75a77c85b7984ab27dd26874d14c64",
+    "listingSearchNodePg.js": "241070b05b50de31d940c054c9bcdf827cc72eef671514944d7ae80e1f970352",
+    "listingStatsAsync.js": "c7a863e4070ef2fcf08cee40c4d29075a3f06d5809d321ddc4ce2f108d9a9529",
+    "pgReadSnapshot.js": "385c8c52cf862aded58e0dea8498eba895e943c480264bafe2386d9e06f597e6",
+    "cooperative.js": "8490c9d8553a0cfb3f08ec66e334136e77fa55a5f94f2feecf72cfa8c72324db",
+    "personalFlags.js": "a5125727e2763eca1138b02987334a8c45f8d22c246257e8b09be422480950cb",
+    "repository/listingStats.js": "d8e75bea96a267146b20f467239671b5d8a2393296cf893893c109459808f58d",
+    "repository/decorationData.js": "266e52c46cd64dbc89e7756fcbb1a63617bb7ec550f18c135b5020c12d6e4a32"
+  },
+  "node": "v22.23.2",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu": "Intel(R) Xeon(R) 6973P-C",
+    "memoryBytes": 16765378560
+  },
+  "fixture": {
+    "version": "prb-fixed-v1",
+    "asOf": "2026-09-26T00:00:00.000Z",
+    "totalRows": 120000,
+    "activeRows": 36000,
+    "chainLength": 1024,
+    "description": "120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers"
+  },
+  "warms": 5,
+  "runs": 50,
+  "cases": [
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 798.2081539999999,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.7439070000000356,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.28684000000021115,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.7013230000002295,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.6840120000001662,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.6600760000001173,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.6577219999999215,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "calls": 1,
+          "ms": 25.30814700000019,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($1) OR (",
+          "calls": 1,
+          "ms": 50.76269600000023,
+          "rows": 60000
+        },
+        {
+          "sql": "SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0",
+          "calls": 1,
+          "ms": 25.726063000000067,
+          "rows": 1023
+        },
+        {
+          "sql": "SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.9102430000002641,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 35.92574999999988,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 37,
+          "ms": 169.176133999998,
+          "rows": 18512
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.5356869999995979,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 3.4662429999998494,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.3459929999999076,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.6018569999996544,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 12.546900999999707,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 2.1292569999995976,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 1,
+          "ms": 1.0288069999996878,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.7703659999997399,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 1.1351070000000618,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 0.7166200000001481,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 210.21495900000355,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.18934799999988172,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.4343509999998787,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.6167769999992743,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 33.8150799999994,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.7186570000003485,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.43541800000002695,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "default": {
+            "planningMs": 12.198,
+            "executionMs": 587.569,
+            "jit": {
+              "Functions": 36,
+              "Options": {
+                "Inlining": true,
+                "Optimization": true,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 3.314,
+                "Inlining": 32.433,
+                "Optimization": 280.751,
+                "Emission": 208.803,
+                "Total": 525.302
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 612187.61,
+              "sharedHitBlocks": 99970,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 11.698,
+            "executionMs": 57.691,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 612187.61,
+              "sharedHitBlocks": 99970,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "default": {
+            "planningMs": 0.198,
+            "executionMs": 36.315,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.137,
+                "Inlining": 0,
+                "Optimization": 1.172,
+                "Emission": 18.153,
+                "Total": 21.462
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.199,
+            "executionMs": 15.723,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 85,
+        "sql_ms": 204,
+        "preload_ms": 37,
+        "profile_ms": 20,
+        "relations_ms": 16,
+        "display_ms": 13,
+        "sort_ms": 16,
+        "preload_page_ms": 3,
+        "hydrate_ms": 2,
+        "stats_ms": 320.1690889999991
+      },
+      "p50Ms": 667.9998419999993,
+      "p95Ms": 727.5317670000004,
+      "maxMs": 733.8322159999989,
+      "lagP99Ms": 23.232511,
+      "lagMaxMs": 30.916607,
+      "rssPeakBytes": 400543744,
+      "heapPeakBytes": 290208904,
+      "queryCount": {
+        "min": 132,
+        "p50": 132,
+        "max": 132
+      },
+      "transactionStatements": {
+        "min": 3,
+        "max": 3
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 658.6929359999995,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.28365800000028685,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.13654200000019046,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.31790300000284333,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.2538890000068932,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.24964099999488099,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.23132299999997485,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "calls": 1,
+          "ms": 24.902901000001293,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($1) OR (",
+          "calls": 1,
+          "ms": 42.36351599999762,
+          "rows": 60000
+        },
+        {
+          "sql": "SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0",
+          "calls": 1,
+          "ms": 25.395003999998153,
+          "rows": 1023
+        },
+        {
+          "sql": "SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.3138810000018566,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 27.61673499999597,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 37,
+          "ms": 159.33550799998193,
+          "rows": 18512
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.30193599999620346,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 3.1407299999991665,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.361150999997335,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.2910090000004857,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 6.378005999999004,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.38703600000008,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 1,
+          "ms": 0.8513090000051307,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.42863799999759067,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.7945169999948121,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 0.6578900000022259,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 195.44333100002405,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.18454599999677157,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.3527719999983674,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.4282789999997476,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 27.521516999993764,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.20999500000471016,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.3319919999994454,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "default": {
+            "planningMs": 12.093,
+            "executionMs": 540.181,
+            "jit": {
+              "Functions": 36,
+              "Options": {
+                "Inlining": true,
+                "Optimization": true,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 3.218,
+                "Inlining": 8.957,
+                "Optimization": 279.309,
+                "Emission": 200.572,
+                "Total": 492.057
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 612187.61,
+              "sharedHitBlocks": 99970,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 12.082,
+            "executionMs": 56.697,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 612187.61,
+              "sharedHitBlocks": 99970,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "default": {
+            "planningMs": 0.201,
+            "executionMs": 34.097,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.26,
+                "Inlining": 0,
+                "Optimization": 1.266,
+                "Emission": 16.717,
+                "Total": 20.243
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.171,
+            "executionMs": 15.493,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 206,
+        "sql_ms": 534,
+        "preload_ms": 113,
+        "profile_ms": 123,
+        "relations_ms": 50,
+        "display_ms": 46,
+        "sort_ms": 63,
+        "preload_page_ms": 23,
+        "hydrate_ms": 4,
+        "stats_ms": 1038.4866910000055
+      },
+      "p50Ms": 1933.8829659999901,
+      "p95Ms": 2038.548686999995,
+      "maxMs": 2065.165922,
+      "lagP99Ms": 43.679743,
+      "lagMaxMs": 101.384191,
+      "rssPeakBytes": 936648704,
+      "heapPeakBytes": 806380944,
+      "queryCount": {
+        "min": 132,
+        "p50": 132,
+        "max": 132
+      },
+      "transactionStatements": {
+        "min": 3,
+        "max": 3
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": false,
+      "nasLatencyPassed": null
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 825.3980479999882,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.26768299999821465,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.21750800000154413,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.26025200000731274,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.2594379999936791,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.31387399999948684,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.2893939999921713,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "calls": 1,
+          "ms": 7.4003649999940535,
+          "rows": 2
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 1.1790360000013607,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 71,
+          "ms": 284.3788069999573,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.21277800000098068,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 6.38600199999928,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.305038999998942,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.20599200000287965,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 17.12324900001113,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.696868999992148,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 2,
+          "ms": 1.2102170000143815,
+          "rows": 53
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.2507460000051651,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "calls": 1,
+          "ms": 0.34002800000598654,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.8192659999913303,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 0.5957020000059856,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 249.12791200003994,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.27106600000115577,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.45980699999199715,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.5000980000040727,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 8.84143299999414,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.31737400000565685,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.431284999998752,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "default": {
+            "planningMs": 0.352,
+            "executionMs": 680.368,
+            "jit": {
+              "Functions": 36,
+              "Options": {
+                "Inlining": true,
+                "Optimization": true,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 3.558,
+                "Inlining": 36.413,
+                "Optimization": 318.766,
+                "Emission": 245.707,
+                "Total": 604.445
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 608704.73,
+              "sharedHitBlocks": 74435,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.327,
+            "executionMs": 69.773,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 608704.73,
+              "sharedHitBlocks": 74435,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "default": {
+            "planningMs": 0.199,
+            "executionMs": 37.711,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.247,
+                "Inlining": 0,
+                "Optimization": 1.168,
+                "Emission": 19.97,
+                "Total": 23.385
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.21,
+            "executionMs": 15.479,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 258,
+        "preload_ms": 68,
+        "profile_ms": 48,
+        "relations_ms": 16,
+        "display_ms": 13,
+        "sort_ms": 28,
+        "preload_page_ms": 5,
+        "hydrate_ms": 4,
+        "stats_ms": 324.6642670000001
+      },
+      "p50Ms": 698.4997599999915,
+      "p95Ms": 748.2346410000027,
+      "maxMs": 757.4946090000012,
+      "lagP99Ms": 32.964607,
+      "lagMaxMs": 41.058303,
+      "rssPeakBytes": 1019244544,
+      "heapPeakBytes": 877763712,
+      "queryCount": {
+        "min": 165,
+        "p50": 165,
+        "max": 165
+      },
+      "transactionStatements": {
+        "min": 3,
+        "max": 3
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 675.0661600000021,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.2538429999985965,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.11900800000876188,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.22669299998960923,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.2193660000048112,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.21978200000012293,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.28960899999947287,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT DISTINCT search_key FROM listings",
+          "calls": 1,
+          "ms": 6.708662000004551,
+          "rows": 2
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 0.8142410000000382,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 71,
+          "ms": 241.57865299998957,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.17283499999030028,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 5.5288239999936195,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.2599579999950947,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.20118499999807682,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 13.739610000004177,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.274872999987565,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 2,
+          "ms": 1.015304999993532,
+          "rows": 53
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.19153799999912735,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "calls": 1,
+          "ms": 0.2411229999997886,
+          "rows": 2
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.6736660000024131,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 0.5217100000008941,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 211.79281099999207,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.16720000001078006,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.3434080000006361,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.4738460000080522,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 18.54586699999345,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.2623290000046836,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.429589000006672,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "default": {
+            "planningMs": 0.287,
+            "executionMs": 553.938,
+            "jit": {
+              "Functions": 36,
+              "Options": {
+                "Inlining": true,
+                "Optimization": true,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 3.079,
+                "Inlining": 9.068,
+                "Optimization": 282.186,
+                "Emission": 201.03,
+                "Total": 495.362
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 608704.73,
+              "sharedHitBlocks": 74435,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.308,
+            "executionMs": 67.129,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 608704.73,
+              "sharedHitBlocks": 74435,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "default": {
+            "planningMs": 0.186,
+            "executionMs": 37.208,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.314,
+                "Inlining": 0,
+                "Optimization": 1.385,
+                "Emission": 19.215,
+                "Total": 22.914
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.173,
+            "executionMs": 17.174,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 308950.87,
+              "sharedHitBlocks": 2433,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 800,
+        "preload_ms": 192,
+        "profile_ms": 227,
+        "relations_ms": 63,
+        "display_ms": 53,
+        "sort_ms": 125,
+        "preload_page_ms": 33,
+        "hydrate_ms": 5,
+        "stats_ms": 957.5863269999973
+      },
+      "p50Ms": 2118.825463999994,
+      "p95Ms": 2233.203552000021,
+      "maxMs": 2246.4814999999944,
+      "lagP99Ms": 42.696703,
+      "lagMaxMs": 96.600063,
+      "rssPeakBytes": 1103638528,
+      "heapPeakBytes": 950789600,
+      "queryCount": {
+        "min": 165,
+        "p50": 165,
+        "max": 165
+      },
+      "transactionStatements": {
+        "min": 3,
+        "max": 3
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null
+    }
+  ],
+  "postgres": "16.14",
+  "sqliteAttempts": 0,
+  "nasAcceptance": "NOT_RUN; CI does not verify NAS acceptance"
+}

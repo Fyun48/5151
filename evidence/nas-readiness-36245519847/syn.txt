@@ -1,0 +1,23 @@
+workflow_sha=08706e30aa6bf5eb88968aac897a089f27790ab1 run_id=36245519847 role=syn
+host=TORI_NAS01 expected=TORI_NAS01 utc=2026-09-26T13:32:52Z
+docker_server=24.0.2
+
+container=591-tracker-v3 status=absent
+
+container=5151-web-A status=absent
+container=/5151-web-B image=sha256:a47285c6a1856fbba265c67222ebc1fd2faa3bb975c5eaaecb5eb923596c5e7e status=running started=2026-09-26T00:56:44.25035355Z
+{"DB_DRIVER":"postgres","sourceHashes":{"/app/src/server.js":"d0ce356e4e90cd65a766f36ead7317daa16b04effc81c9f9ac49df02a35d34b3","/app/src/watcher.js":"b37355e7d370bb0fae19dbf855067e814c85edef401243ad79a1de24c1f9f1c7","/app/src/crawlWatchdog.js":"9f1136a5942c884ce0db851c3dff2606c82be477557d130495d4baad23033388","/app/src/crawlPolicy.js":"8ce4a7e568a74028f31cac57b744b8a9f6e38ea30c50af45507c4bbe966af7cd","/app/src/db.js":"64ea0aa6c121ece0dcbb395c0f4836bef0865bcd2ce3e7819ef782039bf760fe","/app/src/coveringBookkeepingAsync.js":"d611667bf9b2d7e41e4b4f43a2cdb68aed0b35f540e77e0062dd72cc3e63d41e"}}
+
+container=5151-crawler status=absent
+
+container=5151-worker status=absent
+
+container=5151-postgres-A status=absent
+container=/5151-postgres-B image=sha256:de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28 status=running started=2026-09-26T00:56:52.334696773Z
+BEGIN
+SET
+{"pg_version" : "16.14", "recovery" : false, "archive_mode" : "off", "synchronous_commit" : "on", "synchronous_standby_names" : ""}
+{"replication_state" : "streaming", "sync_state" : "async", "write_lag" : "00:00:00.000944", "flush_lag" : "00:00:00.004525", "replay_lag" : "00:00:00.004818"}
+{"archived_count" : 0, "failed_count" : 0, "last_archived_time" : null, "last_failed_time" : null}
+COMMIT
+scope=read_only_inventory; NOT_A_BACKUP_RESTORE_OR_FAILOVER_TEST

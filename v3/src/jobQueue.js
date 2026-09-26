@@ -275,7 +275,7 @@ function sqliteQueue(db) {
 function postgresQueue(pool) {
   return {
     name: "postgres",
-    async enqueue({ jobType, payload = {}, priority = JOB_PRIORITY.ENRICHMENT, idempotencyKey = null, maxAttempts = DEFAULT_MAX_ATTEMPTS, availableAt = Date.now(), now = Date.now() } = {}) {
+    async enqueue({ jobType, payload = {}, priority = JOB_PRIORITY.ENRICHMENT, idempotencyKey = null, maxAttempts = DEFAULT_MAX_ATTEMPTS, now = Date.now(), availableAt = now } = {}) {
       const result = await pool.query(`
         INSERT INTO job_queue (job_type, payload, priority, state, attempts, max_attempts,
           available_at, idempotency_key, created_at, updated_at)
@@ -348,4 +348,3 @@ export function createJobQueue({ driver = "sqlite", sqliteDb = null, pgPool = nu
 export async function ensurePgJobQueueIndex(pool) {
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS job_queue_idempotency_key_uniq ON job_queue(idempotency_key)");
 }
-

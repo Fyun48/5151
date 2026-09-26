@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 /** 樂屋網公開頁 adapter：只解析公開 HTML／JSON-LD，不繞過 Cloudflare、登入或驗證碼。 */
 
 import { createHash } from "node:crypto";
@@ -377,7 +378,7 @@ export async function fetchRakuyaCoveringListings(jobs, options = {}) {
   const fetchText = options.fetchText || (async (url) => {
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html" },
-      signal: AbortSignal.timeout(15000),
+      signal: crawlRequestSignal(AbortSignal.timeout(15000)),
     });
     const text = await res.text();
     return { status: res.status, text };

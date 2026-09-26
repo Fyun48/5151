@@ -87,6 +87,9 @@ test("price min/max without extras still hide over-budget rent", () => {
 });
 
 test("wan-style prices count as tens of thousands of TWD", () => {
+  assert.equal(rentAmount({ price_num: 21000.6, price: "3.8萬" }), 21001);
+  assert.equal(rentAmount({ price_num: 3.8, price: "42,000" }), 42000);
+  assert.equal(rentAmount({ price_num: Infinity, price: "3.8萬" }), 38000);
   assert.equal(rentAmount({ price_num: 3.8, price: "3.8萬" }), 38000);
   assert.equal(rentAmount({ price_num: 3.8, price: "" }), 38000);
   assert.equal(rentAmount({ price_num: 0, price: "38,000" }), 38000);

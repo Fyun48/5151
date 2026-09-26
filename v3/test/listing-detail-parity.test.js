@@ -40,6 +40,11 @@ const TABLES = [
   "route_cache",
   "mrt_cache",
   "route_jobs",
+
+  "settings",
+  "users",
+  "user_settings",
+  "crawl_covers",
 ];
 
 const DETAIL_IDS = [910001, 910002, 910003, 910005, 999999];

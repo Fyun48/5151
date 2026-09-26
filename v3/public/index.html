@@ -8217,7 +8217,6 @@
         persistGuestSearch();
         const gen = ++listLoadGen;
         const append = options.append === true;
-        if (!append) listOffset = 0;
         if (!options.silent) setListBusy(true, options.busyText || "正在搜尋物件…");
         try {
           const params = guestListQuery();
@@ -8275,7 +8274,6 @@
       const listAnchorId = options.keep
         ? (document.activeElement?.closest?.("[data-card]")?.dataset?.card || "")
         : "";
-      if (!append) { listOffset = 0; listCursor = null; }
       const districts = [...viewDistricts].map(encodeURIComponent).join(",");
       const paintStart = performance.now();
       try {
@@ -8284,6 +8282,7 @@
         );
         const data = await res.json();
         if (gen !== listLoadGen) return;
+        if (!res.ok) throw Object.assign(new Error(data.error || "搜尋暫時無法使用，請稍後重試"), { code: data.code });
         if (!options.force && !append && watchNoteBusy()) {
           listRefreshQueued = true;
           return;

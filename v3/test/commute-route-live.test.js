@@ -18,6 +18,10 @@ function runIsolated(script) {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
       env: { ...process.env, DATA_DIR: dataDir },
+      // 這個檔案叫 "live"：子程序會嘗試外部路線服務。沒有 timeout 時，子程序一卡住
+      // spawnSync 就會永久阻塞（父層 test runner 無法中斷），整套測試因此停在同一點
+      // （實測：兩次全跑都停在 253 個測試）。給上限讓它快速失敗且看得見。
+      timeout: 30_000,
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const line = result.stdout.trim().split("\n").filter((row) => row.startsWith("{")).at(-1);

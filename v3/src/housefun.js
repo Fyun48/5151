@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -348,7 +349,7 @@ async function defaultPostForm(url, body) {
       Referer: `${HF_SITE}/`,
     },
     body,
-    signal: AbortSignal.timeout(15000),
+    signal: crawlRequestSignal(AbortSignal.timeout(15000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
     throw Object.assign(new Error(`好房網暫時無法抓取（HTTP ${res.status}）`), {

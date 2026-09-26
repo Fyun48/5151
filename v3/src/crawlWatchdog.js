@@ -1,4 +1,5 @@
-/** 抓取逾時與卡住自動放棄。單次請求有 timeout；整輪超過預算就放掉 busy，讓下一輪能跑。 */
+/** 抓取期限會取消請求，並使該輪後續資料庫操作拒絕執行。 */
+import { crawlRequestSignal, throwIfCrawlCancelled, withCrawlExecution } from "./crawlExecution.js";
 
 export const LIST_FETCH_TIMEOUT_MS = 8_000;
 export const TICK_BUDGET_MS = 15 * 60 * 1000;
@@ -33,6 +34,7 @@ export function noteConsecutiveTimeout(consecutive, error, limit = CONSECUTIVE_T
 }
 
 export function abortSignalTimeout(timeoutMs = LIST_FETCH_TIMEOUT_MS) {
+  throwIfCrawlCancelled();
   const wait = Math.max(1, Number(timeoutMs) || LIST_FETCH_TIMEOUT_MS);
   const ctrl = new AbortController();
   const timer = setTimeout(() => {
@@ -42,10 +44,13 @@ export function abortSignalTimeout(timeoutMs = LIST_FETCH_TIMEOUT_MS) {
     ctrl.abort(error);
   }, wait);
   ctrl.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
-  return ctrl.signal;
+  const signal = crawlRequestSignal(ctrl.signal);
+  signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  if (signal.aborted) clearTimeout(timer);
+  return signal;
 }
 
-export async function withBudget(work, timeoutMs, label = "這輪抓取") {
+export async function withBudget(work, timeoutMs, label = "這輪抓取", { signal: parentSignal } = {}) {
   const ms = Math.max(1, Number(timeoutMs) || TICK_BUDGET_MS);
   let timer;
   const err = () => {
@@ -54,15 +59,30 @@ export async function withBudget(work, timeoutMs, label = "這輪抓取") {
     error.name = "TimeoutError";
     return error;
   };
+  const controller = new AbortController();
+  const signal = parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal;
+  const timeoutError = err();
+  const context = { controller, signal, deadline: Date.now() + ms, timeoutError };
+  let onAbort;
   try {
+    signal.throwIfAborted();
+    const cancelled = new Promise((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    timer = setTimeout(() => controller.abort(timeoutError), ms);
     return await Promise.race([
-      typeof work === "function" ? work() : work,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(err()), ms);
+      withCrawlExecution(context, async () => {
+        throwIfCrawlCancelled();
+        const result = await (typeof work === "function" ? work(signal) : work);
+        throwIfCrawlCancelled();
+        return result;
       }),
+      cancelled,
     ]);
   } finally {
     clearTimeout(timer);
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   }
 }
 
@@ -71,6 +91,8 @@ export function createTickGate({ budgetMs = TICK_BUDGET_MS, now = () => Date.now
   let busy = false;
   let startedAt = 0;
   let generation = 0;
+  let controller = null;
+  const superseded = () => Object.assign(new Error("抓取工作已被取消或取代"), { name: "AbortError", code: "ABORT_ERR" });
 
   return {
     isBusy() {
@@ -85,13 +107,19 @@ export function createTickGate({ budgetMs = TICK_BUDGET_MS, now = () => Date.now
     isCurrent(gen) {
       return gen === generation;
     },
+    signal(gen) {
+      return gen === generation && controller ? controller.signal : AbortSignal.abort(superseded());
+    },
     begin() {
+      controller?.abort(superseded());
+      controller = new AbortController();
       generation += 1;
       busy = true;
       startedAt = now();
       return generation;
     },
     abandon() {
+      controller?.abort(superseded());
       generation += 1;
       busy = false;
       startedAt = 0;

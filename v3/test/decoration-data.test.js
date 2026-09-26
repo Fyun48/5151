@@ -235,6 +235,19 @@ test("PostgreSQL returns the same decoration data as SQLite", async (t) => {
     const viaPg = await collect(pgExec(driver), "postgres");
     assert.deepEqual(viaPg, EXPECTED, "PostgreSQL decoration data matches SQLite");
 
+    // Commute can generate two route keys per candidate; 36k candidates can
+    // exceed PostgreSQL's bind-parameter count even though ID queries are safe.
+    const manyKeys=Array.from({length:70000},(_,i)=>`missing-${i}`);
+    const batchCalls=[];
+    const batchExec=(sql,params)=>{batchCalls.push({sql,params:params.length});return pgExec(driver)(sql,params);};
+    const routes=await loadRouteCacheEntries(batchExec,[...manyKeys,'rk|101'],'postgres');
+    const mrt=await loadMrtCacheEntries(batchExec,[...manyKeys,'geo|101'],'postgres');
+    const jobs=await loadRouteJobs(batchExec,[...manyKeys,'job|101'],'postgres');
+    assert.deepEqual([...routes.keys()],['rk|101']);
+    assert.deepEqual([...mrt.keys()],['geo|101']);
+    assert.deepEqual([...jobs.keys()],['job|101']);
+    assert.ok(batchCalls.every(call=>call.params===1&&call.sql.includes('ANY(?::text[])')));
+
     // The memoising loader must behave the same way through the pg executor.
     const loaders = createDecorationDataLoader({ exec: pgExec(driver), driver: "postgres" });
     assert.equal((await loaders.personalFlagMap(7)).size, 2);

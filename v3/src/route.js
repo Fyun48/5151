@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { normalizeCommuteMode } from "./geo.js";
 import { normalizeRouteDirection } from "./commuteState.js";
 import { googleDirectionsAllowed, isBillableDirectionsStatus, nextWeekdayTaipeiUnix, recordMapsUsage, secondsToMinutes, tripGoogleDirections } from "./mapsBilling.js";
@@ -62,7 +63,7 @@ async function googleDirectionsRaw(fromLat, fromLng, toLat, toLng, { departureTi
     url.searchParams.set("departure_time", String(Math.round(Number(departureTime))));
     url.searchParams.set("traffic_model", "best_guess");
   }
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  const res = await fetch(url, { signal: crawlRequestSignal(AbortSignal.timeout(10000)) });
   if (!res.ok) {
     tripGoogleDirections(`HTTP ${res.status}`);
     return null;
@@ -127,7 +128,7 @@ async function osrmRoutes(fromLat, fromLng, toLat, toLng) {
   url.searchParams.set("steps", "false");
   const res = await fetch(url, {
     headers: { Accept: "application/json", "User-Agent": GEO_UA },
-    signal: AbortSignal.timeout(10000),
+    signal: crawlRequestSignal(AbortSignal.timeout(10000)),
   });
   if (res.status === 429) return { busy: true };
   if (!res.ok) return null;
@@ -190,7 +191,7 @@ export async function fetchRoadRouteTable(fromLat, fromLng, destinations = [], {
     url.searchParams.set("annotations", "distance");
     const res = await fetch(url, {
       headers: { Accept: "application/json", "User-Agent": GEO_UA },
-      signal: AbortSignal.timeout(12000),
+      signal: crawlRequestSignal(AbortSignal.timeout(12000)),
     });
     if (res.status === 429 || !res.ok) return dests.map((row) => ({ ...row, distances: null, busy: res.status === 429 }));
     const body = await res.json();

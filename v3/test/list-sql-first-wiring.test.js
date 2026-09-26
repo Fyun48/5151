@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dbUrl = JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href);
 
-test("api/listings goes through the async search entry point with a listListings fallback", () => {
+test("api/listings loads search and stats through the shared page entry", () => {
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   const handler = server.slice(
     server.indexOf('app.get("/api/listings"'),
@@ -19,8 +19,10 @@ test("api/listings goes through the async search entry point with a listListings
   assert.match(handler, /matchVoteUserId: uid/);
   // The SQL-first chain itself now lives in listingSearchAsync.js (awaited, so a
   // PostgreSQL driver can serve the same handler); the SQLite chain is unchanged.
-  assert.match(handler, /await searchListingsAsync\(args, \{/);
-  assert.match(handler, /PG_LISTINGS_UNDECORATED/);
+  assert.match(handler, /await loadListingPage\(args\)/);
+  assert.doesNotMatch(handler, /PG_LISTINGS_UNDECORATED/);
+  const pagePath = readFileSync(path.join(dir, "../src/listingSearchPage.js"), "utf8");
+  assert.match(pagePath, /await searchListingsAsync\(args, common\)/);
   const asyncPath = readFileSync(path.join(dir, "../src/listingSearchAsync.js"), "utf8");
   assert.match(asyncPath, /listListingsSqlFirst\(args\) \|\|/);
   assert.match(asyncPath, /listListingsCommuteSqlFirst\(args\) \|\|/);
@@ -28,7 +30,7 @@ test("api/listings goes through the async search entry point with a listListings
   assert.match(asyncPath, /listListings\(args\)/);
   // cursor/keyset pagination round-trip: parse ?cursor= and echo nextCursor.
   assert.match(handler, /JSON\.parse\(String\(req\.query\.cursor\)\)/);
-  assert.match(handler, /nextCursor: listed\.nextCursor \|\| null/);
+  assert.match(pagePath, /nextCursor:\s*listed\.nextCursor\s*\|\|\s*null/);
 });
 
 test("frontend loadList pages by cursor and falls back to offset", () => {

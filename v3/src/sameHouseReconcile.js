@@ -83,7 +83,10 @@ function likeDistrict(listing) {
 // The blocking query and the row filter are separate, exported pieces so the PostgreSQL path
 // (repository/listingReads.js) runs the SAME statement text and the SAME post-filter - the
 // crawl's same-house matching must not differ between drivers.
-export function blockMatchCandidatesQuery(sqliteDb, incoming, { limit = RECONCILE_CANDIDATE_LIMIT } = {}) {
+// `fixtureColumn` 讓 PG 分支覆寫「這個 driver 的 listings 有沒有 fixture_namespace」：
+// 同步版用 PRAGMA 偵測（sqlExcludeFixtureRows），PG 分支用 information_schema 偵測後傳進來。
+// 未指定時維持原本的同步偵測行為。
+export function blockMatchCandidatesQuery(sqliteDb, incoming, { limit = RECONCILE_CANDIDATE_LIMIT, fixtureColumn } = {}) {
   const pid = Number(incoming?.post_id) || 0;
   const street = streetKey(incoming?.address);
   const community = String(incoming?.community_name || "").trim();
@@ -109,7 +112,11 @@ export function blockMatchCandidatesQuery(sqliteDb, incoming, { limit = RECONCIL
     params.push(lat, lng);
   }
   clauses.push(`(${blocks.join(" OR ")})`);
-  const isolation = sqlExcludeFixtureRows(sqliteDb, "listings");
+  const isolation = fixtureColumn === undefined
+    ? sqlExcludeFixtureRows(sqliteDb, "listings")
+    : (fixtureColumn
+      ? { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] }
+      : { sql: "1=1", params: [] });
   clauses.push(isolation.sql);
   params.push(...isolation.params);
   if (district) {

@@ -42,7 +42,8 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
   assert.doesNotMatch(admin, /flex:1 1 280px/);
   const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   const mrtFn = dbSrc.slice(dbSrc.indexOf("function mrtFields"), dbSrc.indexOf("export function setCachedRoute"));
-  assert.match(mrtFn, /getSystemCrawl\(\)\.showMrt/);
+  assert.match(mrtFn, /provider\.systemCrawl\(\) : getSystemCrawl\(\)/);
+  assert.match(mrtFn, /system\.showMrt !== false/);
   assert.doesNotMatch(mrtFn, /settings\?\.showMrt/);
   assert.doesNotMatch(mrtFn, /settings\?\.systemShowMrt/);
 });

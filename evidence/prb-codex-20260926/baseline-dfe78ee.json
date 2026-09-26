@@ -1,0 +1,143 @@
+{
+  "status": "CI_SMOKE_FAIL",
+  "sourceSha": "dfe78eef4fcd09b7b49dc835394eeeb8f2467af2",
+  "checkoutSha": "e0fdb8b85274f3423204ec979505eea785c90dfb",
+  "moduleHashes": {
+    "db.js": "8013987677c8ecdfbf06d734409b00060397ae6f5f248ba43b01c6f841ba07aa",
+    "listingSearchPage.js": "d3f0ca05e9805b3e88c9122458015f35da75a77c85b7984ab27dd26874d14c64",
+    "listingSearchNodePg.js": "0c45baeb077bdcb36b1fff9ff85440c7e4bf6e6a08a96d87435a11af3995908c",
+    "listingStatsAsync.js": "c1b0730dfdd851731307568caef820ca4da38f9866799731a718a6b3eca56919",
+    "repository/listingStats.js": "7cafe71d12d24b018e3ea06a6cb96f34ba1f9e36f9544763e584a7941d2b64be"
+  },
+  "node": "v22.23.2",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu": "AMD EPYC 9V74 80-Core Processor",
+    "memoryBytes": 16766410752
+  },
+  "fixture": {
+    "version": "prb-fixed-v1",
+    "asOf": "2026-09-26T00:00:00.000Z",
+    "totalRows": 120000,
+    "activeRows": 36000,
+    "chainLength": 1024,
+    "description": "120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers"
+  },
+  "warms": 5,
+  "runs": 50,
+  "cases": [
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 2729.0082789999997,
+      "p50Ms": 2345.895014000009,
+      "p95Ms": 2414.7886070000022,
+      "maxMs": 2446.123563000001,
+      "lagP99Ms": 174.194687,
+      "lagMaxMs": 243.662847,
+      "rssPeakBytes": 784986112,
+      "heapPeakBytes": 667189704,
+      "queryCount": {
+        "min": 29,
+        "p50": 29,
+        "max": 29
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": false,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 2334.2639519999793,
+      "p50Ms": 6014.323605999991,
+      "p95Ms": 6961.318696000002,
+      "maxMs": 7258.029937999992,
+      "lagP99Ms": 414.711807,
+      "lagMaxMs": 544.735231,
+      "rssPeakBytes": 1338445824,
+      "heapPeakBytes": 1009297304,
+      "queryCount": {
+        "min": 29,
+        "p50": 29,
+        "max": 29
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 2624.9033040000068,
+      "p50Ms": 2631.226670999953,
+      "p95Ms": 2703.4629309999873,
+      "maxMs": 2747.4865930000087,
+      "lagP99Ms": 270.532607,
+      "lagMaxMs": 353.370111,
+      "rssPeakBytes": 1284222976,
+      "heapPeakBytes": 640343968,
+      "queryCount": {
+        "min": 27,
+        "p50": 27,
+        "max": 27
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": false
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 2640.7923639999935,
+      "p50Ms": 7264.939542000007,
+      "p95Ms": 8293.11618100002,
+      "maxMs": 8340.501886999991,
+      "lagP99Ms": 445.906943,
+      "lagMaxMs": 757.596159,
+      "rssPeakBytes": 2150023168,
+      "heapPeakBytes": 1968017224,
+      "queryCount": {
+        "min": 27,
+        "p50": 27,
+        "max": 27
+      },
+      "transactionStatements": {
+        "min": 2,
+        "max": 2
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": false
+    }
+  ],
+  "postgres": "16.14",
+  "sqliteAttempts": 0,
+  "nasAcceptance": "NOT_RUN; this machine is not a NAS"
+}

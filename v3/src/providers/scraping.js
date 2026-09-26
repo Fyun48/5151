@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "../crawlExecution.js";
 import { executeWithProvider, } from "./executeWithProvider.js";
 import { getBoundBudgetDb } from "../budgetGuard.js";
 
@@ -10,7 +11,7 @@ export async function fetchHtmlDirect(url, { headers = {}, timeoutMs = 8000 } = 
       Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       ...headers,
     },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: crawlRequestSignal(AbortSignal.timeout(timeoutMs)),
   });
   if (!res.ok) return "";
   return res.text();
@@ -40,7 +41,7 @@ async function fetchViaPaidProvider(cfg, url, budget) {
     const err = new Error(`scraping provider ${code} has no adapter`);
     throw err;
   }
-  const res = await fetch(String(target), { signal: AbortSignal.timeout(15000) });
+  const res = await fetch(String(target), { signal: crawlRequestSignal(AbortSignal.timeout(15000)) });
   if (!res.ok) throw new Error(`scraping HTTP ${res.status}`);
   return { value: await res.text(), usage: { costMinor: Number(cfg.ceiling_minor) || 0 } };
 }

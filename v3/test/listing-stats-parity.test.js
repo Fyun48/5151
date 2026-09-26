@@ -47,6 +47,11 @@ const TABLES = [
   "route_cache",
   "mrt_cache",
   "route_jobs",
+
+  "settings",
+  "users",
+  "user_settings",
+  "crawl_covers",
 ];
 
 const STAMP = "2026-09-01T00:00:00.000Z";
@@ -248,10 +253,10 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   // Wiring: the list handler awaits the driver-aware entry point, and the repository refuses a
   // partial dependency bundle (that would otherwise compute wrong counters silently).
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /const listingStats = await listingStatsAsync\(\{ userId: uid, diagnostics: statsDetails \}\);/);
+  assert.match(server, /const page = await loadListingPage\(args\);/);
   const facade = readFileSync(path.join(dir, "../src/listingStatsAsync.js"), "utf8");
-  assert.match(facade, /buildListingStatsRows\(\{/);
-  assert.match(facade, /summarizeListingStats\(\{/);
+  assert.match(facade, /await buildListingStatsRowsAsync\(\{/);
+  assert.match(facade, /await summarizeListingStatsAsync\(\{/);
   assert.match(facade, /return stats\(searchKeys, userId, settings, diagnostics\);/);
   assert.throws(
     () => createListingStatsRepository({ deps: {}, exec: async () => {} }),
@@ -261,8 +266,8 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   // and the first /api/listings refresh cannot describe different stores.
   const stateStart = server.indexOf('app.get("/api/state"');
   const state = server.slice(stateStart, stateStart + 2400);
-  assert.match(state, /await listingStatsAsync\(\{ userId: uid \}\)/);
-  assert.match(state, /const listed = await searchListingsAsync\(\{/);
+  assert.match(state, /await loadListingPage\(\{/);
+  assert.match(state, /listings = page\.listings/);
   assert.doesNotMatch(state, /listListings\(/);
   assert.doesNotMatch(state, /stats\(undefined/);
 });
@@ -296,5 +301,4 @@ test("live PostgreSQL: the counters equal the SQLite counters", { skip }, async 
     assert.ok(actual.listings.length >= 3, `PG page size ${actual.listings.length}`);
   });
 });
-
 

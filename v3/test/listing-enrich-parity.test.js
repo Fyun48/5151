@@ -297,12 +297,73 @@ test("live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metr
   }
 });
 
+// 同契約的 **CI fixture 版**（astra 2026-09-25 裁決 §3）。
+//
+// 為什麼不能用下面那支 `PG_SHADOW_URL` 測試來覆蓋 ✗：它斷言「PG 分支挑得到候選」✓，
+// 而 CI 的拋棄式 PG **是空的** ✗ ⇒ 硬改用 `PG_TEST_URL` 會直接失敗（seed 0 筆 ✗）。
+//
+// 本測試改為**自己建 fixture 候選** ✓ ⇒ 不需要影子站 ✓，也不假裝 PG 有正式資料 ✓：
+//   • 以 `PG_TEST_URL` 為 gate ✓（CI 既有拋棄式 PG ✓，由 run-pg-integration.sh 收斂 ✓）
+//   • 在 PG 插一筆符合 seed 條件的 listings（`source='houseprice'`、`offline=0`、
+//     且**沒有** `listing_prep` 列 ✓）—— 只帶 5 個無 DEFAULT 的 NOT NULL 欄 ＋ offline ✓
+//     （其餘靠 schema DEFAULT ✓；欄位清單以 `db.js` 的 DDL 實查為準 ✓）
+//   • 斷言 seed > 0 ✓（PG 分支挑到剛建的候選 ✓）
+//   • 斷言**本機 SQLite 的 `listing_enrich_jobs` 仍為 0** ✓（PG 模式不得寫本機 SQLite ✓）
+//   • 結束自行清理 ✓
+test("live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite", async (t) => {
+  const url = process.env.PG_TEST_URL;
+  if (!url) {
+    t.skip("PG_TEST_URL is not set（本測試為 PG job 的 fixture 版；不需要影子站 ✓）");
+    return;
+  }
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const driver = await createPostgresDriver({ connectionString: url });
+  const options = { driver: "postgres", pgDriver: driver, strict: true, sqliteHandle: db };
+  const FIXTURE_ID = 900000001;
+  const iso = new Date().toISOString();
+  try {
+    resetWriteFixture();
+    clearSeedListings();
+    // 在本機 SQLite 建**不可用**的對照：PG 模式下它不該被讀、也不該被寫 ✓
+    assert.equal(
+      await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 2 }, { driver: "sqlite" }),
+      0,
+      "本機 fixture 沒有任何 listings，sqlite 分支不該有候選",
+    );
+
+    // 自己建 fixture 候選到 PG ✓（5 個無 DEFAULT 的 NOT NULL 欄 ＋ offline ✓）
+    await driver.query(
+      `INSERT INTO listings (post_id, source, source_key, title, url, first_seen_at, last_seen_at, offline)
+       VALUES ($1, 'houseprice', $2, $3, $4, $5, $6, 0)
+       ON CONFLICT (post_id) DO NOTHING`,
+      [FIXTURE_ID, `fixture|${FIXTURE_ID}`, "fixture 標題", `https://example.test/${FIXTURE_ID}`, iso, iso],
+    );
+
+    const seeded = await enrichAsync.seedHousepriceEnrichJobsAsync(db, { limit: 2 }, options);
+    assert.ok(seeded > 0, "PG 分支必須挑到剛建的 fixture 候選");
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM listing_enrich_jobs").get().n,
+      0,
+      "PG 模式不可寫到本機 SQLite",
+    );
+  } finally {
+    // 自行清理 ✓（工作列先刪，再刪候選 ✓）
+    await driver.query("DELETE FROM listing_enrich_jobs WHERE post_id = $1", [FIXTURE_ID]).catch(() => {});
+    await driver.query("DELETE FROM listings WHERE post_id = $1", [FIXTURE_ID]).catch(() => {});
+    await driver.close();
+  }
+});
+
 // 種子查詢的 live 驗證：影子站（＝正式站資料的匯入）有候選，本機 SQLite fixture 沒有，
 // 所以要能明確分辨「讀的是哪一個 store」。跑完把自己新增的工作刪掉。
 test("live：種子查詢讀的是 PostgreSQL，不是本機 SQLite", async (t) => {
-  const url = process.env.PG_TEST_URL;
+  // 這個測試**本質上需要「影子站」**（＝正式站資料的匯入）：它斷言 PG 分支挑得到候選 ✗，
+  // 而 CI 的拋棄式 PG 是空的 ⇒ 不能用 PG_TEST_URL 假裝有影子站 ✗。
+  // 依 astra §3.4「必要測試不得 skip」：此測試**不是** PR-B 的必要 gate，故以專屬 PG_SHADOW_URL
+  // 明確 gate（理由寫在使用者可見的 skip 訊息與 CI 文件中）。
+  const url = process.env.PG_SHADOW_URL;
   if (!url) {
-    t.skip("PG_TEST_URL is not set (live listing enrich seed)");
+    t.skip("PG_SHADOW_URL is not set（需要匯入正式站資料的影子站；不屬於 CI 必要 gate）");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

@@ -102,7 +102,8 @@ test("sql-first falls back (null) outside its envelope", () => {
     // commute sort is not supported by the SQL-first path yet
     assert.equal(app.listListingsSqlFirst({ ...base, sort: "commute_asc" }), null);
     assert.equal(app.listListingsSqlFirst({ ...base, filter: "watched" }), null);
-    assert.equal(app.listListingsSqlFirst({ ...base, q: "某關鍵字" }), null);
+    // q 已於 F3 下推（lower(x) LIKE lower(?) 統一兩 driver 的 LIKE 語意；實測 6 案一致 + 端到端 8 案一致）
+    assert.notEqual(app.listListingsSqlFirst({ ...base, q: "某關鍵字" }), null, "q 應已在 envelope 內");
     assert.equal(
       app.listListingsSqlFirst({ ...base, settings: { ...settings, priceMax: 25000 } }),
       null,

@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { appendAppearanceTags, passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { kitFrom591Detail, listingKitFields } from "./listingKit.js";
@@ -308,7 +309,7 @@ export async function fetchCommunityLocation(communityId) {
         Accept: "application/json, text/plain, */*",
         Referer: "https://market.591.com.tw/",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: crawlRequestSignal(AbortSignal.timeout(8000)),
     });
     if (!res.ok) {
       const fromPage = await fetchCommunityPageLocation(id);
@@ -398,7 +399,7 @@ async function fetchRentDetailBody(postId) {
       Accept: "application/json, text/plain, */*",
       Referer: "https://rent.591.com.tw/",
     },
-    signal: AbortSignal.timeout(8000),
+    signal: crawlRequestSignal(AbortSignal.timeout(8000)),
   });
   if (res.status === 404) throw new ListingGoneError("物件不存在");
   if (!res.ok) throw new Error(`591 詳情 ${res.status}`);

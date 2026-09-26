@@ -232,7 +232,7 @@ test("suspected peer payload includes source and confirm keeps cheaper listing",
   assert.match(matchFns, /overlayPersonal/);
   assert.doesNotMatch(matchFns, /decorateListing\(/);
   assert.match(dbSrc, /source_label: selfSourceLabel\(source\)/);
-  assert.match(dbSrc, /const primary = preferPrimaryListing\(row, peer\)/);
+  assert.match(dbSrc, /const primary = preferPrimaryListing\(row, peer, now\)/);
   // 同源成對關係：兩側都指派角色，避免疑似同源同一對在主列表出現兩次
   assert.match(dbSrc, /assignRole\(row\)/);
   assert.match(dbSrc, /assignRole\(byId\.get\(mid\)\)/);

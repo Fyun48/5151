@@ -15,6 +15,7 @@ import {
   listingFilterHay,
   listingHasElevator,
   listingHasParking,
+  listingKindKeys,
 } from "./floors.js";
 import { districtNameFromListing } from "./regions.js";
 
@@ -27,6 +28,7 @@ export function ensureListingSearchProjection(db) {
       district TEXT NOT NULL DEFAULT '',
       source TEXT NOT NULL DEFAULT '',
       kind TEXT NOT NULL DEFAULT '',
+      kind_keys TEXT NOT NULL DEFAULT '',
       rent INTEGER NOT NULL DEFAULT 0,
       total_monthly_cost INTEGER NOT NULL DEFAULT 0,
       area REAL,
@@ -49,6 +51,12 @@ export function ensureListingSearchProjection(db) {
     CREATE INDEX IF NOT EXISTS idx_proj_district ON ${PROJECTION_TABLE}(district);
     CREATE INDEX IF NOT EXISTS idx_proj_commute ON ${PROJECTION_TABLE}(commute_km);
   `);
+  // F3：CREATE TABLE IF NOT EXISTS 不會替既有表補欄位（production 表已有 9 萬列），
+  // 所以新欄位一律走 idempotent 的 ALTER（慣例同 demand.js:371、geoQueue.js:42）。
+  const columns = new Set(db.prepare(`PRAGMA table_info(${PROJECTION_TABLE})`).all().map((row) => row.name));
+  if (!columns.has("kind_keys")) {
+    db.exec(`ALTER TABLE ${PROJECTION_TABLE} ADD COLUMN kind_keys TEXT NOT NULL DEFAULT ''`);
+  }
 }
 
 // Mirrors db.js listingEffectiveUpdatedAt (same precedence + relative-time skip).
@@ -88,6 +96,7 @@ export function computeListingProjection(row, now = Date.now()) {
     district: districtNameFromListing(row) || "",
     source: String(row?.source || "591"),
     kind: housingTypeLabel(row),
+    kind_keys: listingKindKeys(row),
     rent: rentAmount(row),
     total_monthly_cost: listingCompareCost(row, { includeExtras: true }),
     area: areaNum(row?.area_name),
@@ -107,17 +116,18 @@ export function computeListingProjection(row, now = Date.now()) {
   };
 }
 
-const COLS = `post_id, district, source, kind, rent, total_monthly_cost, area, floor, total_floors,
+const COLS = `post_id, district, source, kind, kind_keys, rent, total_monthly_cost, area, floor, total_floors,
   elevator, parking, rooftop, low_floor, lat, lng, location_class, primary_listing_id,
   offline_state, commute_km, updated_at`;
 
 const UPDATE_SQL = `
   INSERT INTO ${PROJECTION_TABLE} (${COLS})
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(post_id) DO UPDATE SET
     district = excluded.district,
     source = excluded.source,
     kind = excluded.kind,
+    kind_keys = excluded.kind_keys,
     rent = excluded.rent,
     total_monthly_cost = excluded.total_monthly_cost,
     area = excluded.area,
@@ -137,7 +147,7 @@ const UPDATE_SQL = `
 `;
 
 function bind(p) {
-  return [p.post_id, p.district, p.source, p.kind, p.rent, p.total_monthly_cost, p.area, p.floor,
+  return [p.post_id, p.district, p.source, p.kind, p.kind_keys, p.rent, p.total_monthly_cost, p.area, p.floor,
     p.total_floors, p.elevator, p.parking, p.rooftop, p.low_floor, p.lat, p.lng,
     p.location_class, p.primary_listing_id, p.offline_state, p.commute_km, p.updated_at];
 }
@@ -162,7 +172,7 @@ export function deleteListingProjection(db, postId) {
 
 export function rebuildListingSearchProjection(db, listingRows, now = Date.now()) {
   ensureListingSearchProjection(db);
-  const insert = db.prepare(`INSERT INTO ${PROJECTION_TABLE} (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insert = db.prepare(`INSERT INTO ${PROJECTION_TABLE} (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   db.exec(`DELETE FROM ${PROJECTION_TABLE}`);
   db.exec("BEGIN");
   try {

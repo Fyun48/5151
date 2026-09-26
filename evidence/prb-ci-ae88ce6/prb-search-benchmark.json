@@ -1,0 +1,4111 @@
+{
+  "status": "CI_SMOKE_PASS",
+  "target": "ci",
+  "sourceSha": "ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0",
+  "checkoutSha": "600e03370c5b16b8f8a6da11e55798e9e1c95dfa",
+  "moduleHashes": {
+    "db.js": "095433b6e4a869361fd530e888a3e4f3612dbb4186289448aade07100e7bb564",
+    "listingSearchPage.js": "5df4d31a865315d51bc22c775bb54a024fad104d48afa081dc500578c3e55a11",
+    "listingSearchNodePg.js": "320f898a18c2f58143cd90351fb0de73a36edf485ebcdb258acc8d019fc42e3d",
+    "listingStatsAsync.js": "3f051b3ddee774dd9bc4de71d0bc32f16072b515cba7e0ac2426fe54b7fa9576",
+    "pgReadSnapshot.js": "dc52e029c3f6a159263d9bc32e013d12b1fc30fb846c9709f0bb2af739d104cc",
+    "pgCandidateContent.js": "33c5f206d89bce6912be174a2dec75f360a92307fbe21547eb69c4562f353f4b",
+    "dbDriverPostgres.js": "c321d0cb603ee170d2374e66f8b3f39cd78b51be0abfdf277a3ecf279aa73e82",
+    "listingCandidateRow.js": "b76a891673a8ac0719902f42e0d16141d16bd9d66d57d644cdc70ca9462a9f01",
+    "listDistrictSql.js": "ed757a54c3d4a60a21dbd927d5d3169b114efccee0428b6929f537ca8328fc84",
+    "cooperative.js": "fba5403edb3016c7ba39461b1c154d87cda7cc2967cd769b42a6c2ac6fe3a788",
+    "workDiagnostics.js": "6a88a01dd20b43ce5fa976cd618b6b75a339a2afaad8fe3dce1d9edac4db72a1",
+    "personalFlags.js": "e5ed7a9ee0414101abdc68af97cd63c12d6747780d1a66df963a34d305ce4514",
+    "repository/listingStats.js": "d71d61b8f88886de35e4fc05ade22d66fd14cba6fbc8a2989459980f000f96ab",
+    "repository/decorationData.js": "266e52c46cd64dbc89e7756fcbb1a63617bb7ec550f18c135b5020c12d6e4a32"
+  },
+  "node": "v22.23.2",
+  "hardware": {
+    "platform": "linux",
+    "arch": "x64",
+    "cpus": 4,
+    "cpu": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "memoryBytes": 16765378560
+  },
+  "fixture": {
+    "version": "prb-fixed-v1",
+    "asOf": "2026-09-26T00:00:00.000Z",
+    "totalRows": 120000,
+    "activeRows": 36000,
+    "chainLength": 1024,
+    "description": "120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers"
+  },
+  "workDiagnosticsVersion": 1,
+  "workDiagnosticsDefinitions": {
+    "step": "Synchronous generator next() duration; maxUnits is work reported at a checkpoint (rows, peers or comparisons), not a candidate limit.",
+    "slice": "Time spent in this generator between explicit yields to I/O; final next() also obeys the 2 ms scheduling budget.",
+    "yieldWait": "Elapsed await setImmediate, including other requests, I/O and scheduler delay; not synchronous CPU time.",
+    "pgWall": "PG query wall time including server, transport and decoding; submitSync/appendRows.sync measure only the named synchronous section.",
+    "gcPause": "Observed GC duration inside the measured window; tickGap includes the nominal 10 ms timer interval."
+  },
+  "warms": 5,
+  "runs": 50,
+  "cases": [
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 662.2987800000001,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.37452099999973143,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.22151800000028743,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL cursor_tuple_fraction = 1",
+          "calls": 1,
+          "ms": 0.1677190000000337,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.47978799999964394,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.4917310000000725,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.478118999999424,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.4986739999994825,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 1.703071999999338,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "calls": 1,
+          "ms": 1.0006670000002487,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT current_database() AS database_name, current_user AS role, inet_server_addr()::text AS server_address, inet_server_port() AS server_port, pg_po",
+          "calls": 1,
+          "ms": 1.9770909999997457,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( sear",
+          "calls": 1,
+          "ms": 0.729975000000195,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 1,
+          "ms": 2.903408999999556,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_1",
+          "calls": 35,
+          "ms": 61.91364600000088,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.1799829999999929,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 25.940491000000293,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 235.87848699999904,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.267865000000711,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.9758860000001732,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.7290720000000874,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 35.53083399999923,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.6096509999997579,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_3 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, match_post_id FROM listings WHERE match_post_id > 0 OR match_post_id < 0",
+          "calls": 1,
+          "ms": 0.5938210000003892,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_3",
+          "calls": 1,
+          "ms": 0.6825769999995828,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_3",
+          "calls": 1,
+          "ms": 0.589813000000504,
+          "rows": 511
+        },
+        {
+          "sql": "CLOSE listing_read_3",
+          "calls": 1,
+          "ms": 0.20000999999956548,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_4 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 2.5823199999995268,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_4",
+          "calls": 1,
+          "ms": 0.23943099999996775,
+          "rows": 0
+        },
+        {
+          "sql": "CLOSE listing_read_4",
+          "calls": 1,
+          "ms": 0.15128900000036083,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_5 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE post_id = ANY($1::bigint[]) AND ((split_part(COALESCE(sour",
+          "calls": 1,
+          "ms": 1.691874000000098,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_5",
+          "calls": 1,
+          "ms": 1.4762559999999212,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_5",
+          "calls": 1,
+          "ms": 0.14799200000015844,
+          "rows": 0
+        },
+        {
+          "sql": "CLOSE listing_read_5",
+          "calls": 1,
+          "ms": 0.18447400000059133,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_6 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(s",
+          "calls": 1,
+          "ms": 4.575226999999359,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_6",
+          "calls": 1,
+          "ms": 28.910337999999683,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_6",
+          "calls": 18,
+          "ms": 9.955445000002328,
+          "rows": 18000
+        },
+        {
+          "sql": "CLOSE listing_read_6",
+          "calls": 1,
+          "ms": 0.26195499999994354,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 2.6866689999997106,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.6062110000002576,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.692696000000069,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 2.1752880000003643,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 1,
+          "ms": 1.0066319999996267,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.7736909999994168,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.5954110000002402,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.3377790000004097,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "sql": "SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALES",
+          "default": {
+            "planningMs": 0.139,
+            "executionMs": 58.238,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.003,
+                "Inlining": 0,
+                "Optimization": 1.099,
+                "Emission": 15.628,
+                "Total": 18.73
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.14,
+            "executionMs": 26.066,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, address_norm, area_name, layout, fl",
+          "default": {
+            "planningMs": 7.988,
+            "executionMs": 23.013,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 7.86,
+            "executionMs": 22.776,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE post_id = ANY($1::bigint[]) AND ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($2) OR",
+          "default": {
+            "planningMs": 0.399,
+            "executionMs": 0.91,
+            "jit": null,
+            "root": {
+              "node": "Index Scan",
+              "rows": 512,
+              "loops": 1,
+              "totalCost": 1738.52,
+              "sharedHitBlocks": 2117,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.393,
+            "executionMs": 0.918,
+            "jit": null,
+            "root": {
+              "node": "Index Scan",
+              "rows": 512,
+              "loops": 1,
+              "totalCost": 1738.52,
+              "sharedHitBlocks": 2117,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALESCE(self_status, 'open') = 'open' AND (self_expires_a",
+          "default": {
+            "planningMs": 0.692,
+            "executionMs": 51.259,
+            "jit": {
+              "Functions": 39,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.604,
+                "Inlining": 0,
+                "Optimization": 1.043,
+                "Emission": 18.954,
+                "Total": 22.601
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 303282.58,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.621,
+            "executionMs": 29.747,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 303282.58,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "matched": 17488,
+        "total": 36000,
+        "dbTotal": 120000,
+        "pageIds": [
+          900301026,
+          900301028,
+          900301030,
+          900301032,
+          900301034,
+          900301036,
+          900301038,
+          900301040,
+          900301042,
+          900301044,
+          900301046,
+          900301048,
+          900301050,
+          900301052,
+          900301054,
+          900301056,
+          900301058,
+          900301060,
+          900301062,
+          900301064,
+          900301066,
+          900301068,
+          900301070,
+          900301072,
+          900301074,
+          900301076,
+          900301078,
+          900301080,
+          900301082,
+          900301084,
+          900301086,
+          900301088,
+          900301090,
+          900301092,
+          900301094,
+          900301096,
+          900301098,
+          900301100,
+          900301102,
+          900301104,
+          900301106,
+          900301108,
+          900301110,
+          900301112,
+          900301114,
+          900301116,
+          900301118,
+          900301120,
+          900301122,
+          900301124
+        ]
+      },
+      "workDiagnostics": {
+        "pg.query.submitSync": {
+          "calls": 1300,
+          "totalMs": 52.969,
+          "maxMs": 0.152,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.query.wall": {
+          "calls": 1300,
+          "totalMs": 569.274,
+          "maxMs": 5.701,
+          "totalUnits": 8000,
+          "maxUnits": 50,
+          "over2Ms": 51,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.submitSync": {
+          "calls": 250,
+          "totalMs": 29.647,
+          "maxMs": 1.082,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.wall": {
+          "calls": 250,
+          "totalMs": 191.16,
+          "maxMs": 2.968,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 7,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.submitSync": {
+          "calls": 3000,
+          "totalMs": 61.551,
+          "maxMs": 0.112,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.wall": {
+          "calls": 3000,
+          "totalMs": 4486.617,
+          "maxMs": 28.99,
+          "totalUnits": 2802350,
+          "maxUnits": 1024,
+          "over2Ms": 89,
+          "over10Ms": 50,
+          "over50Ms": 0
+        },
+        "pg.appendRows.sync": {
+          "calls": 3000,
+          "totalMs": 35.334,
+          "maxMs": 0.178,
+          "totalUnits": 2802350,
+          "maxUnits": 1024,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.yieldWait": {
+          "calls": 2750,
+          "totalMs": 57.746,
+          "maxMs": 2.907,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 5,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "eventLoop.tickGap": {
+          "calls": 1000,
+          "totalMs": 10525.47,
+          "maxMs": 18.775,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1000,
+          "over10Ms": 694,
+          "over50Ms": 0
+        },
+        "gc.pause": {
+          "calls": 310,
+          "totalMs": 439.26,
+          "maxMs": 6.088,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 84,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.step": {
+          "calls": 7100,
+          "totalMs": 306.728,
+          "maxMs": 0.403,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.slice": {
+          "calls": 178,
+          "totalMs": 309.324,
+          "maxMs": 2.079,
+          "totalUnits": 1800000,
+          "maxUnits": 16288,
+          "over2Ms": 128,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.yieldWait": {
+          "calls": 128,
+          "totalMs": 3.181,
+          "maxMs": 0.084,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.step": {
+          "calls": 7100,
+          "totalMs": 85.913,
+          "maxMs": 0.222,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.slice": {
+          "calls": 51,
+          "totalMs": 87.826,
+          "maxMs": 2.097,
+          "totalUnits": 1800000,
+          "maxUnits": 36000,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.submitSync": {
+          "calls": 50,
+          "totalMs": 1.265,
+          "maxMs": 0.065,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.wall": {
+          "calls": 50,
+          "totalMs": 1696.687,
+          "maxMs": 36.051,
+          "totalUnits": 50,
+          "maxUnits": 1,
+          "over2Ms": 50,
+          "over10Ms": 50,
+          "over50Ms": 0
+        },
+        "cooperative.step": {
+          "calls": 14750,
+          "totalMs": 298.992,
+          "maxMs": 1.195,
+          "totalUnits": 1876800,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.slice": {
+          "calls": 309,
+          "totalMs": 303.179,
+          "maxMs": 3,
+          "totalUnits": 1876800,
+          "maxUnits": 18512,
+          "over2Ms": 60,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.yieldWait": {
+          "calls": 60,
+          "totalMs": 5.902,
+          "maxMs": 2.586,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.step": {
+          "calls": 3700,
+          "totalMs": 170.205,
+          "maxMs": 2.755,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 6,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.slice": {
+          "calls": 157,
+          "totalMs": 171.593,
+          "maxMs": 4.258,
+          "totalUnits": 921600,
+          "maxUnits": 16640,
+          "over2Ms": 57,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.yieldWait": {
+          "calls": 57,
+          "totalMs": 70.76,
+          "maxMs": 3.83,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 24,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.step": {
+          "calls": 3700,
+          "totalMs": 52.096,
+          "maxMs": 0.11,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.slice": {
+          "calls": 109,
+          "totalMs": 53.056,
+          "maxMs": 2.072,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 9,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.step": {
+          "calls": 3700,
+          "totalMs": 45.45,
+          "maxMs": 0.085,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.slice": {
+          "calls": 103,
+          "totalMs": 46.324,
+          "maxMs": 2.019,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.step": {
+          "calls": 3800,
+          "totalMs": 148.351,
+          "maxMs": 1.364,
+          "totalUnits": 928100,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.slice": {
+          "calls": 155,
+          "totalMs": 149.414,
+          "maxMs": 2.592,
+          "totalUnits": 928100,
+          "maxUnits": 18000,
+          "over2Ms": 55,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.yieldWait": {
+          "calls": 55,
+          "totalMs": 7.042,
+          "maxMs": 2.921,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.step": {
+          "calls": 3700,
+          "totalMs": 64.644,
+          "maxMs": 0.093,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.slice": {
+          "calls": 109,
+          "totalMs": 65.567,
+          "maxMs": 2.034,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 9,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.profile.step": {
+          "calls": 3650,
+          "totalMs": 204.423,
+          "maxMs": 3,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 10,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.slice": {
+          "calls": 379,
+          "totalMs": 757.834,
+          "maxMs": 4.268,
+          "totalUnits": 2879100,
+          "maxUnits": 21328,
+          "over2Ms": 329,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.yieldWait": {
+          "calls": 329,
+          "totalMs": 90.245,
+          "maxMs": 5.596,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 9,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.index.step": {
+          "calls": 3650,
+          "totalMs": 96.367,
+          "maxMs": 0.757,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.missing.step": {
+          "calls": 200,
+          "totalMs": 2.884,
+          "maxMs": 0.03,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.pairs.step": {
+          "calls": 200,
+          "totalMs": 159.097,
+          "maxMs": 1.507,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.display.step": {
+          "calls": 3650,
+          "totalMs": 291.277,
+          "maxMs": 0.348,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.step": {
+          "calls": 50,
+          "totalMs": 0.171,
+          "maxMs": 0.021,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.step": {
+          "calls": 34550,
+          "totalMs": 203.115,
+          "maxMs": 0.908,
+          "totalUnits": 8744000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.slice": {
+          "calls": 122,
+          "totalMs": 210.553,
+          "maxMs": 2.125,
+          "totalUnits": 8744000,
+          "maxUnits": 155344,
+          "over2Ms": 72,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.yieldWait": {
+          "calls": 72,
+          "totalMs": 28.503,
+          "maxMs": 6.201,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.step": {
+          "calls": 7100,
+          "totalMs": 437.02,
+          "maxMs": 1.029,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.slice": {
+          "calls": 238,
+          "totalMs": 439.855,
+          "maxMs": 3.017,
+          "totalUnits": 1800000,
+          "maxUnits": 11520,
+          "over2Ms": 188,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.yieldWait": {
+          "calls": 188,
+          "totalMs": 40.976,
+          "maxMs": 2.451,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 5,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.step": {
+          "calls": 7100,
+          "totalMs": 469.714,
+          "maxMs": 0.656,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.slice": {
+          "calls": 267,
+          "totalMs": 471.683,
+          "maxMs": 2.603,
+          "totalUnits": 1800000,
+          "maxUnits": 8704,
+          "over2Ms": 217,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.yieldWait": {
+          "calls": 217,
+          "totalMs": 56.281,
+          "maxMs": 5.849,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 4,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.yieldWait": {
+          "calls": 9,
+          "totalMs": 0.173,
+          "maxMs": 0.026,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.yieldWait": {
+          "calls": 9,
+          "totalMs": 0.287,
+          "maxMs": 0.079,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.yieldWait": {
+          "calls": 3,
+          "totalMs": 0.142,
+          "maxMs": 0.097,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.yieldWait": {
+          "calls": 1,
+          "totalMs": 0.017,
+          "maxMs": 0.017,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        }
+      },
+      "resultSignature": "d75a57c20695b67ee348505aa3c074ff1a05b769e5263b483f51a0285800423f",
+      "stageP95Ms": {
+        "prepare_ms": 8,
+        "sql_ms": 49,
+        "preload_ms": 19,
+        "profile_ms": 10,
+        "relations_ms": 9,
+        "display_ms": 11,
+        "sort_ms": 8,
+        "preload_page_ms": 4,
+        "hydrate_ms": 2,
+        "stats_ms": 135.5315840000003,
+        "stats_status_ms": 1,
+        "stats_candidates_ms": 68,
+        "stats_normalize_ms": 2,
+        "stats_auxiliary_ms": 37,
+        "stats_inputs_ms": 107,
+        "stats_reuse_inputs_ms": 0,
+        "stats_provider_ms": 0,
+        "stats_profile_ms": 17,
+        "stats_count_ms": 20
+      },
+      "p50Ms": 207.18950399999994,
+      "p95Ms": 233.24028100000032,
+      "maxMs": 243.7407089999997,
+      "lagP99Ms": 15.556607,
+      "lagMaxMs": 18.776063,
+      "rssPeakBytes": 464973824,
+      "heapPeakBytes": 360471824,
+      "queryCount": {
+        "min": 88,
+        "p50": 88,
+        "max": 88
+      },
+      "transactionStatements": {
+        "min": 4,
+        "max": 4
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null,
+      "contentStore": {
+        "rows": 36000,
+        "bytes": 55525548,
+        "maxRows": 50000,
+        "maxBytes": 67108864
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 464.7741180000012,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.23461200000019744,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.17666199999803212,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL cursor_tuple_fraction = 1",
+          "calls": 1,
+          "ms": 0.09379199999966659,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.18095499999981257,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.27328900000065914,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.20864000000074157,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.2142199999980221,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.8332430000009481,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "calls": 1,
+          "ms": 0.4922770000011951,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT current_database() AS database_name, current_user AS role, inet_server_addr()::text AS server_address, inet_server_port() AS server_port, pg_po",
+          "calls": 1,
+          "ms": 0.359613000000536,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( sear",
+          "calls": 1,
+          "ms": 0.4931250000008731,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 1,
+          "ms": 1.9498619999976654,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_1",
+          "calls": 35,
+          "ms": 46.03769999999349,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.1309529999998631,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 18.386813000000984,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 183.89996299999984,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.20321599999806494,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.46958400000221445,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.5096640000010666,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 34.26759700000184,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.4178360000005341,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_3 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, match_post_id FROM listings WHERE match_post_id > 0 OR match_post_id < 0",
+          "calls": 1,
+          "ms": 0.41477799999847775,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_3",
+          "calls": 1,
+          "ms": 0.5837610000016866,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_3",
+          "calls": 1,
+          "ms": 0.5120909999968717,
+          "rows": 511
+        },
+        {
+          "sql": "CLOSE listing_read_3",
+          "calls": 1,
+          "ms": 0.13442500000019209,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_4 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, group_key FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.22735499999907915,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_4",
+          "calls": 1,
+          "ms": 0.12010100000043167,
+          "rows": 0
+        },
+        {
+          "sql": "CLOSE listing_read_4",
+          "calls": 1,
+          "ms": 0.11082999999780441,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_5 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE post_id = ANY($1::bigint[]) AND ((split_part(COALESCE(sour",
+          "calls": 1,
+          "ms": 1.0309000000015658,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_5",
+          "calls": 1,
+          "ms": 1.2762849999999162,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_5",
+          "calls": 1,
+          "ms": 0.09868200000346405,
+          "rows": 0
+        },
+        {
+          "sql": "CLOSE listing_read_5",
+          "calls": 1,
+          "ms": 0.1295830000017304,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_6 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(s",
+          "calls": 1,
+          "ms": 1.5902820000010252,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_6",
+          "calls": 1,
+          "ms": 26.81686400000035,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_6",
+          "calls": 18,
+          "ms": 9.090913000003638,
+          "rows": 18000
+        },
+        {
+          "sql": "CLOSE listing_read_6",
+          "calls": 1,
+          "ms": 0.24506399999881978,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 2.6586330000027374,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.2369909999979427,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.20465600000170525,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.137496999999712,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 1,
+          "ms": 0.7016289999992296,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.2504399999997986,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.229551000000356,
+          "rows": 0
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.2673670000003767,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "sql": "SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALES",
+          "default": {
+            "planningMs": 0.153,
+            "executionMs": 41.399,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 1.822,
+                "Inlining": 0,
+                "Optimization": 0.863,
+                "Emission": 14.117,
+                "Total": 16.802
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.138,
+            "executionMs": 25.424,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, address_norm, area_name, layout, fl",
+          "default": {
+            "planningMs": 8.123,
+            "executionMs": 24.416,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 7.809,
+            "executionMs": 23.907,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE post_id = ANY($1::bigint[]) AND ((split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2)) IN ($2) OR",
+          "default": {
+            "planningMs": 0.347,
+            "executionMs": 0.922,
+            "jit": null,
+            "root": {
+              "node": "Index Scan",
+              "rows": 512,
+              "loops": 1,
+              "totalCost": 1738.52,
+              "sharedHitBlocks": 2117,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.336,
+            "executionMs": 0.907,
+            "jit": null,
+            "root": {
+              "node": "Index Scan",
+              "rows": 512,
+              "loops": 1,
+              "totalCost": 1738.52,
+              "sharedHitBlocks": 2117,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALESCE(self_status, 'open') = 'open' AND (self_expires_a",
+          "default": {
+            "planningMs": 0.64,
+            "executionMs": 52.473,
+            "jit": {
+              "Functions": 39,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.554,
+                "Inlining": 0,
+                "Optimization": 1.063,
+                "Emission": 19.656,
+                "Total": 23.274
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 303282.58,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.631,
+            "executionMs": 30.27,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 18512,
+              "loops": 1,
+              "totalCost": 303282.58,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "matched": 17488,
+        "total": 36000,
+        "dbTotal": 120000,
+        "pageIds": [
+          900301026,
+          900301028,
+          900301030,
+          900301032,
+          900301034,
+          900301036,
+          900301038,
+          900301040,
+          900301042,
+          900301044,
+          900301046,
+          900301048,
+          900301050,
+          900301052,
+          900301054,
+          900301056,
+          900301058,
+          900301060,
+          900301062,
+          900301064,
+          900301066,
+          900301068,
+          900301070,
+          900301072,
+          900301074,
+          900301076,
+          900301078,
+          900301080,
+          900301082,
+          900301084,
+          900301086,
+          900301088,
+          900301090,
+          900301092,
+          900301094,
+          900301096,
+          900301098,
+          900301100,
+          900301102,
+          900301104,
+          900301106,
+          900301108,
+          900301110,
+          900301112,
+          900301114,
+          900301116,
+          900301118,
+          900301120,
+          900301122,
+          900301124
+        ]
+      },
+      "workDiagnostics": {
+        "pg.query.submitSync": {
+          "calls": 1300,
+          "totalMs": 77.395,
+          "maxMs": 2.555,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.query.wall": {
+          "calls": 1300,
+          "totalMs": 2439.998,
+          "maxMs": 24.397,
+          "totalUnits": 8000,
+          "maxUnits": 50,
+          "over2Ms": 472,
+          "over10Ms": 9,
+          "over50Ms": 0
+        },
+        "pg.declare.submitSync": {
+          "calls": 250,
+          "totalMs": 53.726,
+          "maxMs": 2.667,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.wall": {
+          "calls": 250,
+          "totalMs": 618.445,
+          "maxMs": 10.132,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 135,
+          "over10Ms": 1,
+          "over50Ms": 0
+        },
+        "pg.fetch.submitSync": {
+          "calls": 3000,
+          "totalMs": 200.228,
+          "maxMs": 4.501,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 10,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.wall": {
+          "calls": 3000,
+          "totalMs": 12439.772,
+          "maxMs": 84.739,
+          "totalUnits": 2802350,
+          "maxUnits": 1024,
+          "over2Ms": 2304,
+          "over10Ms": 104,
+          "over50Ms": 7
+        },
+        "pg.appendRows.sync": {
+          "calls": 3000,
+          "totalMs": 44.646,
+          "maxMs": 0.316,
+          "totalUnits": 2802350,
+          "maxUnits": 1024,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.yieldWait": {
+          "calls": 2750,
+          "totalMs": 3155.358,
+          "maxMs": 11.505,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 813,
+          "over10Ms": 2,
+          "over50Ms": 0
+        },
+        "eventLoop.tickGap": {
+          "calls": 603,
+          "totalMs": 6940.781,
+          "maxMs": 24.395,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 603,
+          "over10Ms": 471,
+          "over50Ms": 0
+        },
+        "gc.pause": {
+          "calls": 305,
+          "totalMs": 548.27,
+          "maxMs": 18.853,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 71,
+          "over10Ms": 2,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.step": {
+          "calls": 7100,
+          "totalMs": 371.333,
+          "maxMs": 7.2,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 8,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.slice": {
+          "calls": 196,
+          "totalMs": 374.383,
+          "maxMs": 8.035,
+          "totalUnits": 1800000,
+          "maxUnits": 17408,
+          "over2Ms": 146,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.yieldWait": {
+          "calls": 146,
+          "totalMs": 137.012,
+          "maxMs": 17.168,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 19,
+          "over10Ms": 1,
+          "over50Ms": 0
+        },
+        "stats.normalize.step": {
+          "calls": 7100,
+          "totalMs": 106.774,
+          "maxMs": 6.235,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.slice": {
+          "calls": 70,
+          "totalMs": 109.227,
+          "maxMs": 7.448,
+          "totalUnits": 1800000,
+          "maxUnits": 36000,
+          "over2Ms": 20,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.submitSync": {
+          "calls": 50,
+          "totalMs": 6.461,
+          "maxMs": 1.915,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.wall": {
+          "calls": 50,
+          "totalMs": 2932.06,
+          "maxMs": 102.124,
+          "totalUnits": 50,
+          "maxUnits": 1,
+          "over2Ms": 50,
+          "over10Ms": 50,
+          "over50Ms": 38
+        },
+        "stats.normalize.yieldWait": {
+          "calls": 20,
+          "totalMs": 23.317,
+          "maxMs": 6.036,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.step": {
+          "calls": 14750,
+          "totalMs": 356.125,
+          "maxMs": 2.772,
+          "totalUnits": 1876800,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.slice": {
+          "calls": 343,
+          "totalMs": 361.004,
+          "maxMs": 3.476,
+          "totalUnits": 1876800,
+          "maxUnits": 18512,
+          "over2Ms": 93,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.yieldWait": {
+          "calls": 93,
+          "totalMs": 152.115,
+          "maxMs": 7.656,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 36,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.step": {
+          "calls": 3700,
+          "totalMs": 170.975,
+          "maxMs": 3.138,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.slice": {
+          "calls": 157,
+          "totalMs": 172.399,
+          "maxMs": 4.849,
+          "totalUnits": 921600,
+          "maxUnits": 16640,
+          "over2Ms": 57,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.yieldWait": {
+          "calls": 57,
+          "totalMs": 86.33,
+          "maxMs": 6.308,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 22,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.step": {
+          "calls": 3700,
+          "totalMs": 63.675,
+          "maxMs": 0.748,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.slice": {
+          "calls": 106,
+          "totalMs": 64.922,
+          "maxMs": 2.039,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 6,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.yieldWait": {
+          "calls": 6,
+          "totalMs": 0.32,
+          "maxMs": 0.132,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.step": {
+          "calls": 3700,
+          "totalMs": 49.898,
+          "maxMs": 0.125,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.slice": {
+          "calls": 105,
+          "totalMs": 51.002,
+          "maxMs": 2.012,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 5,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.yieldWait": {
+          "calls": 5,
+          "totalMs": 4.411,
+          "maxMs": 1.967,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.step": {
+          "calls": 3800,
+          "totalMs": 183.237,
+          "maxMs": 3.83,
+          "totalUnits": 928100,
+          "maxUnits": 256,
+          "over2Ms": 7,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.slice": {
+          "calls": 165,
+          "totalMs": 184.439,
+          "maxMs": 4.915,
+          "totalUnits": 928100,
+          "maxUnits": 17744,
+          "over2Ms": 65,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.yieldWait": {
+          "calls": 65,
+          "totalMs": 113.074,
+          "maxMs": 12.673,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 21,
+          "over10Ms": 2,
+          "over50Ms": 0
+        },
+        "preload.routes.step": {
+          "calls": 3700,
+          "totalMs": 73.682,
+          "maxMs": 2.78,
+          "totalUnits": 921600,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.slice": {
+          "calls": 109,
+          "totalMs": 74.7,
+          "maxMs": 3.203,
+          "totalUnits": 921600,
+          "maxUnits": 18432,
+          "over2Ms": 9,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.yieldWait": {
+          "calls": 9,
+          "totalMs": 10.367,
+          "maxMs": 2.947,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.profile.step": {
+          "calls": 3650,
+          "totalMs": 190.483,
+          "maxMs": 3.171,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.slice": {
+          "calls": 386,
+          "totalMs": 780.69,
+          "maxMs": 3.948,
+          "totalUnits": 2879100,
+          "maxUnits": 21328,
+          "over2Ms": 336,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.yieldWait": {
+          "calls": 336,
+          "totalMs": 543.032,
+          "maxMs": 8.374,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 119,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.index.step": {
+          "calls": 3650,
+          "totalMs": 100.371,
+          "maxMs": 0.76,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.missing.step": {
+          "calls": 200,
+          "totalMs": 3.497,
+          "maxMs": 0.05,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.pairs.step": {
+          "calls": 200,
+          "totalMs": 172.488,
+          "maxMs": 2.645,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.display.step": {
+          "calls": 3650,
+          "totalMs": 309.703,
+          "maxMs": 2.333,
+          "totalUnits": 925600,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.step": {
+          "calls": 50,
+          "totalMs": 0.181,
+          "maxMs": 0.012,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.step": {
+          "calls": 34550,
+          "totalMs": 220.397,
+          "maxMs": 1.978,
+          "totalUnits": 8744000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.slice": {
+          "calls": 130,
+          "totalMs": 228.673,
+          "maxMs": 3.479,
+          "totalUnits": 8744000,
+          "maxUnits": 155856,
+          "over2Ms": 80,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.yieldWait": {
+          "calls": 80,
+          "totalMs": 138.221,
+          "maxMs": 6.897,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 30,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.step": {
+          "calls": 7100,
+          "totalMs": 439.312,
+          "maxMs": 2.772,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 6,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.slice": {
+          "calls": 233,
+          "totalMs": 442.188,
+          "maxMs": 4.424,
+          "totalUnits": 1800000,
+          "maxUnits": 12800,
+          "over2Ms": 183,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.yieldWait": {
+          "calls": 183,
+          "totalMs": 295.209,
+          "maxMs": 8.885,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 67,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.step": {
+          "calls": 7100,
+          "totalMs": 520.857,
+          "maxMs": 1.59,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.slice": {
+          "calls": 284,
+          "totalMs": 523.088,
+          "maxMs": 3.14,
+          "totalUnits": 1800000,
+          "maxUnits": 8960,
+          "over2Ms": 234,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.yieldWait": {
+          "calls": 234,
+          "totalMs": 413.287,
+          "maxMs": 8.055,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 88,
+          "over10Ms": 0,
+          "over50Ms": 0
+        }
+      },
+      "resultSignature": "d75a57c20695b67ee348505aa3c074ff1a05b769e5263b483f51a0285800423f",
+      "stageP95Ms": {
+        "prepare_ms": 53,
+        "sql_ms": 210,
+        "preload_ms": 28,
+        "profile_ms": 12,
+        "relations_ms": 14,
+        "display_ms": 18,
+        "sort_ms": 14,
+        "preload_page_ms": 18,
+        "hydrate_ms": 3,
+        "stats_ms": 382.5213250000015,
+        "stats_status_ms": 5,
+        "stats_candidates_ms": 287,
+        "stats_normalize_ms": 7,
+        "stats_auxiliary_ms": 104,
+        "stats_inputs_ms": 356,
+        "stats_reuse_inputs_ms": 0,
+        "stats_provider_ms": 0,
+        "stats_profile_ms": 21,
+        "stats_count_ms": 25
+      },
+      "p50Ms": 521.2823970000027,
+      "p95Ms": 675.0977050000001,
+      "maxMs": 698.2453050000004,
+      "lagP99Ms": 19.644415,
+      "lagMaxMs": 24.395775,
+      "rssPeakBytes": 592551936,
+      "heapPeakBytes": 488926808,
+      "queryCount": {
+        "min": 88,
+        "p50": 88,
+        "max": 88
+      },
+      "transactionStatements": {
+        "min": 4,
+        "max": 4
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null,
+      "contentStore": {
+        "rows": 36000,
+        "bytes": 55525548,
+        "maxRows": 50000,
+        "maxBytes": 67108864
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "requests": 50,
+      "coldMs": 530.1977719999995,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.23733800000263727,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.132884999999078,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL cursor_tuple_fraction = 1",
+          "calls": 1,
+          "ms": 0.1466629999995348,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.19271600000138278,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.25056100000074366,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.2960979999988922,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.28679600000032224,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.7692669999996724,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "calls": 1,
+          "ms": 0.49393899999995483,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT current_database() AS database_name, current_user AS role, inet_server_addr()::text AS server_address, inet_server_port() AS server_port, pg_po",
+          "calls": 1,
+          "ms": 0.41001699999833363,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( sear",
+          "calls": 1,
+          "ms": 0.5171139999984007,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 1,
+          "ms": 1.964825999999448,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_1",
+          "calls": 35,
+          "ms": 48.54476499999146,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.2274089999991702,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 19.96328100000028,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 180.1301049999929,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.22005100000023958,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.4915340000006836,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.5916770000003453,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 36.03962700000193,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.7115220000014233,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_3 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(s",
+          "calls": 1,
+          "ms": 0.8430770000013581,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_3",
+          "calls": 1,
+          "ms": 18.111128000000463,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_3",
+          "calls": 35,
+          "ms": 21.21292599998924,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_3",
+          "calls": 1,
+          "ms": 0.27243499999894993,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 2.202316000002611,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.3934719999997469,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.2992050000029849,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.2134179999993648,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 2,
+          "ms": 1.413180999999895,
+          "rows": 53
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.2620520000018587,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.24081400000068243,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "calls": 1,
+          "ms": 0.9278840000006312,
+          "rows": 2
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.3270189999966533,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "sql": "SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALES",
+          "default": {
+            "planningMs": 0.158,
+            "executionMs": 59.41,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.049,
+                "Inlining": 0,
+                "Optimization": 1.132,
+                "Emission": 16.372,
+                "Total": 19.554
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.142,
+            "executionMs": 26.005,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, address_norm, area_name, layout, fl",
+          "default": {
+            "planningMs": 7.811,
+            "executionMs": 22.687,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 7.737,
+            "executionMs": 22.193,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALESCE(self_status, 'open') = 'open' AND (self_expires_a",
+          "default": {
+            "planningMs": 0.257,
+            "executionMs": 44.514,
+            "jit": {
+              "Functions": 39,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.387,
+                "Inlining": 0,
+                "Optimization": 1.003,
+                "Emission": 18.2,
+                "Total": 21.59
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 304572.53,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.244,
+            "executionMs": 23.285,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 304572.53,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "matched": 34977,
+        "total": 36000,
+        "dbTotal": 120000,
+        "pageIds": [
+          900300001,
+          900301025,
+          900301026,
+          900301027,
+          900301028,
+          900301029,
+          900301030,
+          900301031,
+          900301032,
+          900301033,
+          900301034,
+          900301035,
+          900301036,
+          900301037,
+          900301038,
+          900301039,
+          900301040,
+          900301041,
+          900301042,
+          900301043,
+          900301044,
+          900301045,
+          900301046,
+          900301047,
+          900301048,
+          900301049,
+          900301050,
+          900301051,
+          900301052,
+          900301053,
+          900301054,
+          900301055,
+          900301056,
+          900301057,
+          900301058,
+          900301059,
+          900301060,
+          900301061,
+          900301062,
+          900301063,
+          900301064,
+          900301065,
+          900301066,
+          900301067,
+          900301068,
+          900301069,
+          900301070,
+          900301071,
+          900301072,
+          900301073
+        ]
+      },
+      "workDiagnostics": {
+        "pg.query.submitSync": {
+          "calls": 1250,
+          "totalMs": 52.025,
+          "maxMs": 0.121,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.query.wall": {
+          "calls": 1250,
+          "totalMs": 567.448,
+          "maxMs": 5.695,
+          "totalUnits": 8250,
+          "maxUnits": 51,
+          "over2Ms": 52,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.submitSync": {
+          "calls": 100,
+          "totalMs": 4.538,
+          "maxMs": 0.078,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.wall": {
+          "calls": 100,
+          "totalMs": 56.853,
+          "maxMs": 0.878,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.submitSync": {
+          "calls": 3600,
+          "totalMs": 66.222,
+          "maxMs": 0.115,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.wall": {
+          "calls": 3600,
+          "totalMs": 4414.806,
+          "maxMs": 19.199,
+          "totalUnits": 3600000,
+          "maxUnits": 1024,
+          "over2Ms": 86,
+          "over10Ms": 50,
+          "over50Ms": 0
+        },
+        "pg.appendRows.sync": {
+          "calls": 3600,
+          "totalMs": 43.65,
+          "maxMs": 0.18,
+          "totalUnits": 3600000,
+          "maxUnits": 1024,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.yieldWait": {
+          "calls": 3500,
+          "totalMs": 62.601,
+          "maxMs": 2.721,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 11,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "eventLoop.tickGap": {
+          "calls": 1043,
+          "totalMs": 11210.248,
+          "maxMs": 19.47,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1043,
+          "over10Ms": 689,
+          "over50Ms": 0
+        },
+        "gc.pause": {
+          "calls": 372,
+          "totalMs": 577.158,
+          "maxMs": 6.501,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 111,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.step": {
+          "calls": 7100,
+          "totalMs": 317.31,
+          "maxMs": 0.395,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.slice": {
+          "calls": 174,
+          "totalMs": 319.735,
+          "maxMs": 2.165,
+          "totalUnits": 1800000,
+          "maxUnits": 15616,
+          "over2Ms": 124,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.yieldWait": {
+          "calls": 124,
+          "totalMs": 3.683,
+          "maxMs": 0.77,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.step": {
+          "calls": 7100,
+          "totalMs": 86.775,
+          "maxMs": 0.427,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.slice": {
+          "calls": 53,
+          "totalMs": 88.7,
+          "maxMs": 2.12,
+          "totalUnits": 1800000,
+          "maxUnits": 36000,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.submitSync": {
+          "calls": 50,
+          "totalMs": 1.193,
+          "maxMs": 0.057,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.wall": {
+          "calls": 50,
+          "totalMs": 1769.08,
+          "maxMs": 43.718,
+          "totalUnits": 50,
+          "maxUnits": 1,
+          "over2Ms": 50,
+          "over10Ms": 50,
+          "over50Ms": 0
+        },
+        "cooperative.step": {
+          "calls": 21250,
+          "totalMs": 390.468,
+          "maxMs": 1.243,
+          "totalUnits": 3600000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.slice": {
+          "calls": 264,
+          "totalMs": 396.324,
+          "maxMs": 2.93,
+          "totalUnits": 3600000,
+          "maxUnits": 36000,
+          "over2Ms": 114,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.yieldWait": {
+          "calls": 114,
+          "totalMs": 41.855,
+          "maxMs": 4.182,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 13,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.step": {
+          "calls": 7100,
+          "totalMs": 309.222,
+          "maxMs": 1.853,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.slice": {
+          "calls": 212,
+          "totalMs": 311.613,
+          "maxMs": 3.287,
+          "totalUnits": 1792000,
+          "maxUnits": 16640,
+          "over2Ms": 112,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.yieldWait": {
+          "calls": 112,
+          "totalMs": 57.646,
+          "maxMs": 3.769,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 17,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.step": {
+          "calls": 7100,
+          "totalMs": 88.201,
+          "maxMs": 0.108,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.slice": {
+          "calls": 112,
+          "totalMs": 90.064,
+          "maxMs": 2.036,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 12,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.step": {
+          "calls": 7100,
+          "totalMs": 85.51,
+          "maxMs": 0.12,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.slice": {
+          "calls": 111,
+          "totalMs": 87.294,
+          "maxMs": 2.02,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 11,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.step": {
+          "calls": 7200,
+          "totalMs": 183.019,
+          "maxMs": 3.263,
+          "totalUnits": 1802500,
+          "maxUnits": 256,
+          "over2Ms": 7,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.slice": {
+          "calls": 158,
+          "totalMs": 184.967,
+          "maxMs": 4.331,
+          "totalUnits": 1802500,
+          "maxUnits": 35488,
+          "over2Ms": 58,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.yieldWait": {
+          "calls": 58,
+          "totalMs": 2.74,
+          "maxMs": 0.924,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.step": {
+          "calls": 7100,
+          "totalMs": 108.217,
+          "maxMs": 2.313,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.slice": {
+          "calls": 118,
+          "totalMs": 110.05,
+          "maxMs": 3.818,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 18,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.profile.step": {
+          "calls": 7050,
+          "totalMs": 328.633,
+          "maxMs": 2.537,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 6,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.slice": {
+          "calls": 452,
+          "totalMs": 917.302,
+          "maxMs": 3.352,
+          "totalUnits": 5502300,
+          "maxUnits": 25856,
+          "over2Ms": 402,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.yieldWait": {
+          "calls": 402,
+          "totalMs": 143.667,
+          "maxMs": 6.621,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 16,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.index.step": {
+          "calls": 7050,
+          "totalMs": 199.095,
+          "maxMs": 1.573,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.missing.step": {
+          "calls": 200,
+          "totalMs": 3.524,
+          "maxMs": 0.035,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.pairs.step": {
+          "calls": 200,
+          "totalMs": 164.054,
+          "maxMs": 1.669,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.display.step": {
+          "calls": 7050,
+          "totalMs": 215.249,
+          "maxMs": 0.342,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.step": {
+          "calls": 50,
+          "totalMs": 0.21,
+          "maxMs": 0.02,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.step": {
+          "calls": 75400,
+          "totalMs": 407.375,
+          "maxMs": 1.405,
+          "totalUnits": 19237350,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.slice": {
+          "calls": 229,
+          "totalMs": 422.929,
+          "maxMs": 2.771,
+          "totalUnits": 19237350,
+          "maxUnits": 206022,
+          "over2Ms": 179,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.yieldWait": {
+          "calls": 179,
+          "totalMs": 44.958,
+          "maxMs": 5.433,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 8,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.step": {
+          "calls": 7100,
+          "totalMs": 403.496,
+          "maxMs": 4.274,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 14,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.slice": {
+          "calls": 205,
+          "totalMs": 406.036,
+          "maxMs": 6.233,
+          "totalUnits": 1800000,
+          "maxUnits": 12800,
+          "over2Ms": 155,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.yieldWait": {
+          "calls": 155,
+          "totalMs": 19.568,
+          "maxMs": 1.543,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.step": {
+          "calls": 7100,
+          "totalMs": 458.308,
+          "maxMs": 1.203,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.slice": {
+          "calls": 257,
+          "totalMs": 460.897,
+          "maxMs": 2.68,
+          "totalUnits": 1800000,
+          "maxUnits": 8960,
+          "over2Ms": 207,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.yieldWait": {
+          "calls": 207,
+          "totalMs": 27.917,
+          "maxMs": 5.599,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.yieldWait": {
+          "calls": 12,
+          "totalMs": 1.719,
+          "maxMs": 1.532,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.yieldWait": {
+          "calls": 11,
+          "totalMs": 8.642,
+          "maxMs": 3.249,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.yieldWait": {
+          "calls": 18,
+          "totalMs": 0.823,
+          "maxMs": 0.28,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.yieldWait": {
+          "calls": 3,
+          "totalMs": 0.103,
+          "maxMs": 0.068,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        }
+      },
+      "resultSignature": "b1a872a9e9aa4c7494129d315fcb89bc043d72db39d5bfa8506b93c35169cbf7",
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 52,
+        "preload_ms": 27,
+        "profile_ms": 16,
+        "relations_ms": 12,
+        "display_ms": 7,
+        "sort_ms": 15,
+        "preload_page_ms": 5,
+        "hydrate_ms": 4,
+        "stats_ms": 127.4322319999992,
+        "stats_status_ms": 1,
+        "stats_candidates_ms": 64,
+        "stats_normalize_ms": 2,
+        "stats_auxiliary_ms": 41,
+        "stats_inputs_ms": 109,
+        "stats_reuse_inputs_ms": 0,
+        "stats_provider_ms": 0,
+        "stats_profile_ms": 11,
+        "stats_count_ms": 12
+      },
+      "p50Ms": 220.81632600000012,
+      "p95Ms": 243.43040199999814,
+      "maxMs": 248.7646520000053,
+      "lagP99Ms": 17.268735,
+      "lagMaxMs": 19.464191,
+      "rssPeakBytes": 599588864,
+      "heapPeakBytes": 387717232,
+      "queryCount": {
+        "min": 96,
+        "p50": 96,
+        "max": 96
+      },
+      "transactionStatements": {
+        "min": 4,
+        "max": 4
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": true,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null,
+      "contentStore": {
+        "rows": 36000,
+        "bytes": 55525548,
+        "maxRows": 50000,
+        "maxBytes": 67108864
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "requests": 50,
+      "coldMs": 507.7059719999961,
+      "coldQueries": [
+        {
+          "sql": "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+          "calls": 1,
+          "ms": 0.2221380000046338,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL jit = off",
+          "calls": 1,
+          "ms": 0.10495699999592034,
+          "rows": null
+        },
+        {
+          "sql": "SET LOCAL cursor_tuple_fraction = 1",
+          "calls": 1,
+          "ms": 0.09997999999905005,
+          "rows": null
+        },
+        {
+          "sql": "SELECT key, value FROM settings",
+          "calls": 1,
+          "ms": 0.18231800000648946,
+          "rows": 7
+        },
+        {
+          "sql": "SELECT user_id, key, value FROM user_settings",
+          "calls": 1,
+          "ms": 0.23912900000141235,
+          "rows": 47
+        },
+        {
+          "sql": "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+          "calls": 1,
+          "ms": 0.21871200000168756,
+          "rows": 3
+        },
+        {
+          "sql": "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+          "calls": 1,
+          "ms": 0.1911019999970449,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT SUM(CASE WHEN COALESCE(offline, 0) != 0 AND COALESCE(offline_confirmed, 0) = 0 THEN 1 ELSE 0 END) AS pending, SUM(CASE WHEN COALESCE(offline, 0",
+          "calls": 1,
+          "ms": 0.8273079999999027,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, addre",
+          "calls": 1,
+          "ms": 0.47747199999867007,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT current_database() AS database_name, current_user AS role, inet_server_addr()::text AS server_address, inet_server_port() AS server_port, pg_po",
+          "calls": 1,
+          "ms": 0.42748599999322323,
+          "rows": 1
+        },
+        {
+          "sql": "DECLARE listing_read_1 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( sear",
+          "calls": 1,
+          "ms": 0.5559399999983725,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_1",
+          "calls": 1,
+          "ms": 2.647143000001961,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_1",
+          "calls": 35,
+          "ms": 49.76775100000668,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_1",
+          "calls": 1,
+          "ms": 0.16389199999684934,
+          "rows": null
+        },
+        {
+          "sql": "DECLARE listing_read_2 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, ",
+          "calls": 1,
+          "ms": 18.703427000000374,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_2",
+          "calls": 71,
+          "ms": 180.0436580000096,
+          "rows": 36000
+        },
+        {
+          "sql": "CLOSE listing_read_2",
+          "calls": 1,
+          "ms": 0.20961499999975786,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 6.543454999999085,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM user_listing_flags f WHERE f.user_id = $1 AND f.watched = 1 AND EXISTS ( SELECT 1 FROM listings l WHERE l.post_id = f.post_i",
+          "calls": 1,
+          "ms": 0.8084140000064508,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT COUNT(*) AS n FROM listings WHERE (fixture_namespace IS NULL OR fixture_namespace = '')",
+          "calls": 1,
+          "ms": 36.809077000005345,
+          "rows": 1
+        },
+        {
+          "sql": "SELECT job_key FROM route_jobs WHERE job_state = 'failed'",
+          "calls": 1,
+          "ms": 0.2946349999983795,
+          "rows": 0
+        },
+        {
+          "sql": "DECLARE listing_read_3 NO SCROLL CURSOR WITHOUT HOLD FOR SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(s",
+          "calls": 1,
+          "ms": 0.9018290000021807,
+          "rows": null
+        },
+        {
+          "sql": "FETCH FORWARD 512 FROM listing_read_3",
+          "calls": 1,
+          "ms": 18.297351999994135,
+          "rows": 512
+        },
+        {
+          "sql": "FETCH FORWARD 1024 FROM listing_read_3",
+          "calls": 35,
+          "ms": 18.695341999999073,
+          "rows": 35488
+        },
+        {
+          "sql": "CLOSE listing_read_3",
+          "calls": 1,
+          "ms": 0.22205699999904027,
+          "rows": null
+        },
+        {
+          "sql": "SELECT * FROM user_listing_flags WHERE user_id = $1",
+          "calls": 1,
+          "ms": 2.1825279999975464,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1",
+          "calls": 1,
+          "ms": 0.5258300000059535,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'",
+          "calls": 1,
+          "ms": 0.2894860000014887,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listings WHERE post_id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24",
+          "calls": 1,
+          "ms": 1.2080489999934798,
+          "rows": 50
+        },
+        {
+          "sql": "SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, floor_name, area_name, layout, sou",
+          "calls": 2,
+          "ms": 1.1556090000012773,
+          "rows": 53
+        },
+        {
+          "sql": "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.22623700000258395,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])",
+          "calls": 1,
+          "ms": 0.23619000000326196,
+          "rows": 0
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, refresh_time, last_seen_at, hidde",
+          "calls": 1,
+          "ms": 0.27258399999846006,
+          "rows": 2
+        },
+        {
+          "sql": "ROLLBACK",
+          "calls": 1,
+          "ms": 0.3005669999984093,
+          "rows": null
+        }
+      ],
+      "coldPlans": [
+        {
+          "sql": "SELECT post_id, xmin::text || '/' || ctid::text AS content_version FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALES",
+          "default": {
+            "planningMs": 0.147,
+            "executionMs": 41.918,
+            "jit": {
+              "Functions": 17,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 1.961,
+                "Inlining": 0,
+                "Optimization": 0.876,
+                "Emission": 14.402,
+                "Total": 17.238
+              }
+            },
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.141,
+            "executionMs": 26,
+            "jit": null,
+            "root": {
+              "node": "Bitmap Heap Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 301953.05,
+              "sharedHitBlocks": 2434,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id, source, source_id, source_key, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, title, address, address_norm, area_name, layout, fl",
+          "default": {
+            "planningMs": 7.922,
+            "executionMs": 22.864,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 7.705,
+            "executionMs": 22.213,
+            "jit": null,
+            "root": {
+              "node": "Seq Scan",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 9891,
+              "sharedHitBlocks": 8001,
+              "sharedReadBlocks": 0
+            }
+          }
+        },
+        {
+          "sql": "SELECT post_id FROM listings WHERE ( search_key IN ($1) OR source = 'self' ) AND ( COALESCE(source, '591') != 'self' OR ( COALESCE(self_status, 'open') = 'open' AND (self_expires_a",
+          "default": {
+            "planningMs": 0.261,
+            "executionMs": 44.328,
+            "jit": {
+              "Functions": 39,
+              "Options": {
+                "Inlining": false,
+                "Optimization": false,
+                "Expressions": true,
+                "Deforming": true
+              },
+              "Timing": {
+                "Generation": 2.205,
+                "Inlining": 0,
+                "Optimization": 0.988,
+                "Emission": 18.019,
+                "Total": 21.213
+              }
+            },
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 304572.53,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          },
+          "requestSnapshot": {
+            "planningMs": 0.296,
+            "executionMs": 23.279,
+            "jit": null,
+            "root": {
+              "node": "Merge Join",
+              "rows": 36000,
+              "loops": 1,
+              "totalCost": 304572.53,
+              "sharedHitBlocks": 2438,
+              "sharedReadBlocks": 0
+            }
+          }
+        }
+      ],
+      "expected": {
+        "matched": 34977,
+        "total": 36000,
+        "dbTotal": 120000,
+        "pageIds": [
+          900300001,
+          900301025,
+          900301026,
+          900301027,
+          900301028,
+          900301029,
+          900301030,
+          900301031,
+          900301032,
+          900301033,
+          900301034,
+          900301035,
+          900301036,
+          900301037,
+          900301038,
+          900301039,
+          900301040,
+          900301041,
+          900301042,
+          900301043,
+          900301044,
+          900301045,
+          900301046,
+          900301047,
+          900301048,
+          900301049,
+          900301050,
+          900301051,
+          900301052,
+          900301053,
+          900301054,
+          900301055,
+          900301056,
+          900301057,
+          900301058,
+          900301059,
+          900301060,
+          900301061,
+          900301062,
+          900301063,
+          900301064,
+          900301065,
+          900301066,
+          900301067,
+          900301068,
+          900301069,
+          900301070,
+          900301071,
+          900301072,
+          900301073
+        ]
+      },
+      "workDiagnostics": {
+        "pg.query.submitSync": {
+          "calls": 1250,
+          "totalMs": 52.437,
+          "maxMs": 0.924,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.query.wall": {
+          "calls": 1250,
+          "totalMs": 2861.132,
+          "maxMs": 17.91,
+          "totalUnits": 8250,
+          "maxUnits": 51,
+          "over2Ms": 533,
+          "over10Ms": 13,
+          "over50Ms": 0
+        },
+        "pg.declare.submitSync": {
+          "calls": 100,
+          "totalMs": 6.302,
+          "maxMs": 1.041,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.declare.wall": {
+          "calls": 100,
+          "totalMs": 244.568,
+          "maxMs": 14.867,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 45,
+          "over10Ms": 2,
+          "over50Ms": 0
+        },
+        "pg.fetch.submitSync": {
+          "calls": 3600,
+          "totalMs": 100.496,
+          "maxMs": 2.057,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.wall": {
+          "calls": 3600,
+          "totalMs": 12787.736,
+          "maxMs": 46.353,
+          "totalUnits": 3600000,
+          "maxUnits": 1024,
+          "over2Ms": 2425,
+          "over10Ms": 153,
+          "over50Ms": 0
+        },
+        "pg.appendRows.sync": {
+          "calls": 3600,
+          "totalMs": 54.273,
+          "maxMs": 0.246,
+          "totalUnits": 3600000,
+          "maxUnits": 1024,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.fetch.yieldWait": {
+          "calls": 3500,
+          "totalMs": 3905.758,
+          "maxMs": 11.621,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1008,
+          "over10Ms": 4,
+          "over50Ms": 0
+        },
+        "eventLoop.tickGap": {
+          "calls": 616,
+          "totalMs": 7391.356,
+          "maxMs": 30.381,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 616,
+          "over10Ms": 480,
+          "over50Ms": 0
+        },
+        "gc.pause": {
+          "calls": 365,
+          "totalMs": 743.235,
+          "maxMs": 13.405,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 143,
+          "over10Ms": 4,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.step": {
+          "calls": 7100,
+          "totalMs": 303.375,
+          "maxMs": 0.223,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.slice": {
+          "calls": 176,
+          "totalMs": 306.14,
+          "maxMs": 2.129,
+          "totalUnits": 1800000,
+          "maxUnits": 17152,
+          "over2Ms": 126,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.content.lookup.yieldWait": {
+          "calls": 126,
+          "totalMs": 149.113,
+          "maxMs": 7.216,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 27,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.step": {
+          "calls": 7100,
+          "totalMs": 93.471,
+          "maxMs": 0.265,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.slice": {
+          "calls": 60,
+          "totalMs": 95.619,
+          "maxMs": 2.217,
+          "totalUnits": 1800000,
+          "maxUnits": 36000,
+          "over2Ms": 10,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.submitSync": {
+          "calls": 50,
+          "totalMs": 3.623,
+          "maxMs": 2.221,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.normalize.yieldWait": {
+          "calls": 10,
+          "totalMs": 8.913,
+          "maxMs": 4.434,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "pg.countListings.wall": {
+          "calls": 50,
+          "totalMs": 1286.261,
+          "maxMs": 54.351,
+          "totalUnits": 50,
+          "maxUnits": 1,
+          "over2Ms": 50,
+          "over10Ms": 50,
+          "over50Ms": 4
+        },
+        "cooperative.step": {
+          "calls": 21250,
+          "totalMs": 439.105,
+          "maxMs": 2.657,
+          "totalUnits": 3600000,
+          "maxUnits": 256,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.slice": {
+          "calls": 287,
+          "totalMs": 445.679,
+          "maxMs": 3.424,
+          "totalUnits": 3600000,
+          "maxUnits": 36000,
+          "over2Ms": 137,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "cooperative.yieldWait": {
+          "calls": 137,
+          "totalMs": 251.091,
+          "maxMs": 8.956,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 53,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.step": {
+          "calls": 7100,
+          "totalMs": 322.781,
+          "maxMs": 2.465,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.slice": {
+          "calls": 215,
+          "totalMs": 325.38,
+          "maxMs": 3.848,
+          "totalUnits": 1792000,
+          "maxUnits": 16896,
+          "over2Ms": 115,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.ids.yieldWait": {
+          "calls": 115,
+          "totalMs": 226.306,
+          "maxMs": 8.17,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 47,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.step": {
+          "calls": 7100,
+          "totalMs": 80.786,
+          "maxMs": 0.133,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.relations.slice": {
+          "calls": 105,
+          "totalMs": 82.81,
+          "maxMs": 2.052,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 5,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.step": {
+          "calls": 7100,
+          "totalMs": 80.345,
+          "maxMs": 0.076,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.slice": {
+          "calls": 105,
+          "totalMs": 81.999,
+          "maxMs": 2.017,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 5,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.step": {
+          "calls": 7200,
+          "totalMs": 171.235,
+          "maxMs": 3.968,
+          "totalUnits": 1802500,
+          "maxUnits": 256,
+          "over2Ms": 7,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.slice": {
+          "calls": 154,
+          "totalMs": 173.127,
+          "maxMs": 5.525,
+          "totalUnits": 1802500,
+          "maxUnits": 35488,
+          "over2Ms": 54,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.extras.yieldWait": {
+          "calls": 54,
+          "totalMs": 110.364,
+          "maxMs": 9.114,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 27,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.step": {
+          "calls": 7100,
+          "totalMs": 114.886,
+          "maxMs": 2.325,
+          "totalUnits": 1792000,
+          "maxUnits": 256,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.slice": {
+          "calls": 121,
+          "totalMs": 116.636,
+          "maxMs": 3.55,
+          "totalUnits": 1792000,
+          "maxUnits": 35840,
+          "over2Ms": 24,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.profile.step": {
+          "calls": 7050,
+          "totalMs": 365.98,
+          "maxMs": 7.101,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 8,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.slice": {
+          "calls": 483,
+          "totalMs": 1021.263,
+          "maxMs": 8.615,
+          "totalUnits": 5502300,
+          "maxUnits": 24576,
+          "over2Ms": 433,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.yieldWait": {
+          "calls": 433,
+          "totalMs": 1178.217,
+          "maxMs": 13.15,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 224,
+          "over10Ms": 6,
+          "over50Ms": 0
+        },
+        "relations.index.step": {
+          "calls": 7050,
+          "totalMs": 222.607,
+          "maxMs": 1.924,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.missing.step": {
+          "calls": 200,
+          "totalMs": 4.274,
+          "maxMs": 0.047,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "relations.pairs.step": {
+          "calls": 200,
+          "totalMs": 185.971,
+          "maxMs": 2.888,
+          "totalUnits": 51150,
+          "maxUnits": 256,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.display.step": {
+          "calls": 7050,
+          "totalMs": 234.876,
+          "maxMs": 2.621,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.build.step": {
+          "calls": 50,
+          "totalMs": 0.158,
+          "maxMs": 0.01,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.step": {
+          "calls": 75400,
+          "totalMs": 443.291,
+          "maxMs": 4.263,
+          "totalUnits": 19237350,
+          "maxUnits": 256,
+          "over2Ms": 3,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.slice": {
+          "calls": 250,
+          "totalMs": 460.149,
+          "maxMs": 6.055,
+          "totalUnits": 19237350,
+          "maxUnits": 202182,
+          "over2Ms": 200,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.routes.yieldWait": {
+          "calls": 24,
+          "totalMs": 43.643,
+          "maxMs": 6.868,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 8,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "list.sort.yieldWait": {
+          "calls": 200,
+          "totalMs": 674.891,
+          "maxMs": 16.873,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 120,
+          "over10Ms": 10,
+          "over50Ms": 0
+        },
+        "stats.profile.step": {
+          "calls": 7100,
+          "totalMs": 453.644,
+          "maxMs": 5.383,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 16,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.slice": {
+          "calls": 227,
+          "totalMs": 457.205,
+          "maxMs": 5.837,
+          "totalUnits": 1800000,
+          "maxUnits": 12800,
+          "over2Ms": 177,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.profile.yieldWait": {
+          "calls": 177,
+          "totalMs": 388.224,
+          "maxMs": 17.999,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 75,
+          "over10Ms": 2,
+          "over50Ms": 0
+        },
+        "stats.count.step": {
+          "calls": 7100,
+          "totalMs": 483.427,
+          "maxMs": 3.975,
+          "totalUnits": 1800000,
+          "maxUnits": 256,
+          "over2Ms": 2,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.slice": {
+          "calls": 266,
+          "totalMs": 485.679,
+          "maxMs": 4.919,
+          "totalUnits": 1800000,
+          "maxUnits": 8960,
+          "over2Ms": 216,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "stats.count.yieldWait": {
+          "calls": 216,
+          "totalMs": 467.241,
+          "maxMs": 13.657,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 81,
+          "over10Ms": 4,
+          "over50Ms": 0
+        },
+        "preload.relations.yieldWait": {
+          "calls": 5,
+          "totalMs": 2.899,
+          "maxMs": 1.38,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 0,
+          "over10Ms": 0,
+          "over50Ms": 0
+        },
+        "preload.prepIds.yieldWait": {
+          "calls": 5,
+          "totalMs": 5.069,
+          "maxMs": 3.331,
+          "totalUnits": 0,
+          "maxUnits": 0,
+          "over2Ms": 1,
+          "over10Ms": 0,
+          "over50Ms": 0
+        }
+      },
+      "resultSignature": "b1a872a9e9aa4c7494129d315fcb89bc043d72db39d5bfa8506b93c35169cbf7",
+      "stageP95Ms": {
+        "prepare_ms": 0,
+        "sql_ms": 231,
+        "preload_ms": 47,
+        "profile_ms": 29,
+        "relations_ms": 33,
+        "display_ms": 24,
+        "sort_ms": 44,
+        "preload_page_ms": 47,
+        "hydrate_ms": 7,
+        "stats_ms": 378.7901680000068,
+        "stats_status_ms": 5,
+        "stats_candidates_ms": 338,
+        "stats_normalize_ms": 3,
+        "stats_auxiliary_ms": 57,
+        "stats_inputs_ms": 358,
+        "stats_reuse_inputs_ms": 0,
+        "stats_provider_ms": 0,
+        "stats_profile_ms": 36,
+        "stats_count_ms": 50
+      },
+      "p50Ms": 586.1281899999958,
+      "p95Ms": 627.0912219999955,
+      "maxMs": 652.5954060000004,
+      "lagP99Ms": 22.659071,
+      "lagMaxMs": 30.392319,
+      "rssPeakBytes": 827125760,
+      "heapPeakBytes": 705642528,
+      "queryCount": {
+        "min": 96,
+        "p50": 96,
+        "max": 96
+      },
+      "transactionStatements": {
+        "min": 4,
+        "max": 4
+      },
+      "errorCount": 0,
+      "timeoutCount": 0,
+      "errors": [],
+      "ciSmokePassed": null,
+      "lagTargetMet": true,
+      "nasLatencyPassed": null,
+      "contentStore": {
+        "rows": 36000,
+        "bytes": 55525548,
+        "maxRows": 50000,
+        "maxBytes": 67108864
+      }
+    }
+  ],
+  "postgres": "16.14",
+  "sqliteAttempts": 0,
+  "nasAcceptance": "NOT_RUN; CI does not verify NAS acceptance"
+}

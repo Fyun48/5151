@@ -282,6 +282,33 @@ if [ ! -f "$VERIFY_PY" ]; then
 fi
 python3 "$VERIFY_PY" "$WORKDIR/integrity.json" || fail "backup integrity_check is not ok"
 
+# --- PostgreSQL backup (2026-09-26) ---
+# PG 已經是線上業務資料的來源（SQLite 只剩舊資料），所以 predeploy 不能只備份 SQLite：
+# 沒有 PG dump 就沒有可回版的業務資料。從本機 PG 容器取 dump——standby 也能 pg_dump
+# （一致性快照），不必連 primary、也不必把連線字串或密碼帶進來。
+# 容器不存在、dump 空、或 pg_restore 讀不出目錄時一律 fail，不讓「只有 SQLite 備份」的
+# predeploy 假裝成功。
+PG_CONTAINER="${PREDEPLOY_PG_CONTAINER:-5151-postgres-A}"
+PG_DB_NAME="${PREDEPLOY_PG_DB:-5151_shadow}"
+PG_DUMP="$BACKUP_DIR/pg-${PG_DB_NAME}.dump"
+echo "=== pg_dump ($PG_CONTAINER / $PG_DB_NAME) ==="
+if ! docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
+  fail "PG container $PG_CONTAINER not found; refusing a release without a PostgreSQL backup"
+fi
+PG_IN_RECOVERY="$(docker exec "$PG_CONTAINER" psql -X -w -U postgres -d "$PG_DB_NAME" -At -c 'SELECT pg_is_in_recovery()' 2>/dev/null || echo unknown)"
+echo "pg_in_recovery=$PG_IN_RECOVERY"
+if ! docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$PG_DB_NAME" > "$PG_DUMP" 2>"$WORKDIR/pg_dump.err"; then
+  tail -5 "$WORKDIR/pg_dump.err" 2>/dev/null || true
+  fail "pg_dump failed for $PG_CONTAINER/$PG_DB_NAME"
+fi
+PG_SIZE="$(stat -c%s "$PG_DUMP" 2>/dev/null || stat -f%z "$PG_DUMP")"
+[ "${PG_SIZE:-0}" -gt 0 ] || fail "PG dump is empty"
+PG_SHA="$(sha256sum "$PG_DUMP" | awk '{print $1}')"
+PG_TABLES="$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$PG_DUMP" 2>/dev/null | grep -c 'TABLE DATA' || true)"
+[ "${PG_TABLES:-0}" -gt 0 ] || fail "PG dump is not readable by pg_restore"
+echo "pg_dump_bytes=$PG_SIZE pg_dump_table_data=$PG_TABLES pg_dump_sha256=$PG_SHA"
+echo "pg_dump=$PG_DUMP"
+
 count_files() {
   local dir="$1"
   if [ -d "$dir" ]; then
@@ -313,13 +340,15 @@ python3 - "$EVIDENCE" "$WORKDIR/demand.json" "$WORKDIR/integrity.json" \
   "$STAMP" "$CONTAINER" "$STATE" "$IMAGE_REF" "$IMAGE_ID" "$REPO_DIGESTS" "$ARCH" "$NODE_VER" \
   "$SHARP_STATUS" "$DATA_HOST" "$BACKUP_DIR" "$BACKUP_METHOD" "$ORIG_SIZE" "$BACKUP_SIZE" \
   "$BACKUP_SHA" "$SECRET_COPIED" "$SRC_MEDIA_COUNT" "$SRC_MEDIA_BYTES" "$BK_MEDIA_COUNT" \
-  "$BK_MEDIA_BYTES" "$MEDIA_MISMATCH" <<'PY'
+  "$BK_MEDIA_BYTES" "$MEDIA_MISMATCH" "$PG_SIZE" "$PG_SHA" "$PG_TABLES" "$PG_IN_RECOVERY" \
+  "$(basename "$PG_DUMP")" <<'PY'
 import json, sys
 path, demand_path, integrity_path = sys.argv[1], sys.argv[2], sys.argv[3]
 (
     stamp, container, state, image_ref, image_id, repo_digests, arch, node_ver,
     sharp, data_host, backup_dir, backup_method, orig_size, backup_size,
     backup_sha, secret_copied, src_mc, src_mb, bk_mc, bk_mb, media_mismatch,
+    pg_size, pg_sha, pg_tables, pg_in_recovery, pg_dump_file,
 ) = sys.argv[4:]
 demand = json.loads(open(demand_path).read())
 integrity = json.loads(open(integrity_path).read())
@@ -340,6 +369,12 @@ doc = {
   "db_original_size": int(orig_size),
   "db_backup_size": int(backup_size),
   "backup_sha256": backup_sha,
+  "pg_backup_file": pg_dump_file,
+  "pg_backup_bytes": int(pg_size),
+  "pg_backup_sha256": pg_sha,
+  "pg_backup_table_data": int(pg_tables),
+  "pg_dump_source_in_recovery": pg_in_recovery,
+  "pg_backup_ok": int(pg_size) > 0 and int(pg_tables) > 0,
   "integrity_check": integrity.get("integrity_check"),
   "ok": integrity.get("integrity_check") == "ok" and integrity.get("ok") is True,
   "secret_files_copied_to_nas_backup_only": bool(int(secret_copied)),

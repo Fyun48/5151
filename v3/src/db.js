@@ -1,7 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
+import { guardCrawlSqlite } from "./crawlExecution.js";
+import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
+import { listingRequestTime } from "./listingRequestTime.js";
+import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
+import { createAttributeFilter, passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { commuteNetworkHint, makeRouteKey, roundCoord } from "./route.js";
@@ -42,7 +46,7 @@ import {
   personalGroupKeyFor,
   splitPersonalSameHouse,
 } from "./userSameHouse.js";
-import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
 import { createWritePath } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -129,7 +133,7 @@ import { bumpRevision, ensureDataRevisionTable } from "./dataRevision.js";
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
 import { coveringJobsFromMembers, coversFromMemberSettings, coversFromWatchDistricts, listingInMemberScope } from "./covering.js";
-import { listCrawlCovers } from "./crawlCovers.js";
+import { coverFromRow, listCrawlCovers } from "./crawlCovers.js";
 import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { ensurePersonalSchema } from "./personalSchema.js";
 import { importV1CacheIfNeeded, importV2CacheIfNeeded } from "./importV1.js";
@@ -493,7 +497,7 @@ import { adminBroadcastsView, normalizeBroadcasts, publicBroadcastsRuntime, reje
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, "v3.db"));
+const db = guardCrawlSqlite(new DatabaseSync(path.join(DATA_DIR, "v3.db")));
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA busy_timeout = 8000");
 db.exec("PRAGMA foreign_keys = ON");
@@ -563,7 +567,7 @@ export function refreshPublicListingsProjectionReady() {
   }
   return publicProjectionReady;
 }
-setTimeout(() => {
+if (resolveDbDriver() !== "postgres") setTimeout(() => {
   let idleSteps = 0;
   const step = () => {
     let progress = { added: 0 };
@@ -2841,7 +2845,15 @@ function parseJson(value, fallback) {
   }
 }
 
-function decorateSameHousePeer(raw) {
+function decorationSourceEnabled(source, provider) {
+  if (provider?.driver === "postgres") {
+    if (typeof provider.sourceEnabled !== "function") throw new Error("PG provider requires sourceEnabled");
+    return provider.sourceEnabled(source);
+  }
+  return isCrawlSourceEnabled(source);
+}
+
+function decorateSameHousePeer(raw, provider) {
   if (!raw) return null;
   const source = String(raw.source || "591") || "591";
   return {
@@ -2849,7 +2861,7 @@ function decorateSameHousePeer(raw) {
     extra_fees: Array.isArray(raw.extra_fees) ? raw.extra_fees : parseJson(raw.extra_fees, []),
     source,
     source_label: selfSourceLabel(source),
-    source_enabled: isCrawlSourceEnabled(source),
+    source_enabled: decorationSourceEnabled(source, provider),
   };
 }
 
@@ -2883,12 +2895,12 @@ function loadSameHousePeers(row, userId, provider) {
   return [...found.values()]
     .filter((item) => Number(item.post_id) !== selfId)
     .filter((item) => !housepriceNotDisplayReady(item, source))
-    .map(decorateSameHousePeer);
+    .map((item) => decorateSameHousePeer(item, source));
 }
 
 function housepriceNotDisplayReady(row, provider) {
   const source = String(row?.source || "591") || "591";
-  if (!isCrawlSourceEnabled(source)) return true;
+  if (!decorationSourceEnabled(source, provider)) return true;
   if (!isHousepriceListing(row)) return false;
   try {
     const prep = listingPrepRow(row.post_id, provider);
@@ -3055,11 +3067,18 @@ export function preloadedDecorationProvider({
   mrtCache = new Map(),
   routeJobs = new Map(),
   personalFlags = null,
+  crawlSources = publicCrawlSources(defaultCrawlSources()),
+  systemCrawl = systemCrawlFromRows([]),
+  now = Date.now(),
 } = {}) {
   const emptyIndex = { groupKey: () => "", peers: () => [], agrees: () => true, size: 0 };
   const index = personalIndex || emptyIndex;
+  const enabledSources = new Set(normalizeCrawlSources(crawlSources.items).filter(row => row.enabled).map(row => row.id));
   return {
     driver: "postgres",
+    now,
+    sourceEnabled: (id) => enabledSources.has(id),
+    systemCrawl: () => systemCrawl,
     userId: Number(userId) || 0,
     prep: (postId) => prep.get(Number(postId) || 0) || null,
     personalIndex: () => index,
@@ -3151,30 +3170,76 @@ export async function preloadDecorationProviderAsync({
   matchVoteUserId = null,
   sameHouse = true,
   driver = "postgres",
+  // 分層（astra6 §3）：`peers: false` 只載入候選階段必需的部分（personalFlagMap／personalIndex／
+  // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
+  loader: loaderIn = null,
+  peers: loadPeers = true,
+  // Only the candidate pipeline may omit prep for known non-houseprice rows.
+  // Page decoration and direct callers retain the complete provider contract.
+  candidatePhase = false,
+  // astra6 §2.2：清單狀態 flags 的**擁有者**（＝觀看者 uid）；未給時沿用 userId。
+  flagUserId = null,
+  requestContext = null,
 } = {}) {
   if (typeof exec !== "function") throw new Error("preloadDecorationProviderAsync requires exec");
   const list = Array.isArray(rows) ? rows : [];
+  if (driver === "postgres" && !settings) throw new Error("PG decoration requires settings");
   const conf = settings || getSettings();
+  const clock = listingRequestTime(requestContext?.asOf);
+  const globalRows = requestContext ? null : (driver === "postgres"
+    ? await exec("SELECT key, value FROM settings")
+    : db.prepare("SELECT key, value FROM settings").all());
+  const crawlSources = requestContext?.crawlSources || crawlSourcesFromRows(globalRows);
+  const systemCrawl = requestContext?.systemCrawl || systemCrawlFromRows(globalRows || []);
   const uid = Number(userId) || 0;
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
-  if (!list.length) return preloadedDecorationProvider({ userId: voteUid });
+  if (!list.length) return preloadedDecorationProvider({ userId: voteUid, crawlSources, systemCrawl, now: clock.now });
 
-  const loader = createDecorationDataLoader({ exec, driver });
-  const pageIds = [...new Set(list.map((row) => Number(row.post_id) || 0).filter(Boolean))];
-  const onPage = new Set(pageIds);
-  const personalFlags = await loader.personalFlagMap(voteUid);
+  // 傳入 loader 時沿用其 memo（呼叫端會在候選階段與頁面階段各呼叫一次）。
+  const loader = loaderIn || createDecorationDataLoader({ exec, driver });
+  const onPage = new Set();
+  const prepIds = new Set();
+  const housepriceIds = new Set();
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const row of list) {
+      const id = Number(row.post_id) || 0;
+      if (id) { onPage.add(id); prepIds.add(id); }
+      if (isHousepriceListing(row)) housepriceIds.add(id);
+      if (++visited % 256 === 0) yield {units:256};
+    }
+  })(), {label:'preload.ids'});
+  // astra6 §2.2：**清單狀態 flags（hidden／viewed／watched）屬觀看者 uid**；配對投票／
+  // split／同戶關係才用 voteUid。原本此處誤用 voteUid，會讓 uid≠voteUid 時（例如以他人
+  // 視角檢視）拿到錯的隱藏／已看清單。SQLite 參考管線在同一位置用的是 loadFlagMap(db, uid)。
+  const flagUid = Number(flagUserId ?? userId) || 0;
+  const personalFlags = await loader.personalFlagMap(flagUid);
   const personalIndex = await loader.personalIndex(voteUid);
   const splitPairs = await loader.splitPairSet(voteUid);
 
   const peers = new Map();
-  const prepIds = new Set(pageIds);
-  if (sameHouse) {
-    const seeds = new Set(pageIds);
+  // 候選階段（`peers: false`）仍需要 prep／extras 涵蓋「候選本身 ＋ 其 match_post_id ＋
+  // personalIndex 的 peer id」——`attachSameHouseRoles()` 就是靠這些 id 取 extras（db.js:3353）。
+  // 這一段全是記憶體運算（O(candidates)），真正的 I/O 在下面的 2-hop fan-out。
+  const relatedIds = new Set();
+  await runStepsAsync((function* () {
+    let visited = 0;
     for (const row of list) {
       const mid = Number(row.match_post_id) || 0;
-      if (mid) seeds.add(mid);
-      for (const pid of personalIndex.peers(row.post_id)) seeds.add(pid);
+      if (mid) { prepIds.add(mid); relatedIds.add(mid); }
+      if (personalIndex.size !== 0) for (const pid of personalIndex.peers(row.post_id)) {
+        prepIds.add(pid); relatedIds.add(pid);
+        if (++visited % 256 === 0) yield {units:256};
+      }
+      if (++visited % 256 === 0) yield {units:256};
     }
+  })(), {label:'preload.relations'});
+  // ⚠️ peers／groupMembers 的唯一消費者 loadSameHousePeers() 只在「裝飾」路徑被呼叫
+  // （db.js:3443，於 decorateListingLite 內）⇒ 這批逐列 I/O 屬**頁面層**，可延後到分頁後
+  // 只對 paged.page 載入（astra6 §3「preload 分層」）。呼叫端以同一個 loader 呼叫兩次，
+  // loader 內有 memo ⇒ 重疊的 id 不會重查。
+  if (sameHouse && loadPeers) {
+    const seeds = new Set(prepIds);
     let frontier = [...seeds];
     for (let hop = 0; hop < 2 && frontier.length; hop += 1) {
       const fetched = await loader.peerRowsFor(frontier);
@@ -3198,23 +3263,49 @@ export async function preloadDecorationProviderAsync({
   }
 
   const groupIds = new Map();
-  for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
   const groupMembers = new Map();
-  for (const gid of new Set([...groupIds.values()].filter(Boolean))) {
-    groupMembers.set(gid, await loader.groupMemberRows(gid));
+  if (loadPeers) {
+    for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
+    // astra §4.3：成員列改為**一次查詢**取回（原本每 group 一筆 ✗，頁面可能數十個 group）。
+    const gids = [...new Set([...groupIds.values()].filter(Boolean))];
+    for (const [gid, rows] of await loader.groupMemberRowsFor(gids)) groupMembers.set(gid, rows);
   }
   const prep = new Map();
-  for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
+  const requiredPrep = [];
+  const externalIds = [];
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const id of prepIds) {
+      const external = !onPage.has(id);
+      if (external) externalIds.push(id);
+      // Unknown external peers can be houseprice even when all candidates are 591.
+      if (!candidatePhase || external || housepriceIds.has(id)) requiredPrep.push(id);
+      if (++visited % 256 === 0) yield {units:256};
+    }
+  })(), {label:'preload.prepIds'});
+  for (const [id, row] of await loader.prepMap(requiredPrep)) if (row) prep.set(id, row);
+  // Candidate rows already contain these fields. Preserve their raw values for
+  // partners removed by profile filtering, then fetch only IDs not in that set.
   const extras = new Map();
-  for (const [id, row] of await loader.extrasMap([...prepIds])) {
-    if (row && !onPage.has(id)) extras.set(id, row);
+  await runStepsAsync((function* () {
+    for (let start = 0; start < list.length; start += 256) {
+      const chunk = list.slice(start, start + 256);
+      for (const [id, row] of listingExtrasSnapshot(chunk.filter(row => relatedIds.has(Number(row.post_id))))) extras.set(id, row);
+      yield {units:chunk.length};
+    }
+  })(), {label:'preload.extras'});
+  for (const [id, row] of await loader.extrasMap(externalIds)) {
+    if (row) extras.set(id, row);
   }
 
   const routeKeys = [];
   const mrtKeys = [];
   const jobKeys = [];
   const commuteOn = Number(conf.commuteKm) > 0 && hasWorkPoint(conf);
+  await runStepsAsync((function* () {
+  let visited = 0;
   for (const row of list) {
+    if (++visited % 256 === 0) yield {units:256};
     const lat = Number(row.lat);
     const lng = Number(row.lng);
     const trusted = isTrustedGeoSource(row.geo_source) && Number.isFinite(lat) && Number.isFinite(lng);
@@ -3229,6 +3320,7 @@ export async function preloadDecorationProviderAsync({
     }
     mrtKeys.push(makeMrtKey(lat, lng));
   }
+  })(), {label:'preload.routes'});
   const routeCache = new Map();
   for (const [key, row] of await loader.routeCacheMap(routeKeys)) if (row) routeCache.set(key, row);
   const mrtCache = new Map();
@@ -3238,6 +3330,9 @@ export async function preloadDecorationProviderAsync({
 
   return preloadedDecorationProvider({
     userId: voteUid,
+    crawlSources,
+    systemCrawl,
+    now: clock.now,
     prep,
     personalIndex,
     splitPairs,
@@ -3329,7 +3424,7 @@ function decorateListingLite(row, settings, userId, provider) {
     ...hpPrepFields(row, data),
     source,
     source_label: selfSourceLabel(source),
-    source_enabled: isCrawlSourceEnabled(source),
+    source_enabled: decorationSourceEnabled(source, data),
     mine: uid > 0 && listedBy === uid,
     ...fit,
   };
@@ -3350,32 +3445,63 @@ function loadUserSplitPairSet(userId) {
   }
 }
 
-function attachSameHouseRoles(rows, voteUserId, provider) {
+function attachSameHouseRoles(...args) {
+  return runStepsSync(attachSameHouseRoleSteps(...args));
+}
+
+function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.now ?? Date.now()) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return list;
   const source = provider || sqliteDecorationProvider(voteUserId);
   const personal = source.personalIndex();
-  const byId = new Map(list.map((row) => [Number(row.post_id), row]));
-  const missing = new Set();
+  const hasPersonal = voteUserId && personal.size !== 0;
+  const byId = new Map();
+  const linked = [];
+  const grouped = new Map();
+  let visited = 0;
   for (const row of list) {
-    if (String(row.match_verdict || "") === "no") continue;
+    byId.set(Number(row.post_id), row);
+    if (Number(row.match_post_id) && String(row.match_verdict || "") !== "no") linked.push(row);
+    if (hasPersonal) {
+      const key = personal.groupKey(row.post_id);
+      if (key) {
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(row);
+      }
+    }
+    if (++visited % 256 === 0) yield {label:'relations.index',units:256};
+  }
+  if (visited % 256) yield {label:'relations.index',units:visited % 256};
+  visited = 0;
+  const missing = new Set();
+  // Most candidates have no relation. Keep their index for resolution without
+  // repeatedly walking them in each relation-only pass. Input order is retained.
+  for (const row of linked) {
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
-    if (voteUserId) {
+    if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+  }
+  if (hasPersonal) for (const members of grouped.values()) {
+    for (const row of members) {
+      if (String(row.match_verdict || "") === "no") continue;
       for (const pid of personal.peers(row.post_id)) {
         if (!byId.has(pid)) missing.add(pid);
+        if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
       }
     }
   }
+  if (visited % 256) yield {label:'relations.missing',units:visited % 256};
   const extras = new Map();
   if (missing.size) {
     for (const [id, item] of source.extras([...missing])) extras.set(id, item);
   }
   const resolve = (id) => byId.get(id) || extras.get(id) || null;
   const splits = source.splitPairs();
-  for (const row of list) {
+  visited = 0;
+  for (const row of linked) {
+    if (visited && visited % 256 === 0) yield {label:'relations.pairs',units:256};
+    visited++;
     const mid = Number(row.match_post_id) || 0;
-    if (!mid || String(row.match_verdict || "") === "no") continue;
     const peer = resolve(mid);
     if (!peer || String(peer.match_verdict || "") === "no") continue;
     if (housepriceNotDisplayReady(peer, source) || housepriceNotDisplayReady(row, source)) continue;
@@ -3383,7 +3509,7 @@ function attachSameHouseRoles(rows, voteUserId, provider) {
       row.same_house_split = true;
       continue;
     }
-    const primary = preferPrimaryListing(row, peer);
+    const primary = preferPrimaryListing(row, peer, now);
     const primaryId = Number(primary.post_id);
     const primaryOffline = Number(primary.offline) === 1;
     // 疑似／確定同源都是成對關係。即使只有其中一側存 match_post_id，
@@ -3397,14 +3523,9 @@ function attachSameHouseRoles(rows, voteUserId, provider) {
     assignRole(row);
     assignRole(byId.get(mid));
   }
-  if (voteUserId) {
-    const grouped = new Map();
-    for (const row of list) {
-      const key = personal.groupKey(row.post_id);
-      if (!key) continue;
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(row);
-    }
+  if (visited) yield {label:'relations.pairs',units:(visited - 1) % 256 + 1};
+  if (hasPersonal) {
+    visited = 0;
     for (const members of grouped.values()) {
       const pool = [];
       const seen = new Set();
@@ -3416,14 +3537,27 @@ function attachSameHouseRoles(rows, voteUserId, provider) {
       };
       for (const row of members) {
         add(row);
-        for (const pid of personal.peers(row.post_id)) add(resolve(pid));
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        for (const pid of personal.peers(row.post_id)) {
+          add(resolve(pid));
+          if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        }
       }
-      const visible = pool.filter((item) => !housepriceNotDisplayReady(item, source));
+      const visible = [];
+      for (const item of pool) {
+        if (!housepriceNotDisplayReady(item, source)) visible.push(item);
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+      }
       if (visible.length < 2) continue;
-      const primary = visible.reduce((best, item) => preferPrimaryListing(best, item), visible[0]);
+      let primary = visible[0];
+      for (const item of visible) {
+        primary = preferPrimaryListing(primary, item, now);
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+      }
       const primaryId = Number(primary.post_id);
       const primaryOffline = Number(primary.offline) === 1;
       for (const target of visible) {
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
         if (!byId.has(Number(target.post_id))) continue;
         target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
         target.same_house_primary_id = primaryId;
@@ -3431,11 +3565,12 @@ function attachSameHouseRoles(rows, voteUserId, provider) {
         target.same_house_personal = true;
       }
     }
+    if (visited % 256) yield {label:'relations.groups',units:visited % 256};
   }
   return list;
 }
 
-function attachListingPeers(row, settings, voteUserId, provider) {
+function attachListingPeers(row, settings, voteUserId, provider, now = provider?.now ?? Date.now()) {
   if (!row) return row;
   const data = provider || sqliteDecorationProvider(voteUserId);
   const splits = data.splitPairs();
@@ -3461,7 +3596,7 @@ function attachListingPeers(row, settings, voteUserId, provider) {
   };
   const same_house = (row.match_verdict === "no" || Number(row.match_rejected) === 1 || splitFromMatch)
     ? null
-    : sameHouseBundle(decoratedSelf, sameHousePeers);
+    : sameHouseBundle(decoratedSelf, sameHousePeers, now);
   if (same_house && voteUserId && data.personalIndex().groupKey(selfId)) {
     same_house.personal_only = true;
     same_house.system_agrees = data.personalGroupAgrees(selfId);
@@ -3470,7 +3605,7 @@ function attachListingPeers(row, settings, voteUserId, provider) {
   return { ...row, match_peer: matchPeer || null, same_house };
 }
 
-function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matchVoteUserId, provider } = {}) {
+function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matchVoteUserId, provider, now = provider?.now ?? Date.now() } = {}) {
   if (!row) return row;
   settings = settings || getSettings();
   const uid = Number(userId) || 0;
@@ -3480,7 +3615,7 @@ function finalizeListingDecorate(row, settings, userId, { sameHouse = true, matc
   const source = String(row.source || "591") || "591";
   const data = provider || sqliteDecorationProvider(voteUid);
   const withPeers = sameHouse
-    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings, voteUid, data)
+    ? attachListingPeers({ ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source) }, settings, voteUid, data, now)
     : { ...row, extra_fees: extraFees, source, source_label: row.source_label || selfSourceLabel(source), match_peer: null, same_house: null };
   const {
     listed_by_user_id: _listedBy,
@@ -4035,50 +4170,183 @@ export function currentSearchKeys() {
   return [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
 }
 
+/**
+ * astra6 2026-09-25 §0.2：由 PG 建立 request context（每個請求一次），避免請求熱路徑讀 SQLite。
+ *
+ * 只放**能精確對應**的資料，避免語意漂移：
+ *   • crawlSources：PG `settings(key, value)` 的 `crawlSources` 鍵（與 SQLite 用同一個鍵名 ✓），
+ *     再套用與 SQLite 路徑完全相同的 `publicCrawlSources(normalizeCrawlSources(...))` ✓。
+ *   • isolation：`fixture_namespace` 的等效 predicate（對應 sqlExcludeFixtureRows 的無 namespace 情形 ✓）。
+ *   • searchKeys：與 currentSearchKeys() 同一語意（每使用者 searchUrls ＋ 全域 searchUrls ＋ crawl_covers 的 searchUrl），
+ *     再以同一支 expandSearchKeysAgainst()（stored = PG `SELECT DISTINCT search_key FROM listings`）展開 ⇒ 零語意漂移。
+ */
+function crawlSourcesFromRows(rows) {
+  const row = rows.find((item) => String(item?.key) === "crawlSources");
+  if (row?.value == null) return publicCrawlSources(defaultCrawlSources());
+  const value = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
+  return publicCrawlSources(normalizeCrawlSources(value));
+}
+
+export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = null, resolvedSearchKeys = undefined } = {}) {
+  if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
+  const clock = listingRequestTime(asOf);
+  // These tables define visibility and scope. Missing schema is a failure, not
+  // an empty database or permission to broaden the search.
+  const globalRows = await exec(`SELECT key, value FROM ${settingsTable}`);
+  const crawlSources = crawlSourcesFromRows(globalRows);
+  const ns = String(namespace || "").trim();
+  const isolation = ns
+    ? { sql: "fixture_namespace = ?", params: [ns] }
+    : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
+  const data = {resolvedSearchKeys};
+  const searchKeys = await buildSearchKeysFromPg(exec, settingsTable, globalRows, data);
+  return {
+    crawlSources, isolation, searchKeys, systemCrawl: systemCrawlFromRows(globalRows), degraded: [], ...clock,
+    settingsForUser(userId) {
+      const uid = Number(userId) || 0;
+      return settingsFromRows({
+        globalRows,
+        userRows: data.userRows.filter((row) => Number(row.user_id) === uid),
+        user: data.users.find((row) => Number(row.id) === uid) || null,
+        system: systemCrawlFromRows(globalRows),
+      });
+    },
+  };
+}
+
+/**
+ * PG 版 `currentSearchKeys()`（astra6 §0.2）：逐步對應 SQLite 版本，全部重用同一支純函式與同一個 predicate。
+ *   • 使用者清單：與 members.listUserIds 完全相同的 predicate（`deleted_at IS NULL OR deleted_at = ''`）`ORDER BY id`。
+ *   • 每使用者 searchUrls：`user_settings` ＋ `settingsFromRows`（pure）＋ `users(role, plan)`。
+ *   • 全域 searchUrls：`settingsFromRows`（uid=0 分支）。
+ *   • covers：`crawl_covers` → `coverFromRow`（已匯出的同一支）→ `coveringJobsFromMembers`（pure）。
+ *   • 展開：`expandSearchKeysAgainst(PG 的 SELECT DISTINCT search_key, keys)` ⇒ 不再掃 SQLite。
+ */
+export async function buildSearchKeysFromPg(exec, settingsTable = "settings", globalRowsIn = null, data = {}) {
+  // 呼叫端（buildListRequestContextFromPg）已經讀過全域 settings ⇒ 直接沿用，避免重複查詢 ✓。
+  const globalRows = globalRowsIn || await exec(`SELECT key, value FROM ${settingsTable}`);
+  const system = systemCrawlFromRows(globalRows);
+  const globalSettings = settingsFromRows({ globalRows, system });
+  const userRowsAll = await exec("SELECT user_id, key, value FROM user_settings");
+  const users = await exec(
+    "SELECT id, role, plan FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id",
+  );
+  data.userRows = userRowsAll || [];
+  data.users = users || [];
+  const urls = [];
+  for (const user of users || []) {
+    const uid = Number(user?.id) || 0;
+    if (!uid) continue;
+    urls.push(
+      ...(settingsFromRows({
+        globalRows,
+        userRows: (userRowsAll || []).filter((row) => Number(row.user_id) === uid),
+        user: { id: uid, role: user.role, plan: user.plan },
+        system,
+      })?.searchUrls || []),
+    );
+  }
+  urls.push(...(globalSettings?.searchUrls || []));
+  const covers = (await exec(
+    "SELECT id, region_id, section_ids, price_min, price_max, last_run_at, created_at FROM crawl_covers ORDER BY region_id, id",
+  )).map(coverFromRow);
+  const coverUrls = coveringJobsFromMembers(covers, { excludeRooftop: false }).map((job) => job.searchUrl);
+  const keys = [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
+  // Explicit request keys already bypass default-key expansion in searchWhere.
+  // Still read all required context tables above, but avoid a whole-catalog
+  // DISTINCT scan whose output would not be consumed by this request.
+  if (Array.isArray(data.resolvedSearchKeys)) return [...data.resolvedSearchKeys];
+  // ✗ 跨請求 TTL memo 已撤回（astra 裁決 §2.3）：模組全域快取沒有 database／schema／交易範圍
+  // ⇒ 第一個請求取得的 keys 會被後續（甚至另一個 executor／快照）沿用，破壞 PG 單一快照契約 ✗
+  //（反例：第二個 executor 本來會回 new-key，實際仍拿到 old-key 且**呼叫 0 次** ✓）。
+  // 必要重用只留在**同一 request／同一 PG transaction**；要跨請求快取必須另做版本化設計 ✓。
+  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  return expandSearchKeysAgainst(stored, keys);
+}
+
 let searchKeyMemo = { at: 0, stored: null };
 
 function invalidateSearchKeyMemo() {
   searchKeyMemo = { at: 0, stored: null };
 }
 
-function expandSearchKeys(keys) {
+/**
+ * 純函式：把 URL 清單展開成資料庫中實際存在的 search_key（語意同 expandSearchKeys）。
+ * PG 路徑以同一支函式展開（stored 由 PG 的 SELECT DISTINCT search_key 取得）⇒ 零語意漂移。
+ */
+export function expandSearchKeysAgainst(storedKeys, keys) {
   if (!keys?.length) return keys;
-  const now = Date.now();
-  let stored = searchKeyMemo.stored;
-  if (!stored || now - searchKeyMemo.at > 8000) {
-    stored = db
-      .prepare("SELECT DISTINCT search_key FROM listings")
-      .all()
-      .map((row) => row.search_key)
-      .filter(Boolean);
-    searchKeyMemo = { at: now, stored };
-  }
   const out = new Set(keys);
-  for (const key of stored) {
+  for (const key of storedKeys || []) {
     if (keys.some((url) => sameSearch(url, key))) out.add(key);
   }
   return [...out];
 }
 
-function searchWhere(searchKeys, clauses, params) {
-  const keys = expandSearchKeys(searchKeys === undefined ? currentSearchKeys() : searchKeys);
+function storedSearchKeys() {
+  const now = Date.now();
+  if (searchKeyMemo.stored && now - searchKeyMemo.at <= 8000) return searchKeyMemo.stored;
+  const stored = db
+    .prepare("SELECT DISTINCT search_key FROM listings")
+    .all()
+    .map((row) => row.search_key)
+    .filter(Boolean);
+  searchKeyMemo = { at: now, stored };
+  return stored;
+}
+
+function expandSearchKeys(keys) {
+  return expandSearchKeysAgainst(storedSearchKeys(), keys);
+}
+
+function searchWhere(searchKeys, clauses, params, context = null) {
+  // astra6 §0.2：searchKeys 未給時原本會讀 SQLite（currentSearchKeys() ✗ ＋ expandSearchKeys() ✗，
+  // 後者是對 listings 做 DISTINCT search_key 的掃描，是請求內最大的一筆 SQLite 讀取）。
+  // 契約：context.searchKeys 視為**已展開**的最終清單（PG 端以同一支 expandSearchKeys 語意展開），
+  // 因此傳入時不再呼叫 expandSearchKeys；未傳時行為與現況完全相同。
+  const fromContext = Boolean(context) && context.searchKeys !== undefined;
+  const resolved = searchKeys === undefined ? (fromContext ? context.searchKeys : currentSearchKeys()) : searchKeys;
+  const keys = fromContext ? resolved : expandSearchKeys(resolved);
   if (keys?.length) {
     clauses.push(`(
       search_key IN (${keys.map(() => "?").join(",")})
-      OR COALESCE(source, '591') = 'self'
+      OR source = 'self'
     )`);
     params.push(...keys);
   }
 }
 
-function listingVisibilityClauses(clauses, params) {
+/**
+ * 瀏覽／清單的 fixture 隔離子句（單一來源）。
+ *
+ * astra6 §2.1：原本兩處（`listingVisibilityClauses` 與 watched 分支）都會**回退讀 SQLite**
+ * （`sqlExcludeFixtureRows(db, …)` ⇒ `PRAGMA table_info(listings)`），即使 request context 已帶
+ * isolation。PG/Node 路徑必須由 context 提供，缺了要**明確失敗**，不得靜默降級 ——
+ * `tableColumns()` 會吞掉例外並可能退成 `1=1`，那會讓 fixture 列外洩到產品畫面。
+ */
+function browseIsolationClause(context, sqliteDb, table = "listings") {
+  if (context && context.isolation) return context.isolation;
+  if (sqliteDb == null) {
+    throw new Error(
+      "browseIsolationClause: PG/Node 路徑必須提供 context.isolation（不得回退讀 SQLite）",
+    );
+  }
+  return sqlExcludeFixtureRows(sqliteDb, table);
+}
+
+function listingVisibilityClauses(clauses, params, context = null, { sqliteDb = db } = {}) {
   // The expiry predicate below is sufficient for reads. An UPDATE here would
   // wait up to busy_timeout for a crawler/importer even when no row expires.
-  const stamp = new Date().toISOString();
+  // astra §5.5：同一個請求必須共用**同一個**時間戳（context.asOf）；只有沒帶 context 的 SQLite 路徑
+  // 才各自取 now（維持既有行為）。
+  const stamp = (context && context.asOf) || new Date().toISOString();
   const openSelf = sqlOpenSelfListing(stamp);
   clauses.push(openSelf.sql);
   params.push(...openSelf.params);
-  const disabled = (getCrawlSources().items || [])
+  // astra6 §0.2：這兩個原本都讀 SQLite（getCrawlSources()／sqlExcludeFixtureRows(db)）；
+  // PG 路徑改由 context 提供（request context 由 PG 建立一次），避免請求內讀 SQLite。
+  const crawl = context && context.crawlSources ? context.crawlSources : getCrawlSources();
+  const disabled = (crawl.items || [])
     .filter((row) => !row.enabled)
     .map((row) => row.id);
   if (disabled.length) {
@@ -4086,7 +4354,7 @@ function listingVisibilityClauses(clauses, params) {
     params.push(...disabled);
   }
   clauses.push(hpDisplayReadySql("listings"));
-  const isolation = sqlExcludeFixtureRows(db, "listings");
+  const isolation = browseIsolationClause(context, sqliteDb, "listings");
   clauses.push(isolation.sql);
   params.push(...isolation.params);
 }
@@ -4323,24 +4591,53 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
   }
   const pool = pgDriver || (await sharedPgDriver());
   await ensureChangeLogStoreOnce(pool);
-  const writer = createWritePath({ driver: "postgres", pgDriver: pool });
-  const existing = await writer.upsertListingRow(listing);
-  await writer.backfillListing(listing, existing);
-  await writer.syncProjection(listing);
-  const changeEvent = existing ? "listing_updated" : "listing_added";
-  // 變更紀錄是輔助資料：與 SQLite 路徑（upsertListing 內的 try/catch）一致，失敗只警告。
-  // 少了這層保護，一次序號碰撞就會把整輪抓取打斷（2026-09-24 Production 事故）。
-  try {
-    await writer.bumpRevision({
-      entityType: "listing",
-      entityId: Number(listing?.post_id) || 0,
-      eventType: changeEvent,
-    });
-  } catch (error) {
-    console.warn("變更紀錄寫入失敗（不影響入庫）：", error?.message || error);
-  }
+  // PR-B（F7／G9）：主列 upsert／backfill／投影／變更紀錄必須在同一個 PG 交易內完成；
+  // 投影要用「交易中回讀後的最終列」計算，而不是傳入的 listing（backfill 會改欄位）。
+  // 中間任一失敗就整筆回滾 → 不會再出現「主列寫入成功、搜尋投影永久缺席」的半套狀態。
+  const applied = await pool.withTransaction(async (client) => {
+    const txDriver = {
+      dialect: "postgres",
+      kind: "postgres",
+      query: (text, params = []) => client.query(text, params),
+      exec: (text) => client.query(text),
+    };
+    const writer = createWritePath({ driver: "postgres", pgDriver: txDriver });
+    const existing = await writer.upsertListingRow(listing);
+    await writer.backfillListing(listing, existing);
+    // 回讀 canonical row（同一交易內），投影依它計算。
+    const postId = Number(listing?.post_id) || 0;
+    let canonical = listing;
+    try {
+      const res = await client.query("SELECT * FROM listings WHERE post_id = $1", [postId]);
+      if (res?.rows?.[0]) canonical = res.rows[0];
+    } catch (error) {
+      // 回讀失敗不阻擋入庫（投影仍以傳入列計算），但留下痕跡。
+      console.warn("投影回讀 canonical row 失敗：", error?.message || error);
+    }
+    await writer.syncProjection(canonical);
+    const event = existing ? "listing_updated" : "listing_added";
+    // 變更紀錄是輔助資料，但 PG 內失敗會「毒化整個交易」→ 用 SAVEPOINT 隔離：
+    // 失敗只回捲這一段，主列與投影仍會提交（否則 catch 起來後 COMMIT 會變成 ROLLBACK，變成靜默資料遺失）。
+    try {
+      await client.query("SAVEPOINT change_log");
+      await writer.bumpRevision({
+        entityType: "listing",
+        entityId: postId,
+        eventType: event,
+      });
+      await client.query("RELEASE SAVEPOINT change_log");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK TO SAVEPOINT change_log");
+      } catch {
+        // 交易已不可用就讓外層處理
+      }
+      console.warn("變更紀錄寫入失敗（不影響入庫）：", error?.message || error);
+    }
+    return event;
+  });
   enqueueSimilaritySafeAsync(listing, pool);
-  return { driver: "postgres", changeEvent };
+  return { driver: "postgres", changeEvent: applied };
 }
 
 function enqueueSimilaritySafe(listing) {
@@ -5739,7 +6036,8 @@ export function listingsNeedingMrt(limit = 20) {
 }
 
 function mrtFields(row, settings, provider) {
-  const showMrt = getSystemCrawl().showMrt !== false;
+  const system = provider?.driver === "postgres" ? provider.systemCrawl() : getSystemCrawl();
+  const showMrt = system.showMrt !== false;
   if (!showMrt) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
@@ -6113,10 +6411,10 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
 function applyListingFilter(rows, settings = getSettings(), provider = null) {
   // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
-  if (commuteOn) warmRouteCache();
+  if (commuteOn && !provider) warmRouteCache();
   // Price/keyword/agent/area checks do not depend on routes. Avoid fetching
   // cached routes and cloning wide rows that these checks already exclude.
-  const candidates = rows.filter((row) => passesAttributeFilters(row, settings));
+  const candidates = rows.filter(createAttributeFilter(settings));
   const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings, provider)) : candidates;
   return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn }));
 }
@@ -6248,17 +6546,17 @@ function priceSortKey(row, settings = {}) {
   return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
-export function listingEffectiveUpdatedAt(row, now = Date.now()) {
-  const sourceUpdated = Date.parse(row?.source_updated_at || "");
+export function listingEffectiveUpdatedAt(row, now = Date.now(), parseDate = Date.parse) {
+  const sourceUpdated = parseDate(row?.source_updated_at || "");
   if (Number.isFinite(sourceUpdated)) return sourceUpdated;
-  const published = Date.parse(row?.source_published_at || "");
+  const published = parseDate(row?.source_published_at || "");
   if (Number.isFinite(published)) return published;
   const raw = String(row?.refresh_time || "").trim();
   if (raw && !/剛剛|秒前|分鐘前|小時|今日|今天|昨日|昨天|天前/.test(raw)) {
-    const abs = Date.parse(raw);
+    const abs = parseDate(raw);
     if (Number.isFinite(abs)) return abs;
   }
-  const first = Date.parse(row?.first_seen_at || "");
+  const first = parseDate(row?.first_seen_at || "");
   if (Number.isFinite(first)) return first;
   return listingRefreshAt({ ...row, refresh_time: "", last_seen_at: row?.first_seen_at }, now) || 0;
 }
@@ -6272,91 +6570,246 @@ function commuteMissingLast(a, b, dir = 1) {
   return (left - right) * dir;
 }
 
-export function sortListingsRows(rows, sort = "price_asc", { filter, settings, now = Date.now() } = {}) {
-  const list = [...(rows || [])];
-  const updated = new Map(list.map(row => [row, listingEffectiveUpdatedAt(row, now)]));
-  const prices = /^(price_asc|price_desc)$/.test(sort)
-    ? new Map(list.map(row => [row, rentSortValue(row, settings)])) : null;
+function* listingSortComparatorSteps(rows, sort, { settings, now = Date.now() } = {}) {
+  const updated = new Map();
+  const prices = /^(price_asc|price_desc)$/.test(sort) ? new Map() : null;
+  let visited = 0;
+  for (const row of rows) {
+    updated.set(row, listingEffectiveUpdatedAt(row, now));
+    if (prices) prices.set(row, rentSortValue(row, settings));
+    if (++visited % 256 === 0) yield;
+  }
   const byId = (a, b) => (Number(a.post_id) || 0) - (Number(b.post_id) || 0);
   const byUpdated = (a, b) => updated.get(b) - updated.get(a) || byId(a, b);
-  if (sort === "commute_asc") {
-    list.sort((a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b));
-  } else if (sort === "commute_desc") {
-    list.sort((a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b));
-  } else if (sort === "price_desc") {
-    list.sort((a, b) => {
-      const pa = prices.get(a);
-      const pb = prices.get(b);
-      if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
-      return pb - pa || byUpdated(a, b);
-    });
-  } else if (sort === "newest") {
-    list.sort(byUpdated);
-  } else if (sort === "fit_desc") {
-    list.sort((a, b) => {
-      const sa = Number(a.fit_score);
-      const sb = Number(b.fit_score);
-      const aKnown = Number.isFinite(sa) && sa > 0;
-      const bKnown = Number.isFinite(sb) && sb > 0;
-      if (aKnown !== bKnown) return aKnown ? -1 : 1;
-      return (sb || 0) - (sa || 0) || byUpdated(a, b);
-    });
+  if (sort === "commute_asc") return (a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b);
+  if (sort === "commute_desc") return (a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b);
+  if (sort === "price_desc") return (a, b) => {
+    const pa = prices.get(a), pb = prices.get(b);
+    if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
+    return pb - pa || byUpdated(a, b);
+  };
+  if (sort === "newest") return byUpdated;
+  if (sort === "fit_desc") return (a, b) => {
+    const sa = Number(a.fit_score), sb = Number(b.fit_score);
+    const aKnown = Number.isFinite(sa) && sa > 0;
+    const bKnown = Number.isFinite(sb) && sb > 0;
+    if (aKnown !== bKnown) return aKnown ? -1 : 1;
+    return (sb || 0) - (sa || 0) || byUpdated(a, b);
+  };
+  const key = row => prices ? prices.get(row) > 0 ? prices.get(row) : Number.MAX_SAFE_INTEGER : priceSortKey(row, settings);
+  return (a, b) => key(a) - key(b) || byUpdated(a, b);
+}
+
+export function sortListingsRows(rows, sort = "price_asc", options = {}) {
+  const list = [...(rows || [])];
+  return list.sort(runStepsSync(listingSortComparatorSteps(list, sort, options)));
+}
+
+function* sortListingsSteps(rows, sort = "price_asc", options = {}) {
+  const list = rows || [];
+  const {settings, now = Date.now()} = options;
+  // Sorting touches each key O(n log n) times. Keep scalar keys beside each row
+  // instead of probing object-keyed Maps in every comparison. The synchronous
+  // implementation above remains the reference for ordering and stable ties.
+  const dates = new Map();
+  const parseDate = value => {
+    if (typeof value !== 'string') return Date.parse(value);
+    if (dates.has(value)) return dates.get(value);
+    const parsed = Date.parse(value);
+    if (dates.size < 128) dates.set(value, parsed);
+    return parsed;
+  };
+  const needPrice = !['newest', 'fit_desc', 'commute_asc', 'commute_desc'].includes(sort);
+  const entries = yield* transformChunks(list, chunk => chunk.map(row => ({
+    row, id: Number(row.post_id) || 0,
+    updated: listingEffectiveUpdatedAt(row, now, parseDate),
+    price: needPrice ? rentSortValue(row, settings) : 0,
+    commute: sort === 'commute_asc' || sort === 'commute_desc' ? listingCommuteKm(row) : null,
+    fit: sort === 'fit_desc' ? Number(row.fit_score) : 0,
+  })));
+  const byUpdated = (a,b) => b.updated - a.updated || a.id - b.id;
+  let compare;
+  if (sort === 'newest') compare = byUpdated;
+  else if (sort === 'commute_asc' || sort === 'commute_desc') {
+    const direction = sort === 'commute_asc' ? 1 : -1;
+    compare = (a,b) => (a.commute == null ? b.commute == null ? 0 : 1
+      : b.commute == null ? -1 : (a.commute - b.commute) * direction) || byUpdated(a,b);
+  } else if (sort === 'fit_desc') {
+    compare = (a,b) => {
+      const aKnown = Number.isFinite(a.fit) && a.fit > 0;
+      const bKnown = Number.isFinite(b.fit) && b.fit > 0;
+      return aKnown !== bKnown ? aKnown ? -1 : 1 : (b.fit || 0) - (a.fit || 0) || byUpdated(a,b);
+    };
+  } else if (sort === 'price_desc') {
+    compare = (a,b) => (a.price > 0) !== (b.price > 0) ? a.price > 0 ? -1 : 1
+      : b.price - a.price || byUpdated(a,b);
   } else {
-    const key = row => prices ? prices.get(row) > 0 ? prices.get(row) : Number.MAX_SAFE_INTEGER : priceSortKey(row, settings);
-    list.sort((a, b) => key(a) - key(b) || byUpdated(a, b));
+    compare = (a,b) => (a.price > 0 ? a.price : Number.MAX_SAFE_INTEGER)
+      - (b.price > 0 ? b.price : Number.MAX_SAFE_INTEGER) || byUpdated(a,b);
   }
-  return list;
+  const sorted = yield* stableSortSteps(entries, compare);
+  return yield* transformChunks(sorted, chunk => chunk.map(entry => entry.row));
+}
+
+export function sortListingsRowsAsync(rows, sort = "price_asc", options = {}) {
+  return runStepsAsync(sortListingsSteps(rows, sort, options), {label:'list.sort'});
 }
 
 // All fields used by profile filters, grouping and sorting. Large bodies, photos,
 // contact details and equipment are loaded only for the selected page.
-const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, price, price_num,
-  extra_fee, extra_fees, extra_fee_text, price_contain_text,
-  title, address, address_norm, area_name, layout, floor_name, kind_name, tags,
-  role_name, contact_name, contact_role, contact_uid, agency,
-  lat, lng, geo_source, location_class, match_post_id, match_level,
-  match_verdict, match_rejected, offline, offline_confirmed, hidden, hidden_at,
-  last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
-export function listListings({
-  filter = "all",
-  kind = "",
-  sources = "",
-  q = "",
-  sort = "price_asc",
-  limit = 500,
-  offset = 0,
-  searchKeys,
-  districts = [],
-  userId,
-  matchVoteUserId,
-  settings: settingsOverride,
-  sameHouse = true,
+
+// Keep the complete candidate contract; page hydration cannot repair a wrong
+// filter, primary or order chosen after dropping required candidate fields.
+
+/**
+ * 搜尋路徑的同步後處理：與 stats 的 `buildListingStatsRows` 同一個精神——
+ * 純粹作用在「已取回的候選列」上，driver-agnostic，PostgreSQL 路徑可逐字重用。
+ *
+ * 為什麼要拆：`listListings` 是同步函式，而 PG 取候選是非同步；若把取資料與後處理綁在
+ * 一起，PG 路徑就只能複製一份後處理（必然分岔）。拆開後兩條路徑共用這一段。
+ *
+ * `provider` 會傳給 `attachSameHouseRoles`（不傳時沿用 SQLite 裝飾來源，行為不變）；
+ * `flagMap` 同理（不傳時取自 SQLite）。
+ */
+function assertListingProvider(provider) {
+  for (const key of ["prep", "personalIndex", "personalGroupAgrees", "splitPairs", "groupId", "groupMemberRows", "peerRows", "extras", "routeCache", "mrtCache", "routeJob", "sourceEnabled", "systemCrawl"]) {
+    if (typeof provider?.[key] !== "function") throw new Error(`PG decoration provider requires ${key}`);
+  }
+}
+
+export function buildListListingsRows(...args) {
+  return runStepsSync(buildListListingsSteps(...args));
+}
+
+export function buildListListingsRowsAsync(...args) {
+  return runStepsAsync(buildListListingsSteps(...args), {label:'list.build'});
+}
+
+function* buildListListingsSteps(raw, {
+  filter, kind, sources, sort, uid, voteUid, settings, districtSet,
+  provider = null, flagMap = null, markStage = () => {},
+  now = provider?.now ?? Date.now(), requireProvider = false,
+  candidateShape = false,
 } = {}) {
-  const queryDetails = {};
-  let stageStarted = performance.now();
-  const markStage = (name) => {
-    const now = performance.now();
-    queryDetails[name] = Math.round(now - stageStarted);
-    stageStarted = now;
-  };
-  const uid = resolveUserId(userId);
-  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
-  ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
-  const settings = settingsOverride || getSettings(uid);
-  const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map(name => String(name || "").trim()).filter(Boolean);
-  const districtNames = requestedDistricts.length ? requestedDistricts : memberRegionDistrictNames(settings);
+  if (requireProvider) {
+    assertListingProvider(provider);
+    if (!(flagMap instanceof Map)) throw new Error("PG search requires flagMap");
+  }
+  const flags = flagMap || loadFlagMap(db, uid);
+  let rows = yield* transformChunks(raw, chunk => {
+    const overlaid = overlayRowsPersonal(chunk, flags, {candidateShape});
+    return filter === "watched" ? overlaid
+      : filter === "offline" || filter === "suspected"
+        ? overlaid.filter(row => passesPriceFilter(row, settings))
+        : applyListingFilter(overlaid, settings, provider);
+  }, 256, 'list.profile');
+  markStage("profile_ms");
+
+  rows = yield* attachSameHouseRoleSteps(rows, voteUid, provider, now);
+  markStage("relations_ms");
+  rows = yield* transformChunks(rows, chunk => {
+    chunk = chunk.filter((row) => listingMatchesListFilter(row, filter));
+    chunk = chunk.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
+
+    // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
+    if (filter !== "watched") {
+      // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
+      chunk = chunk.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+      // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
+      // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
+      if (districtSet.size) {
+        chunk = chunk.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+      }
+
+      if (kind) chunk = chunk.filter((row) => matchesHousingKind(row, kind));
+      if (sources?.length) chunk = chunk.filter((row) => matchesListingSources(row, sources));
+    }
+    return chunk;
+  }, 256, 'list.display');
+  markStage("display_ms");
+
+  const needFit = sort === "fit_desc";
+  if (needFit) {
+    let visited = 0;
+    for (const row of rows) {
+      if (++visited % 128 === 0) yield;
+      // astra6 §0.2：fit／通勤不可留同步 SQLite 讀取 ⇒ provider 一路傳下去（PG 路徑傳 PG provider）。
+      const located = applyCachedCoords(row, settings, provider);
+      const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
+        && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
+      row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;
+    }
+  }
+  return rows;
+}
+
+/**
+ * 搜尋路徑的「候選子句」建構：與 `buildListListingsRows` 同一個精神（driver-agnostic、可被 PG 重用）。
+ *
+ * 回傳 `{ clauses, params, where, districtNames, districtSet }`，呼叫端負責實際取資料：
+ * SQLite 用 `db.prepare(...)`，PG 版用同一段 SQL 文字（`?` 由 sqlDialect 轉 `$n`）。
+ *
+ * 註：`q` 一律輸出 `lower(x) LIKE lower(?)`。原因是**實測** SQLite 的 LIKE 對 ASCII 不分大小寫、
+ * PG 分大小寫（6 案中 4 案不一致）；包上 lower() 後兩邊 6 案完全一致，且對 SQLite 而言
+ * 與原本的 `LIKE` 結果相同（CJK 亦不受影響）。這讓同一段文字在兩個 driver 上語意一致。
+ */
+/** 行政區名稱解析（單一來源；共用 builder 與 PG-fed Node 路徑都用它）。 */
+export function resolveListDistrictNames({ districts = [], settings = null, uid = 0 } = {}) {
+  const requested = (Array.isArray(districts) ? districts : String(districts || "").split(","))
+    .map((name) => String(name || "").trim()).filter(Boolean);
+  return requested.length ? requested : memberRegionDistrictNames(settings || getSettings(uid));
+}
+
+export function buildListListingsClauses({
+  filter = "all", kind = "", sources = "", q = "", searchKeys,
+  districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
+  districtIds = null, districtRelatedIds = null, context = null,
+} = {}, { sqliteDb = db } = {}) {
+  if (sqliteDb == null) {
+    if (!context?.isolation) throw new Error("PG search requires context.isolation");
+    if (!Array.isArray(context?.searchKeys) || !Array.isArray(context?.crawlSources?.items)) {
+      throw new Error("PG search requires searchKeys and crawlSources context");
+    }
+    if (!settingsParam) throw new Error("PG search requires settings");
+  }
+  const settings = settingsParam || getSettings(uid);
+  const districtNames = resolveListDistrictNames({ districts, settings, uid });
   const districtSet = new Set(districtNames);
   const clauses = [];
   const params = [];
-  searchWhere(searchKeys, clauses, params);
+  searchWhere(searchKeys, clauses, params, context);
   if (filter !== "watched") {
-    listingVisibilityClauses(clauses, params);
-    appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
-    appendPriceCeilingCandidates(settings, clauses, params);
+    listingVisibilityClauses(clauses, params, context, { sqliteDb });
+    if (Array.isArray(districtRelatedIds)) {
+      appendDistrictCandidates(districtNames, clauses, params, {
+        driver: "postgres", relatedIds: districtRelatedIds,
+      });
+    } else if (Array.isArray(districtIds)) {
+      // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
+      // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
+      // SQLite 路徑維持 appendDistrictCandidates（含原本的 recursive CTE）。
+      if (districtIds.length) {
+        // PG 專屬表達：closure 以單一陣列參數傳入（避免數萬個佔位符撐爆參數協定）。
+        // 註：`::bigint[]` 讓比較型別明確；實測 candidates 仍為 32 的原因**不是**型別，
+        // 而是 searchWhere 帶了 7 個 crawler URL 條件（與 SQL-first 路徑共用，非本路徑特有）。
+        clauses.push("post_id = ANY(?::bigint[])");
+        params.push(districtIds);
+      } else {
+        clauses.push("1 = 0");
+      }
+    } else {
+      appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
+    }
+    appendPriceCeilingCandidates(settings, clauses, params, { driver: sqliteDb == null ? "postgres" : "sqlite" });
   } else {
-    applyBrowseIsolation(clauses, params, db, "listings");
+    // astra6 §2.1：watched 原本直接 `applyBrowseIsolation(…, sqliteDb, …)` ⇒ 讀 SQLite
+    // （`PRAGMA table_info(listings)`）。改走與 listingVisibilityClauses 同一條 context 路徑
+    // （隔離子句本身相同），PG 缺 context 時明確失敗。watched 不受行政區／價格／顯示篩選
+    // 限制的既有契約不變。
+    const isolation = browseIsolationClause(context, sqliteDb, "listings");
+    clauses.push(isolation.sql);
+    params.push(...isolation.params);
   }
   if (filter === "suspected") {
     clauses.push("match_level IN ('high', 'medium')");
@@ -6393,21 +6846,30 @@ export function listListings({
     params.push(uid);
   }
   if (filter === "all") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `NOT EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.watched <> 0
+    )` : `IFNULL((
       SELECT watched FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 0`);
     params.push(uid);
   }
   if (filter === "unseen") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `NOT EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.viewed <> 0
+    )` : `IFNULL((
       SELECT viewed FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 0`);
     params.push(uid);
   }
   if (filter === "viewed") {
-    clauses.push(`IFNULL((
+    clauses.push(sqliteDb == null ? `EXISTS (
+      SELECT 1 FROM user_listing_flags f
+      WHERE f.post_id = listings.post_id AND f.user_id = ? AND f.viewed = 1
+    )` : `IFNULL((
       SELECT viewed FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
     ), 0) = 1`);
@@ -6417,92 +6879,152 @@ export function listListings({
   if (q) {
     const like = `%${q}%`;
     clauses.push(`(
-      title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?
-      OR IFNULL((
+      lower(title) LIKE lower(?) OR lower(address) LIKE lower(?)
+      OR lower(CAST(post_id AS TEXT)) LIKE lower(?)
+      OR lower(IFNULL((
         SELECT watch_note FROM user_listing_flags f
         WHERE f.post_id = listings.post_id AND f.user_id = ?
-      ), '') LIKE ?
+      ), '')) LIKE lower(?)
     )`);
     params.push(like, like, like, uid, like);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  markStage("prepare_ms");
-  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
-  markStage("sql_ms");
-  queryDetails.candidates = raw.length;
-  const flagMap = loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flagMap, { inPlace: true });
-  let rows =
-    filter === "watched"
-      ? overlaid
-      : filter === "offline" || filter === "suspected"
-        ? overlaid.filter((row) => passesPriceFilter(row, settings))
-        : applyListingFilter(overlaid, settings);
-  markStage("profile_ms");
+  return { clauses, params, where, districtNames, districtSet };
+}
 
-  rows = attachSameHouseRoles(rows, voteUid);
-  markStage("relations_ms");
-  rows = rows.filter((row) => listingMatchesListFilter(row, filter));
-  rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
+/** 排序 → 計數 → 分頁（不含取列與裝飾）。driver-agnostic。 */
+export function paginateListListingsRows(rows, { sort, filter, settings, limit = 500, offset = 0, now = Date.now() } = {}) {
+  return paginateSortedListings(sortListingsRows(rows, sort, { filter, settings, now }), {limit, offset});
+}
 
-  // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
-  if (filter !== "watched") {
-    // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-    rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-    // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
-    // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
-    if (districtSet.size) {
-      rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
-    }
+export async function paginateListListingsRowsAsync(rows, { sort, filter, settings, limit = 500, offset = 0, now = Date.now() } = {}) {
+  return paginateSortedListings(await sortListingsRowsAsync(rows, sort, {filter, settings, now}), {limit, offset});
+}
 
-    rows = rows.filter((row) => matchesHousingKind(row, kind));
-    rows = rows.filter((row) => matchesListingSources(row, sources));
-  }
-  markStage("display_ms");
-
-  const needFit = sort === "fit_desc";
-  if (needFit) {
-    for (const row of rows) {
-      const located = applyCachedCoords(row, settings);
-      const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
-        && Number.isFinite(Number(located.route_km)) ? Math.round(Number(located.route_km) * 10) / 10 : null;
-      row.fit_score = listingFitFields({ ...located, commute_km: km }, settings).fit_score;
-    }
-  }
-  rows = sortListingsRows(rows, sort, { filter, settings });
-  markStage("sort_ms");
-
-  const totalMatched = rows.length;
+function paginateSortedListings(sorted, {limit, offset}) {
+  const totalMatched = sorted.length;
   const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
   const start = Math.max(0, Number(offset) || 0);
-  const page = rows.slice(start, start + pageSize);
-  const fullRows = page.length ? db.prepare(
-    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
-  ).all(...page.map(row => row.post_id)) : [];
-  const fullById = new Map(fullRows.map(row => [Number(row.post_id), row]));
+  const page = sorted.slice(start, start + pageSize);
+  return {
+    page,
+    pageIds: page.map((row) => row.post_id),
+    totalMatched,
+    pageSize,
+    start,
+    hasMore: start + pageSize < totalMatched,
+    nextOffset: start + pageSize,
+  };
+}
+
+/** 取列之後的裝飾（lite → peers → finalize）。driver-agnostic：`fullRows` 由呼叫端提供。 */
+export function decorateListListingsPage(page, fullRows, {
+  settings, uid = 0, voteUid = 0, sameHouse = true, provider = null, requireProvider = false,
+  now = provider?.now ?? Date.now(),
+} = {}) {
+  // ⚠️ astra6 2026-09-25 §0.2（已證實）：原版沒把 provider 交給下面的 decorateListingLite／
+  // finalizeListingDecorate，而這兩個函式缺 provider 時會 fallback 到 sqliteDecorationProvider()
+  // ⇒ PG 路徑會偷偷讀 SQLite。PG 呼叫端必須傳 requireProvider: true，缺 provider 直接拋錯。
+  if (requireProvider && !provider) {
+    throw new Error("decorateListListingsPage: PG 路徑必須提供 decoration provider（不得回退 SQLite）");
+  }
+  if (requireProvider) assertListingProvider(provider);
+  const fullById = new Map((fullRows || []).map((row) => [Number(row.post_id), row]));
   // A separate importer may remove a row between the candidate and page reads.
-  const listings = page.filter(row => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid);
+  return page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, uid, provider);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid, provider, now });
   });
+}
+
+/**
+ * 搜尋路徑的尾段（同步版本，給 SQLite 路徑用）：排序 → 計數 → 分頁 → hydrate → 裝飾。
+ *
+ * PG 版不能走這一支（PG 取列是非同步），改用 `paginateListListingsRows` + `await` + `decorateListListingsPage`；
+ * 三段共用，語意只有取列來源不同。`hydrate(pageIds)` 可注入以覆寫預設的 SQLite 取列。
+ */
+export function pageListListingsRows(rows, {
+  sort, filter, settings, limit = 500, offset = 0,
+  uid = 0, voteUid = 0, sameHouse = true, queryDetails = {},
+  hydrate = null, markStage = () => {}, now = Date.now(),
+} = {}) {
+  const paged = paginateListListingsRows(rows, { sort, filter, settings, limit, offset, now });
+  markStage("sort_ms");
+
+  const fullRows = paged.page.length
+    ? (hydrate
+      ? hydrate(paged.pageIds)
+      : db.prepare(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(",")})`).all(...paged.pageIds))
+    : [];
+  const listings = decorateListListingsPage(paged.page, fullRows, { settings, uid, voteUid, sameHouse, now });
   markStage("hydrate_ms");
   return {
     listings,
-    totalMatched,
-    hasMore: start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
+    totalMatched: paged.totalMatched,
+    hasMore: paged.hasMore,
+    nextOffset: paged.nextOffset,
     queryVersion: 2,
     queryDetails,
   };
+}
+
+export function listListings({
+  filter = "all",
+  kind = "",
+  sources = "",
+  q = "",
+  sort = "price_asc",
+  limit = 500,
+  offset = 0,
+  searchKeys,
+  districts = [],
+  userId,
+  matchVoteUserId,
+  settings: settingsOverride,
+  sameHouse = true,
+  // B4：呼叫端可傳 `context`（最小 `{ asOf }` 即可 ✓）⇒ 相對時間／時間相關條件與 PG 同一時間戳 ✓。
+  // 已確認安全 ✓：`searchWhere`（`db.js:4238`）只在 `context.searchKeys` 有值時改變行為 ✓；
+  // `browseIsolationClause`（`db.js:4263`）缺 `context.isolation` 且 `sqliteDb` 有值時照常走 SQLite ✓（不拋錯 ✗）。
+  context = null, asOf = null,
+} = {}) {
+  const clock = listingRequestTime(asOf ?? context?.asOf);
+  context = { ...context, asOf: clock.asOf };
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const now = performance.now();
+    queryDetails[name] = Math.round(now - stageStarted);
+    stageStarted = now;
+  };
+  const uid = resolveUserId(userId);
+  const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
+  ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
+  const settings = settingsOverride || getSettings(uid);
+  const { clauses, params, where, districtNames, districtSet, requestedDistricts } = buildListListingsClauses({
+    filter, kind, sources, q, searchKeys, districts, settings, uid, voteUid, context,
+  });
+  markStage("prepare_ms");
+  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where} ORDER BY post_id`).all(...params);
+  markStage("sql_ms");
+  queryDetails.candidates = raw.length;
+  let rows = buildListListingsRows(raw, {
+    filter, kind, sources, sort, uid, voteUid, settings, districtSet, markStage, now: clock.now,
+  });
+  return pageListListingsRows(rows, {
+    sort, filter, settings, limit, offset, uid, voteUid, sameHouse, queryDetails, markStage, now: clock.now,
+  });
 }
 
 // Dependency bundle for the shared SQL-first builder (listingSearchSql.js). The
 // builder stays free of this module's singleton, and the PostgreSQL listings
 // repository gets the identical helpers through it — so both drivers build the
 // same statement.
-export function listingSearchBuildContext() {
+export function listingSearchBuildContext({ asOf = null } = {}) {
   return {
+    // ✓ B4：SQL-first 路徑的時間來源 ✓（`asOf` 有值 ⇒ 與 PG `context.asOf` 同源 ✓；
+    //   未傳 ⇒ null ⇒ 各函式自取 now（＝現況 ✓））。
+    visibilityContext: asOf ? { asOf } : null,
     resolveUserId,
     getSettings,
     searchWhere,
@@ -6510,6 +7032,8 @@ export function listingSearchBuildContext() {
     appendDistrictCandidates,
     appendPriceCeilingCandidates,
     memberRegionDistrictNames,
+    // 候選列欄位（B3 的 PG-fed Node 路徑要用同一組欄位，避免兩條路徑取不同欄位）
+    candidateColumns: LIST_CANDIDATE_COLUMNS,
     // Handy for adapters that need to derive PostgreSQL DDL from the SQLite
     // schema (repository/listings.js ensureProjection).
     sqliteDb: db,
@@ -6542,12 +7066,61 @@ export function listingStatsBuildContext() {
  * scope (district / price / keywords / commute / display filters). Driver-agnostic:
  * pure over the candidate rows, so the PostgreSQL path reuses it verbatim.
  */
-export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null } = {}) {
+export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null, candidateShape = false } = {}) {
   const uid = Number(userId) || 0;
   const conf = settings || getSettings(uid);
-  const overlaid = overlayRowsPersonal(rows, flagMap, { inPlace: true })
+  const overlaid = overlayRowsPersonal(rows, flagMap, {candidateShape})
     .filter((row) => keepSelfListingForViewer(row, uid, conf, listingInMemberScope));
   return applyProfileScope(overlaid, conf, provider);
+}
+
+export function buildListingStatsRowsAsync(options = {}) {
+  return runStepsAsync(transformChunks(options.rows || [], rows => buildListingStatsRows({...options, rows})), {label:'stats.profile'});
+}
+
+export function summarizeListingStatsAsync(options = {}) {
+  return runStepsAsync((function* () {
+    const {profileRows = [], ...shared} = options;
+    const total = summarizeListingStats({...shared, profileRows: []});
+    for (let start = 0; start < profileRows.length; start += 256) {
+      const counts = summarizeListingStats({...shared, profileRows: profileRows.slice(start, start + 256),
+        statusCounts: {}, watchedTotal: 0, dbTotal: 0});
+      for (const key of Object.keys(total)) total[key] += counts[key];
+      yield {units:Math.min(256, profileRows.length - start)};
+    }
+    return total;
+  })(), {label:'stats.count'});
+}
+
+// Profile overlays are private to counters. Count and release each complete
+// chunk instead of retaining tens of thousands of wide objects until the end.
+export async function summarizeRawListingStatsAsync(options = {}, diagnostics = null) {
+  const {rows = [], ...shared} = options;
+  let profileMs = 0, countMs = 0;
+  const started = performance.now();
+  const result = await runStepsAsync((function* () {
+    const total = summarizeListingStats({...shared, profileRows:[]});
+    for (let start = 0; start < rows.length; start += 256) {
+      const chunk = rows.slice(start, start + 256);
+      let before = performance.now();
+      const profileRows = buildListingStatsRows({...shared, rows:chunk});
+      profileMs += performance.now() - before;
+      yield {label:'stats.profile',units:chunk.length};
+      before = performance.now();
+      const counts = summarizeListingStats({...shared, profileRows, statusCounts:{}, watchedTotal:0, dbTotal:0});
+      for (const key of Object.keys(total)) total[key] += counts[key];
+      countMs += performance.now() - before;
+      yield {label:'stats.count',units:profileRows.length};
+    }
+    return total;
+  })(), {label:'stats.reduce'});
+  if (diagnostics) {
+    // These are accumulated synchronous durations, not old stage wall times.
+    diagnostics.profile_sync_ms = profileMs;
+    diagnostics.count_sync_ms = countMs;
+    diagnostics.reduce_ms = performance.now() - started;
+  }
+  return result;
 }
 
 /**
@@ -6566,44 +7139,52 @@ export function summarizeListingStats({
   const conf = settings || getSettings();
   const rows = Array.isArray(profileRows) ? profileRows : [];
   const failed = failedRouteJobs instanceof Set ? failedRouteJobs : new Set(failedRouteJobs || []);
-  const browse = rows.filter(countsTowardAllTotal);
-  return {
-    total: browse.length,
-    unseen: browse.filter((row) => !row.viewed).length,
-    watched: rows.filter((row) => row.watched && !isConfirmedOffline(row)).length,
+  const counts = {
+    total: 0,
+    unseen: 0,
+    watched: 0,
     watchedTotal: Number(watchedTotal) || 0,
-    same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
-    hidden: rows.filter((row) => row.hidden).length,
+    same_source: 0,
+    hidden: 0,
     offline: Number(statusCounts?.pending) || 0,
     offlineConfirmed: Number(statusCounts?.confirmed) || 0,
-    suspected: rows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
-    suspectedPending: rows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
-    elevator: browse.filter((row) => listingHasElevator(row)).length,
-    stored: browse.length,
+    suspected: 0,
+    suspectedPending: 0,
+    elevator: 0,
+    stored: 0,
     filteredOut: 0,
-    missingGeo: rows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
-    missingRoute: rows.filter((row) => {
-      if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
-      const geo = applyCachedCoords(row, conf, provider);
-      if (!(
-        Number(conf.commuteKm) > 0 &&
-        isTrustedGeoSource(geo.geo_source) &&
-        Number.isFinite(Number(geo.lat)) &&
-        Number.isFinite(Number(geo.lng)) &&
-        !(Array.isArray(geo.route_kms) && geo.route_kms.length)
-      )) return false;
-      const jobKey = makeRouteJobKey(
-        row.post_id,
-        "to_work",
-        "distance",
-        conf.commuteMode,
-        conf.workLat,
-        conf.workLng,
-      );
-      return !failed.has(jobKey);
-    }).length,
+    missingGeo: 0,
+    missingRoute: 0,
     dbTotal: Number(dbTotal) || 0,
   };
+  const commuteOn = Number(conf.commuteKm) > 0;
+  // Count each candidate once. The async entry keeps the 256-row yield boundary;
+  // avoid allocating a separate filtered array for every sidebar counter.
+  for (const row of rows) {
+    const confirmed = isConfirmedOffline(row);
+    if (countsTowardAllTotal(row)) {
+      counts.total++;
+      counts.stored++;
+      if (!row.viewed) counts.unseen++;
+      if (["same_source", "update", "price_drop", "title_update"].includes(row.last_event)) counts.same_source++;
+      if (listingHasElevator(row)) counts.elevator++;
+    }
+    if (row.watched && !confirmed) counts.watched++;
+    if (row.hidden) counts.hidden++;
+    if (row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden) {
+      counts.suspected++;
+      if (!row.match_verdict) counts.suspectedPending++;
+    }
+    if (row.hidden || isPendingOffline(row) || confirmed || row.watched || row.match_verdict === "yes") continue;
+    if (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null) counts.missingGeo++;
+    if (!commuteOn) continue;
+    const geo = applyCachedCoords(row, conf, provider);
+    if (!isTrustedGeoSource(geo.geo_source) || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lng))
+      || (Array.isArray(geo.route_kms) && geo.route_kms.length)) continue;
+    const jobKey = makeRouteJobKey(row.post_id, "to_work", "distance", conf.commuteMode, conf.workLat, conf.workLng);
+    if (!failed.has(jobKey)) counts.missingRoute++;
+  }
+  return counts;
 }
 
 // Raw SQLite driver handle. Domain code must keep using the exported functions;
@@ -6627,7 +7208,9 @@ export function sqliteHandle() {
 // the PostgreSQL listings repository calls too — parity between the SQLite and
 // PostgreSQL paths is therefore a property of the code, not of two copies.
 export function listListingsSqlFirst(args = {}) {
-  const built = buildListingSearchSql(args, listingSearchBuildContext());
+  const clock = listingRequestTime(args.asOf ?? args.context?.asOf);
+  args = { ...args, asOf: clock.asOf };
+  const built = buildListingSearchSql(args, listingSearchBuildContext({ asOf: args.asOf }));
   if (!built.ok) return null;
   const { uid, voteUid, settings } = built;
   const { sameHouse = true } = args;
@@ -6654,7 +7237,7 @@ export function listListingsSqlFirst(args = {}) {
   const listings = overlaid.map((row) => {
     const lite = decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid, now: clock.now });
   });
 
   const nextCursor = ids.length ? built.cursorOf(pageRows[pageRows.length - 1]) : null;
@@ -6688,9 +7271,11 @@ export function listListingsCommuteSqlFirst({
   districts = [],
   userId,
   settings: settingsOverride,
+  asOf = null,
   sameHouse = true,
   matchVoteUserId,
 } = {}) {
+  const clock = listingRequestTime(asOf);
   if (filter !== "all") return null;
   if (kind || sources || q) return null;
   if (sort !== "commute_asc" && sort !== "commute_desc") return null;
@@ -6718,7 +7303,7 @@ export function listListingsCommuteSqlFirst({
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
-  listingVisibilityClauses(clauses, params);
+  listingVisibilityClauses(clauses, params, clock);
   appendDistrictCandidates(districtNames, clauses, params);
   appendPriceCeilingCandidates(settings, clauses, params);
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
@@ -6805,7 +7390,7 @@ export function listListingsCommuteSqlFirst({
   const listings = overlaid.map((row) => {
     const lite = decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid, now: clock.now });
   });
 
   return {
@@ -6838,9 +7423,11 @@ export function listListingsFitSqlFirst({
   districts = [],
   userId,
   settings: settingsOverride,
+  asOf = null,
   sameHouse = true,
   matchVoteUserId,
 } = {}) {
+  const clock = listingRequestTime(asOf);
   if (filter !== "all") return null;
   if (kind || sources || q) return null;
   if (sort !== "fit_desc") return null;
@@ -6867,7 +7454,7 @@ export function listListingsFitSqlFirst({
   const clauses = [];
   const params = [];
   searchWhere(searchKeys, clauses, params);
-  listingVisibilityClauses(clauses, params);
+  listingVisibilityClauses(clauses, params, clock);
   appendDistrictCandidates(districtNames, clauses, params);
   appendPriceCeilingCandidates(settings, clauses, params);
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
@@ -6934,7 +7521,7 @@ export function listListingsFitSqlFirst({
   const listings = overlaid.map((row) => {
     const lite = decorateListingLite(row, settings, uid);
     const needPeers = sameHouse !== false && Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid });
+    return finalizeListingDecorate(lite, settings, uid, { sameHouse: needPeers, matchVoteUserId: voteUid, now: clock.now });
   });
 
   return {
@@ -7027,9 +7614,9 @@ export function resetPublicListingsDecorateCount() {
   publicDecorateCount = 0;
 }
 
-function publicListingsSearchBuildContext() {
+function publicListingsSearchBuildContext(asOf) {
   return {
-    ...listingSearchBuildContext(),
+    ...listingSearchBuildContext({ asOf }),
     // Guests have no session — the personal flag clauses must run with uid 0 so they match no
     // user_listing_flags row (the Node path loads an empty flag map for guests).
     resolveUserId: () => 0,
@@ -7043,8 +7630,10 @@ function publicListingsSearchBuildContext() {
 // other request on the container (static files included). Returns null when the query falls
 // outside the exact-equivalence envelope; callers must fall back to listPublicListings().
 export function listPublicListingsSqlFirst(args = {}) {
+  const clock = listingRequestTime(args.asOf);
+  args = { ...args, asOf: clock.asOf };
   const settings = args.settings || publicSearchSettings(args);
-  const built = buildPublicListingSearchSql({ ...args, settings }, publicListingsSearchBuildContext());
+  const built = buildPublicListingSearchSql({ ...args, settings }, publicListingsSearchBuildContext(clock.asOf));
   if (!built.ok) return null;
 
   const countRow = db.prepare(built.countQuery.sql).get(...built.countQuery.params);
@@ -7072,7 +7661,7 @@ export function listPublicListingsSqlFirst(args = {}) {
         lite.fit_label = fit.fit_label;
       }
       const needPeers = Boolean(row.match_post_id || row.same_house_role);
-      return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0 });
+      return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0, now: clock.now });
     });
 
   return {
@@ -7104,83 +7693,81 @@ export function listPublicListingsFast(args = {}) {
   return listPublicListingsSqlFirst(args) || listPublicListings(args);
 }
 
-/** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
-export function listPublicListings({
-  kind = "",
-  sources = "",
-  q = "",
-  sort = "newest",
-  limit = 40,
-  offset = 0,
-  districts = [],
-  settings: settingsOverride,
-} = {}) {
-  const queryDetails = {};
-  let stageStarted = performance.now();
-  const markStage = (name) => {
-    const now = performance.now();
-    queryDetails[name] = Math.round(now - stageStarted);
-    stageStarted = now;
-  };
-  ({ kind, sources } = normalizeListQuery("all", kind, sources));
-  const settings = settingsOverride || publicSearchSettings({});
+/** Public candidates keep the guest scope separate from member flags and notes. */
+export function buildPublicListingsClauses({ districts = [], settings, q = "", context = null, districtIds = null } = {}, { sqliteDb = db } = {}) {
+  if (sqliteDb == null && (!context?.isolation || !context?.crawlSources || !Array.isArray(context?.searchKeys))) {
+    throw new Error("PG public search requires visibility context");
+  }
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map((name) => String(name || "").trim()).filter(Boolean)
-    .slice(0, GUEST_MAX_DISTRICTS);
-  const districtSet = new Set(requestedDistricts);
-  const clauses = [];
-  const params = [];
-  searchWhere([], clauses, params);
-  listingVisibilityClauses(clauses, params);
-  appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
-  appendPriceCeilingCandidates(settings, clauses, params);
+    .map((name) => String(name || "").trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
+  const clauses = [], params = [];
+  searchWhere([], clauses, params, context);
+  listingVisibilityClauses(clauses, params, context, { sqliteDb });
+  if (Array.isArray(districtIds)) {
+    clauses.push("post_id = ANY(?::bigint[])");
+    params.push(districtIds);
+  } else {
+    appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
+  }
+  appendPriceCeilingCandidates(settings, clauses, params, { driver: sqliteDb == null ? "postgres" : "sqlite" });
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   if (q) {
     const like = `%${q}%`;
-    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?)");
+    clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?) OR CAST(post_id AS TEXT) LIKE ?)");
     params.push(like, like, like);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  markStage("prepare_ms");
-  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
-  markStage("sql_ms");
-  queryDetails.candidates = raw.length;
-  let rows = applyListingFilter(raw, settings);
-  rows = applyGuestStraightLineFilter(rows, settings);
-  rows = attachSameHouseRoles(rows, 0);
-  rows = rows.filter((row) => listingMatchesListFilter(row, "all"));
-  rows = rows.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
-  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-  if (districtSet.size) {
-    rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
-  }
-  rows = rows.filter((row) => matchesHousingKind(row, kind));
-  rows = rows.filter((row) => matchesListingSources(row, sources));
+  return { where: `WHERE ${clauses.join(" AND ")}`, params, districtSet: new Set(requestedDistricts) };
+}
+
+export function buildPublicListingsRows(...args) {
+  return runStepsSync(buildPublicListingsSteps(...args));
+}
+
+export function buildPublicListingsRowsAsync(...args) {
+  return runStepsAsync(buildPublicListingsSteps(...args));
+}
+
+function* buildPublicListingsSteps(raw, { settings, kind = "", sources = "", sort = "newest", districtSet = new Set(), provider = null, now = Date.now(), markStage = () => {}, requireProvider = false } = {}) {
+  if (requireProvider) assertListingProvider(provider);
+  ({ kind, sources } = normalizeListQuery("all", kind, sources));
+  let rows = yield* transformChunks(raw, chunk => applyGuestStraightLineFilter(applyListingFilter(chunk, settings, provider), settings));
+  rows = yield* attachSameHouseRoleSteps(rows, 0, provider, now);
+  rows = yield* transformChunks(rows, chunk => {
+    chunk = chunk.filter((row) => listingMatchesListFilter(row, "all"));
+    chunk = chunk.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
+    chunk = chunk.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+    if (districtSet.size) {
+      chunk = chunk.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+    }
+    chunk = chunk.filter((row) => matchesHousingKind(row, kind));
+    chunk = chunk.filter((row) => matchesListingSources(row, sources));
+    return chunk;
+  });
   markStage("display_ms");
   const needFit = sort === "fit_desc";
   if (needFit) {
     const fitSettings = guestFitSettings(settings);
+    let visited = 0;
     for (const row of rows) {
+      if (++visited % 128 === 0) yield;
       row.fit_score = listingFitFields({
         ...row,
         commute_km: row.guest_commute_km ?? row.commute_km,
       }, fitSettings, { guest: true }).fit_score;
     }
   }
-  rows = sortListingsRows(rows, sort, { filter: "all", settings });
+  rows = yield* sortListingsSteps(rows, sort, { filter: "all", settings, now });
   markStage("sort_ms");
-  const totalMatched = rows.length;
-  const pageSize = Math.max(1, Math.min(Number(limit) || 40, 50));
-  const start = Math.max(0, Number(offset) || 0);
-  const page = rows.slice(start, start + pageSize);
-  const fullRows = page.length ? db.prepare(
-    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
-  ).all(...page.map((row) => row.post_id)) : [];
+  return rows;
+}
+
+export function decoratePublicListingsPage(page, fullRows, { settings, provider = null, now = Date.now(), requireProvider = false } = {}) {
+  if (requireProvider) assertListingProvider(provider);
   const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
   publicDecorateCount += 1;
   const listings = page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0);
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0, provider);
     attachGuestCommute(lite, row, settings);
     if (!Number.isFinite(Number(row.guest_commute_km))) {
       const fit = listingFitFields(lite, guestFitSettings(settings), { guest: true });
@@ -7188,18 +7775,34 @@ export function listPublicListings({
       lite.fit_label = fit.fit_label;
     }
     const needPeers = Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0 });
+    return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0, provider, now });
   });
-  markStage("hydrate_ms");
-  return {
-    listings,
-    totalMatched,
-    hasMore: start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
-    queryVersion: 2,
-    queryDetails,
-    guest: true,
+
+  return listings;
+}
+
+/** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
+export function listPublicListings({ kind = "", sources = "", q = "", sort = "newest", limit = 40, offset = 0, districts = [], settings: settingsOverride, asOf = null } = {}) {
+  const clock = listingRequestTime(asOf);
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const time = performance.now(); queryDetails[name] = Math.round(time - stageStarted); stageStarted = time;
   };
+  const settings = settingsOverride || publicSearchSettings({});
+  const built = buildPublicListingsClauses({ districts, settings, q, context: clock });
+  markStage("prepare_ms");
+  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${built.where} ORDER BY post_id`).all(...built.params);
+  markStage("sql_ms");
+  queryDetails.candidates = raw.length;
+  const rows = buildPublicListingsRows(raw, { settings, kind, sources, sort, districtSet: built.districtSet, now: clock.now, markStage });
+  const pageSize = Math.max(1, Math.min(Number(limit) || 40, 50));
+  const start = Math.max(0, Number(offset) || 0);
+  const page = rows.slice(start, start + pageSize);
+  const fullRows = page.length ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`).all(...page.map(row => row.post_id)) : [];
+  const listings = decoratePublicListingsPage(page, fullRows, { settings, now: clock.now });
+  markStage("hydrate_ms");
+  return { listings, totalMatched: rows.length, hasMore: start + pageSize < rows.length, nextOffset: start + pageSize, queryVersion: 2, queryDetails, guest: true };
 }
 
 const BACKFILL_STATUS_KEY = "sameHouseBackfillStatus";

@@ -1,5 +1,6 @@
 /** 個人刊登標記。只接受 db 連線，避免和 db.js 循環 import。 */
 import { nextWatchNote } from "./watchFlags.js";
+import { candidateRowWithPersonal } from "./listingCandidateRow.js";
 
 const MIGRATED_KEY = "personalFlagsMigrated";
 
@@ -33,11 +34,11 @@ export function ensureUser(conn, email, { role } = {}) {
   return Number(result.lastInsertRowid);
 }
 
-export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
+export function overlayPersonal(listing, flags, { inPlace = false, candidateShape = false } = {}) {
   if (!listing) return listing;
   const f = flags && typeof flags === "object" ? flags : emptyFlags();
   const systemDup = String(listing.match_verdict || "") === "yes";
-  return Object.assign(inPlace ? listing : { ...listing }, {
+  const personal = {
     viewed: Number(f.viewed) || 0,
     watched: Number(f.watched) || 0,
     hidden: systemDup ? 1 : Number(f.hidden) || 0,
@@ -45,7 +46,11 @@ export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
     viewed_at: f.viewed_at || null,
     watched_at: f.watched_at || null,
     hidden_at: systemDup ? listing.hidden_at || f.hidden_at || null : f.hidden_at || null,
-  });
+  };
+  // Create the complete shape at once. Adding seven fields to a wide PG row
+  // with Object.assign converts V8's fast properties into a larger dictionary.
+  if (inPlace) return Object.assign(listing, personal);
+  return candidateShape ? candidateRowWithPersonal(listing, personal) : { ...listing, ...personal };
 }
 
 export function loadFlags(conn, userId, postId) {
@@ -97,7 +102,9 @@ export function anyoneWatched(conn, postId) {
   );
 }
 
-function stampFlags(prev, flags, now) {
+// 個人旗標「下一個值」的計算（純函式）。同步版 setUserListingFlags() 與 PG 分支
+// （personalFlagsAsync.js）共用同一份規則，兩個 driver 才會算出同樣的時間戳與覆寫順序。
+export function stampFlags(prev, flags, now) {
   const current = { ...emptyFlags(), ...prev };
   const viewed = flags.viewed === undefined ? Number(Boolean(current.viewed)) : Number(Boolean(flags.viewed));
   const watched = flags.watched === undefined ? Number(Boolean(current.watched)) : Number(Boolean(flags.watched));

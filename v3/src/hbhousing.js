@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -313,7 +314,7 @@ async function defaultPostJson(url, body) {
       Referer: `${HB_SITE}/renthouse`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(12000),
+    signal: crawlRequestSignal(AbortSignal.timeout(12000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
     throw new Error(`住商暫時無法抓取（HTTP ${res.status}）`);

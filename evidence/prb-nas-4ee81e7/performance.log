@@ -1,0 +1,32 @@
+(node:335) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+/tmp/prb-nas.DpaExRQD/checkout/node_modules/pg-pool/index.js:45
+    Error.captureStackTrace(err)
+          ^
+
+error: canceling statement due to statement timeout
+    at /tmp/prb-nas.DpaExRQD/checkout/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///tmp/prb-nas.DpaExRQD/checkout/v3/scripts/prb-search-benchmark.mjs:51:5
+    at async withPgFixture (file:///tmp/prb-nas.DpaExRQD/checkout/v3/test/fixtures/prb-search.mjs:61:12)
+    at async file:///tmp/prb-nas.DpaExRQD/checkout/v3/scripts/prb-search-benchmark.mjs:48:3 {
+  length: 109,
+  severity: 'ERROR',
+  code: '57014',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: undefined,
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'postgres.c',
+  line: '3394',
+  routine: 'ProcessInterrupts'
+}
+
+Node.js v22.23.3

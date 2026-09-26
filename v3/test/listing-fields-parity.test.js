@@ -34,6 +34,7 @@ const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL fiel
 
 // Everything the field writes touch plus what the decorated read of them needs.
 const TABLES = [
+  "settings",
   "listings",
   "listing_search_projection",
   "data_revision",

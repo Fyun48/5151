@@ -112,3 +112,20 @@ test("讀寫混合模組：寫入入口帶 write 旗標才擋住 fallback，讀�
   // 讀取入口：PG 掛掉時回 SQLite 的答案。
   assert.equal(await isPhashEnabledAsync(pgOptions({ sqliteHandle: db })), true);
 });
+
+// ⑤ PG_SQLITE_FALLBACK=strict：連讀取也不回退。
+// 這是「驗證 PG 模式真的沒有用到本機 SQLite」用的開關：打開後任何還想回退的讀取都會把
+// PG 的錯誤往上丟，殘留的 SQLite 依賴就會變成看得見的失敗，而不是靜默讀到別台節點的舊資料。
+test("PG_SQLITE_FALLBACK=strict：讀寫都不得回退本機 SQLite", () => {
+  const strict = { PG_SQLITE_FALLBACK: "strict" };
+  const none = { PG_SQLITE_FALLBACK: "none" };
+  assert.equal(sqliteFallbackAllowed({}, { write: false, env: strict }), false, "strict 模式讀取也不回退");
+  assert.equal(sqliteFallbackAllowed({}, { write: true, env: strict }), false, "strict 模式寫入也不回退");
+  assert.equal(sqliteFallbackAllowed({}, { write: false, env: none }), false, "none 視為 strict");
+  // 未設定（預設 closed）維持原政策：寫入 fail-closed、讀取 fail-open。
+  assert.equal(sqliteFallbackAllowed({}, { write: false, env: {} }), true, "預設模式讀取仍可回退");
+  assert.equal(sqliteFallbackAllowed({}, { write: true, env: {} }), false, "預設模式寫入不回退");
+  // options 層級的覆寫優先序不變。
+  assert.equal(sqliteFallbackAllowed({ fallback: "open" }, { write: false, env: strict }), true, "明確 open 仍可覆寫");
+  assert.equal(sqliteFallbackAllowed({ strict: true }, { write: false, env: { PG_SQLITE_FALLBACK: "open" } }), false, "明確 strict 最優先");
+});
