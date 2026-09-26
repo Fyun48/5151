@@ -21,6 +21,16 @@ Node 22.23.3 的正常／失敗／SIGTERM 三案回歸全部通過；[精確 SHA
 DeepSeek 下一輪固定測 runner SHA eb56473，勿改測後續文件 HEAD；只驗證修復與保存四案，不再追逐微小效能差距。
 以下為歷次原始成果與當時交接，若其優先順序與本節不同，以本節為準。
 
+## 2026-09-26 21:32 雙 NAS 唯讀採證已取得
+
+[Run 36245519847](https://github.com/Fyun48/5151/actions/runs/36245519847) 兩台成功，workflow SHA 08706e30。
+原始產物、ZIP digest 與解讀已保存 [evidence/nas-readiness-36245519847](../../evidence/nas-readiness-36245519847/README.md)。
+三個 running 應用 DB_DRIVER=postgres，六個關鍵 source hashes 一致且對應舊 master 9c6b7b0，#497 尚未部署。
+Synology PG primary、CasaOS standby，16.14，async streaming；primary 觀測 replay lag 4.818 ms。
+主庫 archive_mode=off；standby=on，但兩者成功封存數都是 0。未執行備份清單／還原，因此不宣稱沒有任何備份。
+本次已確認通道與角色，仍未驗證跨節點業務／來源爬蟲正確性／restore／failover，不能標 HA PASS。
+ChatGPT 能讀取 artifacts；既有 workflow 是固定唯讀腳本，沒有因此取得通用互動 SSH 或 workflow_dispatch。
+
 ## 第三批修正的 NAS 實測（受測 SHA 6703302）
 
 由 DeepSeek Harness 依交接通知在 CasaOS N3450 執行，**未改測文件 HEAD `b22c13c`**。

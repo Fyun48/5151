@@ -80,3 +80,10 @@ withBudget 5 ms 包住 60 ms 工作，拋 TIMEOUT 後該工作仍完成。
 - timeline 每類只保留最長 32 個且 ≥20 ms 的 span。沒有保留的 FETCH overlap 不等於完整排除 FETCH／callback，
   GC 的已記錄重疊可保留，但未覆蓋時間不能直接全算成同步工作。
 - 上述診斷留待上線後必要時處理，不作為這輪新增效能工項。
+
+## 21:32 最新採證補充
+
+雙 NAS 的角色與版本已有當次實測：[run 36245519847](../../evidence/nas-readiness-36245519847/README.md)。
+Synology primary／CasaOS standby，async streaming，單次 replay lag 4.818 ms；三應用受查六檔均為 9c6b7b0。
+主庫 archive_mode=off、兩台 archived_count=0；備份檔本次未盤點，restore／failover 仍未做。
+因此不用再重查通道／基本角色；下一步聚焦已列的爬蟲缺陷、跨節點業務與復原驗證。
