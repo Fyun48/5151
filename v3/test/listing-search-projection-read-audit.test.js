@@ -14,15 +14,14 @@
 //    這裡會紅 ✓，避免「偷偷在別的階段讀寬欄位、縮欄位時才爆」✗）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { listingSearchBuildContext } from "../src/db.js";
 import { computeListingProjection } from "../src/listingSearchProjection.js";
 
-// 與 db.js 的 LIST_CANDIDATE_COLUMNS 對齊（單一來源是 db.js ✓，這裡只在測試中解析出來當護欄基準）。
+// 從正式 builder 讀取欄位契約，不依賴常數所在檔案或宣告語法。
 function candidateColumns() {
-  const source = readFileSync(new URL("../src/db.js", import.meta.url), "utf8");
-  const match = source.match(/const LIST_CANDIDATE_COLUMNS = `([\s\S]*?)`;/);
-  assert.ok(match, "應能在 db.js 找到 LIST_CANDIDATE_COLUMNS");
-  return match[1].split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  const columns = listingSearchBuildContext().candidateColumns;
+  assert.ok(columns, "正式 builder 必須提供完整候選欄位");
+  return columns.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 const SAMPLE = {

@@ -116,7 +116,7 @@ export function createListingStatsRepository({
         if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
         stageStarted = now;
       };
-      const requestContext = providedContext || await buildListRequestContextFromPg(run, {asOf});
+      const requestContext = providedContext || await buildListRequestContextFromPg(run, {asOf,resolvedSearchKeys:searchKeys});
       const uid = Number(userId) || 0;
       const settings = settingsOverride || requestContext.settingsForUser(uid);
       const clauses = [];

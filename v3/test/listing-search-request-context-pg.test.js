@@ -4,6 +4,26 @@ import { buildListRequestContextFromPg, buildListListingsClauses } from "../src/
 
 const silentExec = async () => [];
 
+test('context: explicit request keys skip unused catalog expansion but retain required PG context reads', async () => {
+  for (const keys of [[], ['https://member.test/explicit']]) {
+    const seen = [];
+    const context = await buildListRequestContextFromPg(async sql => {
+      seen.push(sql);
+      assert.doesNotMatch(sql, /DISTINCT search_key/);
+      return [];
+    }, { resolvedSearchKeys: keys });
+    assert.deepEqual(context.searchKeys, keys);
+    assert.notEqual(context.searchKeys, keys);
+    for (const table of ['settings', 'users', 'user_settings', 'crawl_covers']) {
+      assert.ok(seen.some(sql => new RegExp('FROM '+table+'(?: |$)').test(sql)), table);
+    }
+  }
+  await assert.rejects(buildListRequestContextFromPg(async sql => {
+    if (/FROM users /.test(sql)) throw new Error('required users table missing');
+    return [];
+  }, { resolvedSearchKeys: ['https://member.test/explicit'] }), /required users table missing/);
+});
+
 test("context：由 PG settings 取得 crawlSources（同名 key），並可套進子句", async () => {
   const exec = async (sql) => {
     // astra §4.3：crawlSources 現在與全域 settings 共用**同一筆**查詢（原本另發一筆 WHERE key=? ✗）。

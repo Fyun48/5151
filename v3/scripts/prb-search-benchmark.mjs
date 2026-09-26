@@ -80,7 +80,7 @@ try {
               const prior=coldQueries.at(-1);
               if(prior?.sql===normalized) {prior.calls++;prior.ms+=performance.now()-queryStart;prior.rows+=result.rowCount||0;}
               else coldQueries.push({sql:normalized,calls:1,ms:performance.now()-queryStart,rows:result.rowCount});
-              if(/^DECLARE /.test(text) && /SELECT post_id, source,/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
+              if(/^DECLARE /.test(text) && /SELECT post_id(?:, source,| FROM listings)/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
             }
             return result;
           }};
@@ -119,7 +119,7 @@ try {
           const summarize=plan=>({planningMs:plan['Planning Time'],executionMs:plan['Execution Time'],jit:plan.JIT||null,
             root:{node:plan.Plan['Node Type'],rows:plan.Plan['Actual Rows'],loops:plan.Plan['Actual Loops'],
               totalCost:plan.Plan['Total Cost'],sharedHitBlocks:plan.Plan['Shared Hit Blocks'],sharedReadBlocks:plan.Plan['Shared Read Blocks']}});
-          coldPlans.push({default:summarize(explained.rows[0]['QUERY PLAN'][0]),
+          coldPlans.push({sql:query.sql.replace(/\s+/g,' ').slice(0,180),default:summarize(explained.rows[0]['QUERY PLAN'][0]),
             requestSnapshot:summarize(snapshotPlan.rows[0]['QUERY PLAN'][0])});
         }
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));

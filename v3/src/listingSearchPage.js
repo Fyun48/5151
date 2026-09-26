@@ -15,7 +15,7 @@ export async function loadListingPage(input = {}, options = {}) {
   const started = performance.now();
   const run = async (pgDriver = null) => {
     const requestContext = driver === 'postgres'
-      ? await buildListRequestContextFromPg((sql,params=[])=>pgDriver.query(toPostgresSql(sql),params).then(r=>r.rows),{asOf:args.asOf})
+      ? await buildListRequestContextFromPg((sql,params=[])=>pgDriver.query(toPostgresSql(sql),params).then(r=>r.rows),{asOf:args.asOf,resolvedSearchKeys:args.searchKeys})
       : null;
     const common = {driver, pgDriver, requestContext};
     const statsDetails={};

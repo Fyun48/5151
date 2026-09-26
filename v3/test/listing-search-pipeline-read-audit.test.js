@@ -14,7 +14,7 @@
 // `sort="fit_desc"` 讀 `route_km` 並寫 `fit_score` ✗ ⇒ 審計一律避開這三者 ✓。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { listingSearchBuildContext } from "../src/db.js";
 import { buildListListingsRows, paginateListListingsRows } from "../src/db.js";
 
 function spyProvider(record) {
@@ -46,10 +46,9 @@ function spyProvider(record) {
 }
 
 function candidateColumns() {
-  const source = readFileSync(new URL("../src/db.js", import.meta.url), "utf8");
-  const match = source.match(/const LIST_CANDIDATE_COLUMNS = `([\s\S]*?)`;/);
-  assert.ok(match, "應能在 db.js 找到 LIST_CANDIDATE_COLUMNS");
-  return new Set(match[1].split(/[,\s]+/).map((s) => s.trim()).filter(Boolean));
+  const columns = listingSearchBuildContext().candidateColumns;
+  assert.ok(columns, "正式 builder 必須提供完整候選欄位");
+  return new Set(columns.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean));
 }
 function candidateRow(overrides = {}) {
   return {

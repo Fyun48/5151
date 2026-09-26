@@ -10,7 +10,7 @@
 // 這裡會先紅 ✗，而不是等到線上排序錯亂 ✓。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { listingSearchBuildContext } from "../src/db.js";
 import {
   buildListListingsRows,
   paginateListListingsRows,
@@ -77,10 +77,9 @@ test("回歸：相對 refresh_time 時 newest 排序必須依 first_seen_at（�
 });
 
 test("護欄：寬候選欄位清單必須保留排序／tie-break 需要的欄位", () => {
-  const source = readFileSync(new URL("../src/db.js", import.meta.url), "utf8");
-  const match = source.match(/const LIST_CANDIDATE_COLUMNS = `([\s\S]*?)`;/);
-  assert.ok(match, "應能找到 LIST_CANDIDATE_COLUMNS");
-  const columns = new Set(match[1].split(/[,\s]+/).map((s) => s.trim()).filter(Boolean));
+  const candidateColumns = listingSearchBuildContext().candidateColumns;
+  assert.ok(candidateColumns, "正式 builder 必須提供完整候選欄位");
+  const columns = new Set(candidateColumns.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean));
   for (const required of ["first_seen_at", "last_seen_at", "source_id", "url"]) {
     assert.ok(columns.has(required), `LIST_CANDIDATE_COLUMNS 必須含 ${required}（排序／tie-break 需要）`);
   }

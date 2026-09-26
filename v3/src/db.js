@@ -4118,7 +4118,7 @@ function crawlSourcesFromRows(rows) {
   return publicCrawlSources(normalizeCrawlSources(value));
 }
 
-export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = null } = {}) {
+export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = null, resolvedSearchKeys = undefined } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const clock = listingRequestTime(asOf);
   // These tables define visibility and scope. Missing schema is a failure, not
@@ -4129,7 +4129,7 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   const isolation = ns
     ? { sql: "fixture_namespace = ?", params: [ns] }
     : { sql: "(fixture_namespace IS NULL OR fixture_namespace = '')", params: [] };
-  const data = {};
+  const data = {resolvedSearchKeys};
   const searchKeys = await buildSearchKeysFromPg(exec, settingsTable, globalRows, data);
   return {
     crawlSources, isolation, searchKeys, systemCrawl: systemCrawlFromRows(globalRows), degraded: [], ...clock,
@@ -4183,6 +4183,10 @@ export async function buildSearchKeysFromPg(exec, settingsTable = "settings", gl
   )).map(coverFromRow);
   const coverUrls = coveringJobsFromMembers(covers, { excludeRooftop: false }).map((job) => job.searchUrl);
   const keys = [...new Set([...urls, ...coverUrls].map((url) => String(url || "").trim()).filter(Boolean))];
+  // Explicit request keys already bypass default-key expansion in searchWhere.
+  // Still read all required context tables above, but avoid a whole-catalog
+  // DISTINCT scan whose output would not be consumed by this request.
+  if (Array.isArray(data.resolvedSearchKeys)) return [...data.resolvedSearchKeys];
   // ✗ 跨請求 TTL memo 已撤回（astra 裁決 §2.3）：模組全域快取沒有 database／schema／交易範圍
   // ⇒ 第一個請求取得的 keys 會被後續（甚至另一個 executor／快照）沿用，破壞 PG 單一快照契約 ✗
   //（反例：第二個 executor 本來會回 new-key，實際仍拿到 old-key 且**呼叫 0 次** ✓）。
