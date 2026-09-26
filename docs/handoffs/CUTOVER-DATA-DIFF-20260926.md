@@ -91,15 +91,21 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 
 ## 五、95 列內容衝突的處置（第三節第 5 點）
 
-對每一列衝突都取出兩邊的實際值再分類（不是只看筆數）。結果：**79 筆可用既定規則處理、
-16 筆需要 Owner 決定**。
+對每一列衝突都取出兩邊的實際值再分類（不是只看筆數）。結果：**79 筆可用既定規則處理
+（其中真正需要寫入 PG 的只有 3 筆）、16 筆需要 Owner 決定**。
 
 ### 可用規則處理（79 筆，尚未套用）
 
-| 規則 | 筆數 | 說明 |
-|---|---:|---|
-| `listing_groups`：PG 非 admin 且 SQLite 的 `updated_at` 較新 → 取 SQLite | 73 | PG 的值多為 09-11～09-22、SQLite 為 09-24～09-26（watcher 到修好之前都寫 SQLite）。**若 PG 已是 `admin_confirmed` 則一律保留 PG**，不因時間較舊而降級人工確認。 |
-| 時間戳較新者勝（旗標以外的鍵） | 6 | `lastCoveringAt`／`lastSystemCoveringAt` → PG 較新（09-26 vs 09-22）；`memberFetchDueAt`×2 → PG 較新（09-26 vs 09-22）；`siteCatalogStats` → **SQLite 較新**（09-24 vs 09-19，PG 並非永遠較新）；`user_listing_flags` 1 筆有時間差。 |
+先看「實質差異」而不是只看筆數，79 筆裡真正需要寫入 PG 的其實只有 **3 筆**：
+
+| 表／鍵 | 筆數 | 實質差異 | 處置 |
+|---|---:|---|---|
+| `listing_groups` | 73 | **`confirmation_level` 只有 1 筆真的不同**（PG `suspected` → SQLite `auto_confirmed`，是「確認程度提高」，符合既有優先序）；另外 72 筆只差 `primary_post_id`（代表物件）與 `updated_at` | 只把那 1 筆的 confirmation_level 升為 `auto_confirmed`；其餘 72 筆**不覆寫**——`primary_post_id`／`updated_at` 是 watcher 每輪會重算的衍生欄位，而程式修好後 watcher 已經寫 PG。沒有任何一筆 PG 是 `admin_confirmed`，所以不存在降級人工確認的風險。 |
+| `settings`：`siteCatalogStats` | 1 | SQLite（09-24）比 PG（09-19）新 | 取 SQLite 的值 |
+| `user_listing_flags`：1 筆 | 1 | SQLite 的 `viewed_at` 較新 | 取 SQLite 的值 |
+| `settings`：`lastCoveringAt`／`lastSystemCoveringAt`、`user_settings`：`memberFetchDueAt`×2 | 4 | **PG 較新** | 不動作（PG 保留） |
+
+`siteCatalogStats` 這一筆同時證明了**「PG 永遠較新」不是可靠假設**，所以是一列一列比對後才下規則。
 
 ### 需要 Owner 決定（16 筆）
 
@@ -113,7 +119,9 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 **建議給 Owner 的選項**（每一類都是二選一，不需要逐筆決定）：
 
 1. `user_listing_flags` 8 筆 → (a) 保留 PG（現行站上讀到的狀態）；(b) 取 SQLite（節點上最後的使用者動作）；
-   (c) 逐筆列出兩邊狀態再決定。**建議 (a)**：PG 是站上實際顯示的來源，改動會員狀態的風險高於保留現狀。
+   (c) 逐筆列出兩邊狀態再決定。**建議 (c)**：這 8 筆的 `watched`／`hidden` 兩邊不同、時間戳又相同，
+   其中 5 筆是「PG 說有關注、SQLite 說已取消」——這是會員自己的操作紀錄，建議看過兩邊狀態再定，
+   不要用規則猜。
 2. `settings` 3 筆與 `user_settings` 3 筆 → (a) 全部保留 PG；(b) 全部取 SQLite；(c) 逐筆比對文字差異後決定。
    **建議 (c)**：這 6 筆是站台內容與會員通知設定，內容差異可能是有意的編輯，逐筆看文字再決定成本很低。
 3. `listing_group_members` 2 筆 → (a) 保留 PG 的 `lg_b9cf4f…`；(b) 取 SQLite 的 `lg_2b2746…`。
