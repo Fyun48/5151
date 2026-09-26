@@ -13,7 +13,6 @@ import {
   listingCountForSearch,
   listMatchCandidates,
   listingHasTrustedGeo,
-  markSourceKitRetry,
   listingCommutePatch,
   upsertRouteJob,
   getRouteJob,
@@ -39,13 +38,14 @@ import {
   isCrawlSourceEnabled,
   persistHpListingFields,
   invalidateListingLocation,
-  getRakuyaPageCursors,
-  saveRakuyaPageCursors,
   persistListing,
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
 import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
+// 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
+// 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
+import { saveSettingsAsync } from "./settingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
@@ -102,6 +102,7 @@ import {
   invalidateListingLocationAsync,
   markListingAliveAsync,
   markListingOfflineAsync,
+  markSourceKitRetryAsync,
   persistHpListingFieldsAsync,
   restoreListingOnlineAsync,
   setCachedMrtAsync,
@@ -110,6 +111,8 @@ import {
   touchListingCheckedAsync,
   upsertListingPrepAsync,
 } from "./crawlerWrites.js";
+// 樂屋抓取游標：PG 模式下不再讀寫本機 SQLite（見 crawlerProgressAsync.js 的說明）。
+import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawlerProgressAsync.js";
 
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
@@ -773,11 +776,13 @@ export async function runWatch(options = {}) {
   }
   if (wantRakuya) {
     repairRakuyaScopes(db, jobs);
+    // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼（重抓或跳頁）。
+    const startPages = await getRakuyaPageCursorsAsync();
     await collectExternal("樂屋網", () => fetchRakuyaCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       fetchText: options.rakuyaFetchText,
-      startPages: getRakuyaPageCursors(),
+      startPages,
     }));
   }
 
@@ -884,7 +889,7 @@ export async function runWatch(options = {}) {
   const rakuyaProgress = collected.filter(batch => batch.parsed.source === "rakuya"
     && (!batch.errors?.length || batch.progress?.resetReason === "PAGE_OUT_OF_RANGE"))
     .map(batch => batch.progress).filter(Boolean);
-  if (rakuyaProgress.length) saveRakuyaPageCursors(rakuyaProgress);
+  if (rakuyaProgress.length) await saveRakuyaPageCursorsAsync(rakuyaProgress);
 
   if (needsListingGeo(settings) && freshIds.length > 0 && freshIds.length <= LIST_PAGE_SIZE) {
     await ingestListingGeoBatch(freshIds);
@@ -933,7 +938,7 @@ export async function runWatch(options = {}) {
       });
     } catch (error) {
       if (error?.code === "FETCH_BLOCKED") skipBlockedKit.add(row.source);
-      markSourceKitRetry(row.post_id, {
+      await markSourceKitRetryAsync(row.post_id, {
         error: error?.code || error?.message || "kit_failed",
         delayMs: error?.code === "FETCH_BLOCKED" ? 60 * 60 * 1000 : 15 * 60 * 1000,
       });
@@ -943,7 +948,7 @@ export async function runWatch(options = {}) {
 
   const events = options.silent ? [] : await flushPendingNotifications(settings, { silent: options.silent });
   if (settings.hasBaseline !== true) {
-    saveSettings({ hasBaseline: true });
+    await saveSettingsAsync({ hasBaseline: true });
   }
   // 整輪完成的紀錄（lastCoveringAt／lastSystemCoveringAt ＋ crawl_covers.last_run_at）要走 driver-aware
   // 入口：只寫 SQLite 的話，PG 模式的「該抓了」判定永遠讀到舊值 → 每分鐘重跑一整輪（2026-09-24 事故）。

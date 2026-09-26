@@ -3374,7 +3374,9 @@ let geoBackfillBusy = false;
 
 async function ensureWorkCoords() {
   const uid = defaultUserId();
-  const current = getSettings(uid);
+  // 上班地址與座標是會員設定，必須與其他節點同源：PG 模式下讀寫本機 SQLite 會讓
+  // 「在 A 儲存的地址、B 讀不到」而重複補座標或覆蓋新值。
+  const current = await getSettingsAsync(uid);
   if (!(Number(current.commuteKm) > 0)) return current;
   const workAddress = String(current.workAddress || "").trim();
   if (!workAddress || (hasWorkPoint(current) && isTaiwanCoord(current.workLat, current.workLng))) return current;
@@ -3382,7 +3384,7 @@ async function ensureWorkCoords() {
     const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2, allowAdmin: false });
     if (!geo) return current;
     setCachedGeo(workAddress, geo.lat, geo.lng, geo);
-    return saveSettings({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
+    return await saveSettingsAsync({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
   } catch (error) {
     console.warn("補上班地址座標失敗：", error.message);
     return current;
