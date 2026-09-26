@@ -21,6 +21,15 @@ Node 22.23.3 的正常／失敗／SIGTERM 三案回歸全部通過；[精確 SHA
 下一輪固定測最新程式 SHA `4ee81e7495f63873e302a6451b1bdc51a46cca16`（包含 eb56473 runner 修復），勿改測後續文件 HEAD；保存四案，不再追逐微小效能差距。
 以下為歷次原始成果與當時交接，若其優先順序與本節不同，以本節為準。
 
+## 22:13 NAS 4ee81e7：fixture setup timeout，四案未執行
+
+[Run 36247562272](https://github.com/Fyun48/5151/actions/runs/36247562272) 已完成，證據見 [README](../../evidence/prb-nas-4ee81e7/README.md)。
+精確受測 SHA `4ee81e7495f63873e302a6451b1bdc51a46cca16`；兩個 SHA 欄位、14 個 module hash 與 manifest 全相符。
+真 PG 155／154 pass／0 fail／1 skip；benchmark 建立 120,000 筆 fixture 的單一 INSERT 超過 15 秒（57014），`cases=[]`。
+狀態 **FIXTURE_SETUP_TIMEOUT / NAS_FOUR_CASES_NOT_RUN**，不是已有四案的效能 FAIL。runner exit=1、標籤三項 0、JSONL 39 行可解析，收尾修復已實機驗證。
+本批只修 fixture 分批 10,000 筆 INSERT，最後核對完整總筆數；不改正式程式、候選、timeout 或門檻。新 SHA CI 全綠後再執行同 SHA NAS。
+持久輪替／成功完成範圍及跨節點／復原仍待完成，維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE；應用程式未合併、未部署。
+
 ## 爬蟲第一批修正：取消邊界（4ee81e7）
 
 程式 SHA：`4ee81e7495f63873e302a6451b1bdc51a46cca16`。

@@ -41,13 +41,13 @@ Owner 於 2026-09-26 21:00（Asia/Taipei）指示：若 PostgreSQL、爬蟲與�
   正常退出 0、benchmark 失敗退出 1、runner SIGTERM 退出 143，全部清理完成、JSON 可解析。
   Node 22.23.3 本機 3／3 pass；沒有接 Docker daemon 或正式庫。
 - [精確 SHA CI](https://github.com/Fyun48/5151/actions/runs/36243932369) 與 GitGuardian／model review checks 已全部成功。
-  **新 runner 的 NAS 實跑尚未完成**，本機替身測試不冒充 NAS 驗收。
+  **包含修復的新程式 SHA `4ee81e7495f63873e302a6451b1bdc51a46cca16` 已完成 NAS 執行但 fixture 建立逾時，四案未開始**：[run 36247562272](https://github.com/Fyun48/5151/actions/runs/36247562272)。本機替身測試不冒充 NAS 驗收。
 
 ## 最短上線必辦：只處理會影響正確資料、跨節點一致及回復的缺口
 
 | 項目 | 已確認的缺口 | 完成條件 |
 |---|---|---|
-| 爬蟲取消／覆蓋 | `crawlWatchdog.js` 的 withBudget 仍是 Promise.race，逾時不取消工作；`crawlPolicy.js` 用時間窗選組。`server.js` 只傳部分 jobs 卻仍傳整份 includedUserIds；`coveringBookkeepingAsync.js` 完成時 UPDATE 全部 crawl_covers。 | 持久化完成游標、有效 owner／取消與提交防護；只對本批實際成功的 cover／會員記完成。測 19+ 組、多輪、重啟、部分失敗、逾時舊工作與雙 worker 競爭；不能讓未抓組看起來已成功。 |
+| 爬蟲取消／覆蓋 | `4ee81e7` 已加入 deadline／取消傳播及 SQLite／PG 提交防護，真 PG 取消回滾 CI 通過；持久 owner／fencing 尚未完成。`crawlPolicy.js` 仍用時間窗選組。`server.js` 只傳部分 jobs 卻仍傳整份 includedUserIds；`coveringBookkeepingAsync.js` 完成時 UPDATE 全部 crawl_covers。 | 持久化完成游標、有效 owner／取消與提交防護；只對本批實際成功的 cover／會員記完成。測 19+ 組、多輪、重啟、部分失敗、逾時舊工作與雙 worker 競爭；不能讓未抓組看起來已成功。 |
 | 已啟用功能跨節點同源 | `db.js` 模組載入仍無條件開 v3.db；整站零 SQLite 不能由搜尋核心 sqliteAttempts=0 推得。現有矩陣的 auth／媒體／背景工作與雙節點 HTTP 尚未驗完。 | 核對正式已啟用入口，完成 A 寫 B 讀、B 改 A 讀、權限與媒體可見性；有活躍本機業務寫入就修正或提出明確範圍，不能假稱全站遷移完成，也不能自行關既有功能。 |
 | 資料復原／雙備援 | 2026-09-24 文件記錄 async standby、archive_mode=off；是歷史觀測，沒有本輪即時核對。舊 tunnel 32/32 HTTP 200 演練不是資料與 PG failover 驗收。 | 既有 SSH 核對兩節點版本／掛載／PG角色／複寫與 lag；確認可用備份並在隔離副本還原、指定可回版的 PG 相容應用版本。人工 promotion 可以是明確策略，不要求先建自動選主，但必須有舊 primary 隔離、實測資料點與 RPO／RTO，不能把 standby 稱為備份。 |
 
@@ -62,12 +62,11 @@ Owner 於 2026-09-26 21:00（Asia/Taipei）指示：若 PostgreSQL、爬蟲與�
 withBudget 5 ms 包住 60 ms 工作，拋 TIMEOUT 後該工作仍完成。
 這證明可重現的程式缺口，**不宣稱正式站當下就是該間隔或已發生那些漏抓**。
 
-## DeepSeek 接續順序
+## 接續順序（22:10 更新）
 
-1. runner 精確 SHA CI 全綠後，用既有 SSH／原 CasaOS 跑 `eb564736ee14d268e0a5358d5be7787c0d9a3f78`。
-   不改測文件 HEAD；保存 `evidence/prb-nas-eb56473/`、exit、完整樣本與清理查詢。
-   這輪重點為 JSONL 逐行可解析、取樣器與子程序消失、三項標籤歸零且 EXIT 不再卡住。
-   原門檻仍可回 FAIL；不要再因此啟動純效能優化迴圈。
+1. ChatGPT 直接追蹤已觸發的 [run 36247562272](https://github.com/Fyun48/5151/actions/runs/36247562272)，
+   固定受測 `4ee81e7495f63873e302a6451b1bdc51a46cca16`，不改測文件 HEAD。
+   原始結果、JSONL 可解析性及清理查詢都須核對；原門檻仍可回 FAIL，不因此重啟純效能優化。
 2. 集中補上表三項實際缺口／缺少的正式證據。先讀現有證據；只做必要修正，不重構已通過搜尋路徑。
    爬蟲抽查需包含來源 ID／租金／行政區／刊登與下架狀態及實際 cover 完成映射，不只比 COUNT。
 3. 交付候選 exact SHA＋CI、已啟用功能跨節點驗證、資料／媒體補遷差異、備份還原與回版證據。
@@ -87,3 +86,8 @@ withBudget 5 ms 包住 60 ms 工作，拋 TIMEOUT 後該工作仍完成。
 Synology primary／CasaOS standby，async streaming，單次 replay lag 4.818 ms；三應用受查六檔均為 9c6b7b0。
 主庫 archive_mode=off、兩台 archived_count=0；備份檔本次未盤點，restore／failover 仍未做。
 因此不用再重查通道／基本角色；下一步聚焦已列的爬蟲缺陷、跨節點業務與復原驗證。
+
+## 22:13 本輪結論
+
+`4ee81e7` 真 PG 154 pass／0 fail；fixture 單一 INSERT statement timeout，四案未跑。
+原始證據與修復處置見 [NAS README](../../evidence/prb-nas-4ee81e7/README.md)。清理三項 0、JSONL 可解析，runner 收尾修復通過本輪實測。

@@ -48,6 +48,10 @@ try {
   await withPgFixture(db,async driver=>{
     evidence.postgres=(await driver.query('SHOW server_version')).rows[0].server_version;
     await driver.query('DELETE FROM listings');
+    // Bound fixture preparation statements on the NAS without changing the
+    // 120k-row dataset, request timeout or measured search acceptance gates.
+    const seedBatchRows=10000;
+    for(let first=1;first<=totalRows;first+=seedBatchRows) {
     await driver.query(`INSERT INTO listings(post_id,source,source_id,source_key,search_key,title,url,price,price_num,
       address,area_name,floor_name,kind_name,tags,extra_fees,first_seen_at,last_seen_at,refresh_time,offline,offline_confirmed,hidden,
       match_post_id,match_level)
@@ -59,7 +63,11 @@ try {
         to_char(($5::text)::timestamptz-i*interval '1 minute','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
         $5::text,$5::text,0,0,0,CASE WHEN i<LEAST($3,1024) THEN $1+i+1 ELSE 0 END,
         CASE WHEN i<LEAST($3,1024) THEN 'high' ELSE '' END
-      FROM generate_series(1,$2::integer) i`,[BASE,totalRows,activeRows,KEY,AS_OF]);
+      FROM generate_series($6::integer,LEAST($2::integer,$7::integer)) i`,
+      [BASE,totalRows,activeRows,KEY,AS_OF,first,first+seedBatchRows-1]);
+    }
+    const seeded=Number((await driver.query('SELECT COUNT(*) AS n FROM listings')).rows[0].n);
+    if(seeded!==totalRows) throw new Error(`Fixture row count mismatch: ${seeded} != ${totalRows}`);
     // ANALYZE is confined to the newly created test schema.
     await driver.query('ANALYZE listings');
     const settings={...SETTINGS,searchUrls:[],watchDistricts:[]};
