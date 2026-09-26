@@ -24,19 +24,23 @@ const ARGS = {
   userId: 0, matchVoteUserId: 0, settings: {},
 };
 
-function pageOf(result) {
-  const list = result?.listings || result?.page || result?.rows || result?.items || [];
-  return Array.isArray(list) ? list : [];
+// ✗ 裁決 §3（結果契約）：**移除「任何回傳形狀都容忍、缺值就 []」的輔助函式** ✗
+// ⇒ 只認正式 envelope ✓：`listings` 必須是陣列 ✓、`totalMatched` 必須是有效整數 ✓
+//（label 預設空字串 ⇒ 既有呼叫端不必改 ✓）。
+function listingsOf(result, label = "") {
+  assert.ok(Array.isArray(result?.listings), `${label}：listings 必須是陣列（實際 ${typeof result?.listings}）`);
+  return result.listings;
 }
-function idsOf(result) {
-  return pageOf(result).map((row) => row?.post_id);
+function idsOf(result, label = "") {
+  return listingsOf(result, label).map((row) => Number(row.post_id));
 }
-function totalOf(result) {
-  const value = result?.totalMatched ?? result?.total ?? result?.count;
-  return Number.isFinite(Number(value)) ? Number(value) : null;
+function totalOf(result, label = "") {
+  const value = result?.totalMatched;
+  assert.ok(Number.isInteger(value), `${label}：totalMatched 必須是有效整數（實際 ${JSON.stringify(value)}）`);
+  return value;
 }
-function rolesOf(result) {
-  return pageOf(result).map((row) => String(row?.same_house_role ?? row?.self_role ?? ""));
+function rolesOf(result, label = "") {
+  return listingsOf(result, label).map((row) => String(row?.same_house_role ?? ""));
 }
 
 // ✗ 目前**暫時 skip**（明確標示未完成 ✗，不以 skip 冒充通過 ✓）：
@@ -73,14 +77,31 @@ function rolesOf(result) {
 test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const app = await import("../src/db.js");
-  const pgDriver = await createPostgresDriver({ env: process.env });
+  // ✗ 裁決 §3（測試連線）：driver 必須吃**測試連線本身**的 URL ✓
+  //（原本 `env: process.env` ✗ ⇒ skip 判斷用 `PG_TEST_URL`、實連卻讀一般環境 ⇒ 兩者不同就會連錯目標 ✗）。
+  const pgDriver = await createPostgresDriver({ connectionString: PG_URL });
   const sqliteDb = app.sqliteHandle();
   const SEED = 900300001;
 
   // ✗ 關鍵前提（§3o）：SQLite 的鍵集來自**它自己 DB 的 settings**，不是 `args.settings` ✗
   // ⇒ 兩邊必須種**同一組 `settings.searchUrls`** ✓，否則匹配列不同、集合永遠不等 ✗。
   const URL_591 = "https://rent.591.com.tw/list?region=1&section=2%2C3&order=posttime&orderType=desc";
-  const args = { ...ARGS, settings: { searchUrls: [URL_591] } };
+  // ✗ 裁決 §3（時間）：**固定 fixture 時間 ＋ 同一 `asOf`** ✓（不得以每次 `new Date()` 充當決定性驗證 ✗）。
+  const FIXED_ISO = "2026-09-01T00:00:00.000Z";
+  const AS_OF = "2026-09-26T00:00:00.000Z";
+  // ✗ 裁決 §3（有效案例）：三列 ＋ `limit: 20` ⇒ 第二頁**必為空** ⇒ 分頁永遠「通過」✗
+  //   ⇒ 改 `limit: 2` ✓（第二頁必須有 1 列 ✓）。
+  const args = { ...ARGS, limit: 2, settings: { searchUrls: [URL_591] }, asOf: AS_OF };
+
+  // ✗ 裁決 §3（schema 順序）：**先備妥所有必要 schema，再 seed** ✓
+  //（原本先 INSERT settings、後 ensure settings ⇒ **錯序** ✗ ⇒ CI 拋棄式 PG 沒有 `settings` 表 ✓）。
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  await ensurePgSchema(pgDriver, sqliteDb, { tables: ["settings"] });
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
+  // ✗ 必修 #1：context 內部的 SQL 用 `?` 佔位符 ⇒ **必須過 `toPostgresSql()`** 才能給 PG ✗
+  //（CI 實測：`syntax error at or near ")"` / code 42601，堆疊指向 `db.js:4087` 的 `safeExecFactory` ✓）。
+  const pgExec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;
+  // ✓ 兩引擎吃**同一組** settings ✓（同一字串值 ✓，避免殘留 users／settings 改變 searchKeys ✗）。
   sqliteDb.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
     .run("searchUrls", JSON.stringify([URL_591]));
   await pgDriver.query(
@@ -89,20 +110,12 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   );
 
   // 讀回**展開後的 stored keys** ✓（`searchKeys` ✓；不必猜 URL 格式 ✓）⇒ 取第一個當 fixture 鍵 ✓
-  const { toPostgresSql } = await import("../src/sqlDialect.js");
-  // ✗ 必修 #1：context 內部的 SQL 用 `?` 佔位符 ⇒ **必須過 `toPostgresSql()`** 才能給 PG ✗
-  //（CI 實測：`syntax error at or near ")"` / code 42601，堆疊指向 `db.js:4087` 的 `safeExecFactory` ✓）。
-  const pgExec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;
-  // ✗ 必修 #2：CI 拋棄式 PG **沒有 `settings` 表**（實測 `relation "settings" does not exist` ✓）
-  // ⇒ 照既有 parity 檔（如 `job-queue-parity` ✓）的作法先確保必要表存在 ✓。
-  const { ensurePgSchema } = await import("../src/pgSchema.js");
-  await ensurePgSchema(pgDriver, sqliteDb, { tables: ["settings"] });
   const pgContext = await app.buildListRequestContextFromPg(pgExec);
   const key = (pgContext?.searchKeys || [])[0];
   console.log(`PARITY-CONTEXT ${JSON.stringify({ pgKeys: (pgContext?.searchKeys || []).length, key })}`);
   assert.ok(key, "必須取得一個展開後的 search_key（否則無法建立兩引擎可達 fixture）");
 
-  const iso = new Date().toISOString();
+  const iso = FIXED_ISO;
   const seeds = [0, 1, 2].map((i) => ({
     post_id: SEED + i, source: "591", source_key: `parity|${i}`, search_key: key,
     title: `parity ${i}`, url: `https://example.test/parity/${i}`,
@@ -117,29 +130,61 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     insertSqlite.run(row.post_id, row.source, row.source_key, row.search_key, row.title, row.url,
       row.first_seen_at, row.last_seen_at, row.offline);
   }
-  await pgDriver.query(
-    `INSERT INTO listings (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline)
-     VALUES ${seeds.map((_, i) => `($${i * 6 + 1}, '591', $${i * 6 + 2}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6}, 0)`).join(",")}
+  // ✗ 根因（裁決 §2）：每列只用 6 個參數，卻把 `source_key` 與 `search_key` **都綁到 $2** ✗
+  // ⇒ `$2` 的值是搜尋網址 ⇒ PG 的 `source_key` 不是 `parity|…` ⇒ 前綴計數自然是 0 ✗
+  //（**不能**據此推論 insert 沒落地／寫錯 database／ON CONFLICT 跳過 ✗ —— 我先前正是這樣誤判 ✗）。
+  // 修法：每列改 7 個參數 ✓，欄位順序 post_id, source, source_key, search_key, title, url,
+  // first_seen_at, last_seen_at, offline = $1,'591',$2,$3,$4,$5,$6,$7,0 ✓。
+  const insertColumns = "post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline";
+  const insertValues = seeds.map((_, i) => {
+    const n = i * 7;
+    return `($${n + 1}, '591', $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, $${n + 7}, 0)`;
+  }).join(",");
+  const insertParams = seeds.flatMap((r) => [
+    r.post_id, r.source_key, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at,
+  ]);
+  const seedRes = await pgDriver.query(
+    `INSERT INTO listings (${insertColumns}) VALUES ${insertValues}
      ON CONFLICT (post_id) DO UPDATE SET
        source_key = excluded.source_key, search_key = excluded.search_key, title = excluded.title,
        url = excluded.url, first_seen_at = excluded.first_seen_at, last_seen_at = excluded.last_seen_at,
        offline = excluded.offline`,
-    seeds.flatMap((r) => [r.post_id, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at]),
+    insertParams,
   );
-  // ✗ 必修（CI 實測 `pg: 0` ✓）：原本 `ON CONFLICT DO NOTHING` 遇到既有 post_id 就**整批不放** ✗
-  // ⇒ 改成 `DO UPDATE` ✓，並**先斷言真的在位**再跑搜尋 ✓（否則「沒種到」與「被前置條件濾掉」會混為一談 ✗）。
-  const pgPresent = (await pgDriver.query(
-    "SELECT COUNT(*)::int AS n FROM listings WHERE source_key LIKE 'parity|%'",
-  )).rows[0].n;
-  const sqlitePresent = sqliteDb.prepare(
-    "SELECT COUNT(*) AS n FROM listings WHERE source_key LIKE 'parity|%'",
-  ).get().n;
-  assert.equal(sqlitePresent, seeds.length, `SQLite fixture 必須在位（實際 ${sqlitePresent}）`);
-  assert.equal(pgPresent, seeds.length, `PG fixture 必須在位（實際 ${pgPresent}）`);
+  const whereAmI = (await pgDriver.query(
+    "SELECT current_database() AS db, current_schema() AS schema, to_regclass('listings')::text AS rel",
+  )).rows[0];
+  console.log(`PARITY-PG-TARGET ${JSON.stringify({ rowCount: seedRes.rowCount, ...whereAmI })}`);
+
+  // ✗ 依裁決 §2：**按本次 seed 的確切 post_id 逐欄讀回比對** ✓（prefix count **不能**取代 ✓）。
+  const seedIds = seeds.map((r) => r.post_id);
+  const canonical = (rows) => rows.map((row) => [Number(row.post_id), String(row.source_key), String(row.search_key)]);
+  const expected = seeds.map((r) => [r.post_id, r.source_key, r.search_key]);
+  const pgRows = (await pgDriver.query(
+    "SELECT post_id, source_key, search_key FROM listings WHERE post_id = ANY($1::bigint[]) ORDER BY post_id",
+    [seedIds],
+  )).rows;
+  const sqliteRows = sqliteDb.prepare(
+    `SELECT post_id, source_key, search_key FROM listings WHERE post_id IN (${seedIds.map(() => "?").join(",")}) ORDER BY post_id`,
+  ).all(...seedIds);
+  console.log(`PARITY-FIXTURE-CHECK ${JSON.stringify({ pg: pgRows, sqlite: sqliteRows })}`);
+  assert.deepEqual(canonical(pgRows), expected, "PG 三列每欄都必須與 canonical fixture 相同");
+  assert.deepEqual(canonical(sqliteRows), expected, "SQLite 三列每欄都必須與 canonical fixture 相同");
 
   try {
     const viaPg = await searchListingsAsync({ ...args }, { driver: "postgres", pgDriver });
-    const viaSqlite = await searchListingsAsync({ ...args }, { driver: "sqlite" });
+    // ✗ 裁決 §4（核心語意 parity）：SQLite **Node 參考** `listListings` ✓ 對 PG **正式入口** ✓
+    //（PG 端不覆寫 deps／candidateColumns／decorator ✓、不繞過正式 context 與單一快照 ✓）。
+    const viaSqlite = app.listListings({ ...args });
+    // ✓ §4（入口相容性單獨驗證）：正式 SQLite dispatcher 若實際走 SQL-first 必須**標示引擎** ✓；
+    //   其已知配對語意差異須**記錄 ＋ 正確回歸案例**，不得以 skip／改名當已解決 ✗。
+    const viaSqliteDispatch = await searchListingsAsync({ ...args }, { driver: "sqlite" });
+    console.log(`PARITY-ENGINES ${JSON.stringify({
+      pg: viaPg?.queryDetails?.engine ?? null,
+      sqliteRef: "node",
+      sqliteDispatch: viaSqliteDispatch?.queryDetails?.engine ?? null,
+      sqliteDispatchSqlFirst: viaSqliteDispatch?.sql_first ?? null,
+    })}`);
 
     console.log(`PARITY-KEYS-PG ${JSON.stringify(Object.keys(viaPg || {}))}`);
     console.log(`PARITY-KEYS-SQLITE ${JSON.stringify(Object.keys(viaSqlite || {}))}`);
@@ -172,6 +217,18 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     const nextSqlite = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "sqlite" });
     assert.deepEqual(idsOf(nextPg), idsOf(nextSqlite), "第二頁必須一致");
   } finally {
+    // ✓ 裁決 §3（fixture 隔離）：失敗也要**清理自己建立的資料** ✓
+    //（只刪自己那三列 ✓，不清空共享／正式資料 ✗；連線一律釋放 ✓，斷線不影響原本的失敗訊息 ✓）。
+    try {
+      await pgDriver.query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [seedIds]);
+    } catch {
+      /* 已斷線或非 PG 失敗路徑：不覆蓋真正的原因 */
+    }
+    try {
+      sqliteDb.prepare(`DELETE FROM listings WHERE post_id IN (${seedIds.map(() => "?").join(",")})`).run(...seedIds);
+    } catch {
+      /* 同上 */
+    }
     if (typeof pgDriver?.close === "function") await pgDriver.close();
   }
 });
