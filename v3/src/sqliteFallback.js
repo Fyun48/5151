@@ -15,15 +15,26 @@
 //     （真實故障、需要「先讓站活著」時用；用完記得關掉）。
 export const PG_SQLITE_FALLBACK_ENV = "PG_SQLITE_FALLBACK";
 
+// 三種模式：
+//   open   （PG_SQLITE_FALLBACK=open|all|1|true）—— 讀寫都允許回退（緊急用）
+//   closed （預設）                            —— 寫入 fail-closed、讀取 fail-open
+//   strict （PG_SQLITE_FALLBACK=strict|none）  —— 讀寫都不回退（業務資料完全同源時使用）
+//
+// strict 是給「驗證 PG 模式真的沒有用到本機 SQLite」用的：把它打開後，任何還想回退的
+// 讀取都會直接把 PG 的錯誤往上丟，等於把殘留的 SQLite 依賴變成看得見的失敗。
 export function fallbackMode(env = process.env) {
   const raw = String(env?.[PG_SQLITE_FALLBACK_ENV] || "").trim().toLowerCase();
-  return raw === "open" || raw === "all" || raw === "1" || raw === "true" ? "open" : "closed";
+  if (raw === "open" || raw === "all" || raw === "1" || raw === "true") return "open";
+  if (raw === "strict" || raw === "none") return "strict";
+  return "closed";
 }
 
 // `write` 由呼叫端標記（helper 讀 `options.write`）：true = 這個操作會寫入。
 export function sqliteFallbackAllowed(options = {}, { write = false, env = process.env } = {}) {
   if (options.strict === true) return false;
   if (options.fallback === "open") return true;
-  if (fallbackMode(env) === "open") return true;
+  const mode = fallbackMode(env);
+  if (mode === "open") return true;
+  if (mode === "strict") return false;
   return !write;
 }
