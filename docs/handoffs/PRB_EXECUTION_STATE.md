@@ -18,8 +18,25 @@ runner 修正 SHA：`eb564736ee14d268e0a5358d5be7787c0d9a3f78`；採獨立 proce
 EXIT SIGKILL 該診斷群組後 wait，並用 docker stats --no-stream 避免 ANSI。
 Node 22.23.3 的正常／失敗／SIGTERM 三案回歸全部通過；[精確 SHA CI](https://github.com/Fyun48/5151/actions/runs/36243932369) 與 GitGuardian／model review 全綠。
 `v3/src` 與搜尋 benchmark 與 6703302 完全相同；新 runner NAS 尚未實跑，不能填 PASS。
-DeepSeek 下一輪固定測 runner SHA eb56473，勿改測後續文件 HEAD；只驗證修復與保存四案，不再追逐微小效能差距。
+下一輪固定測最新程式 SHA `4ee81e7495f63873e302a6451b1bdc51a46cca16`（包含 eb56473 runner 修復），勿改測後續文件 HEAD；保存四案，不再追逐微小效能差距。
 以下為歷次原始成果與當時交接，若其優先順序與本節不同，以本節為準。
+
+## 爬蟲第一批修正：取消邊界（4ee81e7）
+
+程式 SHA：`4ee81e7495f63873e302a6451b1bdc51a46cca16`。
+[精確 SHA CI](https://github.com/Fyun48/5151/actions/runs/36246228432) 已全綠：一般測試 2667／2626 pass／0 fail／41 skip；真 PG 155／154 pass／0 fail／1 skip，包含取消後回滾實測。
+
+- withBudget 以 AbortController 與 AsyncLocalStorage 傳播該輪 deadline／取消；tick abandon 或新 generation 會取消舊 generation。
+- 591、各外站、地理／路線／MRT 與 provider 的既有請求 timeout signal 合併該輪取消訊號；搜尋 HTTP 請求不在此 scope。
+- SQLite handle／statement／iterator 檢查該輪 deadline，禁止取消後的新操作；ROLLBACK 與關閉仍可執行。
+- PG driver 的 crawler-scoped 獨立語句用短交易保護；既有 withTransaction 在語句返回及 COMMIT 前檢查取消，失敗會回滾並釋放連線。
+  非 crawler 請求維持原 query 路徑；raw pool 的搜尋唯讀 snapshot 沒有宣稱被此 guard 包裝。
+  crawler 獨立語句增加 BEGIN／COMMIT 往返成本，尚未量測正式抓取吞吐，不能拿搜尋 benchmark 代替。
+- Node 22.23.3 本機相關回歸 13 tests／12 pass／0 fail／1 PG-only skip；真 PG 另在 CI 執行。
+- 這不是強制終止任意 JavaScript：未合作的 callback 可能仍運算，但被保護的資料庫邊界拒絕後續操作。
+  已送出的 COMMIT、已對外送出的通知不能撤回；持久化 ownership／fencing 與 outbox 冪等仍是後續項目。
+- **持久輪替、僅成功 cover／會員記完成、跨節點業務與 restore／failover 尚未完成。**
+  新 SHA NAS 未跑；既有 6703302 NAS 數字不改寫到本 SHA。未合併、未部署。
 
 ## 2026-09-26 21:32 雙 NAS 唯讀採證已取得
 
