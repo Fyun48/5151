@@ -65,20 +65,20 @@ export async function readCandidateContent({ client, readRows, store, sql, param
     return readRows(sql, params, options);
   }
   const identity = store.bindIdentity(JSON.stringify([metadata, fields.map(f => [f.name, f.tableID, f.columnID, f.dataTypeID, f.dataTypeModifier])]));
-  const selected = await readRows(`SELECT ${VERSION_COLUMNS} FROM listings ${sql.slice(PREFIX.length)}`, params);
-  const rows = new Array(selected.length), missing = [], versions = new Map();
-  await runStepsAsync((function* () {
-  for (let i = 0; i < selected.length; i++) {
-    const row = selected[i];
-    const id = Number(row.post_id);
-    const version = row.content_version;
-    const values = store.get(id, version, identity);
-    if (values) rows[i] = candidateRowFromValues(values);
-    else { missing.push(id); versions.set(id, { version, index: i }); }
-    if ((i + 1) % 256 === 0) yield {units:256};
-  }
-  if (selected.length % 256) yield {units:selected.length % 256};
-  })(), {label:'stats.content.lookup'});
+  const rows = [], missing = [], versions = new Map();
+  await readRows(`SELECT ${VERSION_COLUMNS} FROM listings ${sql.slice(PREFIX.length)}`, params, {
+    consumeValues: async selected => runStepsAsync((function* () {
+      for (let i = 0; i < selected.length; i++) {
+        const [postId, version] = selected[i];
+        const id = Number(postId), index = rows.length;
+        const values = store.get(id, version, identity);
+        rows.push(values ? candidateRowFromValues(values) : null);
+        if (!values) { missing.push(id); versions.set(id, {version, index}); }
+        if ((i + 1) % 256 === 0) yield {units:256};
+      }
+      if (selected.length % 256) yield {units:selected.length % 256};
+    })(), {label:'stats.content.lookup'}),
+  });
   if (missing.length) {
     const fresh = await readRows(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings WHERE post_id = ANY($1::bigint[])`, [missing], options);
     await runStepsAsync((function* () {

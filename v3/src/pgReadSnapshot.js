@@ -18,7 +18,7 @@ export async function withPgReadSnapshot(driver, run) {
     diagnostics.record(`${label}.submitSync`, performance.now() - started);
     return pending.then(result => {
       // Includes server, transport and response parsing. Not a synchronous span.
-      diagnostics.record(`${label}.wall`, performance.now() - started, result.rowCount || 0);
+      diagnostics.record(`${label}.wall`, performance.now() - started, result.rowCount || 0, started);
       return result;
     });
   };
@@ -33,7 +33,7 @@ export async function withPgReadSnapshot(driver, run) {
     // assumption that a consumer fetches only its first ten percent.
     await query('SET LOCAL cursor_tuple_fraction = 1');
     let cursorId = 0;
-    const readRows = async (sql, params = [], { arrayRows = false } = {}) => {
+    const readRows = async (sql, params = [], { arrayRows = false, consumeValues = null } = {}) => {
       // Bound decoded cells per parser turn. Narrow ID/version reads can carry
       // more rows per transfer than the full 42-field shape. Retain every row.
       const name = `listing_read_${++cursorId}`;
@@ -43,9 +43,13 @@ export async function withPgReadSnapshot(driver, run) {
       let batchSize = 512;
       while (true) {
         const text = `FETCH FORWARD ${batchSize} FROM ${name}`;
-        const batch = await query(arrayRows ? { text, rowMode: 'array' } : text);
+        const batch = await query(arrayRows || consumeValues ? { text, rowMode: 'array' } : text);
         const started = diagnostics ? performance.now() : 0;
-        if (arrayRows) {
+        if (consumeValues) {
+          // Internal streaming consumer: release this reply before fetching the
+          // next. Never retain both all version rows and all hydrated candidates.
+          await consumeValues(batch.rows, batch.fields);
+        } else if (arrayRows) {
           if (!rowFromValues) {
             const names = batch.fields.map(field => field.name);
             rowFromValues = names.length === LIST_CANDIDATE_KEYS.length
@@ -55,7 +59,7 @@ export async function withPgReadSnapshot(driver, run) {
           }
           for (const values of batch.rows) rows.push(rowFromValues(values));
         } else rows.push(...batch.rows);
-        diagnostics?.record('pg.appendRows.sync', performance.now() - started, batch.rows.length);
+        diagnostics?.record(consumeValues ? 'pg.consumeValues.wall' : 'pg.appendRows.sync', performance.now() - started, batch.rows.length);
         if (batch.rows.length < batchSize) break;
         // Bound row dispatch as well as decoded cells. Four simultaneous narrow
         // 4096-row replies can monopolize a slow NAS event loop despite few cells.

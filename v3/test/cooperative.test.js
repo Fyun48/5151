@@ -53,3 +53,18 @@ test('the final generator step obeys the scheduling budget and diagnostics stay 
   }
   assert.equal(currentWorkDiagnostics(), undefined);
 });
+
+test('slow-span diagnostics retain bounded timestamps and never add unrelated maxima', () => {
+  const d=createWorkDiagnostics();
+  for(let i=0;i<100;i++) d.record('gc.pause',20+i,0,1000+i*200);
+  d.record('eventLoop.tickGap',160,0,1234);
+  d.record('pg.fetch.wall',300,1024,20000);
+  const timeline=d.timeline();
+  assert.equal(timeline['gc.pause'].length,32);
+  assert.equal(timeline['gc.pause'][0].ms,119);
+  assert.deepEqual(timeline['eventLoop.tickGap'],[{startMs:1234,endMs:1394,ms:160,units:0}]);
+  assert.equal(timeline['pg.fetch.wall'][0].startMs,20000);
+  timeline['gc.pause'][0].ms=-1;
+  assert.equal(d.timeline()['gc.pause'][0].ms,119);
+  assert.equal(d.snapshot()['gc.pause'].calls,100);
+});

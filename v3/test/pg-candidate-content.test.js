@@ -88,6 +88,20 @@ test('live PG: reused content belongs to the visible row version and full column
         } finally { writer.release(); }
         assert.equal((await read())[0].title,'changed');
       });
+      await t.test('streamed versions preserve all fields, order and cold/warm rows across reply boundaries', async () => {
+        await seed();
+        await driver.query('TRUNCATE listings');
+        await driver.query("INSERT INTO listings(post_id,title,source,price_num) SELECT i, '住宅 ' || i, '591', i::text FROM generate_series(1,8705) i");
+        const expected=(await driver.query(sql,[0])).rows;
+        const cold=await read();
+        assert.deepEqual(cold,expected);
+        cold[512].title='private mutation';
+        const warm=await read();
+        assert.deepEqual(warm,expected);
+        assert.deepEqual(await read(8000),expected.filter(row=>row.post_id>8000));
+        assert.equal(warm.length,8705);
+        assert.equal(warm.at(-1).post_id,8705);
+      });
       await t.test('old and new repeatable-read snapshots cannot replace each other’s row content', async () => {
         await seed();
         await withPgReadSnapshot(observed,async old=>{

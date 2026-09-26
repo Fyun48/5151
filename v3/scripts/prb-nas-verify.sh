@@ -17,11 +17,16 @@ pg_container="$tag-pg"
 app_container="$tag-app"
 deps_volume="$tag-deps"
 pg_volume="$tag-pgdata"
+metrics_pid=""
 # Provenance labels: every resource this script creates stays attributable even
 # if cleanup never runs, so an interrupted run cannot leave anonymous resources.
 labels=(--label "prb-nas-verify=1" --label "prb-nas-verify.sha=$sha"
         --label "prb-nas-verify.script=v3/scripts/prb-nas-verify.sh")
 cleanup() {
+  if [[ -n "$metrics_pid" ]]; then
+    kill "$metrics_pid" >/dev/null 2>&1 || true
+    wait "$metrics_pid" >/dev/null 2>&1 || true
+  fi
   docker rm -f "$app_container" "$pg_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$deps_volume" "$pg_volume" >/dev/null 2>&1 || true
@@ -57,6 +62,12 @@ done
 [[ "$ready" == true ]] || { docker logs "$pg_container" > "$output/postgres-startup.log" 2>&1; exit 1; }
 docker inspect --format '{{.Image}}' "$pg_container" > "$output/postgres-image.txt"
 docker image inspect --format '{{.Id}}' node:22-bookworm > "$output/node-image.txt"
+# Observe only our disposable PG container. This coarse stream diagnoses CPU /
+# memory pressure; it does not assign individual FETCH delays to server CPU.
+date -u +%FT%TZ > "$output/postgres-resource-stats-start.txt"
+docker stats --format '{{json .}}' "$pg_container" \
+  > "$output/postgres-resource-stats.jsonl" 2> "$output/postgres-resource-stats.err" &
+metrics_pid=$!
 # Both mounts preserve worktree .git paths. The original checkout stays read-only.
 # The internal network has no route to production and publishes no host ports.
 docker run --rm "${labels[@]}" --name "$app_container" --network "$network" \

@@ -6,6 +6,7 @@ import {
   preloadedDecorationProvider,
   stats,
   summarizeListingStatsAsync,
+  summarizeRawListingStatsAsync,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -77,6 +78,14 @@ export async function listingStatsAsync(
       markStage(options.preloadedStatsInputs ? "reuse_inputs_ms" : "inputs_ms");
       const provider = options.decorationProvider || await statsProvider(exec, inputs);
       markStage("provider_ms");
+      if (inputs.candidateShape) {
+        return summarizeRawListingStatsAsync({
+          rows:inputs.rows, flagMap:provider.personalFlags(), userId:inputs.uid,
+          settings:inputs.settings, provider, candidateShape:true,
+          statusCounts:inputs.statusCounts, watchedTotal:inputs.watchedTotal,
+          failedRouteJobs:inputs.failedRouteJobs, dbTotal:inputs.dbTotal,
+        }, diagnostics);
+      }
       const profileRows = await buildListingStatsRowsAsync({
         rows: inputs.rows,
         flagMap: provider.personalFlags(),

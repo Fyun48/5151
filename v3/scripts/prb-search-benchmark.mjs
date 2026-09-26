@@ -30,12 +30,14 @@ const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNo
 const evidence={status:'RUNNING',target,sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
   node:process.version,hardware:{platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,memoryBytes:os.totalmem()},
   fixture:{version:'prb-fixed-v1',asOf:AS_OF,totalRows,activeRows,chainLength:Math.min(activeRows,1024),description:'120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers'},
-  workDiagnosticsVersion:1,workDiagnosticsDefinitions:{
+  workDiagnosticsVersion:2,workDiagnosticsDefinitions:{
     step:'Synchronous generator next() duration; maxUnits is work reported at a checkpoint (rows, peers or comparisons), not a candidate limit.',
     slice:'Time spent in this generator between explicit yields to I/O; final next() also obeys the 2 ms scheduling budget.',
     yieldWait:'Elapsed await setImmediate, including other requests, I/O and scheduler delay; not synchronous CPU time.',
     pgWall:'PG query wall time including server, transport and decoding; submitSync/appendRows.sync measure only the named synchronous section.',
     gcPause:'Observed GC duration inside the measured window; tickGap includes the nominal 10 ms timer interval.',
+    timeline:'At most 32 longest spans >=20 ms per selected category, all on performance.now clock. Overlap is evidence of coincidence, not causation; independent maxima must not be added.',
+    statsReduce:'Canonical stats profile_sync_ms/count_sync_ms are accumulated synchronous work; reduce_ms includes scheduling. They are not the previous separate profile/count wall stages.',
   },warms,runs,cases:[]};
 const save=()=>{mkdirSync(path.dirname(out),{recursive:true});writeFileSync(out,JSON.stringify(evidence,null,2)+'\n');};
 const percentile=(items,p)=>{const a=[...items].sort((a,b)=>a-b);return a[Math.max(0,Math.ceil(a.length*p)-1)]??null;};
@@ -91,6 +93,7 @@ try {
               if(prior?.sql===normalized) {prior.calls++;prior.ms+=performance.now()-queryStart;prior.rows+=result.rowCount||0;}
               else coldQueries.push({sql:normalized,calls:1,ms:performance.now()-queryStart,rows:result.rowCount});
               if(/^DECLARE /.test(text) && /SELECT post_id(?:, source,|, xmin| FROM listings)/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
+              if(/^SELECT COUNT\(\*\) AS n FROM listings WHERE/.test(text)) planInputs.push({sql:text,params});
             }
             return result;
           }};
@@ -133,20 +136,27 @@ try {
             requestSnapshot:summarize(snapshotPlan.rows[0]['QUERY PLAN'][0])});
         }
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));
+        // Idle transport/server baseline, outside all timed samples and gates.
+        const roundTrips=[];
+        for(let i=0;i<10;i++) {const t=performance.now();await driver.query('SELECT 1');roundTrips.push(performance.now()-t);}
         const work=createWorkDiagnostics();
         const lag=monitorEventLoopDelay({resolution:10});lag.enable();await pause(20);
-        const measuredStart=performance.now();let measuredEnd=Infinity,lastTick=measuredStart;
-        const recordGC=entries=>{for(const entry of entries) if(entry.startTime>=measuredStart&&entry.startTime<measuredEnd) work.record('gc.pause',entry.duration);};
+        const measuredStart=performance.now(),cpuStart=process.cpuUsage();let cpuUsed,measuredEnd=Infinity,lastTick=measuredStart;
+        const recordGC=entries=>{for(const entry of entries) if(entry.startTime>=measuredStart&&entry.startTime<measuredEnd) work.record('gc.pause',entry.duration,0,entry.startTime);};
         const gcObserver=new PerformanceObserver(list=>recordGC(list.getEntries()));gcObserver.observe({entryTypes:['gc']});
-        const timer=setInterval(()=>{const now=performance.now();work.record('eventLoop.tickGap',now-lastTick);lastTick=now;
+        const timer=setInterval(()=>{const now=performance.now();work.record('eventLoop.tickGap',now-lastTick,0,lastTick);lastTick=now;
           const m=process.memoryUsage();rss=Math.max(rss,m.rss);heap=Math.max(heap,m.heapUsed);},10);
         let next=0;
         try {
           await withWorkDiagnostics(work,()=>Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);})));
           measuredEnd=performance.now();
+          cpuUsed=process.cpuUsage(cpuStart);
           await pause(20);
         } finally {clearInterval(timer);lag.disable();recordGC(gcObserver.takeRecords());gcObserver.disconnect();}
         const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,expected,workDiagnostics:work.snapshot(),
+          workTimeline:work.timeline(),measurementClock:{timeOrigin:performance.timeOrigin,startMs:measuredStart,endMs:measuredEnd},
+          processCpu:{userMs:cpuUsed.user/1000,systemMs:cpuUsed.system/1000,wallMs:measuredEnd-measuredStart},
+          idleRoundTripMs:{samples:roundTrips.length,p50:percentile(roundTrips,.5),max:Math.max(...roundTrips)},
           resultSignature:createHash('sha256').update(baseline).digest('hex'),
           stageP95Ms:Object.fromEntries(Object.entries(stageSamples).map(([key,values])=>[key,percentile(values,.95)])),
           p50Ms:percentile(samples,.5),p95Ms:percentile(samples,.95),maxMs:Math.max(...samples),

@@ -6,7 +6,8 @@ import path from 'node:path';
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'prb-counter-contract-'));
 process.env.DATA_DIR = dataDir;
-const { summarizeListingStats, summarizeListingStatsAsync } = await import('../src/db.js');
+const { summarizeListingStats, summarizeListingStatsAsync, summarizeRawListingStatsAsync,
+  buildListingStatsRowsAsync, preloadedDecorationProvider } = await import('../src/db.js');
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
 const row = (post_id, extra = {}) => ({
@@ -63,4 +64,30 @@ test('chunked counters add row counts while preserving global totals once', asyn
   const global = new Set(['offline', 'offlineConfirmed', 'watchedTotal', 'dbTotal']);
   assert.deepEqual(actual, Object.fromEntries(Object.entries(expected)
     .map(([key, value]) => [key, global.has(key) ? value : value * repetitions])));
+});
+
+test('streaming raw counters preserve filtering, personal flags and totals across partial chunks', async () => {
+  const {candidateRowFromValues,LIST_CANDIDATE_KEYS} = await import('../src/listingCandidateRow.js');
+  const raw = Array.from({length:1031},(_,i)=>{
+    const item={...rows[i%rows.length],post_id:i+1,source:'591',price_num:10000+i,
+      price:String(10000+i),floor_name:'5/12',area_name:'20坪'};
+    return Object.freeze(candidateRowFromValues(LIST_CANDIDATE_KEYS.map(key=>item[key] ?? null)));
+  });
+  const flags=new Map(raw.filter((_,i)=>i%7===0).map(r=>[r.post_id,{viewed:1,watched:r.post_id%2,hidden:r.post_id%3===0?1:0}]));
+  for(const selected of [[],raw.slice(0,1),raw.slice(0,255),raw.slice(0,257),raw]) {
+    for(const priceMin of [0,10500]) {
+      const conf={...settings,commuteKm:0,priceMin};
+      const provider=preloadedDecorationProvider({personalFlags:flags});
+      const shared={...options,rows:selected,settings:conf,provider,flagMap:flags,userId:101,candidateShape:true};
+      const profileRows=await buildListingStatsRowsAsync(shared);
+      const expected=await summarizeListingStatsAsync({...shared,profileRows});
+      const diagnostics={};
+      assert.deepEqual(await summarizeRawListingStatsAsync(shared,diagnostics),expected);
+      assert.equal(expected.dbTotal,100);
+      assert.equal(expected.watchedTotal,3);
+      assert.ok(diagnostics.reduce_ms>=0);
+      assert.ok(diagnostics.profile_sync_ms>=0);
+    }
+  }
+  assert.equal(raw.length,1031);
 });

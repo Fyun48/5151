@@ -7091,6 +7091,37 @@ export function summarizeListingStatsAsync(options = {}) {
   })(), {label:'stats.count'});
 }
 
+// Profile overlays are private to counters. Count and release each complete
+// chunk instead of retaining tens of thousands of wide objects until the end.
+export async function summarizeRawListingStatsAsync(options = {}, diagnostics = null) {
+  const {rows = [], ...shared} = options;
+  let profileMs = 0, countMs = 0;
+  const started = performance.now();
+  const result = await runStepsAsync((function* () {
+    const total = summarizeListingStats({...shared, profileRows:[]});
+    for (let start = 0; start < rows.length; start += 256) {
+      const chunk = rows.slice(start, start + 256);
+      let before = performance.now();
+      const profileRows = buildListingStatsRows({...shared, rows:chunk});
+      profileMs += performance.now() - before;
+      yield {label:'stats.profile',units:chunk.length};
+      before = performance.now();
+      const counts = summarizeListingStats({...shared, profileRows, statusCounts:{}, watchedTotal:0, dbTotal:0});
+      for (const key of Object.keys(total)) total[key] += counts[key];
+      countMs += performance.now() - before;
+      yield {label:'stats.count',units:profileRows.length};
+    }
+    return total;
+  })(), {label:'stats.reduce'});
+  if (diagnostics) {
+    // These are accumulated synchronous durations, not old stage wall times.
+    diagnostics.profile_sync_ms = profileMs;
+    diagnostics.count_sync_ms = countMs;
+    diagnostics.reduce_ms = performance.now() - started;
+  }
+  return result;
+}
+
 /**
  * Stage 2 of stats(): the counters themselves. `provider` is the decoration provider
  * (route cache reads for `missingRoute`); without one the SQLite route cache is used.
