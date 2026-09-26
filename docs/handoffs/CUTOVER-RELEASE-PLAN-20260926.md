@@ -28,12 +28,32 @@
 
 ## 四、切換順序（依既有流程，不新增路徑）
 
-1. **合併 PR #497** → 取得 merge SHA。
-2. `build-production-image.yml`：以 merge SHA 建置並取得 **image digest**。
-3. `production-predeploy-check.yml`：現在會同時備份 SQLite 與 **PG**（少了 PG dump 會 fail）。
-4. `deploy-v3.yml`：先重建 A 群（CasaOS），再重建 B 群（Synology），同一個 digest。
-5. **部署後才取最後差異**：兩個節點都跑新映像之後，SQLite 不應再被寫入；
-   此時重取一次 SQLite 快照 → 重跑 `cutover-backfill.mjs` → 套用差額 → 套用 3 筆衝突處置。
+三條 workflow 的輸入已核對（`PRODUCTION_DEPLOY_ALLOWED_ACTOR=Fyun48`，`release_mode` 用預設
+`manual_owner`、`release_intent_id` 留空）：
+
+1. **合併 PR #497** → 取得 **master 上的 merge SHA**（三個 workflow 都要求 `sha` 可從
+   `origin/master` 追溯）。
+2. ```bash
+   gh workflow run build-production-image.yml --repo Fyun48/5151 --ref master \
+     -f sha=<merge SHA> -f release_mode=manual_owner
+   ```
+   完成後從 run 的 artifact／log 取得 **image digest**（`sha256:` ＋ 64 碼）。
+3. ```bash
+   gh workflow run production-predeploy-check.yml --repo Fyun48/5151 --ref master \
+     -f sha=<merge SHA> -f confirmation=PREDEPLOY-PRODUCTION -f release_mode=manual_owner
+   ```
+   現在會同時備份 SQLite 與 **PG**（缺 PG dump 會 fail），並輸出 `pg_backup_sha256`。
+4. ```bash
+   gh workflow run deploy-v3.yml --repo Fyun48/5151 --ref master \
+     -f sha=<merge SHA> -f image_digest=<digest> \
+     -f confirmation=DEPLOY-PRODUCTION -f release_mode=manual_owner
+   ```
+   先重建 A 群（CasaOS），再重建 B 群（Synology），兩邊同一個 digest。
+5. **部署後才取最後差異**：兩個節點都跑新映像之後 SQLite 不應再被寫入；
+   重取一次 SQLite 快照 → 重跑 `cutover-backfill.mjs`（新的 `backfill.sql`）→ 套用差額 →
+   套用 `conflicts.sql`（4 句，前提是 Owner 對 15 筆的決定不影響它們）。
+   ⚠️ **舊的 `backfill.sql`／`conflicts.sql` 是 09-26 快照產生的，切換當天必須重新產生**，
+   不能直接套用（PG 已經又長了資料：listings 由 126,734 增至 126,994）。
 6. **短驗證**：版本／health／登入／關鍵 A/B 讀寫（A 寫→B 讀→B 改→A 讀）／房源搜尋／
    一輪必要抓取入庫；確認 SQLite 檔的 mtime 不再前進、standby 正常接收。
 
