@@ -1,5 +1,19 @@
 # PR-B 可接續狀態
 
+## 本批提交：整輪 PostgreSQL ownership
+
+新增 crawlOwnership.js 與 crawl-ownership.test.js；整輪使用專用 PG 連線與 session advisory lock，爬蟲 driver 交易沿同一連線序列執行。取消／斷線後拒絕新操作、等待現有交易回滾才解鎖；晚到 SQLite callback 也受 owner scope 保護。
+獨立座標補算在 owner scope 外啟動，避免繼承已結束的鎖；巢狀 driver 交易明確拒絕，須使用現有 client，避免死鎖。
+本機相關測試 28／25 pass／0 fail／3 PG-only skip；本批真 PG CI 與 NAS 尚待執行，不沿用父 SHA 綠燈。
+這是同一 PG database 的單輪排他，不代表雙 primary fencing／完整 HA；raw pool 繞過 driver 的路徑與已送出的外部副作用不在此保證。其餘 legacy SQLite、跨節點業務與備份復原仍待驗證。
+
+## 最新已測版本：1e0813e NAS 完成
+
+[Run 36250785406](https://github.com/Fyun48/5151/actions/runs/36250785406)，[原始證據](../../evidence/prb-nas-1e0813e/README.md)。
+受測 SHA `1e0813e14f3934fe6218065c054ac4f9cfd63261`；真 PG 156 pass／0 fail；四案 p95 1915.93／4812.84／2048.02／6267.02 ms。
+200 次 errors／timeouts=0、結果 hash 相同；原始 NAS_ACCEPTANCE_FAIL。清理三項 0，144 行 JSONL 有效。fixture 計畫比對見附件，未證實退步根因。
+未合併、未部署應用程式，NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+
 ## 後續程式批次：持久輪替與成功完成範圍
 
 - 新 `crawlScheduleAsync` 從目前 driver 的 settings/users/user_settings 建立計畫；PG 不再以節點 SQLite 的會員條件或來源開關決定本輪內容。

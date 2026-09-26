@@ -3487,6 +3487,8 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
+import { withPgCrawlOwner } from "./crawlOwnership.js";
+import { sharedPgDriver } from "./pgSharedDriver.js";
 import { coveringPlanAsync, reserveCoveringPlan } from "./crawlScheduleAsync.js";
 
 async function tick(reason = "schedule") {
@@ -3507,63 +3509,64 @@ async function tick(reason = "schedule") {
   }
   const tickGen = tickGate.begin();
   try {
-    expireStaleVerifyTokens({
-      onExpire: (user) => {
-        if (user?.email) queueSystemMail("verify_expired", user.email);
-      },
-    });
-    try {
-      pauseIdleMembers();
-    } catch (error) {
-      console.warn("閒置暫停失敗：", error.message);
-    }
-    const now = Date.now();
-    const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
-    if (
-      reason === "manual"
-      && !systemDue
-      && lastRun?.checked_at
-      && !lastRun.error
-      && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
-    ) {
-      const duePlan = await coveringPlanAsync({ now, includeSystem: false });
-      if (!duePlan.jobs.length) {
+    const execute = async () => {
+      expireStaleVerifyTokens({
+        onExpire: (user) => {
+          if (user?.email) queueSystemMail("verify_expired", user.email);
+        },
+      });
+      try {
+        pauseIdleMembers();
+      } catch (error) {
+        console.warn("閒置暫停失敗：", error.message);
+      }
+      const now = Date.now();
+      const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
+      if (
+        reason === "manual"
+        && !systemDue
+        && lastRun?.checked_at
+        && !lastRun.error
+        && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
+      ) {
+        const duePlan = await coveringPlanAsync({ now, includeSystem: false });
+        if (!duePlan.jobs.length) {
+          return {
+            ...lastRun,
+            skipped: "interval",
+            reason,
+            message: "設定已記下，下次排程會用最新條件檢查",
+          };
+        }
+      }
+      const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
+      const plan = await reserveCoveringPlan({ now, includeSystem });
+      if (!plan.jobs.length) {
         return {
-          ...lastRun,
-          skipped: "interval",
+          skipped: "idle",
           reason,
-          message: "設定已記下，下次排程會用最新條件檢查",
+          message: "目前沒有要向外抓取的條件",
+          checked_at: new Date().toISOString(),
+          searches: [],
+          events: [],
         };
       }
-    }
-    const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
-    const plan = await reserveCoveringPlan({ now, includeSystem });
-    if (!plan.jobs.length) {
-      return {
-        skipped: "idle",
-        reason,
-        message: "目前沒有要向外抓取的條件",
-        checked_at: new Date().toISOString(),
-        searches: [],
-        events: [],
-      };
-    }
-    const result = await withBudget(
-      () => runWatch({
+      const result = await runWatch({
         skipHeavyGeo: true,
-        // 持久化公平輪替；失敗不記完成，重啟與不規則間隔不會跳過固定組。
         jobs: plan.jobs,
         memberRequirements: plan.memberRequirements,
-        includedUserIds: plan.includedUserIds,
         includeSystem: plan.includeSystem,
-      }),
-      TICK_BUDGET_MS,
-      "這輪抓取",
-      { signal: tickGate.signal(tickGen) },
-    );
-    if (!tickGate.isCurrent(tickGen)) return result;
+      });
+      return result;
+    };
+    const result = await withBudget(async signal => {
+      if (resolveDbDriver() !== "postgres") return execute();
+      return withPgCrawlOwner(await sharedPgDriver(), execute, { signal });
+    }, TICK_BUDGET_MS, "這輪抓取", { signal: tickGate.signal(tickGen) });
+    if (!tickGate.isCurrent(tickGen) || ["owner_busy", "idle", "interval"].includes(result?.skipped)) return result;
     lastRun = result;
     lastRun.reason = reason;
+    // Independent background jobs must not inherit the finished crawl's owner.
     broadcastWatch(lastRun);
     if (reason !== "startup") queueGeoBackfill();
     return lastRun;

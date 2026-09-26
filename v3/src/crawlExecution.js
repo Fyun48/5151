@@ -13,6 +13,7 @@ export function currentCrawlExecution() {
 export function throwIfCrawlCancelled() {
   const current = execution.getStore();
   if (!current) return;
+  current.assertOwner?.();
   // Check the clock as well: a long synchronous segment can delay the timer.
   if (Date.now() >= current.deadline && !current.signal.aborted) {
     current.controller.abort(current.timeoutError);
