@@ -29,8 +29,6 @@ import {
   commuteRushEnabled,
   collectCommuteSettings,
   copyUserFlags,
-  setListingMatch,
-  reconcileListingById,
   touchListingChecked,
   updateListingsGeoByAddress,
   getCachedGeo,
@@ -113,6 +111,9 @@ import {
 } from "./crawlerWrites.js";
 // 樂屋抓取游標：PG 模式下不再讀寫本機 SQLite（見 crawlerProgressAsync.js 的說明）。
 import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawlerProgressAsync.js";
+// 配對與同屋重評估：站上讀 PG 的 listing_group_members，寫入也必須進 PG
+// （見 listingMatchAsync.js 的說明）。
+import { reconcileListingByIdAsync, setListingMatchAsync } from "./listingMatchAsync.js";
 
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
@@ -289,7 +290,7 @@ async function applyFetchedDetail(listing, detail) {
     furnish_items: detail.furnish_items,
     kit_fetched: 1,
   });
-  try { reconcileListingById(listing.post_id, { reason: "detail_enrichment" }); } catch { /* ignore */ }
+  try { await reconcileListingByIdAsync(listing.post_id, { reason: "detail_enrichment" }); } catch { /* ignore */ }
   return saved;
 }
 
@@ -855,18 +856,18 @@ export async function runWatch(options = {}) {
       if (upserts % 20 === 0) await yieldEventLoop();
 
       if (!existing && prev && (level === "high" || level === "medium")) {
-        setListingMatch(listing.post_id, {
+        await setListingMatchAsync(listing.post_id, {
           match_post_id: prev.post_id,
           match_level: level,
           match_detail: detail,
         });
       } else if (existing && significantListingUpdate(existing, listing)) {
-        try { reconcileListingById(listing.post_id, { reason: "significant_update" }); } catch { /* ignore */ }
+        try { await reconcileListingByIdAsync(listing.post_id, { reason: "significant_update" }); } catch { /* ignore */ }
       }
       if (!existing && prev) {
         const copied = copyUserFlags(prev.post_id, listing.post_id);
         if (copied || prev.hidden || prev.viewed) {
-          setListingMatch(listing.post_id, {
+          await setListingMatchAsync(listing.post_id, {
             match_post_id: prev.post_id,
             match_level: level || "high",
             match_detail: detail,
