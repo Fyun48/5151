@@ -17,6 +17,10 @@ pg_container="$tag-pg"
 app_container="$tag-app"
 deps_volume="$tag-deps"
 pg_volume="$tag-pgdata"
+# Provenance labels: every resource this script creates stays attributable even
+# if cleanup never runs, so an interrupted run cannot leave anonymous resources.
+labels=(--label "prb-nas-verify=1" --label "prb-nas-verify.sha=$sha"
+        --label "prb-nas-verify.script=v3/scripts/prb-nas-verify.sh")
 cleanup() {
   docker rm -f "$app_container" "$pg_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
@@ -30,15 +34,15 @@ trap 'exit 143' TERM
 git -C "$root" worktree add --detach "$work/checkout" "$sha"
 docker pull node:22-bookworm
 docker pull postgres:16.14-alpine
-docker volume create "$deps_volume" >/dev/null
-docker volume create "$pg_volume" >/dev/null
+docker volume create "${labels[@]}" "$deps_volume" >/dev/null
+docker volume create "${labels[@]}" "$pg_volume" >/dev/null
 # Installation has registry access but receives no PG or infrastructure secrets.
-docker run --rm --name "$app_container" \
+docker run --rm "${labels[@]}" --name "$app_container" \
   --mount "type=bind,src=$work,dst=$work" \
   --mount "type=volume,src=$deps_volume,dst=$work/checkout/node_modules" \
   --workdir "$work/checkout" node:22-bookworm npm ci
-docker network create --internal "$network" >/dev/null
-docker run -d --name "$pg_container" --network "$network" --network-alias prb-pg \
+docker network create --internal "${labels[@]}" "$network" >/dev/null
+docker run -d "${labels[@]}" --name "$pg_container" --network "$network" --network-alias prb-pg \
   --mount "type=volume,src=$pg_volume,dst=/var/lib/postgresql/data" \
   --env POSTGRES_DB=tracker_prb_test --env POSTGRES_USER=postgres \
   --env POSTGRES_HOST_AUTH_METHOD=trust \
@@ -55,7 +59,7 @@ docker inspect --format '{{.Image}}' "$pg_container" > "$output/postgres-image.t
 docker image inspect --format '{{.Id}}' node:22-bookworm > "$output/node-image.txt"
 # Both mounts preserve worktree .git paths. The original checkout stays read-only.
 # The internal network has no route to production and publishes no host ports.
-docker run --rm --name "$app_container" --network "$network" \
+docker run --rm "${labels[@]}" --name "$app_container" --network "$network" \
   --mount "type=bind,src=$root,dst=$root,readonly" \
   --mount "type=bind,src=$work,dst=$work,readonly" \
   --mount "type=volume,src=$deps_volume,dst=$work/checkout/node_modules,readonly" \
