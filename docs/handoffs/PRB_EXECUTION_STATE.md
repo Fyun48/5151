@@ -1,124 +1,33 @@
-# PR-B 執行狀態
+# PR-B 可接續狀態
 
-更新：2026-09-26。接手人：Codex。狀態：**IN_PROGRESS / NOT_READY_FOR_REVIEW**。
-PR [#497](https://github.com/Fyun48/5151/pull/497) 保持未合併、未部署。
+更新：2026-09-26。**BLOCKED：需要既有 NAS 執行通道，才能完成實機驗收。**
+PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。
 
-## 可接續位置
+- 分支：`fix/pr-b-persist-listing-transaction`；精確最終 HEAD 讀 GitHub PR，不使用先前報告的 HEAD 當最新值。
+- 已完成實測的程式 SHA：`316995b768415e7b69f03e658c4027cdb5bab6cd`；[Tests run 36222517400](https://github.com/Fyun48/5151/actions/runs/36222517400)。
+- 一般 2,598 pass／0 fail／34 skip；PG 129 pass／0 fail／1 optional shadow skip。CI smoke PASS；本批 lag 全部達標。
+- 全部修正、效能表、驗證範圍、保留／撤回理由：[接手結果](PRB_CODEX_TAKEOVER_20260926.md)。
+- 原始及中間量測：`evidence/prb-codex-20260926/`；失敗歷程保留於 Git，不靠重跑或取消 CI 製造綠燈。
+- 整體架構的剩餘 gate：[GATE 1～12](gate-1-12-evidence-20260924.md)。C～F／完整 HTTP E2E／HA 未完成。
 
-- 分支：`fix/pr-b-persist-listing-transaction`；精確版號以 GitHub PR HEAD 為準。
-- 接手基準：`ad5310e6a70de3b694869b2fefedefabc688a292`。
-- `1c43b7f`：請求時間、PG 設定與來源、清單及統計共用快照、503、queue clock、固定 fixture。
-- `dfe78ee`：訪客 PG 入口、async cache、MRT 設定同源、舊 fixture 必要 schema。
-- 本檔之前的增量紀錄保留在 Git 歷史；過去的 CI 綠燈不代表目前 HEAD 已驗收。
-- 詳細接手範圍：`PRB_CODEX_TAKEOVER_20260926.md`。
+## 下一步
 
-## 已確認的修正
+1. 提供本工作階段可用的既有 NAS 遠端執行通道。沒有要求新 tunnel、重建憑證庫或先部署。
+2. 在獨立 checkout，以 PR 最終 HEAD 執行 `bash v3/scripts/prb-nas-verify.sh <完整 SHA>`。
+   完整指令及產物位置：`docs/runbooks/PRB_NAS_Disposable_Verification.md`。
+3. 讀取 PG test log／四案效能 JSON，修正任何未達標項目；NAS gate 通過前不得標 READY_FOR_REVIEW。
+4. 完整 PR-B 驗收後，另依 C～F 的逐項 gate 接續整體遷移；正式變更維持 manual-only。
 
-1. `asOf` 傳入可見性、primary、排序、same-house bundle；原交接所稱第四個 public 呼叫其實屬於 stats，不照舊行號盲改。
-2. PG 搜尋 context 使用必要 PG tables；不吞缺表錯誤，不使用跨請求 search-key TTL 或全域表存在快取。
-3. 清單／統計在同一個 Repeatable Read 唯讀交易；初始 `/api/state` 也使用完整 page 入口。
-4. PG 的來源啟用與 MRT 顯示設定不讀 SQLite。測試攔截的是 I/O 嘗試，不只未捕捉例外。
-5. 訪客原先仍直接讀 SQLite，現已接 async PG pipeline。其候選、群組、卡片均由 PG 供料；不接受會員身份／私人旗標作為訪客條件。
-6. PG public cache 暫不跨請求重用：現有 revision 屬 best-effort，不能保證其涵蓋所有變更。SQLite 繼續既有 TTL cache；async 失敗不快取。
-7. 正式 PG 入口固定 `node_pg`，SQL PG 實驗另放診斷模組；沒有 SQLite 逃生參數。
-8. Queue 預設 availableAt 使用注入的 now；live fixture 隔離 schema 並建立實際需要的唯一索引。
-9. 會員前端 HTTP 失敗先拋錯，保留清單、統計、篩選、分頁，不把 503 當成零筆結果。
+## 本機／CI 重跑
 
-## 證據狀態
+```bash
+npm ci
+TZ=UTC npm test
+# 僅在已設定拋棄式 PG_TEST_URL／PG_URL 的隔離環境：
+npm run test:pg
+node v3/scripts/prb-search-benchmark.mjs
+```
 
-- 本機第一批完整套件：2,621 tests / 2,590 pass / 0 fail / 31 skip。
-- 第一批 CI（`1c43b7f`，run `36219022055`）：一般 Tests 成功；PG 110 pass / 13 fail / 1 skip。
-  失敗根因：MRT 裝飾漏讀 SQLite；舊 fixture 缺 settings；新的隔離 queue fixture 缺唯一索引。均依實際錯誤修正。
-- 第二批 CI（`dfe78ee`，run `36219436279`）：PG 122 pass / 3 fail / 1 skip。價格上限仍用 SQLite typeof；PG 測試程序中的 SQLite 啟動回填 timer 干擾 I/O spy；兩者已修正。
-- 同批規模量測：單區 C1 p95 2,414.79ms（超標）、C4 6,961.32ms；全區 C1 2,703.46ms、C4 8,293.12ms；lag 全部超標，最高 RSS 2,150,023,168 bytes，0 error。原始證據 `evidence/prb-codex-20260926/baseline-dfe78ee.json`。
-- 下一批移除統計無用裝飾查詢、重用同快照候選 extras（包含被 profile filter 排除的 partner），保持寬候選欄位。須等新量測，未宣稱效能已通過。
-- 本機第二批完整套件：2,625 tests / 2,592 pass / 1 fail / 32 skip；失敗是 MRT 原始碼斷言未隨來源抽換更新，已修正並通過定向測試。
-- `v3/test/listing-search-parity.test.js`：會員兩頁、正式 SQLite projection dispatcher、個人旗標與投票者分離、通勤、固定時間、缺表／空結果、跨請求更新、訪客 PG-only sentinel。
-- `v3/test/listing-search-client-error.test.js`：以實際前端 loadList 函式注入 HTTP 503，確認既有狀態保持。
-- `v3/test/listing-search-http.test.js`：使用正式 page loader 與錯誤回應 helper 的 HTTP 整合；不是完整 production/auth E2E。
-- lint：NOT_RUN。正式資料雙節點 HTTP E2E：NOT_RUN。
-
-## 第三批真實結果與目前修正
-
-`3a716ec30621107f60b60720caa05c957036fb3a`：Tests run `36220337010` 全部完成。
-一般 2,627 tests / 2,594 pass / 0 fail / 33 skip；PG 127 tests / 126 pass / 0 fail / 1 optional shadow skip。
-固定 120k fixture：單區 C1 p95 1,703.15ms、C4 4,668.29ms；全區 C1 1,750.99ms、C4 5,638.95ms。
-C1 CI smoke 通過，但 lag p99 168–404ms、max 242–814ms 均未達標；RSS 最高 2,583,490,560 bytes。
-原始 Actions artifact：`evidence/prb-codex-20260926/after-3a716ec.json`。不能因 CI 綠燈宣稱完整效能驗收通過。
-
-本批針對量到的主執行緒阻塞：候選／統計用同快照 cursor 每批 512 列完整讀取；
-共享 Node pipeline 加入可協作排程，保留全域配對及穩定排序；extras 僅保留實際關係 partner 的原值。
-新增跨 256 列邊界的角色、各排序及 counters parity、cursor 多批／參數／錯誤清理測試。
-每個 FETCH 都計入實際查詢數，不將批次傳輸冒充單一 SQL。必須等本批真 PG 與規模測量後決定是否保留。
-
-## 第四批結果與下一批依據
-
-`1c5115e4171db81326b325cb14170341a004ece6`，run `36221210476`：一般 2,597 pass／0 fail／34 skip；
-真 PG 128 pass／0 fail／1 optional shadow skip。cursor 參數、多批、故障清理與跨 chunk parity 均通過。
-效能仍 FAIL：單區 C1 p95 2,023.56ms；全區 C1 2,005.09ms；C4 5,283.01／5,718.38ms。
-lag 單區 C1 30.61／42.30ms、全區 C1 36.34／50.20ms（p99／max）已 PASS；
-C4 尚有單區 max 116.65ms、全區 p99 53.05ms 超標。所有量測零 error／timeout。
-
-EXPLAIN 實證：單區候選 execution 894.58ms，其中 JIT 814.72ms；全區候選 JIT 824.06ms。
-下一批對搜尋快照使用 `SET LOCAL jit = off`，隨 ROLLBACK 恢復，不改伺服器或 pool 設定。
-此外，實際 pg.Result 產生的寬 row 經 Object.assign 添加旗標會變成 V8 dictionary properties；
-改以完整物件展開建立旗標後，離線同資料 CPU／heap 有實測改善，仍需真 PG 規模驗證。
-所有候選欄位與個人標記語意保留；stats／搜尋參考管線共用相同轉換。
-
-已備好 NAS 拋棄式 container runner 與 runbook；只通過 bash 語法檢查，沒有宣稱本機實跑 Docker。
-benchmark 的 NAS 模式檢查四案 p95 及 lag；CI 模式仍使用原 smoke 門檻。
-
-## 第五批結果與最終收尾
-
-`b6931207970b5186521ea64396c45cc1c4b22e01`，run `36221756986`：真 PG 128 pass／0 fail／1 optional shadow skip，
-CI smoke PASS；一般測試 2,596 pass／1 fail／34 skip。唯一失敗是舊欄位審計把「非 fit 不得 clone」當門檻，
-與已量測的完整物件建構優化衝突。改為驗證每列只完整複製一次、所有寬候選欄位保留、canonical input 不被個人旗標污染。
-不是移除 parity 或用重跑掩蓋功能錯誤。
-
-| 案例 | cold ms | warm p95 ms | lag p99 / max ms | peak RSS bytes | SQL / txn | errors |
-|---|---:|---:|---:|---:|---:|---:|
-| 單區 C1 | 994.79 | 920.31 | 26.87 / 35.26 | 392683520 | 132 / 3 | 0 |
-| 單區 C4 | 779.41 | 2368.79 | 42.14 / 94.24 | 954081280 | 132 / 3 | 0 |
-| 全區 C1 | 836.02 | 858.32 | 38.83 / 45.42 | 945106944 | 165 / 3 | 0 |
-| 全區 C4 | 839.96 | 2773.71 | 49.48 / 101.91 | 1048297472 | 165 / 3 | 0 |
-
-完整原始 evidence：`after-b693120.json`。全區 C4 lag max 還略超 100ms，不填 PASS。
-本次收尾把 stats 的整批 numeric normalization 也納入協作排程、CPU slice 改為 2ms。
-額外修正大量通勤／MRT／job 文字 key 的 PG bind 上限，改成單一 text array；真 PG 驗證 70,001 個 key 仍取得既有資料。
-SQLite I/O guard 也攔截事先 prepare 的 StatementSync 方法，包含被吞掉的例外。
-以上須等最終 HEAD CI；只因文件引用的舊 SHA 通過，不能代替最終版號。
-
-## 第六批與最後一個已確認的大批傳輸
-
-`da6750d470e52070a6dcefd365254b4a05375c23`，run `36222113438` 全部完成：
-一般 2,598 pass／0 fail／34 skip；真 PG 129 pass／0 fail／1 optional shadow skip；CI smoke PASS。
-本機 Node 24：2,632 tests／2,598 pass／0 fail／34 skip。
-單區 C1 p95 727.53ms／C4 2,038.55ms；全區 C1 748.23ms／C4 2,233.20ms。
-四案 lag p99 都低於 50ms；單區 C4 max 101.38ms 仍略超 100ms（不宣稱完整 lag PASS）。
-原始 artifact 已保存 `after-da6750d.json`。
-
-單區仍一次回傳 60,000 個 district seed ID；本批把 seeds／關係讀取納入同快照 cursor，
-其 ID／root Set 建構也分段執行。query 數增加的原因是固定大小 FETCH，沒有逐房源／逐群組 N+1。
-benchmark 再加入獨立推導的固定 ID／matched／total／dbTotal，記錄結果 hash；
-不允許縮成少於 120k stored／36k active 來通關。待本批 CI 完成後更新 PR 本文的精確 HEAD 證據。
-
-## 效能驗收
-
-`v3/scripts/prb-search-benchmark.mjs` 在自行建立的 PG schema 執行並自行清除。
-120,000 筆固定資料／36,000 筆查詢範圍／1,024 節點跨區關係鏈。
-單區及全區各跑 C1、C4；每案至少 5 輪暖機、50 個完整清單回應，含統計及 JSON 序列化。
-Actions artifact：`prb-search-performance`。記錄精確 SHA、模組 hash、硬體、PG/Node、p95、lag、RSS、查詢數與錯誤。
-CI 的 smoke 與 NAS gate 分開，不能互相替代。
-
-## 存取阻礙及正式環境界線
-
-已讀 `Fyun48/cline-server` 的 infra／credentials／remote-access 文件。
-目前工作環境沒有文件指定的 `~/.secrets/INDEX.md`、`~/.ssh/nas_cline` 或 `~/.ssh/5151-v3-syn-nas`。
-現有 VS Code 遠端入口顯示未登入、沒有可用 host。沒有改驗證設定或建立新 tunnel。
-因此 NAS 同級實機效能目前 **BLOCKED**，需要把既有可用遠端執行通道提供給本次工作環境，或在既有 NAS 開發環境執行同 SHA 的拋棄式驗收。
-正式庫名 `5151_shadow` 不代表測試庫；禁止把 CI setup／fixture import 指向它。
-
-## 後續
-
-等待目前 CI 完成，讀取所有失敗與效能證據；修正後一次推送並等同 SHA CI。
-NAS gate、完整正式 HTTP E2E 及原始 C～F 架構工作仍分開列明；不能宣稱整站已離開 SQLite。
+本機 Node 24 最近完整結果：2,632 tests／2,598 pass／0 fail／34 skip；CI 使用 Node 22／PG 16.14。
+必要 PG fixture 由專用 CI job 實跑；lint NOT_RUN。NAS runner 只完成 bash 語法檢查，實機容器流程 NOT_RUN。
+正式庫 `5151_shadow` 不可用於 setup／import／migration／ANALYZE；測試腳本不接受正式連線。

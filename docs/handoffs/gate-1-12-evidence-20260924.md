@@ -17,7 +17,7 @@
 | **9 補遷** | NOT_RUN | 無本次完成證據。 | PR-D／E 資料、媒體核對與衝突處理。 |
 | **10 完整執行覆蓋** | NOT_RUN | CI fixture 是功能與效能測試，不是正式抓取週期觀測。 | 連續兩個完整覆蓋週期、至少 30 分鐘，取較長者。 |
 | **11 HA／回版** | PARTIAL | 既有 infra 文件記錄 primary＋async standby、archive_mode=off；有 PITR runbook。 | 未執行封存、還原、promotion／failover、RPO／RTO 實測、舊版讀新 schema。本次沒有改正式環境。 |
-| **12 CI 可信度** | PARTIAL | `3a716ec` 的 Tests run `36220337010` 完成：一般 2,594 pass／0 fail／33 skip；真 PG 126 pass／0 fail／1 optional shadow skip；C1 smoke PASS。`1c5115e` 真 PG 128 pass／0 fail／1 skip、一般 2,597 pass／0 fail／34 skip，但效能 smoke 因單區 p95 2,023.56ms 失敗；詳見執行狀態。 | 最終 HEAD 必須等 CI 完成後核對，不用前一 SHA 代替。必要 PG fixture 實際執行；optional 正式 shadow probe 的 skip 不代表已驗正式資料。lint NOT_RUN。 |
+| **12 CI 可信度** | PASS（本批程式） | `316995b` 的 [Tests run 36222517400](https://github.com/Fyun48/5151/actions/runs/36222517400)：一般 2,598 pass／0 fail／34 skip；真 PG 129 pass／0 fail／1 optional shadow skip；C1 smoke PASS。 | 最終文件提交的 HEAD CI 另在 PR 本文核對；CI 並未替代 NAS／完整 HTTP E2E／lint（NOT_RUN）。 |
 
 原始效能 JSON：`evidence/prb-codex-20260926/`。
 可接續狀態：`docs/handoffs/PRB_EXECUTION_STATE.md`。
