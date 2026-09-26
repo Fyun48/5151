@@ -132,10 +132,14 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   console.log(`PARITY-DISTRICTS ${JSON.stringify({ allowedDistricts, regionId, sectionId })}`);
   assert.ok(regionId && sectionId, "必須由 URL 推導出 region｜section（否則 districtSet 條件無法成立）");
   const sourceKey = `${regionId}|${sectionId}`;
+  // ✗ B4 排序決定性：三列 `first_seen_at` 若**相同** ⇒ 平手 ⇒ **順序永遠不會被驗證** ✗
+  //   ⇒ 明確給不同時間（索引越大越舊 ✓）⇒ `newest` 的預期順序為 [SEED, SEED+1, SEED+2] ✓
+  //   （固定算式 ✓，不用每次 `new Date()` ✗）。
+  const stampFor = (i) => new Date(Date.parse(FIXED_ISO) - i * 60_000).toISOString();
   const seeds = [0, 1, 2].map((i) => ({
     post_id: SEED + i, source: "591", source_key: sourceKey, search_key: key,
     title: `parity ${i}`, url: `https://example.test/parity/${i}`,
-    first_seen_at: iso, last_seen_at: iso, offline: 0,
+    first_seen_at: stampFor(i), last_seen_at: stampFor(i), offline: 0,
   }));
   const insertSqlite = sqliteDb.prepare(
     `INSERT OR REPLACE INTO listings
@@ -222,6 +226,8 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     assert.ok(idsOf(viaSqlite).length > 0, `SQLite 結果不得為空（實際 ${JSON.stringify(idsOf(viaSqlite))}）`);
     // ① 集合與順序 ✓
     assert.deepEqual(idsOf(viaPg), idsOf(viaSqlite), "id 集合與順序必須一致");
+    // ✓ 裁決 §4 第 2 點：**先有人工確定的預期**，再檢查兩邊一致 ✓（兩邊相同不代表兩邊都正確 ✗）。
+    assert.deepEqual(idsOf(viaPg), [SEED, SEED + 1], "newest 預期順序：page1/limit=2 ⇒ 第 1、2 列");
     // ② 總數 ✓
     assert.equal(totalOf(viaPg), totalOf(viaSqlite), "totalMatched 必須一致");
     // ③ same-house 角色／個人狀態 ✓
