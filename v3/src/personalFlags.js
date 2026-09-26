@@ -37,7 +37,7 @@ export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
   if (!listing) return listing;
   const f = flags && typeof flags === "object" ? flags : emptyFlags();
   const systemDup = String(listing.match_verdict || "") === "yes";
-  return Object.assign(inPlace ? listing : { ...listing }, {
+  const personal = {
     viewed: Number(f.viewed) || 0,
     watched: Number(f.watched) || 0,
     hidden: systemDup ? 1 : Number(f.hidden) || 0,
@@ -45,7 +45,10 @@ export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
     viewed_at: f.viewed_at || null,
     watched_at: f.watched_at || null,
     hidden_at: systemDup ? listing.hidden_at || f.hidden_at || null : f.hidden_at || null,
-  });
+  };
+  // Create the complete shape at once. Adding seven fields to a wide PG row
+  // with Object.assign converts V8's fast properties into a larger dictionary.
+  return inPlace ? Object.assign(listing, personal) : { ...listing, ...personal };
 }
 
 export function loadFlags(conn, userId, postId) {

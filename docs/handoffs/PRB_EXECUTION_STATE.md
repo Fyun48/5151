@@ -51,6 +51,23 @@ C1 CI smoke 通過，但 lag p99 168–404ms、max 242–814ms 均未達標；RS
 新增跨 256 列邊界的角色、各排序及 counters parity、cursor 多批／參數／錯誤清理测试。
 每個 FETCH 都計入實際查詢數，不將批次傳輸冒充單一 SQL。必須等本批真 PG 與規模測量後決定是否保留。
 
+## 第四批結果與下一批依據
+
+`1c5115e4171db81326b325cb14170341a004ece6`，run `36221210476`：一般 2,597 pass／0 fail／34 skip；
+真 PG 128 pass／0 fail／1 optional shadow skip。cursor 參數、多批、故障清理與跨 chunk parity 均通過。
+效能仍 FAIL：單區 C1 p95 2,023.56ms；全區 C1 2,005.09ms；C4 5,283.01／5,718.38ms。
+lag 單區 C1 30.61／42.30ms、全區 C1 36.34／50.20ms（p99／max）已 PASS；
+C4 尚有單區 max 116.65ms、全區 p99 53.05ms 超標。所有量測零 error／timeout。
+
+EXPLAIN 實證：單區候選 execution 894.58ms，其中 JIT 814.72ms；全區候選 JIT 824.06ms。
+下一批對搜尋快照使用 `SET LOCAL jit = off`，隨 ROLLBACK 恢復，不改伺服器或 pool 設定。
+此外，實際 pg.Result 產生的寬 row 經 Object.assign 添加旗標會變成 V8 dictionary properties；
+改以完整物件展開建立旗標後，離線同資料 CPU／heap 有實測改善，仍需真 PG 規模驗證。
+所有候選欄位與個人標記語意保留；stats／搜尋參考管線共用相同轉換。
+
+已備好 NAS 拋棄式 container runner 與 runbook；只通過 bash 語法檢查，沒有宣稱本機實跑 Docker。
+benchmark 的 NAS 模式檢查四案 p95 及 lag；CI 模式仍使用原 smoke 門檻。
+
 ## 效能驗收
 
 `v3/scripts/prb-search-benchmark.mjs` 在自行建立的 PG schema 執行並自行清除。

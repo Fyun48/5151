@@ -12,17 +12,20 @@ process.env.DATA_DIR=dir;
 process.env.DB_DRIVER='postgres';
 const {sqliteHandle}=await import('../src/db.js');
 const {loadListingPage}=await import('../src/listingSearchPage.js');
+const {withPgReadSnapshot}=await import('../src/pgReadSnapshot.js');
 const {withPgFixture,withoutSqliteIO,seedBase,AS_OF,KEY,SETTINGS,DISTRICTS,BASE}=await import('../test/fixtures/prb-search.mjs');
 const db=sqliteHandle();
 const totalRows=Number(process.env.PERF_ROWS)||120000;
 const activeRows=Math.min(Number(process.env.PERF_ACTIVE_ROWS)||36000,totalRows);
+const target=process.env.PERF_TARGET||'ci';
+if(!['ci','nas'].includes(target)) throw new Error('PERF_TARGET must be ci or nas');
 const runs=Math.max(50,Number(process.env.PERF_RUNS)||50);
 const warms=Math.max(5,Number(process.env.PERF_WARMS)||5);
 const out=path.resolve(process.env.PERF_OUTPUT || 'artifacts/prb-search-benchmark.json');
 const root=fileURLToPath(new URL('../..',import.meta.url));
 const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
 const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','repository/listingStats.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
-const evidence={status:'RUNNING',sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
+const evidence={status:'RUNNING',target,sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
   node:process.version,hardware:{platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,memoryBytes:os.totalmem()},
   fixture:{version:'prb-fixed-v1',asOf:AS_OF,totalRows,activeRows,chainLength:Math.min(activeRows,1024),description:'120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers'},
   warms,runs,cases:[]};
@@ -101,7 +104,12 @@ try {
         // Diagnose PG versus Node cost outside all timed request windows.
         for(const query of planInputs) {
           const explained=await driver.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+query.sql,query.params);
-          coldPlans.push(explained.rows[0]['QUERY PLAN'][0]);
+          const snapshotPlan=await withPgReadSnapshot(driver,snapshot=>snapshot.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+query.sql,query.params));
+          const summarize=plan=>({planningMs:plan['Planning Time'],executionMs:plan['Execution Time'],jit:plan.JIT||null,
+            root:{node:plan.Plan['Node Type'],rows:plan.Plan['Actual Rows'],loops:plan.Plan['Actual Loops'],
+              totalCost:plan.Plan['Total Cost'],sharedHitBlocks:plan.Plan['Shared Hit Blocks'],sharedReadBlocks:plan.Plan['Shared Read Blocks']}});
+          coldPlans.push({default:summarize(explained.rows[0]['QUERY PLAN'][0]),
+            requestSnapshot:summarize(snapshotPlan.rows[0]['QUERY PLAN'][0])});
         }
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));
         const lag=monitorEventLoopDelay({resolution:10});lag.enable();await pause(20);
@@ -120,16 +128,19 @@ try {
           errorCount:errors.length,timeoutCount:errors.filter(e=>/timeout|timed out/i.test(e.message)).length,errors};
         result.ciSmokePassed=concurrency===1?result.p95Ms<=(scope==='single'?2000:4000)&&!errors.length:null;
         result.lagTargetMet=result.lagP99Ms<=50&&result.lagMaxMs<=100;
-        evidence.cases.push(result);save();console.log('PRB-PERF-CASE',JSON.stringify(result));
+        result.nasLatencyPassed=target==='nas'?result.p95Ms<=({single:{1:1000,4:2000},all:{1:2000,4:4000}}[scope][concurrency])&&!errors.length:null;
+        evidence.cases.push(result);save();console.log('PRB-PERF-CASE',JSON.stringify({...result,coldQueries:undefined,coldPlans:undefined}));
       });
       if(attempts.length) throw new Error(`SQLite I/O attempts: ${JSON.stringify(attempts)}`);
     }
     evidence.sqliteAttempts=0;
   });
-  evidence.status=evidence.cases.every(c=>c.errorCount===0&&c.ciSmokePassed!==false)?'CI_SMOKE_PASS':'CI_SMOKE_FAIL';
-  evidence.nasAcceptance='NOT_RUN; this machine is not a NAS';
+  const ciPassed=evidence.cases.every(c=>c.errorCount===0&&c.ciSmokePassed!==false);
+  const nasPassed=evidence.cases.every(c=>c.errorCount===0&&c.nasLatencyPassed&&c.lagTargetMet);
+  evidence.status=target==='nas'?(nasPassed?'NAS_ACCEPTANCE_PASS':'NAS_ACCEPTANCE_FAIL'):(ciPassed?'CI_SMOKE_PASS':'CI_SMOKE_FAIL');
+  evidence.nasAcceptance=target==='nas'?evidence.status:'NOT_RUN; CI does not verify NAS acceptance';
   save();console.log('PRB-PERF-RESULT',evidence.status,out);
-  if(evidence.status!=='CI_SMOKE_PASS') process.exitCode=1;
+  if(!['CI_SMOKE_PASS','NAS_ACCEPTANCE_PASS'].includes(evidence.status)) process.exitCode=1;
 } catch(error) {
   evidence.status='FAILED';evidence.error={code:error.code||null,message:String(error.message)};save();throw error;
 } finally {rmSync(dir,{recursive:true,force:true});}

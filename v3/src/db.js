@@ -6589,7 +6589,7 @@ function* buildListListingsSteps(raw, {
   }
   const flags = flagMap || loadFlagMap(db, uid);
   let rows = yield* transformChunks(raw, chunk => {
-    const overlaid = overlayRowsPersonal(chunk, flags, { inPlace: true });
+    const overlaid = overlayRowsPersonal(chunk, flags);
     return filter === "watched" ? overlaid
       : filter === "offline" || filter === "suspected"
         ? overlaid.filter(row => passesPriceFilter(row, settings))
@@ -6947,7 +6947,7 @@ export function listingStatsBuildContext() {
 export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null } = {}) {
   const uid = Number(userId) || 0;
   const conf = settings || getSettings(uid);
-  const overlaid = overlayRowsPersonal(rows, flagMap, { inPlace: true })
+  const overlaid = overlayRowsPersonal(rows, flagMap)
     .filter((row) => keepSelfListingForViewer(row, uid, conf, listingInMemberScope));
   return applyProfileScope(overlaid, conf, provider);
 }

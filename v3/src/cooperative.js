@@ -46,7 +46,7 @@ export function* stableSortSteps(rows, compare, size = 256) {
       const end = Math.min(start + 2 * width, source.length);
       let left = start, right = middle;
       for (let index = start; index < end; index++) {
-        target[index] = right >= end || (left < middle && compare(source[left], source[right]) <= 0)
+        target[index] = right >= end || (left < middle && !(compare(source[left], source[right]) > 0))
           ? source[left++] : source[right++];
         if (index % size === 0) yield;
       }

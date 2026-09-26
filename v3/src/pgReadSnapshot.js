@@ -8,6 +8,10 @@ export async function withPgReadSnapshot(driver, run) {
   let broken = null;
   try {
     await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    // This interactive workload spent ~815ms compiling a ~80ms query in the
+    // fixed fixture. Scope the setting to this transaction, never the pool or
+    // server. PostgreSQL restores it on ROLLBACK, including failures.
+    await client.query('SET LOCAL jit = off');
     let cursorId = 0;
     return await run({
       query:(sql,params=[])=>client.query(sql,params),

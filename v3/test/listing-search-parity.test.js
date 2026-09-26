@@ -291,12 +291,18 @@ test('cooperative member processing preserves roles, all sort modes and statisti
 test('live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure', {skip}, async()=>{
   const {withPgReadSnapshot,readPgRows}=await import('../src/pgReadSnapshot.js');
   await withPgFixture(db,async driver=>{
-    const rows=await withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,
-      'SELECT i FROM generate_series(1,1059) i WHERE i > $1 ORDER BY i',[2]));
+    const previousJit=(await driver.query('SHOW jit')).rows[0].jit;
+    const rows=await withPgReadSnapshot(driver,async snapshot=>{
+      assert.equal((await snapshot.query('SHOW jit')).rows[0].jit,'off');
+      return readPgRows(snapshot,
+      'SELECT i FROM generate_series(1,1059) i WHERE i > $1 ORDER BY i',[2]);
+    });
+    assert.equal((await driver.query('SHOW jit')).rows[0].jit,previousJit);
     assert.deepEqual(rows.map(r=>r.i),Array.from({length:1057},(_,i)=>i+3));
     await assert.rejects(withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,'SELECT * FROM missing_required_table')),
       e=>e.code==='42P01');
     const next=await withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,'SELECT 42 AS n'));
     assert.deepEqual(next,[{n:42}]);
+    assert.equal((await driver.query('SHOW jit')).rows[0].jit,previousJit);
   });
 });

@@ -12,6 +12,7 @@ test('cooperative sort preserves native ordering, stable ties and every row acro
       assert.deepEqual(await runStepsAsync(stableSortSteps(rows,compare)), expected);
       assert.deepEqual(rows.map(r=>r.id), Array.from({length},(_,i)=>i));
     }
+    assert.deepEqual(await runStepsAsync(stableSortSteps(rows,()=>NaN)),rows);
   }
 });
 
