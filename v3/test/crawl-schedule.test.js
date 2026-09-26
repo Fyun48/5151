@@ -7,7 +7,7 @@ import {DatabaseSync} from 'node:sqlite';
 const dir=mkdtempSync(path.join(os.tmpdir(),'crawl-schedule-'));
 process.env.DATA_DIR=dir;
 const {sqliteHandle}=await import('../src/db.js');
-const {reserveCoveringPlan,completeCoveringPlan}=await import('../src/crawlScheduleAsync.js');
+const {reserveCoveringPlan,completeCoveringPlan,crawlRuntimeAsync}=await import('../src/crawlScheduleAsync.js');
 const {coverFingerprint}=await import('../src/crawlCovers.js');
 const {withPgFixture,withoutSqliteIO}=await import('./fixtures/prb-search.mjs');
 const db=sqliteHandle();
@@ -17,11 +17,16 @@ const later='2026-09-26T02:00:00.000Z';
 function seed() {
  db.exec('DELETE FROM user_settings; DELETE FROM users; DELETE FROM settings; DELETE FROM crawl_covers;');
  db.prepare('INSERT INTO users(id,email,role,created_at) VALUES (?,?,?,?)').run(101,'schedule@example.test','admin',at);
+ db.prepare('INSERT INTO settings(key,value) VALUES (?,?)').run('crawlSources',JSON.stringify([{id:'591',enabled:false},{id:'hbhousing',enabled:true},{id:'sinyi',enabled:true}]));
  const urls=Array.from({length:19},(_,i)=>`https://rent.591.com.tw/list?region=${i+1}`);
  for(const [k,v] of Object.entries({searchUrls:urls,memberFetchDueAt:at,notificationsPaused:false}))
   db.prepare('INSERT INTO user_settings(user_id,key,value) VALUES (?,?,?)').run(101,k,JSON.stringify(v));
 }
 async function exercise(options,read) {
+ const runtime=await crawlRuntimeAsync(options);
+ assert.equal(runtime.sourceEnabled('591'),false);
+ assert.equal(runtime.sourceEnabled('hbhousing'),true);
+ assert.equal(runtime.sourceEnabled('sinyi'),true);
  const seen=new Set();
  for(let n=0;n<4;n++) {
   const plan=await reserveCoveringPlan({now:Date.parse(later)+n*1800000,includeSystem:false},options);
