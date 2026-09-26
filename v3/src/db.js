@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { guardCrawlSqlite } from "./crawlExecution.js";
 import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
@@ -496,7 +497,7 @@ import { adminBroadcastsView, normalizeBroadcasts, publicBroadcastsRuntime, reje
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
 mkdirSync(DATA_DIR, { recursive: true });
 
-const db = new DatabaseSync(path.join(DATA_DIR, "v3.db"));
+const db = guardCrawlSqlite(new DatabaseSync(path.join(DATA_DIR, "v3.db")));
 db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA busy_timeout = 8000");
 db.exec("PRAGMA foreign_keys = ON");

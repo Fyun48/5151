@@ -49,6 +49,7 @@ import { replaceCrawlCovers } from "./crawlCovers.js";
 import { markCoveringCompletedAsync, markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
+import { throwIfCrawlCancelled } from "./crawlExecution.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
@@ -631,6 +632,7 @@ export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Dat
 }
 
 export async function runWatch(options = {}) {
+  throwIfCrawlCancelled();
   const want591 = isCrawlSourceEnabled("591");
   const wantHb = isCrawlSourceEnabled("hbhousing");
   const wantSinyi = isCrawlSourceEnabled("sinyi");
@@ -686,12 +688,14 @@ export async function runWatch(options = {}) {
     for (const job of jobs) {
       try {
         const result = await fetchListings(job.searchUrl, pages, fetchOptions);
+        throwIfCrawlCancelled();
         collected.push(result);
         consecutiveTimeouts = 0;
         if (result.total > 0 && result.listings.length === 0) {
           errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
         }
       } catch (error) {
+        throwIfCrawlCancelled();
         errors.push(`${job.searchUrl} → ${error.message}`);
         const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
         consecutiveTimeouts = skip.consecutive;
@@ -706,6 +710,7 @@ export async function runWatch(options = {}) {
   async function collectExternal(label, run) {
     try {
       const batches = await run();
+      throwIfCrawlCancelled();
       for (const batch of batches) {
         for (const error of batch.errors || []) {
           errors.push(`${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`);
@@ -717,6 +722,7 @@ export async function runWatch(options = {}) {
         }
       }
     } catch (error) {
+      throwIfCrawlCancelled();
       errors.push(`${label} → ${error.message}`);
     }
   }

@@ -3558,6 +3558,7 @@ async function tick(reason = "schedule") {
       }),
       TICK_BUDGET_MS,
       "這輪抓取",
+      { signal: tickGate.signal(tickGen) },
     );
     if (!tickGate.isCurrent(tickGen)) return result;
     lastRun = result;

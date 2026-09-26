@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { allDistricts } from "./regions.js";
 import {
   GEO_FAST_BUDGET_MS,
@@ -499,7 +500,7 @@ async function photonSearch(query, { fetchFn = fetch, timeoutMs = 4000 } = {}) {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+    signal: crawlRequestSignal(AbortSignal.timeout(Math.max(500, timeoutMs))),
   });
   geoMetrics.provider_ms.push({ provider: "photon", ms: Date.now() - started, status: res.status });
   if (res.status === 429 || res.status === 503) return { busy: true, provider: "photon" };
@@ -550,7 +551,7 @@ async function nominatimSearch(params, { fetchFn = fetch, timeoutMs = 4000 } = {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+    signal: crawlRequestSignal(AbortSignal.timeout(Math.max(500, timeoutMs))),
   });
   geoMetrics.provider_ms.push({ provider: "nominatim", ms: Date.now() - started, status: res.status });
   return res;
