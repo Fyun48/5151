@@ -12,6 +12,8 @@ import {
   saveAsProfileAsync,
   saveSettingsAsync,
 } from "./settingsAsync.js";
+// 帳號維護（過期驗證碼、閒置暫停）：PG 模式下與其他節點同源。
+import { expireStaleVerifyTokensAsync, pauseIdleMembersAsync } from "./accountMaintenanceAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
@@ -37,7 +39,6 @@ import {
   countOpenSelfListings,
   issueVerifyToken,
   confirmVerifyToken,
-  expireStaleVerifyTokens,
   rejectSuspectedMatch,
   confirmSuspectedMatch,
   listPublicListings,
@@ -133,7 +134,6 @@ import {
   armMemberExternalFetch,
   touchLastLogin,
   resumeIdleIfNeeded,
-  pauseIdleMembers,
   linkOauthIdentity,
   listDemand,
   getDemand,
@@ -3512,13 +3512,14 @@ async function tick(reason = "schedule") {
   const tickGen = tickGate.begin();
   try {
     const execute = async () => {
-      expireStaleVerifyTokens({
+      // 帳號維護必須與其他節點同源：PG 模式下只寫本機 SQLite 會讓兩台各自標記過期／暫停。
+      await expireStaleVerifyTokensAsync({
         onExpire: (user) => {
           if (user?.email) queueSystemMail("verify_expired", user.email);
         },
       });
       try {
-        pauseIdleMembers();
+        await pauseIdleMembersAsync();
       } catch (error) {
         console.warn("閒置暫停失敗：", error.message);
       }
