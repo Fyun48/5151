@@ -1,10 +1,35 @@
 # PR-B 可接續狀態
 
 更新：2026-09-26，第二批程式提交 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0` 已推送；精確 SHA CI checks 已全部成功。
-**新程式 NAS_NOT_RUN；最近已完成的 NAS 仍為 6381f0f FAIL。**
-**最近完成的 NAS 驗收：受測 SHA `6381f0f8a5afad0a6f4e9ca8cc67cf42e7e9349b`（PR head，程式等於 `143f1a6`），
-結果 `NAS_ACCEPTANCE_FAIL`。**
+**最近完成的 NAS 驗收：受測 SHA `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，結果 `NAS_ACCEPTANCE_FAIL`；
+但 lag 大幅改善，四案有三案達標。**
 PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+
+## 第二批修正的 NAS 實測（受測 SHA ae88ce6）
+
+由 DeepSeek Harness 依交接指令在 CasaOS N3450 執行，**未改測文件 HEAD `be2da17`**。
+暖機 5 輪、四案各 50 次；真 PG 148 tests／147 pass／0 fail／1 skip；`sqliteAttempts = 0`；runner exit = 1。
+
+| 案例 | p95 ms | 目標 ms | 延遲結果 | lag p99／max ms | lag 門檻 | peak RSS MiB | errors／timeouts |
+|---|---:|---:|---|---|---:|---:|---|
+| 單區 C1 | 1429.96 | 1000 | FAIL | 23.25／44.83 | **PASS** | 436.2 | 0／0 |
+| 單區 C4 | 3321.86 | 2000 | FAIL | 36.08／67.31 | **PASS** | 679.3 | 0／0 |
+| 全區 C1 | 1448.70 | 2000 | PASS | 26.64／73.86 | **PASS** | 666.6 | 0／0 |
+| 全區 C4 | 4032.71 | 4000 | FAIL | 41.84／162.14 | FAIL | 745.2 | 0／0 |
+
+- **本批用一點延遲換到大幅 lag**：p95 與 `6381f0f` 幾乎相同（單區 +3.0%／+3.1%，全區 −0.1%／+0.4%），
+  但 lag p99 降到原來的 33～39%、max 降到 50～66%。全區 C4 的 **p99 41.84 ms 已在門檻內**，
+  只剩 **max 162.14 ms** 超標；全區 C4 延遲只超目標 32.71 ms（0.82%）。
+- **lag 定位（不看 p95）**：同步切片已被壓住 —— 四案最大 `step` 6.919／8.149／7.479／7.119 ms、
+  最大 `slice` 7.731／9.382／8.918／7.909 ms，都遠低於 50 ms。lag max 等於最大 `tickGap`
+  （44.805／67.228／73.837／162.051 ms）。全區 C4 的 162 ms 是「等待＋GC」疊出來的：
+  `pg.fetch.wall` 最大 303.586 ms、`pg.fetch.yieldWait` 最大 96.113 ms、`gc.pause` 最大 59.069 ms
+  （3 次 >50 ms），4 路併發時 I/O 回呼與 GC 連續佔用事件迴圈，10 ms 計時器拿不到機會。
+- **下一批具體目標**：①降低 fetch／append 期間的配置以壓 GC pause（四案最大 35.7～71.5 ms，>50 ms 共 5 次）；
+  ②查 PG fetch wall／yieldWait（round trips 已由 49／44 增至 88／96）；③`stats_ms` 仍是最大階段
+  （785.05／1634.92／728.30／1865.29 ms，占 46.3～54.9%），且比上一輪高，切片開銷要一併計入；
+  ④單區 C4 的 `prepare_ms` 92→223、`display_ms` 157→172、`sort_ms` 149→163。
+- 三項標籤清理查詢皆 0 筆；正式容器未動；證據在 `evidence/prb-nas-ae88ce6/`（含 `runner.log`）。
 
 ## 第二批輸入／SQL／關係與排程修正（ae88ce6）
 
@@ -47,7 +72,12 @@ PG list ID 查詢 shared hits 為 2,438；候選仍為單區 18,512／全區 36,
   本機 CPU-only 診斷沒有 PG／NAS，不能替代驗收。
 - fixture、42 欄、120k stored／36k active、暖機 5 輪、每案 50 次及所有硬 gate 不變。
 
-## 交給 DeepSeek 的下一輪 NAS（指定程式 SHA ae88ce6）
+## 交給 DeepSeek 的下一輪 NAS（指定程式 SHA ae88ce6）— 已執行
+
+**已於 2026-09-26 由 DeepSeek Harness 執行完畢，結果見本檔第一節。**
+受測 SHA 就是指定的 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，沒有改測文件 HEAD `be2da17`；
+證據目錄 `evidence/prb-nas-ae88ce6/`，`sourceSha` 與 `checkoutSha` 皆為該 SHA。
+本節以下保留原始指令備查。
 
 本輪由 DeepSeek Harness 透過既有 SSH 執行。沒有瀏覽器登入／OTP 待辦。
 **指定 SHA CI 已全綠，可以執行；指定測 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，不要自動換成後續文件 HEAD。**

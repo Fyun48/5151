@@ -1,0 +1,1018 @@
+Preparing worktree (detached HEAD ae88ce6)
+HEAD is now at ae88ce6 perf(prb): reduce stats input work and bound measured CPU slices
+22-bookworm: Pulling from library/node
+Digest: sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+Status: Image is up to date for node:22-bookworm
+docker.io/library/node:22-bookworm
+16.14-alpine: Pulling from library/postgres
+Digest: sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+Status: Image is up to date for postgres:16.14-alpine
+docker.io/library/postgres:16.14-alpine
+
+added 106 packages, and audited 107 packages in 9s
+
+34 packages are looking for funding
+  run `npm fund` for details
+
+1 moderate severity vulnerability
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+npm notice
+npm notice New major version of npm available! 10.9.9 -> 12.1.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.1.0
+npm notice To update run: npm install -g npm@12.1.0
+npm notice
+
+> 5151@1.0.0 test:pg
+> node v3/scripts/pg-integration-setup.mjs && bash v3/scripts/run-pg-integration.sh
+
+(node:22) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+PG-SCHEMA {"statements":97,"tables":97,"rows":79,"sequences":73}
+PG-INDEXES {"created":132,"skippedTables":["listings"]}
+[pg] 執行 25 個整合測試檔
+TAP version 13
+# (node:45) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：budgetStore 與同步函式走出同一串結果
+ok 1 - sqlite 模式：budgetStore 與同步函式走出同一串結果
+  ---
+  duration_ms: 152.154121
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+ok 2 - postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+  ---
+  duration_ms: 231.720526
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：預算 store 在 PostgreSQL 上真的保留、結算、釋放
+ok 3 - live：預算 store 在 PostgreSQL 上真的保留、結算、釋放
+  ---
+  duration_ms: 520.717192
+  type: 'test'
+  ...
+# (node:57) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the crawler reads go through the driver-aware entry point
+ok 4 - the crawler reads go through the driver-aware entry point
+  ---
+  duration_ms: 1837.420201
+  type: 'test'
+  ...
+# Subtest: the backfill scans find the fixture's work on the sqlite driver
+ok 5 - the backfill scans find the fixture's work on the sqlite driver
+  ---
+  duration_ms: 14.461531
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back
+    # Subtest: existing row and fingerprint lookup
+    ok 1 - existing row and fingerprint lookup
+      ---
+      duration_ms: 884.879725
+      type: 'test'
+      ...
+    # Subtest: the offline sweep scans match
+    ok 2 - the offline sweep scans match
+      ---
+      duration_ms: 622.405423
+      type: 'test'
+      ...
+    # Subtest: the backfill scans match
+    ok 3 - the backfill scans match
+      ---
+      duration_ms: 688.758134
+      type: 'test'
+      ...
+    # Subtest: match candidates match on both paths
+    ok 4 - match candidates match on both paths
+      ---
+      duration_ms: 597.624463
+      type: 'test'
+      ...
+    # Subtest: a listing written through PostgreSQL is readable back
+    ok 5 - a listing written through PostgreSQL is readable back
+      ---
+      duration_ms: 775.233546
+      type: 'test'
+      ...
+    1..5
+ok 6 - live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back
+  ---
+  duration_ms: 3577.720944
+  type: 'test'
+  ...
+# (node:69) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：async 入口與原本的同步函式輸出完全相同
+ok 7 - sqlite 模式：async 入口與原本的同步函式輸出完全相同
+  ---
+  duration_ms: 66.684753
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的 payload
+ok 8 - postgres 路徑（離線 exec）給出與 sqlite 相同的 payload
+  ---
+  duration_ms: 81.028191
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：搜尋與標籤都要與 sqlite 相同
+ok 9 - postgres 路徑：搜尋與標籤都要與 sqlite 相同
+  ---
+  duration_ms: 55.622413
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：CRM 關閉時 module 的旗標與 sqlite 相同
+ok 10 - postgres 路徑：CRM 關閉時 module 的旗標與 sqlite 相同
+  ---
+  duration_ms: 58.508376
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：找不到聯絡人時的行為與 sqlite 相同
+ok 11 - postgres 路徑：找不到聯絡人時的行為與 sqlite 相同
+  ---
+  duration_ms: 47.283869
+  type: 'test'
+  ...
+# Subtest: live shadow PostgreSQL：同一組 CRM 讀取斷言
+ok 12 - live shadow PostgreSQL：同一組 CRM 讀取斷言
+  ---
+  duration_ms: 329.299376
+  type: 'test'
+  ...
+# Subtest: 第二段：七個寫入動作在兩個 driver 給出相同結果
+ok 13 - 第二段：七個寫入動作在兩個 driver 給出相同結果
+  ---
+  duration_ms: 205.885856
+  type: 'test'
+  ...
+# Subtest: 第二段：CRM 關閉時寫入會被擋下（兩邊一致）
+ok 14 - 第二段：CRM 關閉時寫入會被擋下（兩邊一致）
+  ---
+  duration_ms: 45.679793
+  type: 'test'
+  ...
+# Subtest: 第二段：同步開啟時，寫入會把快照寫進 crm_outbox（PG 也一樣）
+ok 15 - 第二段：同步開啟時，寫入會把快照寫進 crm_outbox（PG 也一樣）
+  ---
+  duration_ms: 119.124911
+  type: 'test'
+  ...
+# Subtest: 第二段：crm_outbox 的 claim／sent／failure／stats 在兩個 driver 一致
+ok 16 - 第二段：crm_outbox 的 claim／sent／failure／stats 在兩個 driver 一致
+  ---
+  duration_ms: 112.537449
+  type: 'test'
+  ...
+# Subtest: 第二段：deliverCrmOutboxOnce 走 ops 時，成功與失敗的標記與 sqlite 相同
+ok 17 - 第二段：deliverCrmOutboxOnce 走 ops 時，成功與失敗的標記與 sqlite 相同
+  ---
+  duration_ms: 130.036763
+  type: 'test'
+  ...
+# Subtest: 第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀得到
+ok 18 - 第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀得到
+  ---
+  duration_ms: 71.93381
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）
+ok 19 - live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）
+  ---
+  duration_ms: 130.814268
+  type: 'test'
+  ...
+# (node:81) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: decoration data loaders read the SQLite fixture
+ok 20 - decoration data loaders read the SQLite fixture
+  ---
+  duration_ms: 31.853543
+  type: 'test'
+  ...
+# Subtest: the loader memoises one read per user and per id set
+ok 21 - the loader memoises one read per user and per id set
+  ---
+  duration_ms: 13.431831
+  type: 'test'
+  ...
+# Subtest: PostgreSQL returns the same decoration data as SQLite
+ok 22 - PostgreSQL returns the same decoration data as SQLite
+  ---
+  duration_ms: 1473.680457
+  type: 'test'
+  ...
+# (node:92) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: job 佇列：SQLite 路徑的行為（離線基準）
+ok 23 - job 佇列：SQLite 路徑的行為（離線基準）
+  ---
+  duration_ms: 22.555213
+  type: 'test'
+  ...
+# Subtest: job 佇列：SQLite 佇列介面與原本的同步函式等價
+ok 24 - job 佇列：SQLite 佇列介面與原本的同步函式等價
+  ---
+  duration_ms: 22.217381
+  type: 'test'
+  ...
+# Subtest: live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收
+ok 25 - live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收
+  ---
+  duration_ms: 414.944809
+  type: 'test'
+  ...
+# Subtest: PG enqueue uses the supplied clock for immediate availability and honors explicit scheduling
+ok 26 - PG enqueue uses the supplied clock for immediate availability and honors explicit scheduling
+  ---
+  duration_ms: 5.964658
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:104) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: detail reads go through the driver-aware entry point
+ok 27 - detail reads go through the driver-aware entry point
+  ---
+  duration_ms: 1508.331149
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the detail read matches the SQLite read
+    # Subtest: member detail for every shape
+    ok 1 - member detail for every shape
+      ---
+      duration_ms: 852.444609
+      type: 'test'
+      ...
+    # Subtest: sameHouse:false (the crawler's read) still matches
+    ok 2 - sameHouse:false (the crawler's read) still matches
+      ---
+      duration_ms: 632.001511
+      type: 'test'
+      ...
+    1..2
+ok 28 - live PostgreSQL: the detail read matches the SQLite read
+  ---
+  duration_ms: 1492.749456
+  type: 'test'
+  ...
+# (node:116) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：async 入口與同步函式輸出完全相同
+ok 29 - sqlite 模式：async 入口與同步函式輸出完全相同
+  ---
+  duration_ms: 16.373495
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的統計
+ok 30 - postgres 路徑（離線 exec）給出與 sqlite 相同的統計
+  ---
+  duration_ms: 6.758273
+  type: 'test'
+  ...
+# Subtest: live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_URL 決定）
+ok 31 - live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_URL 決定）
+  ---
+  duration_ms: 266.378597
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：sqlite 模式 async 入口與同步函式做出同一件事
+ok 32 - 寫入路徑：sqlite 模式 async 入口與同步函式做出同一件事
+  ---
+  duration_ms: 61.722907
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+ok 33 - 寫入路徑：postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+  ---
+  duration_ms: 74.849802
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：PG 路徑的列數判斷用 rowCount（拿不到 rowCount 就不算搶到）
+ok 34 - 寫入路徑：PG 路徑的列數判斷用 rowCount（拿不到 rowCount 就不算搶到）
+  ---
+  duration_ms: 26.199302
+  type: 'test'
+  ...
+# Subtest: 種子查詢：sqlite 與 postgres 路徑挑出同一批候選並產生同一批工作
+ok 35 - 種子查詢：sqlite 與 postgres 路徑挑出同一批候選並產生同一批工作
+  ---
+  duration_ms: 42.233514
+  type: 'test'
+  ...
+# Subtest: 種子查詢：來源停用時不播種（sync 與 async 一致）
+ok 36 - 種子查詢：來源停用時不播種（sync 與 async 一致）
+  ---
+  duration_ms: 18.138437
+  type: 'test'
+  ...
+# Subtest: live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metrics 與回收
+ok 37 - live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metrics 與回收
+  ---
+  duration_ms: 334.609641
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite
+ok 38 - live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite
+  ---
+  duration_ms: 209.573488
+  type: 'test'
+  ...
+# Subtest: live：種子查詢讀的是 PostgreSQL，不是本機 SQLite
+ok 39 - live：種子查詢讀的是 PostgreSQL，不是本機 SQLite # SKIP PG_SHADOW_URL is not set（需要匯入正式站資料的影子站；不屬於 CI 必要 gate）
+  ---
+  duration_ms: 1.932692
+  type: 'test'
+  ...
+# (node:128) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the field writes go through the driver-aware entry point
+ok 40 - the field writes go through the driver-aware entry point
+  ---
+  duration_ms: 1659.512468
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the field writes land in the same store as the reads
+    # Subtest: setListingDetail writes the detail columns
+    ok 1 - setListingDetail writes the detail columns
+      ---
+      duration_ms: 1084.332103
+      type: 'test'
+      ...
+    # Subtest: persistHpListingFields writes the 5168 columns and kit
+    ok 2 - persistHpListingFields writes the 5168 columns and kit
+      ---
+      duration_ms: 752.599447
+      type: 'test'
+      ...
+    # Subtest: the MRT and community caches are written where the reads look
+    ok 3 - the MRT and community caches are written where the reads look
+      ---
+      duration_ms: 631.868042
+      type: 'test'
+      ...
+    # Subtest: the 5168 prep row is stored in PostgreSQL
+    ok 4 - the 5168 prep row is stored in PostgreSQL
+      ---
+      duration_ms: 642.529159
+      type: 'test'
+      ...
+    1..4
+ok 41 - live PostgreSQL: the field writes land in the same store as the reads
+  ---
+  duration_ms: 3117.292201
+  type: 'test'
+  ...
+# (node:140) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: flag existence predicates keep missing, zero, nonbinary, NULL and viewer identity semantics
+ok 42 - flag existence predicates keep missing, zero, nonbinary, NULL and viewer identity semantics
+  ---
+  duration_ms: 22.296192
+  type: 'test'
+  ...
+# Subtest: live PG: production flag predicates match SQLite reference with nonbinary and NULL flags
+ok 43 - live PG: production flag predicates match SQLite reference with nonbinary and NULL flags
+  ---
+  duration_ms: 287.001099
+  type: 'test'
+  ...
+# Subtest: stats numeric normalization preserves the complete conversion and own-field contract
+ok 44 - stats numeric normalization preserves the complete conversion and own-field contract
+  ---
+  duration_ms: 5.40663
+  type: 'test'
+  ...
+# Subtest: candidate prep retains houseprice and unknown peers, all candidates and personal relations
+ok 45 - candidate prep retains houseprice and unknown peers, all candidates and personal relations
+  ---
+  duration_ms: 152.88474
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:152) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# LIVE-ENTRY-KEYS ["listings","totalMatched","hasMore","nextOffset","queryVersion","queryDetails"]
+# LIVE-ENTRY-IDS []
+# Subtest: live PG：正式入口（不注入 deps）能查真 PG，且連續兩次結果一致
+ok 46 - live PG：正式入口（不注入 deps）能查真 PG，且連續兩次結果一致
+  ---
+  duration_ms: 312.335215
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:164) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: nonempty PG provider pipeline decorates cards without any SQLite access, including MRT settings
+ok 47 - nonempty PG provider pipeline decorates cards without any SQLite access, including MRT settings
+  ---
+  duration_ms: 106.451429
+  type: 'test'
+  ...
+# Subtest: SQLite dispatcher: complete projection yields both nonempty pages
+ok 48 - SQLite dispatcher: complete projection yields both nonempty pages
+  ---
+  duration_ms: 83.037866
+  type: 'test'
+  ...
+# PARITY-BASELINE {"engines":["node_pg","node_sqlite","sql_first"],"ids":[1,2,3],"sqliteAttempts":0}
+# Subtest: live PG: canonical fields, Node reference and SQLite dispatcher agree across both pages
+ok 49 - live PG: canonical fields, Node reference and SQLite dispatcher agree across both pages
+  ---
+  duration_ms: 1374.377099
+  type: 'test'
+  ...
+# Subtest: fixed request time changes the expected primary and card bundle independently of wall time
+ok 50 - fixed request time changes the expected primary and card bundle independently of wall time
+  ---
+  duration_ms: 226.000806
+  type: 'test'
+  ...
+# Subtest: reference fixture has explicit expected filters and personal roles
+ok 51 - reference fixture has explicit expected filters and personal roles
+  ---
+  duration_ms: 267.69454
+  type: 'test'
+  ...
+# PARITY-MATRIX {"cases":12,"sqliteAttempts":0}
+# Subtest: live PG: relations, viewer/voter identity, filters, extras and time match the Node reference
+ok 52 - live PG: relations, viewer/voter identity, filters, extras and time match the Node reference
+  ---
+  duration_ms: 2197.466374
+  type: 'test'
+  ...
+# Subtest: live PG: commute preloading never warms SQLite
+ok 53 - live PG: commute preloading never warms SQLite
+  ---
+  duration_ms: 1121.396211
+  type: 'test'
+  ...
+# Subtest: live PG: a partner removed by profile filters still determines the shared house primary
+ok 54 - live PG: a partner removed by profile filters still determines the shared house primary
+  ---
+  duration_ms: 1074.726745
+  type: 'test'
+  ...
+# Subtest: live PG: missing required schema fails; existing empty tables return a normal empty result
+ok 55 - live PG: missing required schema fails; existing empty tables return a normal empty result
+  ---
+  duration_ms: 1158.898445
+  type: 'test'
+  ...
+# Subtest: live PG: complete page and counters use one snapshot; next request sees committed changes
+ok 56 - live PG: complete page and counters use one snapshot; next request sees committed changes
+  ---
+  duration_ms: 1081.575417
+  type: 'test'
+  ...
+# Subtest: live PG: anonymous search preserves guest filters and never reads private flags or SQLite
+ok 57 - live PG: anonymous search preserves guest filters and never reads private flags or SQLite
+  ---
+  duration_ms: 1399.757566
+  type: 'test'
+  ...
+# Subtest: cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries
+ok 58 - cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries
+  ---
+  duration_ms: 705.663763
+  type: 'test'
+  ...
+# Subtest: live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure
+ok 59 - live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure
+  ---
+  duration_ms: 931.609732
+  type: 'test'
+  ...
+# Subtest: SQLite guard records swallowed cached-statement I/O, then restores the statement
+ok 60 - SQLite guard records swallowed cached-statement I/O, then restores the statement
+  ---
+  duration_ms: 43.987914
+  type: 'test'
+  ...
+# (node:176) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 第二段：suggestFromNewHashAsync 兩個 driver 寫出等價的建議
+ok 61 - 第二段：suggestFromNewHashAsync 兩個 driver 寫出等價的建議
+  ---
+  duration_ms: 54.735636
+  type: 'test'
+  ...
+# Subtest: 第二段：recordCrawlInsightAsync 把洞察列寫進 PG（provider 以 llmInsight 注入）
+ok 62 - 第二段：recordCrawlInsightAsync 把洞察列寫進 PG（provider 以 llmInsight 注入）
+  ---
+  duration_ms: 27.512407
+  type: 'test'
+  ...
+# Subtest: 第二段：enqueueListingSimilarityAsync 在功能關閉時明確回 disabled、不誤寫
+ok 63 - 第二段：enqueueListingSimilarityAsync 在功能關閉時明確回 disabled、不誤寫
+  ---
+  duration_ms: 20.449228
+  type: 'test'
+  ...
+# Subtest: sqlite 模式：async 入口與原本的同步函式輸出完全相同
+ok 64 - sqlite 模式：async 入口與原本的同步函式輸出完全相同
+  ---
+  duration_ms: 20.79665
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的 admin payload
+ok 65 - postgres 路徑（離線 exec）給出與 sqlite 相同的 admin payload
+  ---
+  duration_ms: 16.609591
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：設定讀寫與 shouldEnqueueSimilarity 與 sqlite 相同
+ok 66 - postgres 路徑：設定讀寫與 shouldEnqueueSimilarity 與 sqlite 相同
+  ---
+  duration_ms: 24.405924
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：reviewSimilarity 的驗證與回傳與 sqlite 相同
+ok 67 - postgres 路徑：reviewSimilarity 的驗證與回傳與 sqlite 相同
+  ---
+  duration_ms: 22.265844
+  type: 'test'
+  ...
+# Subtest: live shadow PostgreSQL：同一組 admin 斷言
+ok 68 - live shadow PostgreSQL：同一組 admin 斷言
+  ---
+  duration_ms: 381.224402
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:188) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the state writes go through the driver-aware entry point
+ok 69 - the state writes go through the driver-aware entry point
+  ---
+  duration_ms: 1460.522505
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the state writes land where the site reads
+    # Subtest: offline -> alive -> restored -> checked match SQLite field for field
+    ok 1 - offline -> alive -> restored -> checked match SQLite field for field
+      ---
+      duration_ms: 907.538676
+      type: 'test'
+      ...
+    # Subtest: invalidateLocation clears the route_jobs rows
+    ok 2 - invalidateLocation clears the route_jobs rows
+      ---
+      duration_ms: 503.090074
+      type: 'test'
+      ...
+    1..2
+ok 70 - live PostgreSQL: the state writes land where the site reads
+  ---
+  duration_ms: 1414.903759
+  type: 'test'
+  ...
+# (node:200) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: listingStatsAsync keeps the SQLite counters on the sqlite driver
+ok 71 - listingStatsAsync keeps the SQLite counters on the sqlite driver
+  ---
+  duration_ms: 1765.139686
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the counters equal the SQLite counters
+    # Subtest: without commute settings
+    ok 1 - without commute settings
+      ---
+      duration_ms: 868.554002
+      type: 'test'
+      ...
+    # Subtest: with commute settings and a cached route
+    ok 2 - with commute settings and a cached route
+      ---
+      duration_ms: 694.659035
+      type: 'test'
+      ...
+    # Subtest: the initial payload page matches the SQLite page
+    ok 3 - the initial payload page matches the SQLite page
+      ---
+      duration_ms: 715.240407
+      type: 'test'
+      ...
+    1..3
+ok 72 - live PostgreSQL: the counters equal the SQLite counters
+  ---
+  duration_ms: 2283.263161
+  type: 'test'
+  ...
+# (node:212) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the decision chain answers with the reasons the SQLite path acts on
+ok 73 - the decision chain answers with the reasons the SQLite path acts on
+  ---
+  duration_ms: 1304.871318
+  type: 'test'
+  ...
+# Subtest: the PostgreSQL enqueue answers the SQLite rows through its own executor
+ok 74 - the PostgreSQL enqueue answers the SQLite rows through its own executor
+  ---
+  duration_ms: 466.903563
+  type: 'test'
+  ...
+# Subtest: every event site goes through the driver-aware entry point
+ok 75 - every event site goes through the driver-aware entry point
+  ---
+  duration_ms: 5.471079
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the enqueue writes the queue the site reads
+    # Subtest: the same members are queued with the same columns
+    ok 1 - the same members are queued with the same columns
+      ---
+      duration_ms: 1801.343677
+      type: 'test'
+      ...
+    1..1
+ok 76 - live PostgreSQL: the enqueue writes the queue the site reads
+  ---
+  duration_ms: 1804.047059
+  type: 'test'
+  ...
+# (node:224) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the notification queue reads and writes through the driver-aware entry point
+ok 77 - the notification queue reads and writes through the driver-aware entry point
+  ---
+  duration_ms: 1457.430784
+  type: 'test'
+  ...
+# Subtest: live PostgreSQL: the notification queue drains the same store it writes
+    # Subtest: the pending page matches SQLite (rows and order)
+    ok 1 - the pending page matches SQLite (rows and order)
+      ---
+      duration_ms: 410.901045
+      type: 'test'
+      ...
+    # Subtest: updateEventNotify writes the same columns as SQLite
+    ok 2 - updateEventNotify writes the same columns as SQLite
+      ---
+      duration_ms: 255.221266
+      type: 'test'
+      ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+    # Subtest: markEventNotified takes the event out of the queue it wrote to
+    ok 3 - markEventNotified takes the event out of the queue it wrote to
+      ---
+      duration_ms: 229.2054
+      type: 'test'
+      ...
+    1..3
+ok 78 - live PostgreSQL: the notification queue drains the same store it writes
+  ---
+  duration_ms: 900.706098
+  type: 'test'
+  ...
+# Subtest: live PG: narrow reads retain all rows across bounded replies and report batch work
+ok 79 - live PG: narrow reads retain all rows across bounded replies and report batch work
+  ---
+  duration_ms: 365.826558
+  type: 'test'
+  ...
+# Subtest: live PG: complete-read planner settings remain local after success and failure
+ok 80 - live PG: complete-read planner settings remain local after success and failure
+  ---
+  duration_ms: 55.488556
+  type: 'test'
+  ...
+# Subtest: live PG: candidate array batches preserve every row, field, numeric value and text
+ok 81 - live PG: candidate array batches preserve every row, field, numeric value and text
+  ---
+  duration_ms: 119.823801
+  type: 'test'
+  ...
+# Subtest: live PG: the complete candidate shape keeps the typed value in every named column
+ok 82 - live PG: the complete candidate shape keeps the typed value in every named column
+  ---
+  duration_ms: 190.251202
+  type: 'test'
+  ...
+# Subtest: candidate content store bounds rows/bytes and refuses mutable PG values
+ok 83 - candidate content store bounds rows/bytes and refuses mutable PG values
+  ---
+  duration_ms: 5.83992
+  type: 'test'
+  ...
+# Subtest: live PG: reused content belongs to the visible row version and full column contract
+    # Subtest: warm reads select fresh versions, preserve ordering/scope and return isolated objects
+    ok 1 - warm reads select fresh versions, preserve ordering/scope and return isolated objects
+      ---
+      duration_ms: 184.82882
+      type: 'test'
+      ...
+    # Subtest: committed updates, inserts and deletes are visible; rollback stays invisible
+    ok 2 - committed updates, inserts and deletes are visible; rollback stays invisible
+      ---
+      duration_ms: 142.612856
+      type: 'test'
+      ...
+    # Subtest: old and new repeatable-read snapshots cannot replace each other’s row content
+    ok 3 - old and new repeatable-read snapshots cannot replace each other’s row content
+      ---
+      duration_ms: 115.092558
+      type: 'test'
+      ...
+    # Subtest: search_path, truncate and column replacement invalidate content
+    ok 4 - search_path, truncate and column replacement invalidate content
+      ---
+      duration_ms: 159.771523
+      type: 'test'
+      ...
+    # Subtest: a dropped required column fails even when all raw content was warm
+    ok 5 - a dropped required column fails even when all raw content was warm
+      ---
+      duration_ms: 46.842878
+      type: 'test'
+      ...
+    # Subtest: RLS tables keep their original read path
+    ok 6 - RLS tables keep their original read path
+      ---
+      duration_ms: 49.072633
+      type: 'test'
+      ...
+    # Subtest: revoked SELECT fails on warm content; column-only grants retain the ordinary path
+    ok 7 - revoked SELECT fails on warm content; column-only grants retain the ordinary path
+      ---
+      duration_ms: 132.027622
+      type: 'test'
+      ...
+    # Subtest: eviction and oversize rows affect performance only, never selection or complete content
+    ok 8 - eviction and oversize rows affect performance only, never selection or complete content
+      ---
+      duration_ms: 97.086012
+      type: 'test'
+      ...
+    1..8
+ok 84 - live PG: reused content belongs to the visible row version and full column contract
+  ---
+  duration_ms: 1197.851536
+  type: 'test'
+  ...
+# (node:258) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: rowsPerStatement respects the bind-parameter limit and the batch size
+ok 85 - rowsPerStatement respects the bind-parameter limit and the batch size
+  ---
+  duration_ms: 6.836914
+  type: 'test'
+  ...
+# Subtest: multiRowInsertSql numbers the placeholders across rows
+ok 86 - multiRowInsertSql numbers the placeholders across rows
+  ---
+  duration_ms: 4.299631
+  type: 'test'
+  ...
+# Subtest: an imported store re-syncs the identity sequences
+ok 87 - an imported store re-syncs the identity sequences
+  ---
+  duration_ms: 4.76407
+  type: 'test'
+  ...
+# Subtest: readTableChunks streams rowid-ordered chunks without holding the table
+ok 88 - readTableChunks streams rowid-ordered chunks without holding the table
+  ---
+  duration_ms: 7.666648
+  type: 'test'
+  ...
+# Subtest: the multi-row path sends one statement per chunk and flattens the params
+ok 89 - the multi-row path sends one statement per chunk and flattens the params
+  ---
+  duration_ms: 7.013084
+  type: 'test'
+  ...
+# Subtest: multiRow:false keeps the legacy per-row path (batch transaction)
+ok 90 - multiRow:false keeps the legacy per-row path (batch transaction)
+  ---
+  duration_ms: 4.867512
+  type: 'test'
+  ...
+# Subtest: live PostgreSQL: both import paths write the same rows
+    # Subtest: multi-row import (and a rerun stays idempotent)
+    ok 1 - multi-row import (and a rerun stays idempotent)
+      ---
+      duration_ms: 210.654139
+      type: 'test'
+      ...
+    # Subtest: per-row import writes the same content
+    ok 2 - per-row import writes the same content
+      ---
+      duration_ms: 295.918245
+      type: 'test'
+      ...
+    1..2
+ok 91 - live PostgreSQL: both import paths write the same rows
+  ---
+  duration_ms: 676.461797
+  type: 'test'
+  ...
+# (node:269) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: driver, schema import, listings parity and queue claim
+    # Subtest: driver health check reports the server role
+    ok 1 - driver health check reports the server role
+      ---
+      duration_ms: 4.890364
+      type: 'test'
+      ...
+    # Subtest: the SQLite schema is mirrored into PostgreSQL with identical row counts
+    ok 2 - the SQLite schema is mirrored into PostgreSQL with identical row counts
+      ---
+      duration_ms: 19.276565
+      type: 'test'
+      ...
+    # Subtest: import is idempotent (re-import adds no rows)
+    ok 3 - import is idempotent (re-import adds no rows)
+      ---
+      duration_ms: 77.782787
+      type: 'test'
+      ...
+    # Subtest: listings search returns the same ids/order/paging/cursor as the SQLite path
+    ok 4 - listings search returns the same ids/order/paging/cursor as the SQLite path
+      ---
+      duration_ms: 891.15473
+      type: 'test'
+      ...
+    # Subtest: outside the envelope the PostgreSQL repository reports null (Node fallback)
+    ok 5 - outside the envelope the PostgreSQL repository reports null (Node fallback)
+      ---
+      duration_ms: 1.720039
+      type: 'test'
+      ...
+    # Subtest: durable queue: two workers never claim the same job (FOR UPDATE SKIP LOCKED)
+    ok 6 - durable queue: two workers never claim the same job (FOR UPDATE SKIP LOCKED)
+      ---
+      duration_ms: 112.910996
+      type: 'test'
+      ...
+    # Subtest: durable queue: expired lease is reclaimed and re-claimed by the other worker
+    ok 7 - durable queue: expired lease is reclaimed and re-claimed by the other worker
+      ---
+      duration_ms: 21.911097
+      type: 'test'
+      ...
+    # Subtest: durable queue: idempotency key collapses duplicate enqueues
+    ok 8 - durable queue: idempotency key collapses duplicate enqueues
+      ---
+      duration_ms: 19.223079
+      type: 'test'
+      ...
+    1..8
+ok 92 - live PostgreSQL: driver, schema import, listings parity and queue claim
+  ---
+  duration_ms: 4872.693639
+  type: 'test'
+  ...
+# (node:281) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PG 整合：設定 PG 後必須真的連得上（連不上＝失敗，不是略過）
+ok 93 - PG 整合：設定 PG 後必須真的連得上（連不上＝失敗，不是略過）
+  ---
+  duration_ms: 259.137252
+  type: 'test'
+  ...
+# Subtest: PG 整合：缺 pgDriver 時 canRunNodePg 必須為 false（不得誤判可跑）
+ok 94 - PG 整合：缺 pgDriver 時 canRunNodePg 必須為 false（不得誤判可跑）
+  ---
+  duration_ms: 701.740515
+  type: 'test'
+  ...
+# Subtest: PG 整合：完整路徑走 node_pg、單一快照只取一次連線、資料查詢都走該 client
+ok 95 - PG 整合：完整路徑走 node_pg、單一快照只取一次連線、資料查詢都走該 client
+  ---
+  duration_ms: 157.526487
+  type: 'test'
+  ...
+# Subtest: PG 整合：districtClosureIds 走 PG（不得拋錯；不需行政區條件時可為 null）
+ok 96 - PG 整合：districtClosureIds 走 PG（不得拋錯；不需行政區條件時可為 null）
+  ---
+  duration_ms: 51.222619
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:293) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PG 分支：儲存設定寫進 user_settings，且讀回來與寫入相符
+ok 97 - PG 分支：儲存設定寫進 user_settings，且讀回來與寫入相符
+  ---
+  duration_ms: 49.436118
+  type: 'test'
+  ...
+# Subtest: PG 分支：site 層鍵寫進 settings、跳過的鍵不寫（與 SQLite 分支同一份規則）
+ok 98 - PG 分支：site 層鍵寫進 settings、跳過的鍵不寫（與 SQLite 分支同一份規則）
+  ---
+  duration_ms: 12.083067
+  type: 'test'
+  ...
+# Subtest: PG 分支：儲存設定會啟用對應的搜尋設定檔，換一個會把舊的關掉
+ok 99 - PG 分支：儲存設定會啟用對應的搜尋設定檔，換一個會把舊的關掉
+  ---
+  duration_ms: 24.975812
+  type: 'test'
+  ...
+# Subtest: PG 分支：saveAsProfileAsync 建立設定檔並排下次抓取時間
+ok 100 - PG 分支：saveAsProfileAsync 建立設定檔並排下次抓取時間
+  ---
+  duration_ms: 30.475321
+  type: 'test'
+  ...
+# Subtest: live：PG 上的設定寫入可被讀回（PG_TEST_URL）
+ok 101 - live：PG 上的設定寫入可被讀回（PG_TEST_URL）
+  ---
+  duration_ms: 499.173209
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:305) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 政策：讀取預設允許 fallback，寫入預設拒絕（未設 PG_SQLITE_FALLBACK）
+ok 102 - 政策：讀取預設允許 fallback，寫入預設拒絕（未設 PG_SQLITE_FALLBACK）
+  ---
+  duration_ms: 3.81896
+  type: 'test'
+  ...
+# Subtest: 政策：PG_SQLITE_FALLBACK=open 與 options.fallback='open' 連寫入都放行
+ok 103 - 政策：PG_SQLITE_FALLBACK=open 與 options.fallback='open' 連寫入都放行
+  ---
+  duration_ms: 1.063696
+  type: 'test'
+  ...
+# Subtest: 政策：strict=true 一律往上丟（連環境變數也壓不過）
+ok 104 - 政策：strict=true 一律往上丟（連環境變數也壓不過）
+  ---
+  duration_ms: 0.82976
+  type: 'test'
+  ...
+# Subtest: PG 模式寫入失敗（交易型入口）：往上丟，且不動本機 SQLite
+ok 105 - PG 模式寫入失敗（交易型入口）：往上丟，且不動本機 SQLite
+  ---
+  duration_ms: 10.794936
+  type: 'test'
+  ...
+# Subtest: PG 模式讀取失敗：仍回本機 SQLite 的答案（fail-open 保留給讀取）
+ok 106 - PG 模式讀取失敗：仍回本機 SQLite 的答案（fail-open 保留給讀取）
+  ---
+  duration_ms: 6.014328
+  type: 'test'
+  ...
+# Subtest: 緊急逃生門：PG_SQLITE_FALLBACK=open 時寫入回退成舊行為（真的寫進 SQLite）
+ok 107 - 緊急逃生門：PG_SQLITE_FALLBACK=open 時寫入回退成舊行為（真的寫進 SQLite）
+  ---
+  duration_ms: 12.201775
+  type: 'test'
+  ...
+# Subtest: 讀寫混合模組：寫入入口帶 write 旗標才擋住 fallback，讀取入口仍 fail-open
+ok 108 - 讀寫混合模組：寫入入口帶 write 旗標才擋住 fallback，讀取入口仍 fail-open
+  ---
+  duration_ms: 7.917114
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:313) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the hot-path writes land the expected rows on SQLite
+ok 109 - the hot-path writes land the expected rows on SQLite
+  ---
+  duration_ms: 47.784659
+  type: 'test'
+  ...
+# Subtest: PostgreSQL writes read back identically to SQLite
+ok 110 - PostgreSQL writes read back identically to SQLite
+  ---
+  duration_ms: 352.1871
+  type: 'test'
+  ...
+1..110
+# tests 148
+# suites 0
+# pass 147
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 76998.791954
+(node:324) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+PRB-PERF-CASE {"scope":"single","concurrency":1,"requests":50,"coldMs":3719.362187999999,"expected":{"matched":17488,"total":36000,"dbTotal":120000,"pageIds":[900301026,900301028,900301030,900301032,900301034,900301036,900301038,900301040,900301042,900301044,900301046,900301048,900301050,900301052,900301054,900301056,900301058,900301060,900301062,900301064,900301066,900301068,900301070,900301072,900301074,900301076,900301078,900301080,900301082,900301084,900301086,900301088,900301090,900301092,900301094,900301096,900301098,900301100,900301102,900301104,900301106,900301108,900301110,900301112,900301114,900301116,900301118,900301120,900301122,900301124]},"workDiagnostics":{"pg.query.submitSync":{"calls":1300,"totalMs":656.356,"maxMs":4.499,"totalUnits":0,"maxUnits":0,"over2Ms":22,"over10Ms":0,"over50Ms":0},"pg.query.wall":{"calls":1300,"totalMs":2952.26,"maxMs":30.245,"totalUnits":8000,"maxUnits":50,"over2Ms":522,"over10Ms":7,"over50Ms":0},"eventLoop.tickGap":{"calls":5565,"totalMs":61729.888,"maxMs":44.805,"totalUnits":0,"maxUnits":0,"over2Ms":5565,"over10Ms":4258,"over50Ms":0},"pg.declare.submitSync":{"calls":250,"totalMs":242.402,"maxMs":4.541,"totalUnits":0,"maxUnits":0,"over2Ms":15,"over10Ms":0,"over50Ms":0},"pg.declare.wall":{"calls":250,"totalMs":1145.517,"maxMs":18.762,"totalUnits":0,"maxUnits":0,"over2Ms":185,"over10Ms":14,"over50Ms":0},"pg.fetch.submitSync":{"calls":3000,"totalMs":1288.417,"maxMs":7.825,"totalUnits":0,"maxUnits":0,"over2Ms":62,"over10Ms":0,"over50Ms":0},"pg.fetch.wall":{"calls":3000,"totalMs":26157.927,"maxMs":150.126,"totalUnits":2802350,"maxUnits":1024,"over2Ms":2904,"over10Ms":207,"over50Ms":50},"pg.appendRows.sync":{"calls":3000,"totalMs":175.397,"maxMs":2.114,"totalUnits":2802350,"maxUnits":1024,"over2Ms":1,"over10Ms":0,"over50Ms":0},"pg.fetch.yieldWait":{"calls":2750,"totalMs":389.016,"maxMs":15.197,"totalUnits":0,"maxUnits":0,"over2Ms":18,"over10Ms":11,"over50Ms":0},"gc.pause":{"calls":331,"totalMs":2266.669,"maxMs":35.683,"totalUnits":0,"maxUnits":0,"over2Ms":322,"over10Ms":80,"over50Ms":0},"stats.content.lookup.step":{"calls":7100,"totalMs":1987.276,"maxMs":4.28,"totalUnits":1800000,"maxUnits":256,"over2Ms":6,"over10Ms":0,"over50Ms":0},"stats.content.lookup.slice":{"calls":966,"totalMs":2047.171,"maxMs":5.636,"totalUnits":1800000,"maxUnits":2816,"over2Ms":916,"over10Ms":0,"over50Ms":0},"stats.content.lookup.yieldWait":{"calls":916,"totalMs":223.31,"maxMs":26.086,"totalUnits":0,"maxUnits":0,"over2Ms":3,"over10Ms":1,"over50Ms":0},"stats.normalize.step":{"calls":7100,"totalMs":354.953,"maxMs":3.48,"totalUnits":1800000,"maxUnits":256,"over2Ms":3,"over10Ms":0,"over50Ms":0},"stats.normalize.slice":{"calls":210,"totalMs":372.595,"maxMs":3.981,"totalUnits":1800000,"maxUnits":14848,"over2Ms":160,"over10Ms":0,"over50Ms":0},"stats.normalize.yieldWait":{"calls":160,"totalMs":77.767,"maxMs":13.745,"totalUnits":0,"maxUnits":0,"over2Ms":4,"over10Ms":3,"over50Ms":0},"pg.countListings.submitSync":{"calls":50,"totalMs":28.874,"maxMs":3.338,"totalUnits":0,"maxUnits":0,"over2Ms":4,"over10Ms":0,"over50Ms":0},"pg.countListings.wall":{"calls":50,"totalMs":7552.194,"maxMs":251.083,"totalUnits":50,"maxUnits":1,"over2Ms":50,"over10Ms":50,"over50Ms":50},"cooperative.step":{"calls":14750,"totalMs":1927.851,"maxMs":6.919,"totalUnits":1876800,"maxUnits":256,"over2Ms":82,"over10Ms":0,"over50Ms":0},"cooperative.slice":{"calls":1009,"totalMs":1983.915,"maxMs":7.731,"totalUnits":1876800,"maxUnits":9728,"over2Ms":759,"over10Ms":0,"over50Ms":0},"cooperative.yieldWait":{"calls":759,"totalMs":272.484,"maxMs":23.863,"totalUnits":0,"maxUnits":0,"over2Ms":9,"over10Ms":6,"over50Ms":0},"preload.ids.step":{"calls":3700,"totalMs":1262.795,"maxMs":5.059,"totalUnits":921600,"maxUnits":256,"over2Ms":63,"over10Ms":0,"over50Ms":0},"preload.ids.slice":{"calls":599,"totalMs":1289.744,"maxMs":6.541,"totalUnits":921600,"maxUnits":3072,"over2Ms":507,"over10Ms":0,"over50Ms":0},"preload.ids.yieldWait":{"calls":507,"totalMs":194.164,"maxMs":16.281,"totalUnits":0,"maxUnits":0,"over2Ms":4,"over10Ms":4,"over50Ms":0},"preload.relations.step":{"calls":3700,"totalMs":276.566,"maxMs":2.42,"totalUnits":921600,"maxUnits":256,"over2Ms":1,"over10Ms":0,"over50Ms":0},"preload.relations.slice":{"calls":215,"totalMs":287.011,"maxMs":2.834,"totalUnits":921600,"maxUnits":8448,"over2Ms":115,"over10Ms":0,"over50Ms":0},"preload.relations.yieldWait":{"calls":115,"totalMs":97.099,"maxMs":13.979,"totalUnits":0,"maxUnits":0,"over2Ms":6,"over10Ms":6,"over50Ms":0},"preload.prepIds.step":{"calls":3700,"totalMs":181.953,"maxMs":1.619,"totalUnits":921600,"maxUnits":256,"over2Ms":0,"over10Ms":0,"over50Ms":0},"preload.prepIds.slice":{"calls":172,"totalMs":189.021,"maxMs":2.678,"totalUnits":921600,"maxUnits":14592,"over2Ms":72,"over10Ms":0,"over50Ms":0},"preload.prepIds.yieldWait":{"calls":72,"totalMs":90.443,"maxMs":15.002,"totalUnits":0,"maxUnits":0,"over2Ms":6,"over10Ms":5,"over50Ms":0},"preload.extras.step":{"calls":3800,"totalMs":831.652,"maxMs":6.929,"totalUnits":928100,"maxUnits":256,"over2Ms":200,"over10Ms":0,"over50Ms":0},"preload.extras.slice":{"calls":409,"totalMs":841.5,"maxMs":6.931,"totalUnits":928100,"maxUnits":7680,"over2Ms":309,"over10Ms":0,"over50Ms":0},"preload.extras.yieldWait":{"calls":309,"totalMs":282.16,"maxMs":17.067,"totalUnits":0,"maxUnits":0,"over2Ms":19,"over10Ms":14,"over50Ms":0},"preload.routes.step":{"calls":3700,"totalMs":356.606,"maxMs":3.158,"totalUnits":921600,"maxUnits":256,"over2Ms":1,"over10Ms":0,"over50Ms":0},"preload.routes.slice":{"calls":260,"totalMs":368.728,"maxMs":5.094,"totalUnits":921600,"maxUnits":6400,"over2Ms":165,"over10Ms":0,"over50Ms":0},"preload.routes.yieldWait":{"calls":165,"totalMs":68.839,"maxMs":12.253,"totalUnits":0,"maxUnits":0,"over2Ms":4,"over10Ms":2,"over50Ms":0},"list.profile.step":{"calls":3650,"totalMs":865.437,"maxMs":5.648,"totalUnits":925600,"maxUnits":256,"over2Ms":3,"over10Ms":0,"over50Ms":0},"list.build.slice":{"calls":1525,"totalMs":4091.32,"maxMs":11.651,"totalUnits":2879100,"maxUnits":8192,"over2Ms":1475,"over10Ms":5,"over50Ms":0},"list.build.yieldWait":{"calls":1475,"totalMs":795.901,"maxMs":24.227,"totalUnits":0,"maxUnits":0,"over2Ms":67,"over10Ms":9,"over50Ms":0},"relations.index.step":{"calls":3650,"totalMs":473.344,"maxMs":4.219,"totalUnits":925600,"maxUnits":256,"over2Ms":30,"over10Ms":0,"over50Ms":0},"relations.missing.step":{"calls":200,"totalMs":18.341,"maxMs":0.7,"totalUnits":51150,"maxUnits":256,"over2Ms":0,"over10Ms":0,"over50Ms":0},"relations.pairs.step":{"calls":200,"totalMs":1108.595,"maxMs":11.65,"totalUnits":51150,"maxUnits":256,"over2Ms":200,"over10Ms":4,"over50Ms":0},"list.display.step":{"calls":3650,"totalMs":1551.305,"maxMs":4.364,"totalUnits":925600,"maxUnits":256,"over2Ms":11,"over10Ms":0,"over50Ms":0},"list.build.step":{"calls":50,"totalMs":1.509,"maxMs":0.101,"totalUnits":0,"maxUnits":0,"over2Ms":0,"over10Ms":0,"over50Ms":0},"list.sort.step":{"calls":34550,"totalMs":1378.17,"maxMs":6.387,"totalUnits":8744000,"maxUnits":256,"over2Ms":2,"over10Ms":0,"over50Ms":0},"list.sort.slice":{"calls":712,"totalMs":1444.831,"maxMs":8.129,"totalUnits":8744000,"maxUnits":36768,"over2Ms":662,"over10Ms":0,"over50Ms":0},"list.sort.yieldWait":{"calls":662,"totalMs":187.115,"maxMs":9.816,"totalUnits":0,"maxUnits":0,"over2Ms":9,"over10Ms":0,"over50Ms":0},"stats.profile.step":{"calls":7100,"totalMs":2484.118,"maxMs":8.795,"totalUnits":1800000,"maxUnits":256,"over2Ms":38,"over10Ms":0,"over50Ms":0},"stats.profile.slice":{"calls":1142,"totalMs":2566.915,"maxMs":9.583,"totalUnits":1800000,"maxUnits":2304,"over2Ms":1092,"over10Ms":0,"over50Ms":0},"stats.profile.yieldWait":{"calls":1092,"totalMs":601.476,"maxMs":25.01,"totalUnits":0,"maxUnits":0,"over2Ms":75,"over10Ms":5,"over50Ms":0},"stats.count.step":{"calls":7100,"totalMs":2413.535,"maxMs":7.592,"totalUnits":1800000,"maxUnits":256,"over2Ms":6,"over10Ms":0,"over50Ms":0},"stats.count.slice":{"calls":1150,"totalMs":2461.367,"maxMs":9.171,"totalUnits":1800000,"maxUnits":1792,"over2Ms":1101,"over10Ms":0,"over50Ms":0},"stats.count.yieldWait":{"calls":1101,"totalMs":408.954,"maxMs":34.79,"totalUnits":0,"maxUnits":0,"over2Ms":50,"over10Ms":1,"over50Ms":0}},"resultSignature":"d75a57c20695b67ee348505aa3c074ff1a05b769e5263b483f51a0285800423f","stageP95Ms":{"prepare_ms":48,"sql_ms":301,"preload_ms":119,"profile_ms":45,"relations_ms":63,"display_ms":62,"sort_ms":48,"preload_page_ms":24,"hydrate_ms":24,"stats_ms":785.0463219999983,"stats_status_ms":5,"stats_candidates_ms":416,"stats_normalize_ms":18,"stats_auxiliary_ms":235,"stats_inputs_ms":655,"stats_reuse_inputs_ms":0,"stats_provider_ms":0,"stats_profile_ms":111,"stats_count_ms":72},"p50Ms":1209.3980329999977,"p95Ms":1429.9575939999995,"maxMs":1487.7138999999952,"lagP99Ms":23.248895,"lagMaxMs":44.826623,"rssPeakBytes":457416704,"heapPeakBytes":359116304,"queryCount":{"min":88,"p50":88,"max":88},"transactionStatements":{"min":4,"max":4},"errorCount":0,"timeoutCount":0,"errors":[],"ciSmokePassed":true,"lagTargetMet":true,"nasLatencyPassed":false,"contentStore":{"rows":36000,"bytes":55525548,"maxRows":50000,"maxBytes":67108864}}
+PRB-PERF-CASE {"scope":"single","concurrency":4,"requests":50,"coldMs":2764.861909000014,"expected":{"matched":17488,"total":36000,"dbTotal":120000,"pageIds":[900301026,900301028,900301030,900301032,900301034,900301036,900301038,900301040,900301042,900301044,900301046,900301048,900301050,900301052,900301054,900301056,900301058,900301060,900301062,900301064,900301066,900301068,900301070,900301072,900301074,900301076,900301078,900301080,900301082,900301084,900301086,900301088,900301090,900301092,900301094,900301096,900301098,900301100,900301102,900301104,900301106,900301108,900301110,900301112,900301114,900301116,900301118,900301120,900301122,900301124]},"workDiagnostics":{"pg.query.submitSync":{"calls":1300,"totalMs":528.158,"maxMs":4.291,"totalUnits":0,"maxUnits":0,"over2Ms":14,"over10Ms":0,"over50Ms":0},"pg.query.wall":{"calls":1300,"totalMs":9600.325,"maxMs":60.994,"totalUnits":8000,"maxUnits":50,"over2Ms":1264,"over10Ms":228,"over50Ms":2},"eventLoop.tickGap":{"calls":2493,"totalMs":36999.19,"maxMs":67.228,"totalUnits":0,"maxUnits":0,"over2Ms":2493,"over10Ms":2317,"over50Ms":5},"pg.declare.submitSync":{"calls":250,"totalMs":255.168,"maxMs":33.485,"totalUnits":0,"maxUnits":0,"over2Ms":16,"over10Ms":1,"over50Ms":0},"pg.declare.wall":{"calls":250,"totalMs":2880.367,"maxMs":70.413,"totalUnits":0,"maxUnits":0,"over2Ms":249,"over10Ms":121,"over50Ms":3},"pg.fetch.submitSync":{"calls":3000,"totalMs":890.665,"maxMs":3.736,"totalUnits":0,"maxUnits":0,"over2Ms":15,"over10Ms":0,"over50Ms":0},"pg.fetch.wall":{"calls":3000,"totalMs":49310.768,"maxMs":279.889,"totalUnits":2802350,"maxUnits":1024,"over2Ms":2992,"over10Ms":2241,"over50Ms":63},"pg.appendRows.sync":{"calls":3000,"totalMs":192.697,"maxMs":4.789,"totalUnits":2802350,"maxUnits":1024,"over2Ms":2,"over10Ms":0,"over50Ms":0},"pg.fetch.yieldWait":{"calls":2750,"totalMs":11283.437,"maxMs":32.641,"totalUnits":0,"maxUnits":0,"over2Ms":2188,"over10Ms":115,"over50Ms":0},"gc.pause":{"calls":328,"totalMs":2686.271,"maxMs":53.316,"totalUnits":0,"maxUnits":0,"over2Ms":328,"over10Ms":67,"over50Ms":1},"stats.content.lookup.step":{"calls":7100,"totalMs":2044.825,"maxMs":9.474,"totalUnits":1800000,"maxUnits":256,"over2Ms":18,"over10Ms":0,"over50Ms":0},"stats.content.lookup.slice":{"calls":980,"totalMs":2104.419,"maxMs":9.9,"totalUnits":1800000,"maxUnits":2304,"over2Ms":931,"over10Ms":0,"over50Ms":0},"stats.content.lookup.yieldWait":{"calls":931,"totalMs":6632.304,"maxMs":55.629,"totalUnits":0,"maxUnits":0,"over2Ms":906,"over10Ms":105,"over50Ms":1},"stats.normalize.step":{"calls":7100,"totalMs":366.129,"maxMs":3.15,"totalUnits":1800000,"maxUnits":256,"over2Ms":3,"over10Ms":0,"over50Ms":0},"stats.normalize.slice":{"calls":212,"totalMs":387.77,"maxMs":5.011,"totalUnits":1800000,"maxUnits":14848,"over2Ms":162,"over10Ms":0,"over50Ms":0},"stats.normalize.yieldWait":{"calls":162,"totalMs":1057.662,"maxMs":28.53,"totalUnits":0,"maxUnits":0,"over2Ms":155,"over10Ms":17,"over50Ms":0},"pg.countListings.submitSync":{"calls":50,"totalMs":13.902,"maxMs":0.404,"totalUnits":0,"maxUnits":0,"over2Ms":0,"over10Ms":0,"over50Ms":0},"pg.countListings.wall":{"calls":50,"totalMs":5314.416,"maxMs":341.637,"totalUnits":50,"maxUnits":1,"over2Ms":50,"over10Ms":50,"over50Ms":44},"cooperative.step":{"calls":14750,"totalMs":2018.886,"maxMs":8.149,"totalUnits":1876800,"maxUnits":256,"over2Ms":92,"over10Ms":0,"over50Ms":0},"cooperative.slice":{"calls":1032,"totalMs":2081.818,"maxMs":9.382,"totalUnits":1876800,"maxUnits":10240,"over2Ms":785,"over10Ms":0,"over50Ms":0},"cooperative.yieldWait":{"calls":785,"totalMs":5102.145,"maxMs":45.258,"totalUnits":0,"maxUnits":0,"over2Ms":710,"over10Ms":92,"over50Ms":0},"preload.ids.step":{"calls":3700,"totalMs":1320.19,"maxMs":9.447,"totalUnits":921600,"maxUnits":256,"over2Ms":75,"over10Ms":0,"over50Ms":0},"preload.ids.slice":{"calls":626,"totalMs":1347.116,"maxMs":9.892,"totalUnits":921600,"maxUnits":3072,"over2Ms":527,"over10Ms":0,"over50Ms":0},"preload.ids.yieldWait":{"calls":527,"totalMs":3270.65,"maxMs":34.729,"totalUnits":0,"maxUnits":0,"over2Ms":485,"over10Ms":53,"over50Ms":0},"preload.relations.step":{"calls":3700,"totalMs":269.874,"maxMs":3.266,"totalUnits":921600,"maxUnits":256,"over2Ms":3,"over10Ms":0,"over50Ms":0},"preload.relations.slice":{"calls":207,"totalMs":280.166,"maxMs":4.256,"totalUnits":921600,"maxUnits":8960,"over2Ms":107,"over10Ms":0,"over50Ms":0},"preload.relations.yieldWait":{"calls":107,"totalMs":656.338,"maxMs":15.109,"totalUnits":0,"maxUnits":0,"over2Ms":99,"over10Ms":10,"over50Ms":0},"preload.prepIds.step":{"calls":3700,"totalMs":173.857,"maxMs":3.692,"totalUnits":921600,"maxUnits":256,"over2Ms":2,"over10Ms":0,"over50Ms":0},"preload.prepIds.slice":{"calls":162,"totalMs":180.429,"maxMs":4.956,"totalUnits":921600,"maxUnits":15872,"over2Ms":63,"over10Ms":0,"over50Ms":0},"preload.prepIds.yieldWait":{"calls":63,"totalMs":348.99,"maxMs":19.594,"totalUnits":0,"maxUnits":0,"over2Ms":55,"over10Ms":3,"over50Ms":0},"preload.extras.step":{"calls":3800,"totalMs":849.914,"maxMs":8.175,"totalUnits":928100,"maxUnits":256,"over2Ms":204,"over10Ms":0,"over50Ms":0},"preload.extras.slice":{"calls":407,"totalMs":859.302,"maxMs":8.176,"totalUnits":928100,"maxUnits":7680,"over2Ms":307,"over10Ms":0,"over50Ms":0},"preload.extras.yieldWait":{"calls":307,"totalMs":2128.326,"maxMs":38.776,"totalUnits":0,"maxUnits":0,"over2Ms":290,"over10Ms":42,"over50Ms":0},"preload.routes.step":{"calls":3700,"totalMs":343.539,"maxMs":4.441,"totalUnits":921600,"maxUnits":256,"over2Ms":5,"over10Ms":0,"over50Ms":0},"preload.routes.slice":{"calls":248,"totalMs":354.319,"maxMs":5.687,"totalUnits":921600,"maxUnits":6656,"over2Ms":149,"over10Ms":0,"over50Ms":0},"preload.routes.yieldWait":{"calls":149,"totalMs":1010.677,"maxMs":55.409,"totalUnits":0,"maxUnits":0,"over2Ms":134,"over10Ms":22,"over50Ms":1},"list.profile.step":{"calls":3650,"totalMs":840.594,"maxMs":16.019,"totalUnits":925600,"maxUnits":256,"over2Ms":14,"over10Ms":1,"over50Ms":0},"list.build.slice":{"calls":1529,"totalMs":4138.484,"maxMs":16.019,"totalUnits":2879100,"maxUnits":7680,"over2Ms":1480,"over10Ms":5,"over50Ms":0},"list.build.yieldWait":{"calls":1480,"totalMs":9671.914,"maxMs":48.687,"totalUnits":0,"maxUnits":0,"over2Ms":1362,"over10Ms":210,"over50Ms":0},"relations.index.step":{"calls":3650,"totalMs":492.108,"maxMs":5.111,"totalUnits":925600,"maxUnits":256,"over2Ms":36,"over10Ms":0,"over50Ms":0},"relations.missing.step":{"calls":200,"totalMs":18.71,"maxMs":0.331,"totalUnits":51150,"maxUnits":256,"over2Ms":0,"over10Ms":0,"over50Ms":0},"relations.pairs.step":{"calls":200,"totalMs":1143.578,"maxMs":11.507,"totalUnits":51150,"maxUnits":256,"over2Ms":200,"over10Ms":4,"over50Ms":0},"list.display.step":{"calls":3650,"totalMs":1566.027,"maxMs":3.861,"totalUnits":925600,"maxUnits":256,"over2Ms":9,"over10Ms":0,"over50Ms":0},"list.build.step":{"calls":50,"totalMs":1.413,"maxMs":0.086,"totalUnits":0,"maxUnits":0,"over2Ms":0,"over10Ms":0,"over50Ms":0},"list.sort.step":{"calls":34550,"totalMs":1342.865,"maxMs":7.606,"totalUnits":8744000,"maxUnits":256,"over2Ms":4,"over10Ms":0,"over50Ms":0},"list.sort.slice":{"calls":700,"totalMs":1407.771,"maxMs":7.936,"totalUnits":8744000,"maxUnits":37360,"over2Ms":650,"over10Ms":0,"over50Ms":0},"list.sort.yieldWait":{"calls":650,"totalMs":4124.765,"maxMs":26.476,"totalUnits":0,"maxUnits":0,"over2Ms":595,"over10Ms":84,"over50Ms":0},"stats.profile.step":{"calls":7100,"totalMs":2201.117,"maxMs":20.908,"totalUnits":1800000,"maxUnits":256,"over2Ms":28,"over10Ms":8,"over50Ms":0},"stats.profile.slice":{"calls":1006,"totalMs":2283.495,"maxMs":20.908,"totalUnits":1800000,"maxUnits":2304,"over2Ms":956,"over10Ms":10,"over50Ms":0},"stats.profile.yieldWait":{"calls":956,"totalMs":6475.016,"maxMs":64.402,"totalUnits":0,"maxUnits":0,"over2Ms":875,"over10Ms":136,"over50Ms":2},"stats.count.step":{"calls":7100,"totalMs":2494.549,"maxMs":10.55,"totalUnits":1800000,"maxUnits":256,"over2Ms":35,"over10Ms":1,"over50Ms":0},"stats.count.slice":{"calls":1154,"totalMs":2545.534,"maxMs":10.55,"totalUnits":1800000,"maxUnits":1792,"over2Ms":1104,"over10Ms":1,"over50Ms":0},"stats.count.yieldWait":{"calls":1104,"totalMs":6848.235,"maxMs":57.323,"totalUnits":0,"maxUnits":0,"over2Ms":994,"over10Ms":126,"over50Ms":3}},"resultSignature":"d75a57c20695b67ee348505aa3c074ff1a05b769e5263b483f51a0285800423f","stageP95Ms":{"prepare_ms":223,"sql_ms":796,"preload_ms":296,"profile_ms":107,"relations_ms":115,"display_ms":172,"sort_ms":163,"preload_page_ms":55,"hydrate_ms":17,"stats_ms":1634.9204610000015,"stats_status_ms":21,"stats_candidates_ms":1125,"stats_normalize_ms":47,"stats_auxiliary_ms":249,"stats_inputs_ms":1298,"stats_reuse_inputs_ms":0,"stats_provider_ms":0,"stats_profile_ms":260,"stats_count_ms":340},"p50Ms":2918.4014049999823,"p95Ms":3321.8581940000004,"maxMs":3383.6670379999996,"lagP99Ms":36.077567,"lagMaxMs":67.305471,"rssPeakBytes":712282112,"heapPeakBytes":610334232,"queryCount":{"min":88,"p50":88,"max":88},"transactionStatements":{"min":4,"max":4},"errorCount":0,"timeoutCount":0,"errors":[],"ciSmokePassed":null,"lagTargetMet":true,"nasLatencyPassed":false,"contentStore":{"rows":36000,"bytes":55525548,"maxRows":50000,"maxBytes":67108864}}
+PRB-PERF-CASE {"scope":"all","concurrency":1,"requests":50,"coldMs":2775.9251930000028,"expected":{"matched":34977,"total":36000,"dbTotal":120000,"pageIds":[900300001,900301025,900301026,900301027,900301028,900301029,900301030,900301031,900301032,900301033,900301034,900301035,900301036,900301037,900301038,900301039,900301040,900301041,900301042,900301043,900301044,900301045,900301046,900301047,900301048,900301049,900301050,900301051,900301052,900301053,900301054,900301055,900301056,900301057,900301058,900301059,900301060,900301061,900301062,900301063,900301064,900301065,900301066,900301067,900301068,900301069,900301070,900301071,900301072,900301073]},"workDiagnostics":{"pg.query.submitSync":{"calls":1250,"totalMs":640.639,"maxMs":4.219,"totalUnits":0,"maxUnits":0,"over2Ms":29,"over10Ms":0,"over50Ms":0},"pg.query.wall":{"calls":1250,"totalMs":3030.479,"maxMs":29.617,"totalUnits":8250,"maxUnits":51,"over2Ms":604,"over10Ms":6,"over50Ms":0},"eventLoop.tickGap":{"calls":5722,"totalMs":64872.877,"maxMs":73.837,"totalUnits":0,"maxUnits":0,"over2Ms":5722,"over10Ms":4555,"over50Ms":2},"pg.declare.submitSync":{"calls":100,"totalMs":65.095,"maxMs":3.645,"totalUnits":0,"maxUnits":0,"over2Ms":5,"over10Ms":0,"over50Ms":0},"pg.declare.wall":{"calls":100,"totalMs":363.417,"maxMs":24.425,"totalUnits":0,"maxUnits":0,"over2Ms":100,"over10Ms":1,"over50Ms":0},"pg.fetch.submitSync":{"calls":3600,"totalMs":1433.659,"maxMs":5.462,"totalUnits":0,"maxUnits":0,"over2Ms":52,"over10Ms":0,"over50Ms":0},"pg.fetch.wall":{"calls":3600,"totalMs":28006.309,"maxMs":139.649,"totalUnits":3600000,"maxUnits":1024,"over2Ms":3600,"over10Ms":247,"over50Ms":50},"pg.appendRows.sync":{"calls":3600,"totalMs":211.344,"maxMs":3.338,"totalUnits":3600000,"maxUnits":1024,"over2Ms":1,"over10Ms":0,"over50Ms":0},"pg.fetch.yieldWait":{"calls":3500,"totalMs":342.639,"maxMs":13.198,"totalUnits":0,"maxUnits":0,"over2Ms":11,"over10Ms":6,"over50Ms":0},"stats.content.lookup.step":{"calls":7100,"totalMs":1969.103,"maxMs":4.879,"totalUnits":1800000,"maxUnits":256,"over2Ms":9,"over10Ms":0,"over50Ms":0},"stats.content.lookup.slice":{"calls":960,"totalMs":2026.063,"maxMs":6.307,"totalUnits":1800000,"maxUnits":2560,"over2Ms":910,"over10Ms":0,"over50Ms":0},"stats.content.lookup.yieldWait":{"calls":910,"totalMs":207.636,"maxMs":12.348,"totalUnits":0,"maxUnits":0,"over2Ms":4,"over10Ms":2,"over50Ms":0},"stats.normalize.step":{"calls":7100,"totalMs":372.144,"maxMs":10.467,"totalUnits":1800000,"maxUnits":256,"over2Ms":4,"over10Ms":1,"over50Ms":0},"stats.normalize.slice":{"calls":214,"totalMs":392.891,"maxMs":11.4,"totalUnits":1800000,"maxUnits":15104,"over2Ms":164,"over10Ms":1,"over50Ms":0},"stats.normalize.yieldWait":{"calls":164,"totalMs":219.841,"maxMs":13.509,"totalUnits":0,"maxUnits":0,"over2Ms":18,"over10Ms":12,"over50Ms":0},"pg.countListings.submitSync":{"calls":50,"totalMs":28.995,"maxMs":3.667,"totalUnits":0,"maxUnits":0,"over2Ms":5,"over10Ms":0,"over50Ms":0},"pg.countListings.wall":{"calls":50,"totalMs":4802.668,"maxMs":209.084,"totalUnits":50,"maxUnits":1,"over2Ms":50,"over10Ms":50,"over50Ms":50},"gc.pause":{"calls":414,"totalMs":3225.7,"maxMs":71.479,"totalUnits":0,"maxUnits":0,"over2Ms":414,"over10Ms":110,"over50Ms":1},"cooperative.step":{"calls":21250,"totalMs":2296.183,"maxMs":7.479,"totalUnits":3600000,"maxUnits":256,"over2Ms":75,"over10Ms":0,"over50Ms":0},"cooperative.slice":{"calls":1110,"totalMs":2363.638,"maxMs":8.918,"totalUnits":3600000,"maxUnits":12704,"over2Ms":961,"over10Ms":0,"over50Ms":0},"cooperative.yieldWait":{"calls":961,"totalMs":737.651,"maxMs":23.011,"totalUnits":0,"maxUnits":0,"over2Ms":38,"over10Ms":38,"over50Ms":0},"preload.ids.step":{"calls":7100,"totalMs":2212.074,"maxMs":8.612,"totalUnits":1792000,"maxUnits":256,"over2Ms":112,"over10Ms":0,"over50Ms":0},"preload.ids.slice":{"calls":933,"totalMs":2256.5,"maxMs":9.4,"totalUnits":1792000,"maxUnits":4096,"over2Ms":835,"over10Ms":0,"over50Ms":0},"preload.ids.yieldWait":{"calls":835,"totalMs":225.898,"maxMs":16.517,"totalUnits":0,"maxUnits":0,"over2Ms":3,"over10Ms":1,"over50Ms":0},"preload.relations.step":{"calls":7100,"totalMs":307.21,"maxMs":3.119,"totalUnits":1792000,"maxUnits":256,"over2Ms":1,"over10Ms":0,"over50Ms":0},"preload.relations.slice":{"calls":227,"totalMs":322.364,"maxMs":5.038,"totalUnits":1792000,"maxUnits":16128,"over2Ms":127,"over10Ms":0,"over50Ms":0},"preload.relations.yieldWait":{"calls":127,"totalMs":99.095,"maxMs":11.718,"totalUnits":0,"maxUnits":0,"over2Ms":7,"over10Ms":4,"over50Ms":0},"preload.prepIds.step":{"calls":7100,"totalMs":436.788,"maxMs":2.299,"totalUnits":1792000,"maxUnits":256,"over2Ms":1,"over10Ms":0,"over50Ms":0},"preload.prepIds.slice":{"calls":297,"totalMs":452.537,"maxMs":3.614,"totalUnits":1792000,"maxUnits":16896,"over2Ms":198,"over10Ms":0,"over50Ms":0},"preload.prepIds.yieldWait":{"calls":198,"totalMs":44.462,"maxMs":10.781,"totalUnits":0,"maxUnits":0,"over2Ms":1,"over10Ms":1,"over50Ms":0},"preload.extras.step":{"calls":7200,"totalMs":779.713,"maxMs":4.735,"totalUnits":1802500,"maxUnits":256,"over2Ms":200,"over10Ms":0,"over50Ms":0},"preload.extras.slice":{"calls":406,"totalMs":794.077,"maxMs":4.736,"totalUnits":1802500,"maxUnits":15872,"over2Ms":306,"over10Ms":0,"over50Ms":0},"preload.extras.yieldWait":{"calls":306,"totalMs":78.602,"maxMs":13.146,"totalUnits":0,"maxUnits":0,"over2Ms":2,"over10Ms":1,"over50Ms":0},"preload.routes.step":{"calls":7100,"totalMs":431.582,"maxMs":3.239,"totalUnits":1792000,"maxUnits":256,"over2Ms":1,"over10Ms":0,"over50Ms":0},"preload.routes.slice":{"calls":293,"totalMs":448.525,"maxMs":3.993,"totalUnits":1792000,"maxUnits":10496,"over2Ms":193,"over10Ms":0,"over50Ms":0},"preload.routes.yieldWait":{"calls":193,"totalMs":55.312,"maxMs":9.202,"totalUnits":0,"maxUnits":0,"over2Ms":2,"over10Ms":0,"over50Ms":0},"list.profile.step":{"calls":7050,"totalMs":1421.009,"maxMs":7.502,"totalUnits":1800000,"maxUnits":256,"over2Ms":22,"over10Ms":0,"over50Ms":0},"list.build.slice":{"calls":1826,"totalMs":4800.97,"maxMs":10.09,"totalUnits":5502300,"maxUnits":7680,"over2Ms":1776,"over10Ms":1,"over50Ms":0},"list.build.yieldWait":{"calls":1776,"totalMs":1104.088,"maxMs":37.744,"totalUnits":0,"maxUnits":0,"over2Ms":104,"over10Ms":10,"over50Ms":0},"relations.index.step":{"calls":7050,"totalMs":1037.971,"maxMs":6.296,"totalUnits":1800000,"maxUnits":256,"over2Ms":68,"over10Ms":0,"over50Ms":0},"relations.missing.step":{"calls":200,"totalMs":24.052,"maxMs":0.394,"totalUnits":51150,"maxUnits":256,"over2Ms":0,"over10Ms":0,"over50Ms":0},"relations.pairs.step":{"calls":200,"totalMs":1104.801,"maxMs":10.089,"totalUnits":51150,"maxUnits":256,"over2Ms":200,"over10Ms":1,"over50Ms":0},"list.display.step":{"calls":7050,"totalMs":1106.131,"maxMs":3.452,"totalUnits":1800000,"maxUnits":256,"over2Ms":2,"over10Ms":0,"over50Ms":0},"list.build.step":{"calls":50,"totalMs":1.559,"maxMs":0.105,"totalUnits":0,"maxUnits":0,"over2Ms":0,"over10Ms":0,"over50Ms":0},"list.sort.step":{"calls":75400,"totalMs":2457.216,"maxMs":3.624,"totalUnits":19237350,"maxUnits":256,"over2Ms":2,"over10Ms":0,"over50Ms":0},"list.sort.slice":{"calls":1270,"totalMs":2586.299,"maxMs":5.467,"totalUnits":19237350,"maxUnits":38561,"over2Ms":1220,"over10Ms":0,"over50Ms":0},"list.sort.yieldWait":{"calls":1220,"totalMs":572.191,"maxMs":28.134,"totalUnits":0,"maxUnits":0,"over2Ms":38,"over10Ms":12,"over50Ms":0},"stats.profile.step":{"calls":7100,"totalMs":2084.799,"maxMs":8.227,"totalUnits":1800000,"maxUnits":256,"over2Ms":18,"over10Ms":0,"over50Ms":0},"stats.profile.slice":{"calls":1000,"totalMs":2157.289,"maxMs":9.533,"totalUnits":1800000,"maxUnits":2560,"over2Ms":950,"over10Ms":0,"over50Ms":0},"stats.profile.yieldWait":{"calls":950,"totalMs":817.847,"maxMs":35.464,"totalUnits":0,"maxUnits":0,"over2Ms":94,"over10Ms":14,"over50Ms":0},"stats.count.step":{"calls":7100,"totalMs":2378.591,"maxMs":7.555,"totalUnits":1800000,"maxUnits":256,"over2Ms":12,"over10Ms":0,"over50Ms":0},"stats.count.slice":{"calls":1130,"totalMs":2423.556,"maxMs":9.093,"totalUnits":1800000,"maxUnits":1792,"over2Ms":1080,"over10Ms":0,"over50Ms":0},"stats.count.yieldWait":{"calls":1080,"totalMs":454.479,"maxMs":44.24,"totalUnits":0,"maxUnits":0,"over2Ms":51,"over10Ms":2,"over50Ms":0}},"resultSignature":"b1a872a9e9aa4c7494129d315fcb89bc043d72db39d5bfa8506b93c35169cbf7","stageP95Ms":{"prepare_ms":0,"sql_ms":384,"preload_ms":133,"profile_ms":73,"relations_ms":68,"display_ms":40,"sort_ms":82,"preload_page_ms":33,"hydrate_ms":32,"stats_ms":728.3004469999869,"stats_status_ms":6,"stats_candidates_ms":429,"stats_normalize_ms":21,"stats_auxiliary_ms":149,"stats_inputs_ms":591,"stats_reuse_inputs_ms":0,"stats_provider_ms":0,"stats_profile_ms":93,"stats_count_ms":75},"p50Ms":1270.1840139999986,"p95Ms":1448.6975519999978,"maxMs":1523.8328849999816,"lagP99Ms":26.640383,"lagMaxMs":73.859071,"rssPeakBytes":698961920,"heapPeakBytes":374782888,"queryCount":{"min":96,"p50":96,"max":96},"transactionStatements":{"min":4,"max":4},"errorCount":0,"timeoutCount":0,"errors":[],"ciSmokePassed":true,"lagTargetMet":true,"nasLatencyPassed":true,"contentStore":{"rows":36000,"bytes":55525548,"maxRows":50000,"maxBytes":67108864}}
+PRB-PERF-CASE {"scope":"all","concurrency":4,"requests":50,"coldMs":2735.1919059999927,"expected":{"matched":34977,"total":36000,"dbTotal":120000,"pageIds":[900300001,900301025,900301026,900301027,900301028,900301029,900301030,900301031,900301032,900301033,900301034,900301035,900301036,900301037,900301038,900301039,900301040,900301041,900301042,900301043,900301044,900301045,900301046,900301047,900301048,900301049,900301050,900301051,900301052,900301053,900301054,900301055,900301056,900301057,900301058,900301059,900301060,900301061,900301062,900301063,900301064,900301065,900301066,900301067,900301068,900301069,900301070,900301071,900301072,900301073]},"workDiagnostics":{"pg.query.submitSync":{"calls":1250,"totalMs":494.579,"maxMs":7.531,"totalUnits":0,"maxUnits":0,"over2Ms":12,"over10Ms":0,"over50Ms":0},"pg.query.wall":{"calls":1250,"totalMs":9578.042,"maxMs":57.576,"totalUnits":8250,"maxUnits":51,"over2Ms":1209,"over10Ms":229,"over50Ms":2},"eventLoop.tickGap":{"calls":2939,"totalMs":44714.818,"maxMs":162.051,"totalUnits":0,"maxUnits":0,"over2Ms":2939,"over10Ms":2724,"over50Ms":18},"pg.declare.submitSync":{"calls":100,"totalMs":49.531,"maxMs":4.688,"totalUnits":0,"maxUnits":0,"over2Ms":3,"over10Ms":0,"over50Ms":0},"pg.declare.wall":{"calls":100,"totalMs":813.63,"maxMs":22.494,"totalUnits":0,"maxUnits":0,"over2Ms":100,"over10Ms":24,"over50Ms":0},"pg.fetch.submitSync":{"calls":3600,"totalMs":1050.503,"maxMs":5.601,"totalUnits":0,"maxUnits":0,"over2Ms":21,"over10Ms":0,"over50Ms":0},"pg.fetch.wall":{"calls":3600,"totalMs":55877.378,"maxMs":303.586,"totalUnits":3600000,"maxUnits":1024,"over2Ms":3600,"over10Ms":2691,"over50Ms":68},"pg.appendRows.sync":{"calls":3600,"totalMs":233.226,"maxMs":3.089,"totalUnits":3600000,"maxUnits":1024,"over2Ms":1,"over10Ms":0,"over50Ms":0},"pg.fetch.yieldWait":{"calls":3500,"totalMs":13608.474,"maxMs":96.113,"totalUnits":0,"maxUnits":0,"over2Ms":2584,"over10Ms":172,"over50Ms":2},"gc.pause":{"calls":394,"totalMs":3618.521,"maxMs":59.069,"totalUnits":0,"maxUnits":0,"over2Ms":394,"over10Ms":119,"over50Ms":3},"stats.content.lookup.step":{"calls":7100,"totalMs":2099.6,"maxMs":53.556,"totalUnits":1800000,"maxUnits":256,"over2Ms":22,"over10Ms":1,"over50Ms":1},"stats.content.lookup.slice":{"calls":970,"totalMs":2161.105,"maxMs":54.405,"totalUnits":1800000,"maxUnits":2560,"over2Ms":922,"over10Ms":1,"over50Ms":1},"stats.content.lookup.yieldWait":{"calls":922,"totalMs":6595.172,"maxMs":103.099,"totalUnits":0,"maxUnits":0,"over2Ms":889,"over10Ms":104,"over50Ms":5},"stats.normalize.step":{"calls":7100,"totalMs":362.048,"maxMs":3.293,"totalUnits":1800000,"maxUnits":256,"over2Ms":6,"over10Ms":0,"over50Ms":0},"stats.normalize.slice":{"calls":211,"totalMs":380.627,"maxMs":4.628,"totalUnits":1800000,"maxUnits":15104,"over2Ms":161,"over10Ms":0,"over50Ms":0},"stats.normalize.yieldWait":{"calls":161,"totalMs":951.267,"maxMs":22.032,"totalUnits":0,"maxUnits":0,"over2Ms":147,"over10Ms":16,"over50Ms":0},"pg.countListings.submitSync":{"calls":50,"totalMs":17.49,"maxMs":3.375,"totalUnits":0,"maxUnits":0,"over2Ms":1,"over10Ms":0,"over50Ms":0},"pg.countListings.wall":{"calls":50,"totalMs":4928.488,"maxMs":292.206,"totalUnits":50,"maxUnits":1,"over2Ms":50,"over10Ms":50,"over50Ms":46},"cooperative.step":{"calls":21250,"totalMs":2342.684,"maxMs":7.119,"totalUnits":3600000,"maxUnits":256,"over2Ms":95,"over10Ms":0,"over50Ms":0},"cooperative.slice":{"calls":1121,"totalMs":2415.171,"maxMs":7.909,"totalUnits":3600000,"maxUnits":11776,"over2Ms":971,"over10Ms":0,"over50Ms":0},"cooperative.yieldWait":{"calls":971,"totalMs":6630.755,"maxMs":64.949,"totalUnits":0,"maxUnits":0,"over2Ms":904,"over10Ms":105,"over50Ms":1},"preload.ids.step":{"calls":7100,"totalMs":2288.55,"maxMs":17.827,"totalUnits":1792000,"maxUnits":256,"over2Ms":111,"over10Ms":2,"over50Ms":0},"preload.ids.slice":{"calls":955,"totalMs":2342.606,"maxMs":17.827,"totalUnits":1792000,"maxUnits":4352,"over2Ms":857,"over10Ms":2,"over50Ms":0},"preload.ids.yieldWait":{"calls":857,"totalMs":5877.688,"maxMs":30.63,"totalUnits":0,"maxUnits":0,"over2Ms":814,"over10Ms":107,"over50Ms":0},"preload.relations.step":{"calls":7100,"totalMs":309.859,"maxMs":8.773,"totalUnits":1792000,"maxUnits":256,"over2Ms":5,"over10Ms":0,"over50Ms":0},"preload.relations.slice":{"calls":217,"totalMs":326.195,"maxMs":8.888,"totalUnits":1792000,"maxUnits":16128,"over2Ms":117,"over10Ms":0,"over50Ms":0},"preload.relations.yieldWait":{"calls":117,"totalMs":940.866,"maxMs":55.331,"totalUnits":0,"maxUnits":0,"over2Ms":107,"over10Ms":20,"over50Ms":2},"preload.prepIds.step":{"calls":7100,"totalMs":415.473,"maxMs":3.233,"totalUnits":1792000,"maxUnits":256,"over2Ms":4,"over10Ms":0,"over50Ms":0},"preload.prepIds.slice":{"calls":280,"totalMs":433.701,"maxMs":4.99,"totalUnits":1792000,"maxUnits":14336,"over2Ms":180,"over10Ms":0,"over50Ms":0},"preload.prepIds.yieldWait":{"calls":180,"totalMs":1322.046,"maxMs":25.246,"totalUnits":0,"maxUnits":0,"over2Ms":169,"over10Ms":25,"over50Ms":0},"preload.extras.step":{"calls":7200,"totalMs":793.548,"maxMs":6.708,"totalUnits":1802500,"maxUnits":256,"over2Ms":204,"over10Ms":0,"over50Ms":0},"preload.extras.slice":{"calls":404,"totalMs":807.515,"maxMs":6.708,"totalUnits":1802500,"maxUnits":15360,"over2Ms":304,"over10Ms":0,"over50Ms":0},"preload.extras.yieldWait":{"calls":304,"totalMs":2288.013,"maxMs":32.86,"totalUnits":0,"maxUnits":0,"over2Ms":293,"over10Ms":56,"over50Ms":0},"preload.routes.step":{"calls":7100,"totalMs":388.494,"maxMs":3.609,"totalUnits":1792000,"maxUnits":256,"over2Ms":2,"over10Ms":0,"over50Ms":0},"preload.routes.slice":{"calls":267,"totalMs":403.882,"maxMs":3.789,"totalUnits":1792000,"maxUnits":10496,"over2Ms":167,"over10Ms":0,"over50Ms":0},"preload.routes.yieldWait":{"calls":167,"totalMs":1208.766,"maxMs":22.634,"totalUnits":0,"maxUnits":0,"over2Ms":161,"over10Ms":26,"over50Ms":0},"list.profile.step":{"calls":7050,"totalMs":1547.479,"maxMs":14.336,"totalUnits":1800000,"maxUnits":256,"over2Ms":29,"over10Ms":7,"over50Ms":0},"list.build.slice":{"calls":1877,"totalMs":5056.541,"maxMs":14.337,"totalUnits":5502300,"maxUnits":7936,"over2Ms":1827,"over10Ms":7,"over50Ms":0},"list.build.yieldWait":{"calls":1827,"totalMs":14773.639,"maxMs":59.692,"totalUnits":0,"maxUnits":0,"over2Ms":1743,"over10Ms":412,"over50Ms":6},"relations.index.step":{"calls":7050,"totalMs":1122.033,"maxMs":7.872,"totalUnits":1800000,"maxUnits":256,"over2Ms":92,"over10Ms":0,"over50Ms":0},"relations.missing.step":{"calls":200,"totalMs":23.583,"maxMs":0.723,"totalUnits":51150,"maxUnits":256,"over2Ms":0,"over10Ms":0,"over50Ms":0},"relations.pairs.step":{"calls":200,"totalMs":1117.248,"maxMs":9.659,"totalUnits":51150,"maxUnits":256,"over2Ms":200,"over10Ms":0,"over50Ms":0},"list.display.step":{"calls":7050,"totalMs":1129.823,"maxMs":5.577,"totalUnits":1800000,"maxUnits":256,"over2Ms":8,"over10Ms":0,"over50Ms":0},"list.build.step":{"calls":50,"totalMs":1.279,"maxMs":0.096,"totalUnits":0,"maxUnits":0,"over2Ms":0,"over10Ms":0,"over50Ms":0},"list.sort.step":{"calls":75400,"totalMs":2645.855,"maxMs":3.675,"totalUnits":19237350,"maxUnits":256,"over2Ms":27,"over10Ms":0,"over50Ms":0},"list.sort.slice":{"calls":1344,"totalMs":2787.472,"maxMs":5.29,"totalUnits":19237350,"maxUnits":37537,"over2Ms":1294,"over10Ms":0,"over50Ms":0},"list.sort.yieldWait":{"calls":1294,"totalMs":9876.645,"maxMs":63.904,"totalUnits":0,"maxUnits":0,"over2Ms":1165,"over10Ms":222,"over50Ms":2},"stats.profile.step":{"calls":7100,"totalMs":2319.54,"maxMs":16.09,"totalUnits":1800000,"maxUnits":256,"over2Ms":36,"over10Ms":15,"over50Ms":0},"stats.profile.slice":{"calls":1022,"totalMs":2398.652,"maxMs":16.091,"totalUnits":1800000,"maxUnits":2304,"over2Ms":972,"over10Ms":15,"over50Ms":0},"stats.profile.yieldWait":{"calls":972,"totalMs":8065.786,"maxMs":64.01,"totalUnits":0,"maxUnits":0,"over2Ms":913,"over10Ms":185,"over50Ms":3},"stats.count.step":{"calls":7100,"totalMs":2474.367,"maxMs":10.977,"totalUnits":1800000,"maxUnits":256,"over2Ms":25,"over10Ms":1,"over50Ms":0},"stats.count.slice":{"calls":1147,"totalMs":2523.909,"maxMs":10.977,"totalUnits":1800000,"maxUnits":1792,"over2Ms":1097,"over10Ms":1,"over50Ms":0},"stats.count.yieldWait":{"calls":1097,"totalMs":7775.154,"maxMs":55.999,"totalUnits":0,"maxUnits":0,"over2Ms":1013,"over10Ms":161,"over50Ms":1}},"resultSignature":"b1a872a9e9aa4c7494129d315fcb89bc043d72db39d5bfa8506b93c35169cbf7","stageP95Ms":{"prepare_ms":1,"sql_ms":1070,"preload_ms":413,"profile_ms":375,"relations_ms":213,"display_ms":148,"sort_ms":355,"preload_page_ms":102,"hydrate_ms":36,"stats_ms":1865.2864340000087,"stats_status_ms":15,"stats_candidates_ms":1152,"stats_normalize_ms":44,"stats_auxiliary_ms":217,"stats_inputs_ms":1331,"stats_reuse_inputs_ms":0,"stats_provider_ms":0,"stats_profile_ms":414,"stats_count_ms":382},"p50Ms":3519.6370319999987,"p95Ms":4032.707779999997,"maxMs":4045.590544000006,"lagP99Ms":41.844735,"lagMaxMs":162.136063,"rssPeakBytes":781373440,"heapPeakBytes":664107352,"queryCount":{"min":96,"p50":96,"max":96},"transactionStatements":{"min":4,"max":4},"errorCount":0,"timeoutCount":0,"errors":[],"ciSmokePassed":null,"lagTargetMet":false,"nasLatencyPassed":false,"contentStore":{"rows":36000,"bytes":55525548,"maxRows":50000,"maxBytes":67108864}}
+PRB-PERF-RESULT NAS_ACCEPTANCE_FAIL /out/prb-search-benchmark.json
