@@ -1,10 +1,20 @@
 # PR-B 可接續狀態
 
+## 23:35 最新結果：093bb4a 已完成
+
+受測 SHA `093bb4ae76339b0f6a5f4ea57ca4266872de4a30`，[NAS run 36251837874](https://github.com/Fyun48/5151/actions/runs/36251837874)，[原始證據](../../evidence/prb-nas-093bb4a/README.md)。
+SHA、14 個 module hash、ZIP digest 及原始 manifest 核對相符；真 PG 162／161 pass／0 fail／1 skip。
+四案 p95 2136.93／5118.03／2161.05／5817.00 ms；lag p99/max 33.36/95.16、46.30/280.49、37.39/98.96、57.87/227.28 ms。
+200 次 errors／timeouts=0、fixture 結果 hash 一致；原始 NAS_ACCEPTANCE_FAIL（延遲四案 FAIL，lag 兩個 C1 PASS）。
+runner exit=1、cleanup 三項 0、148 行 JSONL 有效。整輪 ownership 真 PG 回歸已在 NAS 通過，不代表全站零 SQLite 或雙 primary fencing。
+停止純效能微調；剩餘同源／復原要求已定位為 [具體收尾清單](RELEASE_GAPS_093bb4a.md)。
+NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE，未合併、未部署應用程式。以下舊節為歷史，以本節為準。
+
 ## 本批提交：整輪 PostgreSQL ownership
 
 新增 crawlOwnership.js 與 crawl-ownership.test.js；整輪使用專用 PG 連線與 session advisory lock，爬蟲 driver 交易沿同一連線序列執行。取消／斷線後拒絕新操作、等待現有交易回滾才解鎖；晚到 SQLite callback 也受 owner scope 保護。
 獨立座標補算在 owner scope 外啟動，避免繼承已結束的鎖；巢狀 driver 交易明確拒絕，須使用現有 client，避免死鎖。
-本機相關測試 28／25 pass／0 fail／3 PG-only skip；本批真 PG CI 與 NAS 尚待執行，不沿用父 SHA 綠燈。
+本機相關測試 28／25 pass／0 fail／3 PG-only skip；精確 SHA 093bb4ae76339b0f6a5f4ea57ca4266872de4a30 的 CI 四項全綠，真 PG CI／NAS 皆 162 tests／161 pass／0 fail／1 skip。
 這是同一 PG database 的單輪排他，不代表雙 primary fencing／完整 HA；raw pool 繞過 driver 的路徑與已送出的外部副作用不在此保證。其餘 legacy SQLite、跨節點業務與備份復原仍待驗證。
 
 ## 最新已測版本：1e0813e NAS 完成
