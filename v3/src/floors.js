@@ -497,14 +497,15 @@ export function decideNotifyDecision(listing, settings = {}) {
 }
 
 export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
+  const km = Number(settings.commuteKm);
+  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
+  const boxesOn = hasActiveBoxes(settings.excludeBoxes);
+  if (!commuteOn && !boxesOn) return true;
   const cls = resolveLocationClass(listing);
   const usableRoad = canUseForRoadDistance(cls) && hasTrustedCoords(listing);
   if (usableRoad && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
-  const km = Number(settings.commuteKm);
-  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
-  const boxesOn = hasActiveBoxes(settings.excludeBoxes);
   if (strict && boxesOn && !usableRoad) return false;
   if (commuteOn) {
     if (strict && !usableRoad) return false;

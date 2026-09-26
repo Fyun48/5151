@@ -14,6 +14,9 @@ export async function withPgReadSnapshot(driver, run) {
     // fixed fixture. Scope the setting to this transaction, never the pool or
     // server. PostgreSQL restores it on ROLLBACK, including failures.
     await client.query('SET LOCAL jit = off');
+    // Every cursor below is exhausted. Plan for total time, not the default
+    // assumption that a consumer fetches only its first ten percent.
+    await client.query('SET LOCAL cursor_tuple_fraction = 1');
     let cursorId = 0;
     const readRows = async (sql, params = [], { arrayRows = false } = {}) => {
       // Bound decoded cells per parser turn. Narrow ID/version reads can carry

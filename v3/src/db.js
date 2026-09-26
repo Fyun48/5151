@@ -4241,7 +4241,7 @@ function searchWhere(searchKeys, clauses, params, context = null) {
   if (keys?.length) {
     clauses.push(`(
       search_key IN (${keys.map(() => "?").join(",")})
-      OR COALESCE(source, '591') = 'self'
+      OR source = 'self'
     )`);
     params.push(...keys);
   }

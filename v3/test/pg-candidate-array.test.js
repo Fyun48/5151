@@ -5,6 +5,23 @@ import { LIST_CANDIDATE_KEYS } from '../src/listingCandidateRow.js';
 import { withPgReadSnapshot, readPgRows } from '../src/pgReadSnapshot.js';
 
 const connectionString = process.env.PG_TEST_URL || '';
+test('live PG: complete-read planner settings remain local after success and failure',
+  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+    const driver = await createPostgresDriver({ connectionString, poolOptions:{max:1} });
+    const settings = "SELECT current_setting('jit') AS jit, current_setting('cursor_tuple_fraction') AS fraction";
+    try {
+      const before = (await driver.query(settings)).rows;
+      const verify = async snapshot => {
+        assert.deepEqual((await snapshot.query(settings)).rows, [{jit:'off',fraction:'1'}]);
+      };
+      await withPgReadSnapshot(driver, verify);
+      assert.deepEqual((await driver.query(settings)).rows, before);
+      await assert.rejects(withPgReadSnapshot(driver,async snapshot=>{
+        await verify(snapshot); throw new Error('deliberate callback failure');
+      }),/deliberate callback failure/);
+      assert.deepEqual((await driver.query(settings)).rows,before);
+    } finally { await driver.close(); }
+  });
 test('live PG: candidate array batches preserve every row, field, numeric value and text',
   { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
     const driver = await createPostgresDriver({ connectionString });
