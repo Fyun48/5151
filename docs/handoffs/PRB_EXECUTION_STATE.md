@@ -1,5 +1,16 @@
 # PR-B 可接續狀態
 
+## 22:32 最新 NAS 結果：92e8210 四案已完成
+
+[原始證據與表格](../../evidence/prb-nas-92e8210/README.md)，[run 36248207780](https://github.com/Fyun48/5151/actions/runs/36248207780)。
+受測精確 SHA `92e8210adbe362e98c79ba869d8bd65c99ddbfd2`，不是後續文件 HEAD。
+真 PG 154 pass／0 fail；四案 p95 2402.70／6040.11／3096.85／6080.45 ms，四案 errors／timeouts=0、結果 hash 與先前相同。
+原始結論 NAS_ACCEPTANCE_FAIL，四案 latency／lag 皆未過；較 6703302 慢 1.72～2.33 倍，根因未證實，不將先前效能例外自動擴大。
+fixture 分批與 runner 收尾修復已實機通過；清理三項 0、JSONL 174 行有效。
+不再要求重跑舊 SHA、不重啟純效能微調；下一步仍為持久輪替、成功完成範圍及跨節點／復原。
+NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE；應用程式未合併、未部署。以下舊節為歷史紀錄，以本節為最新狀態。
+
+
 更新：2026-09-26，第三批程式 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5` 已推送，精確 SHA CI checks 全部成功。
 **最近完成的 NAS 驗收：受測 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5`，結果 `NAS_ACCEPTANCE_FAIL`；
 全區 C4 延遲首次達標、lag 兩案達標，另兩案只差 0.07 與 1.65 ms。**
