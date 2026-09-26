@@ -202,7 +202,8 @@ SQLite，PG 還是 09-22 的舊值 → 已把這兩張表從正式站 SQLite **u
 - image digest：`sha256:21ce5bb46a337bff21f509d0074fd820f788e9e8f13cfc508af993caca558d67`
 - predeploy check run `35961287333`（success）；build image run `35961289874`（success）；deploy run `35961651897`（success）
 - 正式站容器 revision `ebf695b6224ff35b82339c03ed42b393ecfa071f`；`5151-web-A` revision 同；
-  `5151-web-B` 同（web-B 的 docker 只能 root 進，改用公開站 12/12 取樣證明）。
+  `5151-web-B` 同（**更正 2026-09-24：web-B 的 docker 可用 `tori` 執行**——`tori` 在 `administrators` ＋ `docker` 群組，
+  只需 `export PATH=$PATH:/usr/local/bin`；先前「只能 root 進」的說法未經實測，已作廢。實測 revision 同為 `9c6b7b04…`）。
 
 **驗收證據（都是實際輸出，不是推論）**
 
