@@ -1,9 +1,40 @@
 # PR-B 可接續狀態
 
-更新：2026-09-26 台灣時間 17:08。**BLOCKED：瀏覽器登入被自動核准審查拒絕，NAS 實測無法接續。**
-PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。執行器於約 17:04 恢復，但 scratch 與瀏覽器登入狀態已重設。不是缺 NAS SSH 憑證；既有通道本輪曾成功實跑。
+更新：2026-09-26 台灣時間 17:45。**NAS 同 SHA 驗收已實跑：受測 SHA `ef9e21a`，結果 `NAS_ACCEPTANCE_FAIL`。**
+PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
 
-安全登入尚未送出：自動核准審查指出實際提交／憑證來源為 `jibbyteam.cloudflareaccess.com`，可見頁面品牌為 `toriace.cloudflareaccess.com`，目標服務為 `cocodeco.reversalplay.me`；來源不一致，無法確認 Email／驗證碼目的地。這是自動審查拒絕，不是使用者取消。未改用低階瀏覽器操作、其他通道或憑證轉貼來繞過；需使用者確認這些登入網域的授權關係並核准後再處理。NAS 後續測試沒有在背景自動接續。
+登入阻礙已解除，而且原本就不需要瀏覽器登入：Cloudflare 組織只有一個，
+`name=toriace.cloudflareaccess.com` 與 `auth_domain=jibbyteam.cloudflareaccess.com` 是同一個組織物件的兩個欄位，
+兩者都屬於 Owner 唯一的 Cloudflare 帳號。NAS 通道走既有 SSH 金鑰即可；該組織唯一的登入方式是 One-time PIN，
+驗證碼只寄到 Owner 信箱，代理人本來就無法代收。
+
+## 本輪已完成的五個步驟（DeepSeek Harness，2026-09-26）
+
+1. **保全**：`/tmp/prb-opt.JoUcLPr0` 已封存到 `/mnt/Storage1/prb-archive/prb-opt-jouclpr0-20260926/`
+   （tar 含 `.git`、原 HEAD `201b5bb`、status、binary diff、逐檔 SHA256），解開後 HEAD 與 73 筆變更狀態一致；
+   `/tmp/prb-nas-src.5oVQAQv1` 同樣封存。
+2. **比對**：code-server `/tmp/prb-transfer.it64ho8o/5151` 唯一變更的 `v3/test/pg-candidate-array.test.js`，
+   內容雜湊 `5bbad427…` 等於 `1d09dee`／`63c1f5a`，沒有未納入的修改。
+3. **清理**：`prb-opt-jouclpr0-app` 事前已不存在（`--rm`）；`-pg`／`-net`／`-deps`／`-pgdata` 四項依精確名稱移除。
+   清理後以標籤與名稱前綴查詢皆 0 筆，`/tmp/prb-nas.*` 無殘留，正式容器與 `5151_shadow` 未受影響。
+4. **runner 修正**：`v3/scripts/prb-nas-verify.sh` 建立 container／network／volume 時未加標籤，已最小修正為
+   `prb-nas-verify=1`、`prb-nas-verify.sha`、`prb-nas-verify.script` 三個標籤並提交為 `ef9e21a`。
+   該提交只動 runner（+10／−6）；`v3/src`、`v3/test`、benchmark 腳本與 `63c1f5a` 完全相同。
+   同 SHA CI [36233027423](https://github.com/Fyun48/5151/actions/runs/36233027423) completed／success。
+5. **驗收**：以 GitHub 唯一權威來源的獨立 checkout 在 CasaOS N3450 執行
+   `bash v3/scripts/prb-nas-verify.sh ef9e21aa0f293e97a7269e4726f499e4561f21fe <證據目錄>`。
+
+| 案例 | p95 ms | 目標 ms | 延遲結果 | lag p99／max ms | peak RSS MiB | errors／timeouts |
+|---|---:|---:|---|---|---:|---|
+| 單區 C1 | 1775.12 | 1000 | FAIL | 55.97／98.63 | 431.0 | 0／0 |
+| 單區 C4 | 4680.62 | 2000 | FAIL | 72.88／209.85 | 674.9 | 0／0 |
+| 全區 C1 | 1959.80 | 2000 | PASS | 79.04／134.74 | 694.4 | 0／0 |
+| 全區 C4 | 5821.09 | 4000 | FAIL | 121.83／226.62 | 839.7 | 0／0 |
+
+真 PG 143 tests／142 pass／0 fail／1 optional skip；`sqliteAttempts = 0`；runner exit = `1`。
+與 `848aa7e` baseline 相比 p95 下降 58～66%，只有全區 C1 進入門檻（餘裕 2.0%）。
+`stats_ms` 是四案最大單一階段（占 35.9～50.1%），C4 時 CPU 密集階段同步放大，lag max 升到 226.62 ms。
+完整證據在 `evidence/prb-nas-ef9e21a/`。
 
 ## 已提交與驗證
 
@@ -27,27 +58,31 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 - baseline 848aa7e 的四案 50 次正式驗收已跑完且 FAIL；原始證據在 `evidence/prb-nas-20260926/`（201b5bb 證據提交）。
 - 本輪開發短測固定 120k stored／36k active。單區 C1 從無 profiler 約 2.86 秒，經版本重用約 2.48 秒，再經窄欄位批次與關係索引約 1.93 秒；三次量測，結果 hash 一致。**不是 50 次正式驗收，且仍高於 1 秒目標。**
 - 最後一個名為 `diagnostic-cursor.json` 的約 2.19 秒結果，實際未套入三處新修正（patch 的 EOF context 失敗），不可用來評價新 planner 設定。
-- 尚未完成新 SHA 的 NAS 四案驗收、C4 lag 收斂與清理本輪隔離開發資源。整體遷移 C～F、production auth／雙節點 HTTP E2E、HA promotion／failover、PITR／RPO／RTO 未完成。
+- 新 SHA 的 NAS 四案驗收已於本輪完成（FAIL，見上）；C4 lag 收斂與 `stats_ms` 成本尚未處理。
+  整體遷移 C～F、production auth／雙節點 HTTP E2E、HA promotion／failover、PITR／RPO／RTO 未完成。
 
-## 中斷時的可接續環境
+## 可接續環境（本輪結束時）
 
-台灣時間約 16:54，ChatGPT 的 `exec_command` 與 `node_repl` 回報 transport disconnected，重試為 `409 Conflict, environment_offline: Environment is not connected`；約 17:04 已恢復。新的執行環境與瀏覽器已重建，原本本地 scratch 不在，但下列 NAS／code-server 路徑的遠端狀態尚無法讀回。現在的登入阻礙見本檔開頭。
+- NAS 受測 checkout：`/mnt/Storage1/prb-acceptance/5151`（detached `ef9e21a`，取自 GitHub 權威來源）。
+  新一輪 runner 建立的資源都帶 `prb-nas-verify=1` 標籤，可依標籤查回來源。
+- NAS 持久證據：`/mnt/Storage1/prb-acceptance/evidence/prb-nas-ef9e21a/`（含 SHA256SUMS）；
+  同一份已提交到 repo 的 `evidence/prb-nas-ef9e21a/`。
+- 封存：`/mnt/Storage1/prb-archive/prb-opt-jouclpr0-20260926/` 與
+  `/mnt/Storage1/prb-archive/prb-nas-src-5oVQAQv1-20260926/`。舊 `/tmp/prb-opt.JoUcLPr0`、
+  `/tmp/prb-nas-src.5oVQAQv1` 依指示先保留，重開機即失效，內容以封存為準。
+- `prb-opt-jouclpr0-*` 五項資源已清除；新一輪 runner 資源由 EXIT trap 清除，兩者查詢皆 0 筆。
+- code-server 的 `/tmp/prb-transfer.it64ho8o/5151` 已確認沒有未納入的修改。
+- 既有 SSH 設定／金鑰／known_hosts 依共享 infra runbook 使用，StrictHostKeyChecking 保持啟用。
+  長時間驗收以 `setsid nohup` 脫離 SSH 連線，避免斷線觸發 runner 的 EXIT cleanup。
+  不要新開 tunnel、不要把機密寫入 repo。正式 `5151_shadow` 不可用於測試 setup／migration／ANALYZE。
+- 舊 dev 註記仍有效但已封存：NAS 開發短測曾到單區 C1 約 1.93 秒（3 次量測、非 50 次正式驗收）；
+  `diagnostic-cursor.json` 的約 2.19 秒未套入三處 planner 修正，不可用來評價新設定。
 
-- 既有瀏覽器 IDE：`https://cocodeco.reversalplay.me/?folder=/workspace`。原 `/workspace/5151` 未覆蓋。
-- code-server 的隔離 clone：`/tmp/prb-transfer.it64ho8o/5151`，遠端 `github` 指向權威 GitHub，最後 HEAD 9d415e4。有一份未提交的 `v3/test/pg-candidate-array.test.js` 新測試；已納入 1d09dee GitHub 提交，接續時先比對 diff 再同步。
-- NAS 隔離開發根目錄：`/tmp/prb-opt.JoUcLPr0`。其 Git HEAD 仍是舊 baseline／evidence，但應用檔案已逐批套修正；**不可當作同 SHA 正式驗收 checkout**。
-- NAS 原始開發 log／JSON／CPU profiles：上述目錄的 `artifacts/dev/`。包含 diagnostic-baseline、optimized（撤回 JSON transport）、array、reuse、context、content、batches、cursor；complete-cursor patch 未套入，額外設定測試已寫入，但最後測試的完成結果未能讀回。
-- 最後確認已完成的完整 NAS PG 回歸：`content-full-pg.log`，142 tests／141 pass／0 fail／1 optional skip。後續窄欄位／版本／closure 19 項針對性測試全過。
-- Docker 資源前綴 `prb-opt-jouclpr0`：`-pg` 容器、`-net` internal network、`-deps` 與 `-pgdata` volumes；`-app` 僅在單次測試時存在，採 --rm。未發布 host port，DB 僅 `tracker_prb_test`。
-- dev runner 使用 nohup + timeout 5／6 分鐘，沒有無限背景迴圈。執行器斷線後的實際資源狀態尚待確認。
-- 既有 SSH 設定／金鑰／known_hosts 依共享 infra runbook 使用，StrictHostKeyChecking 保持啟用。不要新開 tunnel、不要把機密寫入 repo。正式 `5151_shadow` 不可用於測試 setup／migration／ANALYZE。
+## 後續
 
-## 恢復後接續
-
-先由使用者確認並核准可信的既有登入服務；遵守安全登入流程，不從聊天接收 Email 驗證碼或其他秘密。
-
-1. 先確認上述 dev runner 已結束、取回完整 logs 與 JSON，核對待提交測試及 GitHub HEAD；保留失敗證據。
-2. 以最新精確 SHA 的新獨立 checkout 執行 `bash v3/scripts/prb-nas-verify.sh <完整 SHA>`；不要對有 patch 的 dev clone 冒稱同 SHA。
-3. 保持暖機至少 5 輪、四案各 50 次、完整 page/stats/JSON、獨立預期與零 SQLite guard；針對未過延遲／lag 繼續修正。
-4. 保存本輪 raw evidence 後，只清除 `prb-opt-jouclpr0-app`、`prb-opt-jouclpr0-pg`、`prb-opt-jouclpr0-net`、`prb-opt-jouclpr0-deps`、`prb-opt-jouclpr0-pgdata`。不要 prune 或碰正式容器。
-5. NAS gate 通過前維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。完整 PR-B 驗收後再接續 C～F，正式變更仍 manual-only。
+1. 針對 `stats_ms`（四案最大單一階段）與 C4 併發下的 CPU 成本（profile／sort／relations／display）修正；
+   每次新程式都要有精確 SHA CI 與 NAS 四案驗收。
+2. lag gate 尚未有任何一案同時滿足 p99 ≤50 ms、max ≤100 ms；C4 的 lag max 已到 226.62 ms，需一併收斂。
+3. 不使用較強硬體、不放寬門檻、不減少候選來讓數字過關；失敗樣本一律保留。
+4. NAS gate 通過前維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。完整 PR-B 驗收後再接續 C～F；
+   正式變更仍 manual-only，且需 Owner 明確核准。
