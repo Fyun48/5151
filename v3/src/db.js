@@ -7061,6 +7061,7 @@ export function listListingsSqlFirst(args = {}) {
 // mirrors listListings()'s strict geo filter (usable road + trusted coords +
 // within commute budget) so the returned set and order are identical.
 export function listListingsCommuteSqlFirst({
+  asOf = null,
   filter = "all",
   kind = "",
   sources = "",
@@ -7101,7 +7102,7 @@ export function listListingsCommuteSqlFirst({
 
   const clauses = [];
   const params = [];
-  searchWhere(searchKeys, clauses, params);
+  listingVisibilityClauses(clauses, params, asOf ? { asOf } : null);
   listingVisibilityClauses(clauses, params);
   appendDistrictCandidates(districtNames, clauses, params);
   appendPriceCeilingCandidates(settings, clauses, params);
@@ -7211,6 +7212,7 @@ export function listListingsCommuteSqlFirst({
 // kind_name (isWholeFloorHome). excludeLowFloors is handled by the display
 // filter: low-floor listings are filtered out, so the score penalty is moot.
 export function listListingsFitSqlFirst({
+  asOf = null,
   filter = "all",
   kind = "",
   sources = "",
@@ -7249,7 +7251,7 @@ export function listListingsFitSqlFirst({
   if (!districtNames.length) return null;
 
   const clauses = [];
-  const params = [];
+  listingVisibilityClauses(clauses, params, asOf ? { asOf } : null);
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
   appendDistrictCandidates(districtNames, clauses, params);
@@ -7490,6 +7492,7 @@ export function listPublicListingsFast(args = {}) {
 
 /** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
 export function listPublicListings({
+  asOf = null,
   kind = "",
   sources = "",
   q = "",
@@ -7512,7 +7515,7 @@ export function listPublicListings({
     .map((name) => String(name || "").trim()).filter(Boolean)
     .slice(0, GUEST_MAX_DISTRICTS);
   const districtSet = new Set(requestedDistricts);
-  const clauses = [];
+  listingVisibilityClauses(clauses, params, asOf ? { asOf } : null);
   const params = [];
   searchWhere([], clauses, params);
   listingVisibilityClauses(clauses, params);
@@ -8163,7 +8166,7 @@ export function stats(searchKeys, userId, settingsOverride, diagnostics) {
   statsMemo.delete(holdKey);
   const settings = settingsOverride || getSettings(uid);
   if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) warmRouteCache();
-  const clauses = [];
+  listingVisibilityClauses(clauses, params, asOf ? { asOf } : null);
   const params = [];
   searchWhere(searchKeys, clauses, params);
   listingVisibilityClauses(clauses, params);
