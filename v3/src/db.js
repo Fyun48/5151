@@ -6880,8 +6880,11 @@ export function listListings({
 // builder stays free of this module's singleton, and the PostgreSQL listings
 // repository gets the identical helpers through it — so both drivers build the
 // same statement.
-export function listingSearchBuildContext() {
+export function listingSearchBuildContext({ asOf = null } = {}) {
   return {
+    // ✓ B4：SQL-first 路徑的時間來源 ✓（`asOf` 有值 ⇒ 與 PG `context.asOf` 同源 ✓；
+    //   未傳 ⇒ null ⇒ 各函式自取 now（＝現況 ✓））。
+    visibilityContext: asOf ? { asOf } : null,
     resolveUserId,
     getSettings,
     searchWhere,
@@ -7008,7 +7011,7 @@ export function sqliteHandle() {
 // the PostgreSQL listings repository calls too — parity between the SQLite and
 // PostgreSQL paths is therefore a property of the code, not of two copies.
 export function listListingsSqlFirst(args = {}) {
-  const built = buildListingSearchSql(args, listingSearchBuildContext());
+  const built = buildListingSearchSql(args, listingSearchBuildContext({ asOf: args.asOf }));
   if (!built.ok) return null;
   const { uid, voteUid, settings } = built;
   const { sameHouse = true } = args;

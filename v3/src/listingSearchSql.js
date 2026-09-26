@@ -163,8 +163,12 @@ export function buildListingSearchSql(args = {}, deps = {}) {
 
   const clauses = [];
   const params = [];
-  deps.searchWhere(searchKeys, clauses, params);
-  deps.listingVisibilityClauses(clauses, params);
+  // ✓ B4（裁決 §6.2／§4）：SQL-first 入口必須與 PG 共用**同一個時間戳** ✓
+  //（`deps.visibilityContext` 由 `listingSearchBuildContext({ asOf })` 提供 ✓；
+  //  未提供時為 null ⇒ `stamp = new Date()` ＝**現況** ✓ ⇒ 既有行為不變 ✓）。
+  const visibilityContext = deps.visibilityContext || null;
+  deps.searchWhere(searchKeys, clauses, params, visibilityContext);
+  deps.listingVisibilityClauses(clauses, params, visibilityContext);
   deps.appendDistrictCandidates(districtNames, clauses, params);
   deps.appendPriceCeilingCandidates(settings, clauses, params);
   if (sourceKeys.length) {
