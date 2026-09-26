@@ -4323,24 +4323,53 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
   }
   const pool = pgDriver || (await sharedPgDriver());
   await ensureChangeLogStoreOnce(pool);
-  const writer = createWritePath({ driver: "postgres", pgDriver: pool });
-  const existing = await writer.upsertListingRow(listing);
-  await writer.backfillListing(listing, existing);
-  await writer.syncProjection(listing);
-  const changeEvent = existing ? "listing_updated" : "listing_added";
-  // 變更紀錄是輔助資料：與 SQLite 路徑（upsertListing 內的 try/catch）一致，失敗只警告。
-  // 少了這層保護，一次序號碰撞就會把整輪抓取打斷（2026-09-24 Production 事故）。
-  try {
-    await writer.bumpRevision({
-      entityType: "listing",
-      entityId: Number(listing?.post_id) || 0,
-      eventType: changeEvent,
-    });
-  } catch (error) {
-    console.warn("變更紀錄寫入失敗（不影響入庫）：", error?.message || error);
-  }
+  // PR-B（F7／G9）：主列 upsert／backfill／投影／變更紀錄必須在同一個 PG 交易內完成；
+  // 投影要用「交易中回讀後的最終列」計算，而不是傳入的 listing（backfill 會改欄位）。
+  // 中間任一失敗就整筆回滾 → 不會再出現「主列寫入成功、搜尋投影永久缺席」的半套狀態。
+  const applied = await pool.withTransaction(async (client) => {
+    const txDriver = {
+      dialect: "postgres",
+      kind: "postgres",
+      query: (text, params = []) => client.query(text, params),
+      exec: (text) => client.query(text),
+    };
+    const writer = createWritePath({ driver: "postgres", pgDriver: txDriver });
+    const existing = await writer.upsertListingRow(listing);
+    await writer.backfillListing(listing, existing);
+    // 回讀 canonical row（同一交易內），投影依它計算。
+    const postId = Number(listing?.post_id) || 0;
+    let canonical = listing;
+    try {
+      const res = await client.query("SELECT * FROM listings WHERE post_id = $1", [postId]);
+      if (res?.rows?.[0]) canonical = res.rows[0];
+    } catch (error) {
+      // 回讀失敗不阻擋入庫（投影仍以傳入列計算），但留下痕跡。
+      console.warn("投影回讀 canonical row 失敗：", error?.message || error);
+    }
+    await writer.syncProjection(canonical);
+    const event = existing ? "listing_updated" : "listing_added";
+    // 變更紀錄是輔助資料，但 PG 內失敗會「毒化整個交易」→ 用 SAVEPOINT 隔離：
+    // 失敗只回捲這一段，主列與投影仍會提交（否則 catch 起來後 COMMIT 會變成 ROLLBACK，變成靜默資料遺失）。
+    try {
+      await client.query("SAVEPOINT change_log");
+      await writer.bumpRevision({
+        entityType: "listing",
+        entityId: postId,
+        eventType: event,
+      });
+      await client.query("RELEASE SAVEPOINT change_log");
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK TO SAVEPOINT change_log");
+      } catch {
+        // 交易已不可用就讓外層處理
+      }
+      console.warn("變更紀錄寫入失敗（不影響入庫）：", error?.message || error);
+    }
+    return event;
+  });
   enqueueSimilaritySafeAsync(listing, pool);
-  return { driver: "postgres", changeEvent };
+  return { driver: "postgres", changeEvent: applied };
 }
 
 function enqueueSimilaritySafe(listing) {

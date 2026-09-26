@@ -1,0 +1,12 @@
+[Unit]
+Description=5151 projection integrity monitor (read-only)
+Documentation=repo:deploy/observability/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/5151-scripts/projection-monitor.sh
+TimeoutStartSec=120
+Nice=10
+IOSchedulingClass=idle
