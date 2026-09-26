@@ -102,7 +102,9 @@ export function anyoneWatched(conn, postId) {
   );
 }
 
-function stampFlags(prev, flags, now) {
+// 個人旗標「下一個值」的計算（純函式）。同步版 setUserListingFlags() 與 PG 分支
+// （personalFlagsAsync.js）共用同一份規則，兩個 driver 才會算出同樣的時間戳與覆寫順序。
+export function stampFlags(prev, flags, now) {
   const current = { ...emptyFlags(), ...prev };
   const viewed = flags.viewed === undefined ? Number(Boolean(current.viewed)) : Number(Boolean(flags.viewed));
   const watched = flags.watched === undefined ? Number(Boolean(current.watched)) : Number(Boolean(flags.watched));

@@ -14,6 +14,8 @@ import {
 } from "./settingsAsync.js";
 // 帳號維護（過期驗證碼、閒置暫停）：PG 模式下與其他節點同源。
 import { expireStaleVerifyTokensAsync, pauseIdleMembersAsync } from "./accountMaintenanceAsync.js";
+// 個人旗標（收藏／隱藏／已看過）：站上讀 PG 的 user_listing_flags，寫入也必須進 PG。
+import { setFlagsAsync } from "./personalFlagsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
@@ -53,7 +55,6 @@ import {
   saveAsProfile,
   saveSettings,
   setCachedGeo,
-  setFlags,
   sourceHistory,
   stats,
   holdStatsCache,
@@ -662,7 +663,7 @@ app.get("/go/:id", async (req, res) => {
       // Awaited so the redirect follows the store the list came from (listingDetailAsync.js).
       listing = await getListingAsync(id);
       if (session?.userId && await getListingAsync(id, session.userId)) {
-        setFlags(id, { viewed: true }, session.userId);
+        await setFlagsAsync(id, { viewed: true }, session.userId);
       }
       if (listing && String(listing.source || "") === "houseprice") {
         const queued = await requestClickRefreshAsync(db, listing, "go");
@@ -3838,7 +3839,7 @@ app.post("/api/listings/:id/flags", async (req, res) => {
     const session = requireMember(req, res);
     if (!session) return;
     const uid = session.userId;
-    const updated = setFlags(Number(req.params.id), req.body || {}, uid);
+    const updated = await setFlagsAsync(Number(req.params.id), req.body || {}, uid);
     if (!updated) {
       res.status(404).json({ error: "找不到這筆物件" });
       return;
