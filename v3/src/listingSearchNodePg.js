@@ -42,18 +42,11 @@ export function canRunNodePg({ pgDriver, deps } = {}) {
  * 這裡改成在 Node 端做 BFS 展開：每步用 PG 原生查詢取「配對雙向鄰居＋個人同屋源群組」，
  * 直到沒有新 id。集合語意與原本的 `UNION` 遞移閉包相同，且完全沒有 dialect 風險。
  */
-export async function districtClosureIds(exec, { districtNames = [], userId = 0 } = {}) {
+export async function districtClosureIds(exec, { districtNames = [], userId = 0, relatedOnly = false } = {}) {
   const { allowed, allKeys } = districtKeyLists(districtNames);
   if (!allowed.length || allowed.length === allKeys.length) return null;
   const prefix = districtKeyPrefixExpression("pg");
   const marks = (n) => Array.from({ length: n }, () => "?").join(",");
-
-  // (1) 種子：落在所選行政區（或無法辨識的舊鍵）的 post_id。
-  const seedRows = await exec(
-    `SELECT post_id FROM listings WHERE (${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
-    [...allowed, ...allKeys], {batch:true},
-  );
-  const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows.map(row => Number(row.post_id)).filter(Boolean)));
 
   // (2) 關係邊：配對雙向（無向圖）＋（選用）該使用者的同屋源群組。
   //     不把 id 清單當 SQL 參數（closure 可達數萬筆，會撐爆參數協定）；改在 Node 端算連通分量。
@@ -77,6 +70,18 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0 
       for (let i = 1; i < list.length; i += 1) edges.push([list[0], list[i]]);   // 群組＝完全圖（以第一筆為代表連出）
     }
   }
+
+  // The page keeps direct district matches in SQL. Only relation endpoints
+  // need a Node closure: unrelated district IDs must not make a round trip to
+  // Node and back as a large array parameter. The legacy full-ID contract is
+  // retained for direct callers; the page explicitly opts into relatedOnly.
+  const endpoints = relatedOnly ? [...new Set(edges.flat())] : null;
+  if (relatedOnly && !endpoints.length) return [];
+  const seedRows = await exec(
+    `SELECT post_id FROM listings WHERE ${relatedOnly ? "post_id = ANY(?::bigint[]) AND " : ""}(${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
+    [...(relatedOnly ? [endpoints] : []), ...allowed, ...allKeys], {batch:true},
+  );
+  const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows.map(row => Number(row.post_id)).filter(Boolean)));
 
   // (3) 只在「含種子的連通分量」內取全部 id（＝原本 recursive UNION 的遞移閉包語意）。
   //
@@ -132,7 +137,36 @@ export async function searchListingsNodePg(args = {}, opts = {}) {
   return withPgReadSnapshot(opts.pgDriver, pgDriver => searchListingsNodePgInner(args, {...opts, pgDriver}));
 }
 
-async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null, requestContext = null } = {}) {
+export async function loadSearchCandidateRows(pgDriver, {candidateColumns, built, reusableCandidates = null}) {
+  if (!Array.isArray(reusableCandidates)) {
+    return readPgRows(pgDriver, toPostgresSql(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`), built.params, {arrayRows:true});
+  }
+  // The list and counters have different scopes. Read the exact list IDs first;
+  // reuse only matching raw rows and fetch every missing ID in this snapshot.
+  const selected = await readPgRows(pgDriver, toPostgresSql(`SELECT post_id FROM listings ${built.where} ORDER BY post_id`), built.params);
+  const byId = new Map();
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const row of reusableCandidates) {
+      byId.set(Number(row.post_id), row);
+      if (++visited % 256 === 0) yield;
+    }
+  })());
+  const missing = await runStepsAsync(transformChunks(selected,
+    rows => rows.map(row => Number(row.post_id)).filter(id => !byId.has(id))));
+  if (missing.length) {
+    const fetched = await readPgRows(pgDriver,
+      `SELECT ${candidateColumns} FROM listings WHERE post_id = ANY($1::bigint[])`, [missing], {arrayRows:true});
+    for (const row of fetched) byId.set(Number(row.post_id), row);
+  }
+  return runStepsAsync(transformChunks(selected, rows => rows.map(({post_id}) => {
+    const row = byId.get(Number(post_id));
+    if (!row) throw new Error('PG candidate missing from the request snapshot');
+    return row;
+  })));
+}
+
+async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null, requestContext = null, reusableCandidates = null } = {}) {
   if (!pgDriver || typeof pgDriver.query !== "function") {
     throw new Error("searchListingsNodePg requires pgDriver");
   }
@@ -170,9 +204,10 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     districts: args.districts, settings, uid, voteUid,
     context,
     // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
-    districtIds: filter === "watched" ? null : await districtClosureIds(exec, {
+    districtRelatedIds: filter === "watched" ? null : await districtClosureIds(exec, {
       districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),
       userId: voteUid,
+      relatedOnly: true,
     }),
     // astra 2026-09-25 §2.1：明確表示「這裡沒有 SQLite 可讀」——隔離子句必須來自 context，
     // 缺 context.isolation 時 builder 會直接拋錯，不得靜默降級或偷讀 SQLite。
@@ -182,7 +217,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   // astra §5.5（B4）：明確候選順序。Node 後處理（同戶角色、配對）會依輸入列順序走訪，
   // 沒有 ORDER BY 時順序由 PG 掃描計畫決定 ⇒ 不可重現。以 post_id 排序固定輸入，
   // 使「同一份資料＋同一組 args＋同一個 asOf」得到同一個結果。
-  const raw = await readPgRows(pgDriver, toPostgresSql(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`), built.params);
+  const raw = await loadSearchCandidateRows(pgDriver, {candidateColumns, built, reusableCandidates});
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
   queryDetails.engine = "node_pg";

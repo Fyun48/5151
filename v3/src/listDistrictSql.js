@@ -36,14 +36,20 @@ export function districtKeyPrefixExpression(dialect = "sqlite") {
 
 // Keep unrecognised/legacy keys for the existing address/title fallback.
 // This is a conservative candidate reduction, not a new district classifier.
-export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor } = {}) {
+export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor, driver = "sqlite", relatedIds = null } = {}) {
   const selected = new Set(names || []);
   if (!selected.size) return;
   const allowed = known.filter(row => selected.has(row.name)).map(row => row.key);
   if (!allowed.length || allowed.length === allKeys.length) return;
   const marks = values => values.map(() => "?").join(",");
-  const alternatives = [`${prefix} IN (${marks(allowed)})`, `${prefix} NOT IN (${marks(allKeys)})`];
+  const districtPrefix = driver === "postgres" ? districtKeyPrefixExpression("pg") : prefix;
+  const alternatives = [`${districtPrefix} IN (${marks(allowed)})`, `${districtPrefix} NOT IN (${marks(allKeys)})`];
   params.push(...allowed, ...allKeys);
+  if (Array.isArray(relatedIds) && relatedIds.length) {
+    if (driver !== "postgres") throw new Error("District relation IDs require PostgreSQL");
+    alternatives.push("post_id = ANY(?::bigint[])");
+    params.push(relatedIds);
+  }
   // Keep complete relation components of district candidates, including incoming
   // one-sided matches and the viewer's personal groups. Unrelated matches in
   // other districts cannot affect their roles. UNION terminates mutual cycles.
@@ -75,5 +81,7 @@ export function appendDistrictCandidates(names, clauses, params, { preserveRelat
   }
   // Select IDs from the narrow index before reading wide listing fields. A
   // direct OR predicate on SELECT <all fields> otherwise causes a table scan.
-  clauses.push(`post_id IN (SELECT post_id FROM listings WHERE ${alternatives.join(" OR ")})`);
+  clauses.push(driver === "postgres"
+    ? `(${alternatives.join(" OR ")})`
+    : `post_id IN (SELECT post_id FROM listings WHERE ${alternatives.join(" OR ")})`);
 }

@@ -5,7 +5,7 @@ import { toPostgresSql } from './sqlDialect.js';
 import { withPgReadSnapshot } from './pgReadSnapshot.js';
 import { listingRequestTime } from './listingRequestTime.js';
 import { searchListingsAsync, ListingSearchUnavailableError, isListingSearchUnavailable } from './listingSearchAsync.js';
-import { listingStatsAsync } from './listingStatsAsync.js';
+import { listingStatsAsync, loadPgListingStatsInputs } from './listingStatsAsync.js';
 
 // The page and its counters share one clock, connection, settings and snapshot.
 // This is also the benchmark entry: all DB/Node work and the public envelope.
@@ -18,17 +18,26 @@ export async function loadListingPage(input = {}, options = {}) {
       ? await buildListRequestContextFromPg((sql,params=[])=>pgDriver.query(toPostgresSql(sql),params).then(r=>r.rows),{asOf:args.asOf})
       : null;
     const common = {driver, pgDriver, requestContext};
-    const listed = await searchListingsAsync(args, common);
-    const queryMs = performance.now()-started;
-    const statsStarted=performance.now();
     const statsDetails={};
-    const stats=await listingStatsAsync({searchKeys:args.searchKeys,userId:args.userId,
-      settings:args.settings,asOf:args.asOf,diagnostics:statsDetails},common);
+    const statsArgs={searchKeys:args.searchKeys,userId:args.userId,
+      settings:args.settings,asOf:args.asOf,diagnostics:statsDetails};
+    let statsPrepareMs=0;
+    if(driver==='postgres') {
+      const before=performance.now();
+      common.preloadedStatsInputs=await loadPgListingStatsInputs(statsArgs,common);
+      common.reusableCandidates=common.preloadedStatsInputs.rows;
+      statsPrepareMs=performance.now()-before;
+      statsDetails.inputs_ms=Math.round(statsPrepareMs);
+    }
+    const listed = await searchListingsAsync(args, common);
+    const queryMs = performance.now()-started-statsPrepareMs;
+    const statsStarted=performance.now();
+    const stats=await listingStatsAsync(statsArgs,common);
     return {
       stats:{...stats,matched:listed.totalMatched},listings:listed.listings,
       hasMore:listed.hasMore===true,nextOffset:listed.nextOffset||0,
       nextCursor:listed.nextCursor||null,queryVersion:listed.queryVersion||2,
-      timing:{query_ms:queryMs,stats_ms:performance.now()-statsStarted,total_ms:performance.now()-started,
+      timing:{query_ms:queryMs,stats_ms:statsPrepareMs+performance.now()-statsStarted,total_ms:performance.now()-started,
         dataset:listed.totalMatched,stages:listed.queryDetails,stats_stages:statsDetails},
     };
   };

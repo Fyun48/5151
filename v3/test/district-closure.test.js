@@ -47,3 +47,30 @@ test("closure：個人同屋源群組會把同群成員納入（userId > 0）", 
   );
   assert.deepEqual([...ids].sort((a, b) => a - b), [1, 2, 3]);
 });
+
+test('related-only closure keeps cross-district components and leaves unrelated district IDs in SQL', async () => {
+  const seeds = [1, 100, 101, 102];
+  const edges = [[1, 99], [2, 99], [2, 3], [20, 21]];
+  let seedParams;
+  const exec = async (sql, params) => {
+    if (/split_part/.test(sql)) {
+      assert.match(sql, /post_id = ANY\(\?::bigint\[\]\)/);
+      seedParams = params[0];
+      return seeds.filter(id => params[0].includes(id)).map(post_id => ({ post_id }));
+    }
+    if (/match_post_id/.test(sql)) return edges.map(([post_id, match_post_id]) => ({ post_id, match_post_id }));
+    return [];
+  };
+  const ids = await districtClosureIds(exec, { districtNames: ['士林區'], relatedOnly: true });
+  assert.deepEqual(ids.sort((a, b) => a - b), [1, 2, 3, 99]);
+  assert.ok(!seedParams.includes(100));
+  assert.ok(!seedParams.includes(101));
+});
+
+test('related-only closure needs no district ID scan when there are no relation edges', async () => {
+  const exec = async sql => {
+    assert.doesNotMatch(sql, /split_part/);
+    return [];
+  };
+  assert.deepEqual(await districtClosureIds(exec, { districtNames: ['士林區'], relatedOnly: true }), []);
+});

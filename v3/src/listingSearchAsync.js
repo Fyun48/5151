@@ -61,6 +61,7 @@ export async function searchListingsAsync(args = {}, options = {}) {
       deps: options.deps || listingSearchBuildContext(),
       decorationLoader: options.decorationLoader,
       requestContext: options.requestContext,
+      reusableCandidates: options.reusableCandidates,
     });
   } catch (error) {
     // F2／astra6 §5：PostgreSQL 失敗時**不回退 SQLite**，且**移除正式可達的換庫能力** ✗。

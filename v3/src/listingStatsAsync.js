@@ -20,6 +20,21 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
 
+const statsExecutor = driver => (sql, params = [], { batch = false, arrayRows = false } = {}) => batch
+  ? readPgRows(driver, toPostgresSql(sql), params, {arrayRows})
+  : driver.query(toPostgresSql(sql), params).then(res => res.rows);
+
+// The caller owns the snapshot. loadListingPage uses these same raw rows for
+// ID-based list hydration and then for counters, without changing either scope.
+export async function loadPgListingStatsInputs(args = {}, options = {}) {
+  const exec = options.exec || statsExecutor(options.pgDriver);
+  const repository = options.repository || createListingStatsRepository({
+    driver: "postgres", pgDriver: options.pgDriver, exec,
+    deps: options.deps || listingStatsBuildContext(),
+  });
+  return repository.loadInputs({...args, requestContext:options.requestContext});
+}
+
 // Counters consume personal flags and routes. They do not decorate cards or
 // compare house groups, so loading candidate extras/peers/MRT for them is wasteful.
 async function statsProvider(exec, inputs) {
@@ -48,15 +63,20 @@ export async function listingStatsAsync(
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     return await withPgReadSnapshot(pgDriver, async snapshotDriver => {
-      const exec = options.exec
-        || ((sql, params = [], { batch = false } = {}) => batch
-          ? readPgRows(snapshotDriver, toPostgresSql(sql), params)
-          : snapshotDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
-      const deps = options.deps || listingStatsBuildContext();
-      const repository = options.repository
-        || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
-      const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics, asOf, requestContext: options.requestContext });
+      const exec = options.exec || statsExecutor(snapshotDriver);
+      let stageStarted = performance.now();
+      const markStage = name => {
+        const now = performance.now();
+        if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
+        stageStarted = now;
+      };
+      const inputs = options.preloadedStatsInputs || await loadPgListingStatsInputs(
+        {searchKeys, userId, settings, diagnostics, asOf},
+        {...options, pgDriver:snapshotDriver, exec},
+      );
+      markStage(options.preloadedStatsInputs ? "reuse_inputs_ms" : "inputs_ms");
       const provider = options.decorationProvider || await statsProvider(exec, inputs);
+      markStage("provider_ms");
       const profileRows = await buildListingStatsRowsAsync({
         rows: inputs.rows,
         flagMap: provider.personalFlags(),
@@ -64,7 +84,8 @@ export async function listingStatsAsync(
         settings: inputs.settings,
         provider,
       });
-      return await summarizeListingStatsAsync({
+      markStage("profile_ms");
+      const result = await summarizeListingStatsAsync({
         profileRows,
         settings: inputs.settings,
         statusCounts: inputs.statusCounts,
@@ -73,6 +94,8 @@ export async function listingStatsAsync(
         dbTotal: inputs.dbTotal,
         provider,
       });
+      markStage("count_ms");
+      return result;
     });
   } catch (error) {
     if (isListingSearchUnavailable(error)) throw error;

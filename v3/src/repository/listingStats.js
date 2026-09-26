@@ -60,7 +60,8 @@ export function assertListingStatsDeps(deps = {}) {
 export function normalizeStatsCandidateRow(row) {
   if (!row) return row;
   for (const key of STATS_CANDIDATE_NUMERIC_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(row, key)) row[key] = numberFromPg(row[key]);
+    const value = row[key];
+    if (value != null && typeof value !== "number" && Object.prototype.hasOwnProperty.call(row, key)) row[key] = numberFromPg(value);
   }
   return row;
 }
@@ -109,6 +110,12 @@ export function createListingStatsRepository({
      * product-visible total and the failed route jobs.
      */
     async loadInputs({ searchKeys, userId, settings: settingsOverride, diagnostics, requestContext: providedContext = null, asOf = null } = {}) {
+      let stageStarted = performance.now();
+      const markStage = name => {
+        const now = performance.now();
+        if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
+        stageStarted = now;
+      };
       const requestContext = providedContext || await buildListRequestContextFromPg(run, {asOf});
       const uid = Number(userId) || 0;
       const settings = settingsOverride || requestContext.settingsForUser(uid);
@@ -126,17 +133,21 @@ export function createListingStatsRepository({
     FROM listings ${statusWhere}`,
         params,
       );
-      context.appendDistrictCandidates(context.memberRegionDistrictNames(settings), clauses, params);
+      markStage("status_ms");
+      context.appendDistrictCandidates(context.memberRegionDistrictNames(settings), clauses, params, {driver:"postgres"});
       context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-      const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true});
+      const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true, arrayRows: true});
+      markStage("candidates_ms");
       const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)));
+      markStage("normalize_ms");
       const flagMap = await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);
       const dbTotal = await countProductListings(runOne, requestContext);
       const failedRouteJobs = new Set(
         (await run("SELECT job_key FROM route_jobs WHERE job_state = 'failed'")).map((row) => row.job_key),
       );
+      markStage("auxiliary_ms");
       if (diagnostics) {
         diagnostics.driver = "postgres";
         diagnostics.candidates = rows.length;
@@ -145,4 +156,3 @@ export function createListingStatsRepository({
     },
   };
 }
-

@@ -25,7 +25,7 @@ const warms=Math.max(5,Number(process.env.PERF_WARMS)||5);
 const out=path.resolve(process.env.PERF_OUTPUT || 'artifacts/prb-search-benchmark.json');
 const root=fileURLToPath(new URL('../..',import.meta.url));
 const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
-const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','cooperative.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
+const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','listingCandidateRow.js','listDistrictSql.js','cooperative.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
 const evidence={status:'RUNNING',target,sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
   node:process.version,hardware:{platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,memoryBytes:os.totalmem()},
   fixture:{version:'prb-fixed-v1',asOf:AS_OF,totalRows,activeRows,chainLength:Math.min(activeRows,1024),description:'120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers'},
@@ -71,15 +71,16 @@ try {
         const counted={query:()=>{throw new Error('outside snapshot');},pool:{connect:async()=>{
           const client=await driver.pool.connect();
           return {release:(...a)=>client.release(...a),query:async(sql,params)=>{
-            if(/^\s*(BEGIN|COMMIT|ROLLBACK|SET)\b/i.test(sql)) tx++; else count++;
+            const text=typeof sql==='string'?sql:sql.text;
+            if(/^\s*(BEGIN|COMMIT|ROLLBACK|SET)\b/i.test(text)) tx++; else count++;
             const queryStart=performance.now();
             const result=await client.query(sql,params);
             if(captureCold) {
-              const normalized=sql.replace(/\s+/g,' ').slice(0,150);
+              const normalized=text.replace(/\s+/g,' ').slice(0,150);
               const prior=coldQueries.at(-1);
               if(prior?.sql===normalized) {prior.calls++;prior.ms+=performance.now()-queryStart;prior.rows+=result.rowCount||0;}
               else coldQueries.push({sql:normalized,calls:1,ms:performance.now()-queryStart,rows:result.rowCount});
-              if(/^DECLARE .* FOR SELECT post_id, source,/.test(sql)) planInputs.push({sql:sql.replace(/^DECLARE .*? FOR /,''),params});
+              if(/^DECLARE /.test(text) && /SELECT post_id, source,/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
             }
             return result;
           }};
@@ -87,7 +88,8 @@ try {
         const start=performance.now();
         try {
           const page=await loadListingPage(input,{driver:'postgres',pgDriver:counted});
-          if(measure) for(const [key,value] of Object.entries({...page.timing.stages,stats_ms:page.timing.stats_ms})) {
+          if(measure) for(const [key,value] of Object.entries({...page.timing.stages,stats_ms:page.timing.stats_ms,
+            ...Object.fromEntries(Object.entries(page.timing.stats_stages).map(([key,value])=>['stats_'+key,value]))})) {
             if(typeof value==='number' && key.endsWith('_ms')) (stageSamples[key] ||= []).push(value);
           }
           const serialized=JSON.stringify(page); // Include response serialization.

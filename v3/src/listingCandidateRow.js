@@ -1,0 +1,51 @@
+// Keep the complete candidate shape in one place. A literal object retains
+// V8 fast properties; pg array mode avoids inserting wide-row keys one at a time.
+export function candidateRowFromValues(values) {
+  return {
+    post_id: values[0],
+    source: values[1],
+    source_id: values[2],
+    source_key: values[3],
+    url: values[4],
+    price: values[5],
+    price_num: values[6],
+    extra_fee: values[7],
+    extra_fees: values[8],
+    extra_fee_text: values[9],
+    price_contain_text: values[10],
+    title: values[11],
+    address: values[12],
+    address_norm: values[13],
+    area_name: values[14],
+    layout: values[15],
+    floor_name: values[16],
+    kind_name: values[17],
+    tags: values[18],
+    role_name: values[19],
+    contact_name: values[20],
+    contact_role: values[21],
+    contact_uid: values[22],
+    agency: values[23],
+    lat: values[24],
+    lng: values[25],
+    geo_source: values[26],
+    location_class: values[27],
+    match_post_id: values[28],
+    match_level: values[29],
+    match_verdict: values[30],
+    match_rejected: values[31],
+    offline: values[32],
+    offline_confirmed: values[33],
+    hidden: values[34],
+    hidden_at: values[35],
+    last_event: values[36],
+    first_seen_at: values[37],
+    last_seen_at: values[38],
+    refresh_time: values[39],
+    listed_by_user_id: values[40],
+    self_status: values[41],
+  };
+}
+
+export const LIST_CANDIDATE_KEYS = Object.freeze(Object.keys(candidateRowFromValues([])));
+export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
 import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
@@ -6543,13 +6544,7 @@ export function sortListingsRowsAsync(rows, sort = "price_asc", options = {}) {
 
 // All fields used by profile filters, grouping and sorting. Large bodies, photos,
 // contact details and equipment are loaded only for the selected page.
-const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, price, price_num,
-  extra_fee, extra_fees, extra_fee_text, price_contain_text,
-  title, address, address_norm, area_name, layout, floor_name, kind_name, tags,
-  role_name, contact_name, contact_role, contact_uid, agency,
-  lat, lng, geo_source, location_class, match_post_id, match_level,
-  match_verdict, match_rejected, offline, offline_confirmed, hidden, hidden_at,
-  last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
+
 
 // Keep the complete candidate contract; page hydration cannot repair a wrong
 // filter, primary or order chosen after dropping required candidate fields.
@@ -6655,7 +6650,7 @@ export function resolveListDistrictNames({ districts = [], settings = null, uid 
 export function buildListListingsClauses({
   filter = "all", kind = "", sources = "", q = "", searchKeys,
   districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
-  districtIds = null, context = null,
+  districtIds = null, districtRelatedIds = null, context = null,
 } = {}, { sqliteDb = db } = {}) {
   if (sqliteDb == null) {
     if (!context?.isolation) throw new Error("PG search requires context.isolation");
@@ -6672,7 +6667,11 @@ export function buildListListingsClauses({
   searchWhere(searchKeys, clauses, params, context);
   if (filter !== "watched") {
     listingVisibilityClauses(clauses, params, context, { sqliteDb });
-    if (Array.isArray(districtIds)) {
+    if (Array.isArray(districtRelatedIds)) {
+      appendDistrictCandidates(districtNames, clauses, params, {
+        driver: "postgres", relatedIds: districtRelatedIds,
+      });
+    } else if (Array.isArray(districtIds)) {
       // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
       // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
       // SQLite 路徑維持 appendDistrictCandidates（含原本的 recursive CTE）。
@@ -6986,44 +6985,52 @@ export function summarizeListingStats({
   const conf = settings || getSettings();
   const rows = Array.isArray(profileRows) ? profileRows : [];
   const failed = failedRouteJobs instanceof Set ? failedRouteJobs : new Set(failedRouteJobs || []);
-  const browse = rows.filter(countsTowardAllTotal);
-  return {
-    total: browse.length,
-    unseen: browse.filter((row) => !row.viewed).length,
-    watched: rows.filter((row) => row.watched && !isConfirmedOffline(row)).length,
+  const counts = {
+    total: 0,
+    unseen: 0,
+    watched: 0,
     watchedTotal: Number(watchedTotal) || 0,
-    same_source: browse.filter((row) => ["same_source", "update", "price_drop", "title_update"].includes(row.last_event)).length,
-    hidden: rows.filter((row) => row.hidden).length,
+    same_source: 0,
+    hidden: 0,
     offline: Number(statusCounts?.pending) || 0,
     offlineConfirmed: Number(statusCounts?.confirmed) || 0,
-    suspected: rows.filter((row) => row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden).length,
-    suspectedPending: rows.filter((row) => row.match_level && !row.match_verdict && !row.offline && !row.hidden).length,
-    elevator: browse.filter((row) => listingHasElevator(row)).length,
-    stored: browse.length,
+    suspected: 0,
+    suspectedPending: 0,
+    elevator: 0,
+    stored: 0,
     filteredOut: 0,
-    missingGeo: rows.filter((row) => !row.hidden && !isPendingOffline(row) && !isConfirmedOffline(row) && !row.watched && row.match_verdict !== "yes" && (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null)).length,
-    missingRoute: rows.filter((row) => {
-      if (row.hidden || isPendingOffline(row) || isConfirmedOffline(row) || row.watched || row.match_verdict === "yes") return false;
-      const geo = applyCachedCoords(row, conf, provider);
-      if (!(
-        Number(conf.commuteKm) > 0 &&
-        isTrustedGeoSource(geo.geo_source) &&
-        Number.isFinite(Number(geo.lat)) &&
-        Number.isFinite(Number(geo.lng)) &&
-        !(Array.isArray(geo.route_kms) && geo.route_kms.length)
-      )) return false;
-      const jobKey = makeRouteJobKey(
-        row.post_id,
-        "to_work",
-        "distance",
-        conf.commuteMode,
-        conf.workLat,
-        conf.workLng,
-      );
-      return !failed.has(jobKey);
-    }).length,
+    missingGeo: 0,
+    missingRoute: 0,
     dbTotal: Number(dbTotal) || 0,
   };
+  const commuteOn = Number(conf.commuteKm) > 0;
+  // Count each candidate once. The async entry keeps the 256-row yield boundary;
+  // avoid allocating a separate filtered array for every sidebar counter.
+  for (const row of rows) {
+    const confirmed = isConfirmedOffline(row);
+    if (countsTowardAllTotal(row)) {
+      counts.total++;
+      counts.stored++;
+      if (!row.viewed) counts.unseen++;
+      if (["same_source", "update", "price_drop", "title_update"].includes(row.last_event)) counts.same_source++;
+      if (listingHasElevator(row)) counts.elevator++;
+    }
+    if (row.watched && !confirmed) counts.watched++;
+    if (row.hidden) counts.hidden++;
+    if (row.match_level && !row.offline && row.match_verdict !== "yes" && !row.hidden) {
+      counts.suspected++;
+      if (!row.match_verdict) counts.suspectedPending++;
+    }
+    if (row.hidden || isPendingOffline(row) || confirmed || row.watched || row.match_verdict === "yes") continue;
+    if (!isTrustedGeoSource(row.geo_source) || row.lat == null || row.lng == null) counts.missingGeo++;
+    if (!commuteOn) continue;
+    const geo = applyCachedCoords(row, conf, provider);
+    if (!isTrustedGeoSource(geo.geo_source) || !Number.isFinite(Number(geo.lat)) || !Number.isFinite(Number(geo.lng))
+      || (Array.isArray(geo.route_kms) && geo.route_kms.length)) continue;
+    const jobKey = makeRouteJobKey(row.post_id, "to_work", "distance", conf.commuteMode, conf.workLat, conf.workLng);
+    if (!failed.has(jobKey)) counts.missingRoute++;
+  }
+  return counts;
 }
 
 // Raw SQLite driver handle. Domain code must keep using the exported functions;
