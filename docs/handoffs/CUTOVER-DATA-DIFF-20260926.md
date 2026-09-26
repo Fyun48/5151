@@ -59,13 +59,41 @@ CasaOS `5151-web-A` 的本機 SQLite、Synology `5151-web-B` 的本機 SQLite。
 
 **目前尚未對正式 PG 寫入任何一列。** 補遷腳本要先 dry-run、再在隔離副本排練（第三節第 4 點）。
 
-## 四、下一步（第三節第 4、6 點）
+## 四、補遷腳本與隔離排練（第三節第 4 點）
 
-1. 產出 `dry-run` 補遷腳本：預設只印「將新增幾列、將更新哪幾類欄位」，不寫入；
-   冪等（重跑不重複新增）、以主鍵 upsert、不動 PG 較新的列。
-2. 在**隔離 PG instance**（新建容器、獨立 volume、唯一 label、不掛正式 volume）以 PG dump 還原，
-   對它跑一次補遷，驗證列數與關聯正確、重跑不變。
-3. 正式切換時：暫停會寫舊庫的 writer（目前 crawler 未執行，watcher 在 web 容器內）→
-   取最後差異 → 補遷 → 部署 PG 版本 → 恢復。
-4. 需要 Owner 的兩類決策（`user_settings` 5 筆、`listing_group_members` 2 筆）在所有其他工作完成後
-   一次提出，附具體鍵名與兩邊的值。
+腳本：`v3/scripts/cutover-backfill.mjs`（只讀 SQLite 快照，輸出 SQL；由 psql 套用，
+所以不需要把 PG 連線字串交給腳本，dry-run 與套用走同一份文字）。
+回歸：`v3/test/cutover-backfill.test.js` 4 案（dry-run 不產生 SQL、只 INSERT 缺少的鍵、
+不得出現 UPDATE／DELETE／DDL、多份快照以 freshness 挑較新、群組先於成員的 FK 順序）。
+
+**dry-run（對正式資料、唯讀）**：三份快照合併後，PG 缺少 133 列，與第二節的獨立比對完全一致。
+其中 53 個鍵出現在多份快照，以 freshness 欄位（`updated_at`／`joined_at`／`*_at`）挑較新的一份；
+只有 1 個鍵（`settings` 的站台設定）沒有 freshness 欄位可比，而三份內容相同。
+
+產出的 `backfill.sql`：133 筆 `INSERT … ON CONFLICT DO NOTHING`（members 69、groups 25、
+flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4bebec7…`。
+
+**隔離排練**（新建 `prb-cutover-rehearsal` 容器 ＋ 獨立 volume，唯一 label，未掛任何正式 volume；
+以 PG dump 還原後套用）：
+
+| 表 | 套用前 | 套用後 | 增減 |
+|---|---:|---:|---:|
+| `settings` | 28 | 29 | +1 |
+| `user_listing_flags` | 705 | 743 | +38 |
+| `listing_groups` | 14,486 | 14,511 | +25 |
+| `listing_group_members` | 45,181 | 45,250 | +69 |
+| 合計 | | | **+133** |
+
+- 與 dry-run 預測一致；`psql -v ON_ERROR_STOP=1` **無任何錯誤**（外鍵與約束通過，靠先寫群組再寫成員）。
+- **重跑一次新增 0 筆**（冪等；`ON CONFLICT DO NOTHING` 生效，不會覆蓋 PG 既有列）。
+- 排練資源已清除：依 `prb-nas-verify=1` 查容器／volume 皆 0 筆，正式容器未受影響。
+- 紀錄留在 NAS `cutover-20260926/rehearsal-record.md`。
+
+## 五、下一步（第三節第 6 點、第四、五節）
+
+1. 95 列內容衝突：依第三節的分類規則處理，其中 `user_settings` 5 筆與
+   `listing_group_members` 2 筆需要 Owner 決定（會與其他待決事項一次提出）。
+2. 第四節最低驗證：兩節點 A/B 讀寫、爬蟲來源抽查、PG 備份的隔離還原抽查。
+3. 第五節：把 PG 備份（pg_dump）接進既有 predeploy 流程。
+4. 正式切換：停寫舊庫 → 取最後差異 → 補遷 → 部署 → 恢復。
+
