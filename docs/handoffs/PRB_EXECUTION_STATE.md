@@ -1,9 +1,93 @@
 # PR-B 可接續狀態
 
-更新：2026-09-26，CPU 修正提交 `143f1a636a21a85cad1019dd5037a476123fd5a3` 已推送，精確 SHA 的 CI checks 全部成功。
+更新：2026-09-26，第二批程式提交 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0` 已推送；精確 SHA CI checks 已全部成功。
+**新程式 NAS_NOT_RUN；最近已完成的 NAS 仍為 6381f0f FAIL。**
 **最近完成的 NAS 驗收：受測 SHA `6381f0f8a5afad0a6f4e9ca8cc67cf42e7e9349b`（PR head，程式等於 `143f1a6`），
 結果 `NAS_ACCEPTANCE_FAIL`。**
 PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+
+## 第二批輸入／SQL／關係與排程修正（ae88ce6）
+
+程式 SHA：`ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，基於 GitHub `a6378854bf5365595f77752e8dcd2215956442f1`。
+[精確 SHA Tests 36237613877](https://github.com/Fyun48/5151/actions/runs/36237613877) completed／success。
+一般 2656 tests／2616 pass／0 fail／40 skip；真 PG 148 tests／147 pass／0 fail／1 optional skip。
+同 SHA GitGuardian 與 model review checks 皆 completed／success。
+原始 artifact JSON 已原樣保存於 `evidence/prb-ci-ae88ce6/`，ZIP digest、14 個 module hashes 與四案結果 hash 均核對相符。
+
+| CI 案例 | p95 ms | lag p99／max ms | peak RSS MiB | errors／timeouts |
+|---|---:|---:|---:|---:|
+| 單區 C1 | 233.24 | 15.56／18.78 | 443.4 | 0／0 |
+| 單區 C4 | 675.10 | 19.64／24.40 | 565.1 | 0／0 |
+| 全區 C1 | 243.43 | 17.27／19.46 | 571.8 | 0／0 |
+| 全區 C4 | 627.09 | 22.66／30.39 | 788.8 | 0／0 |
+
+CI smoke 與四案 lag 均通過、SQLite attempts 0；NAS 尚未跑，不能替代 CasaOS gate。
+本輪 CI 是 Xeon Platinum 8573C，上輪是 EPYC 7763，不能據此推算 NAS 改善幅度。
+插樁同步 step 最大 3.000／7.200／4.274／7.101 ms；slice 最大 4.268／8.035／6.233／8.615 ms；
+yieldWait 最大 6.201／17.168／6.621／17.999 ms。GC pause 與所有工作量見原始 JSON。
+PG list ID 查詢 shared hits 為 2,438；候選仍為單區 18,512／全區 36,000。
+
+- PG 的 all／unseen／viewed 個人旗標改用 EXISTS／NOT EXISTS，讓 planner 可使用 semi／anti join，
+  避免每個候選都執行 scalar subquery。保留缺值、NULL、0、1、非二元值，以及 viewer uid 與 voteUid 分離的語意。
+- 候選 prep 僅載入已知 houseprice 列與來源未知的外部 peers；一般 provider／頁面裝飾契約不變。
+  不減少候選、欄位、extras 或關係；preload 的候選記憶體迴圈加上合作式排程。
+- 同戶角色只掃描一次所有候選建立索引與個人群組；配對階段只處理有關係的列，保留原順序、
+  主副卡／split／個人群組覆寫規則。內層 peer 及 primary 選擇加入 checkpoints。
+- stats 數字欄位改用固定 property 讀取；保留自訂 projection、文字數字與 own-field 轉換契約。
+- PG 窄列每批最多 1,024 列（原 4,096），完整 42 欄仍為每批 512 列；完整讀完，不截斷。
+  代價是窄列 FETCH 次數增加，須由同 SHA CI／NAS 同時檢查端到端延遲與 lag。
+- 版本內容複製改為 2 ms 合作式排程；generator 最後一次 next() 超過預算也必須讓出。
+  WHERE、MVCC 列版本、欄位權限、schema／role／storage／epoch 與快照保護皆不變。
+- benchmark 新增每案 `workDiagnostics`：`.step`／`.slice` 的同步時間、checkpoint 工作量、
+  `.yieldWait` 排程等待、PG submit／append 同步段及 query wall time、GC pause／timer gap。
+  **yieldWait 與 PG wall time 包含其他請求／I/O，不能當作本次同步 CPU 時間**；
+  step／slice 為已插樁區段，並非完整 JS／PG parser profiler。GC pause 另列。
+  診斷只在 benchmark 量測區段透過 AsyncLocalStorage 啟用，使用彙總資料、不保留無界樣本。
+- 本機 Node 22.23.3 回歸：127 tests／121 pass／0 fail／6 真 PG 測試於本機跳過，現已在 CI 實際執行。
+  本機 CPU-only 診斷沒有 PG／NAS，不能替代驗收。
+- fixture、42 欄、120k stored／36k active、暖機 5 輪、每案 50 次及所有硬 gate 不變。
+
+## 交給 DeepSeek 的下一輪 NAS（指定程式 SHA ae88ce6）
+
+本輪由 DeepSeek Harness 透過既有 SSH 執行。沒有瀏覽器登入／OTP 待辦。
+**指定 SHA CI 已全綠，可以執行；指定測 `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，不要自動換成後續文件 HEAD。**
+未量測的新版本不得沿用 6381f0f 或 CI 的成績。若實際改測別的 SHA，須先核對它自己的 CI、
+以真正受測 SHA 命名目錄並回填版本差異。
+
+```bash
+ssh casa-nas
+cd /mnt/Storage1/prb-acceptance/5151 || exit 1
+test -z "$(git status --porcelain)" || exit 1
+git fetch origin || exit 1
+git checkout --detach ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0 || exit 1
+test "$(git rev-parse HEAD)" = ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0 || exit 1
+mkdir -p /mnt/Storage1/prb-acceptance/evidence
+mkdir /mnt/Storage1/prb-acceptance/evidence/prb-nas-ae88ce6 || exit 1
+setsid nohup bash -c '
+  bash v3/scripts/prb-nas-verify.sh \
+    ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0 \
+    /mnt/Storage1/prb-acceptance/evidence/prb-nas-ae88ce6 \
+    > /mnt/Storage1/prb-acceptance/evidence/prb-nas-ae88ce6/runner.log 2>&1
+  prb_run_exit=$?
+  echo "$prb_run_exit" > /mnt/Storage1/prb-acceptance/evidence/prb-nas-ae88ce6/runner-exit.txt
+  exit "$prb_run_exit"
+' >/dev/null 2>&1 &
+```
+
+原 CasaOS N3450，完整真 PG 與四案各 50 次。請一併回傳 `workDiagnostics` 的最大同步 step／slice、
+工作量、讓出等待、PG reply 列數與 GC pause；若仍超過 lag gate，先依量測定位，勿只看 p95 改善。
+核對 JSON `sourceSha`／`checkoutSha`、module hashes、結果 hash、主機與映像、SQLite attempts、
+errors／timeouts、runner exit。完成後保存三項標籤清理查詢（容器／network／volume 應為 0）：
+
+```bash
+docker ps -a --filter label=prb-nas-verify=1 --format '{{.ID}} {{.Names}}'
+docker network ls --filter label=prb-nas-verify=1 --format '{{.ID}} {{.Name}}'
+docker volume ls --filter label=prb-nas-verify=1 --format '{{.Name}}'
+```
+
+保存全部失敗樣本、raw logs、cleanup 紀錄與 SHA256SUMS，提交到 `evidence/prb-nas-ae88ce6/`。
+回填 PR 與本文件時一律用實際受測 SHA；NAS 未過仍 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+正式 `5151_shadow` 不可 setup／migration／ANALYZE；不改硬體、不放寬 gate、不合併、不部署。
 
 ## 第一批 CPU 修正的 NAS 實測（受測 SHA 6381f0f）
 
@@ -32,7 +116,7 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
 - 證據：`evidence/prb-nas-6381f0f/`；同 SHA CI
   [36235625644](https://github.com/Fyun48/5151/actions/runs/36235625644)。
 
-## 本輪 CPU 修正（143f1a6）
+## 第一批 CPU 修正（143f1a6，歷史）
 
 - 從 GitHub 的 `2a90c1d` 乾淨 checkout 開始，沒有取用 NAS 舊 `/tmp` 工作樹。
 - 完整 42 欄 PG 候選的個人旗標 overlay 改為固定欄位建構，避免逐列枚舉寬物件。
@@ -48,8 +132,7 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未
   最後數字租金 fast path 未另外計入這份診斷；正式效能以同 SHA CI 與 NAS 為準。
 - runner、benchmark、fixture、gate、42 欄契約、快照與完整候選數皆未修改。
 
-本執行器（ChatGPT）可改碼、推送與檢查 CI，但沒有 DeepSeek Harness 的既有 NAS SSH 設定／金鑰；
-NAS 執行一律由 DeepSeek Harness 以既有通道接續，不建立新通道。
+ChatGPT 負責改碼、推送與精確 SHA CI；NAS 由 DeepSeek Harness 以既有 SSH 接續。
 `143f1a6`／`6381f0f` 的 NAS 四案已於本輪由 DeepSeek Harness 跑完，結果見上方。
 
 ## 本輪已完成的五個步驟（DeepSeek Harness，2026-09-26）
@@ -82,7 +165,7 @@ NAS 執行一律由 DeepSeek Harness 以既有通道接續，不建立新通道�
 
 ## 已提交與驗證
 
-- 最新程式 SHA `143f1a636a21a85cad1019dd5037a476123fd5a3`：
+- 第一批程式 SHA `143f1a636a21a85cad1019dd5037a476123fd5a3`（歷史）：
   [Tests 36235146987](https://github.com/Fyun48/5151/actions/runs/36235146987) completed／success。
   一般 2650 tests／2612 pass／0 fail／38 skip；真 PG 143 tests／142 pass／0 fail／1 optional skip。
   GitGuardian 與 model review checks 也成功。
@@ -90,7 +173,7 @@ NAS 執行一律由 DeepSeek Harness 以既有通道接續，不建立新通道�
   每案 50 次，errors／timeouts／SQLite attempts 皆 0；`CI_SMOKE_PASS`。
   **全區 C4 lag p99 54.20 ms 超過 50 ms**（max 87.88 ms）；不可寫成所有效能 gates 已過。
   完整 artifact 原樣保存於 `evidence/prb-ci-143f1a6/`，含版本、硬體、module hashes 與 SHA256SUMS。
-- 最近 NAS 受測 SHA `ef9e21aa0f293e97a7269e4726f499e4561f21fe`：
+- 上一輪 NAS 受測 SHA `ef9e21aa0f293e97a7269e4726f499e4561f21fe`（歷史）：
   [同 SHA Tests 36233027423](https://github.com/Fyun48/5151/actions/runs/36233027423) success，NAS FAIL。
 - 以下 `749165e`～`1d09dee` 為歷史程式／CI 記錄；其 NAS 效果已由 `ef9e21a` 的完整實跑涵蓋，
   結果仍只歸屬實際受測 SHA `ef9e21a`。
@@ -111,16 +194,16 @@ NAS 執行一律由 DeepSeek Harness 以既有通道接續，不建立新通道�
 - baseline 848aa7e 的四案 50 次正式驗收已跑完且 FAIL；原始證據在 `evidence/prb-nas-20260926/`（201b5bb 證據提交）。
 - 歷史 NAS 開發短測固定 120k stored／36k active。單區 C1 從無 profiler 約 2.86 秒，經版本重用約 2.48 秒，再經窄欄位批次與關係索引約 1.93 秒；三次量測，結果 hash 一致。**不是 50 次正式驗收，且仍高於 1 秒目標。**
 - 最後一個名為 `diagnostic-cursor.json` 的約 2.19 秒結果，實際未套入三處新修正（patch 的 EOF context 失敗），不可用來評價新 planner 設定。
-- ef9e21a 的 NAS 四案驗收已完成（FAIL，見上）。143f1a6 的 CPU 修正尚無 NAS 四案結果；
-  不預先宣稱 `stats_ms`、C4 或 lag gate 已達標。
+- ef9e21a 與 6381f0f 的 NAS 四案已完成（皆 FAIL，見上）；143f1a6 程式效果由實測 6381f0f 記錄。
+  新程式 ae88ce6 尚未在 NAS 量測，不預先宣稱 `stats_ms`、C4 或 lag gate 達標。
   整體遷移 C～F、production auth／雙節點 HTTP E2E、HA promotion／failover、PITR／RPO／RTO 未完成。
 
 ## 可接續環境（DeepSeek 2026-09-26 完成後）
 
-- NAS 受測 checkout：`/mnt/Storage1/prb-acceptance/5151`（detached `ef9e21a`，取自 GitHub 權威來源）。
+- NAS 受測 checkout：`/mnt/Storage1/prb-acceptance/5151`（最近受測 detached `6381f0f`，取自 GitHub 權威來源）。
   新一輪 runner 建立的資源都帶 `prb-nas-verify=1` 標籤，可依標籤查回來源。
-- NAS 持久證據：`/mnt/Storage1/prb-acceptance/evidence/prb-nas-ef9e21a/`（含 SHA256SUMS）；
-  同一份已提交到 repo 的 `evidence/prb-nas-ef9e21a/`。
+- 最新 NAS 持久證據：`/mnt/Storage1/prb-acceptance/evidence/prb-nas-6381f0f/`（含 SHA256SUMS）；
+  已提交到 repo 的 `evidence/prb-nas-6381f0f/`，更早 ef9e21a 證據亦保留。
 - 封存：`/mnt/Storage1/prb-archive/prb-opt-jouclpr0-20260926/` 與
   `/mnt/Storage1/prb-archive/prb-nas-src-5oVQAQv1-20260926/`。舊 `/tmp/prb-opt.JoUcLPr0`、
   `/tmp/prb-nas-src.5oVQAQv1` 依指示先保留，重開機即失效，內容以封存為準。
@@ -132,7 +215,7 @@ NAS 執行一律由 DeepSeek Harness 以既有通道接續，不建立新通道�
 - 舊 dev 註記仍有效但已封存：NAS 開發短測曾到單區 C1 約 1.93 秒（3 次量測、非 50 次正式驗收）；
   `diagnostic-cursor.json` 的約 2.19 秒未套入三處 planner 修正，不可用來評價新設定。
 
-## 後續
+## 第一批 NAS 後提出的目標（本批已實作，效果待新 SHA NAS）
 
 1. `143f1a6`／`6381f0f` 的精確 SHA CI 與 NAS 四案都已完成（NAS 為 FAIL，見上方第一節）。
    下一批修正的目標：`stats_inputs_ms`（591／1121／455／1100 ms）與 C4 的 `sql_ms`（867／1407）、
