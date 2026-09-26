@@ -45,8 +45,8 @@ import {
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
-import { replaceCrawlCovers } from "./crawlCovers.js";
-import { markCoveringCompletedAsync, markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
+import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
+import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { throwIfCrawlCancelled } from "./crawlExecution.js";
@@ -633,13 +633,14 @@ export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Dat
 
 export async function runWatch(options = {}) {
   throwIfCrawlCancelled();
-  const want591 = isCrawlSourceEnabled("591");
-  const wantHb = isCrawlSourceEnabled("hbhousing");
-  const wantSinyi = isCrawlSourceEnabled("sinyi");
-  const wantHp = isCrawlSourceEnabled("houseprice");
-  const wantDd = isCrawlSourceEnabled("ddroom");
-  const wantHf = isCrawlSourceEnabled("housefun");
-  const wantRakuya = isCrawlSourceEnabled("rakuya");
+  const runtime = await crawlRuntimeAsync();
+  const want591 = runtime.sourceEnabled("591");
+  const wantHb = runtime.sourceEnabled("hbhousing");
+  const wantSinyi = runtime.sourceEnabled("sinyi");
+  const wantHp = runtime.sourceEnabled("houseprice");
+  const wantDd = runtime.sourceEnabled("ddroom");
+  const wantHf = runtime.sourceEnabled("housefun");
+  const wantRakuya = runtime.sourceEnabled("rakuya");
   if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf && !wantRakuya) {
     return {
       checked_at: nowIso(),
@@ -649,14 +650,15 @@ export async function runWatch(options = {}) {
       message: "591 與外站來源都已在後台關閉，這次沒有抓取",
     };
   }
-  const settings = getSettings();
+  const settings = runtime.settings;
   const plan = Array.isArray(options.jobs)
     ? {
       jobs: options.jobs,
       includedUserIds: options.includedUserIds || [],
+      memberRequirements: options.memberRequirements || [],
       includeSystem: options.includeSystem === true,
     }
-    : coveringPlan({
+    : await reserveCoveringPlan({
       now: Date.now(),
       includeSystem: options.includeSystem !== false,
     });
@@ -664,7 +666,6 @@ export async function runWatch(options = {}) {
   if (!jobs.length) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
-  replaceCrawlCovers(db, jobs);
   bindNotifyJobSnapshots();
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
@@ -672,6 +673,7 @@ export async function runWatch(options = {}) {
   const hbPages = CRAWL_PAGES_EXTERNAL;
   const collected = [];
   const errors = [];
+  const sourceSuccess = [];
   const fetchOptions = {
     minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     excludeKeywords: settings.excludeKeywords,
@@ -684,12 +686,15 @@ export async function runWatch(options = {}) {
   };
 
   if (want591) {
+    const successful = new Set();
+    sourceSuccess.push(successful);
     let consecutiveTimeouts = 0;
     for (const job of jobs) {
       try {
         const result = await fetchListings(job.searchUrl, pages, fetchOptions);
         throwIfCrawlCancelled();
         collected.push(result);
+        if (!result.errors?.length) successful.add(job.searchUrl);
         consecutiveTimeouts = 0;
         if (result.total > 0 && result.listings.length === 0) {
           errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
@@ -708,10 +713,13 @@ export async function runWatch(options = {}) {
   }
 
   async function collectExternal(label, run) {
+    const successful = new Set();
+    sourceSuccess.push(successful);
     try {
       const batches = await run();
       throwIfCrawlCancelled();
       for (const batch of batches) {
+        if (!batch.errors?.length && batch.searchUrl) successful.add(batch.searchUrl);
         for (const error of batch.errors || []) {
           errors.push(`${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`);
         }
@@ -939,9 +947,11 @@ export async function runWatch(options = {}) {
   }
   // 整輪完成的紀錄（lastCoveringAt／lastSystemCoveringAt ＋ crawl_covers.last_run_at）要走 driver-aware
   // 入口：只寫 SQLite 的話，PG 模式的「該抓了」判定永遠讀到舊值 → 每分鐘重跑一整輪（2026-09-24 事故）。
-  await markCoveringCompletedAsync({
-    includedUserIds: plan.includedUserIds,
-    includeSystem: plan.includeSystem === true,
+  // A partial source failure is not a successful cover. Be conservative until
+  // every enabled source reports success; never postpone unprocessed members.
+  await completeCoveringPlan({
+    successfulJobs: jobs.filter(job => sourceSuccess.length > 0 && sourceSuccess.every(set => set.has(job.searchUrl))),
+    memberRequirements: plan.memberRequirements,
     at: nowIso(),
   });
 

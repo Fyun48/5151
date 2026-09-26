@@ -3487,7 +3487,7 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
-import { rotateCoveringJobs } from "./crawlPolicy.js";
+import { coveringPlanAsync, reserveCoveringPlan } from "./crawlScheduleAsync.js";
 
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
@@ -3526,7 +3526,7 @@ async function tick(reason = "schedule") {
       && !lastRun.error
       && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
     ) {
-      const duePlan = coveringPlan({ now, includeSystem: false });
+      const duePlan = await coveringPlanAsync({ now, includeSystem: false });
       if (!duePlan.jobs.length) {
         return {
           ...lastRun,
@@ -3537,7 +3537,7 @@ async function tick(reason = "schedule") {
       }
     }
     const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
-    const plan = coveringPlan({ now, includeSystem });
+    const plan = await reserveCoveringPlan({ now, includeSystem });
     if (!plan.jobs.length) {
       return {
         skipped: "idle",
@@ -3551,8 +3551,9 @@ async function tick(reason = "schedule") {
     const result = await withBudget(
       () => runWatch({
         skipHeavyGeo: true,
-        // 每輪只跑一段覆蓋條件（時間輪替）：19 組全跑會超過 15 分鐘預算而被放棄。
-        jobs: rotateCoveringJobs(plan.jobs, { now, intervalMs: crawlIntervalMinutes() * 60 * 1000 }),
+        // 持久化公平輪替；失敗不記完成，重啟與不規則間隔不會跳過固定組。
+        jobs: plan.jobs,
+        memberRequirements: plan.memberRequirements,
         includedUserIds: plan.includedUserIds,
         includeSystem: plan.includeSystem,
       }),

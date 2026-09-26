@@ -1,5 +1,16 @@
 # PR-B 可接續狀態
 
+## 後續程式批次：持久輪替與成功完成範圍
+
+- 新 `crawlScheduleAsync` 從目前 driver 的 settings/users/user_settings 建立計畫；PG 不再以節點 SQLite 的會員條件或來源開關決定本輪內容。
+- 預約在短交易內鎖住 settings 的 crawlScheduleV1；每個 cover 保存最後嘗試順序，優先選最久未嘗試的 6 組。失敗仍會重試，不受時間窗跳號或重啟影響。
+- watcher 依各啟用來源實際回傳的成功 searchUrl 交集記錄成功；沒有回傳／失敗來源不算完成。只更新成功 cover 的 last_run_at，不刪除未執行 covers。
+- 成功範圍可跨輪累積；會員所有所需範圍都在其 dueAt 之後成功、且設定未被修改時，才以 CAS 更新該會員下一次到期時間。進度不再冒充 lastCoveringAt 或更新所有 cover。
+- 本機測試涵蓋 19 組／不規則時間、資料庫重新開啟、部分失敗、跨輪完成及設定變更；PG 的並行預約／零 SQLite I/O 交由精確 SHA CI 實測。
+- 此批是短交易預約鎖，**不是整輪分散式 worker lease／fencing**；兩個 worker 的完整生命週期排他仍待補。watcher 其餘 legacy helper 不因此宣稱全站零 SQLite。
+- 下一步：精確 SHA CI → 同 SHA NAS；再補 worker ownership、跨節點啟用功能與備份復原，未合併、未部署。
+
+
 ## 22:32 最新 NAS 結果：92e8210 四案已完成
 
 [原始證據與表格](../../evidence/prb-nas-92e8210/README.md)，[run 36248207780](https://github.com/Fyun48/5151/actions/runs/36248207780)。

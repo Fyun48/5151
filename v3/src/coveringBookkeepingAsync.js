@@ -20,6 +20,7 @@ import {
   crawlIntervalMinutes,
   markCoveringCompleted,
   sqliteHandle,
+  systemCrawlFromRows,
 } from "./db.js";
 
 const KEYS = ["lastCoveringAt", "lastSystemCoveringAt"];
@@ -59,7 +60,10 @@ export async function isSystemCoveringDueAsync(now = Date.now(), options = {}) {
   const { lastSystemCoveringAt } = await coveringBookkeepingAsync(options);
   const last = Date.parse(lastSystemCoveringAt);
   if (!Number.isFinite(last)) return true;
-  return now - last >= crawlIntervalMinutes() * 60 * 1000;
+  const interval = (options.driver || resolveDbDriver()) === "postgres"
+    ? systemCrawlFromRows(await (await pgExec(options))(GLOBAL_SETTINGS_SQL, [])).intervalMinutes
+    : crawlIntervalMinutes();
+  return now - last >= interval * 60 * 1000;
 }
 
 // 只更新「抓到哪了」的時間戳（不動 crawl_covers、不碰會員到期時間）。
@@ -67,13 +71,12 @@ export async function isSystemCoveringDueAsync(now = Date.now(), options = {}) {
 // isSystemCoveringDue() 在這段期間只會看到上一輪的舊時間（2026-09-24 事故）。
 export async function markCoveringProgressAsync({ at = new Date().toISOString(), includeSystem = false } = {}, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") {
-    touchCrawlCoversRun(sqliteHandle());
-    return markCoveringCompleted({ includedUserIds: [], includeSystem, at });
+    if (includeSystem) sqliteHandle().prepare(SITE_SETTING_UPSERT_SQL).run("lastSystemCoveringAt", JSON.stringify(at));
+    return { lastCoveringAt: "", lastSystemCoveringAt: includeSystem ? at : "" };
   }
   const exec = await pgExec(options);
-  await exec(SITE_SETTING_UPSERT_SQL, ["lastCoveringAt", JSON.stringify(at)]);
   if (includeSystem) await exec(SITE_SETTING_UPSERT_SQL, ["lastSystemCoveringAt", JSON.stringify(at)]);
-  return { lastCoveringAt: at, lastSystemCoveringAt: includeSystem ? at : "" };
+  return { lastCoveringAt: "", lastSystemCoveringAt: includeSystem ? at : "" };
 }
 
 // db.js markCoveringCompleted() ＋ crawlCovers.touchCrawlCoversRun()（PG 分支）。
