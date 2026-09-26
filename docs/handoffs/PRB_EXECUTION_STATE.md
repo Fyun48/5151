@@ -3,7 +3,23 @@
 更新：2026-09-26，第三批程式 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5` 已推送，精確 SHA CI checks 全部成功。
 **最近完成的 NAS 驗收：受測 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5`，結果 `NAS_ACCEPTANCE_FAIL`；
 全區 C4 延遲首次達標、lag 兩案達標，另兩案只差 0.07 與 1.65 ms。**
-PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。
+
+## 2026-09-26 21:00 Owner 上線優先：目前有效裁決
+
+**SEARCH_PERFORMANCE_ACCEPTED_WITH_EXCEPTION / RELEASE_BLOCKED_ON_CORRECTNESS_AND_RECOVERY**。
+依 Owner 最新指示，接受 6703302 已測搜尋延遲作為此版效能取捨，停止純效能優化；
+舊 NAS_ACCEPTANCE_FAIL 保留、不改測試門檻，但不再以它單獨阻擋進度。
+PR-B 搜尋工作交付審查；整體 PostgreSQL／爬蟲／雙備援尚不可結案，故維持 NOT_READY_FOR_MERGE。
+目前爬蟲取消／輪替／完成範圍有可重現缺口，跨節點與資料復原證據未齊，與速度問題分開處理。
+完整裁決、三項最短上線必辦與接續順序見 [RELEASE_TRIAGE_20260926.md](RELEASE_TRIAGE_20260926.md)。
+
+runner 修正 SHA：`eb564736ee14d268e0a5358d5be7787c0d9a3f78`；採獨立 process group、
+EXIT SIGKILL 該診斷群組後 wait，並用 docker stats --no-stream 避免 ANSI。
+Node 22.23.3 的正常／失敗／SIGTERM 三案回歸全部通過；[精確 SHA CI](https://github.com/Fyun48/5151/actions/runs/36243932369) 與 GitGuardian／model review 全綠。
+`v3/src` 與搜尋 benchmark 與 6703302 完全相同；新 runner NAS 尚未實跑，不能填 PASS。
+DeepSeek 下一輪固定測 runner SHA eb56473，勿改測後續文件 HEAD；只驗證修復與保存四案，不再追逐微小效能差距。
+以下為歷次原始成果與當時交接，若其優先順序與本節不同，以本節為準。
 
 ## 第三批修正的 NAS 實測（受測 SHA 6703302）
 

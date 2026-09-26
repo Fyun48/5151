@@ -4,6 +4,12 @@
 未合併、未部署；2026-09-24 的正式環境觀測保留在 Git 歷史，不能冒充本次重新查驗。
 目前 scope 是 PR #497。整體 SQLite 退出、跨節點業務與 HA 並未完成。
 
+2026-09-26 21:00 Owner 改為上線優先：搜尋效能接受例外，停止微調；
+最近 NAS 實測為 6703302（四案 p95 1337.70／3029.58／1326.39／3529.45 ms），原 FAIL 原樣保留。
+下面的 316995b CI、NAS 通道／尚無成績等文字為較早盤點，不代表目前狀態；
+最新搜尋與 runner 結果見 PRB_EXECUTION_STATE.md，上線裁決見 RELEASE_TRIAGE_20260926.md。
+**已重新核對爬蟲 timeout 不取消、時間窗輪替與整批完成更新缺口仍在；跨節點業務與復原未新增 PASS 證據。**
+
 | GATE | 判定 | 已有證據 | 尚缺驗證或工作 |
 |---|---|---|---|
 | **1 版本／拓樸** | PARTIAL | 已核對 GitHub PR、base、checkout；CI artifact 有 source SHA、checkout SHA、模組 hash、Node／PG／硬體。既有 infra 文件記錄 web-A、web-B、crawler 共用 primary，PG 16.14／async standby。 | 本工作階段沒有 NAS 執行通道；正式節點 image digest、source mount、runtime hashes 未重新核對。 |
