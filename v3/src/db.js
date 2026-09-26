@@ -3065,6 +3065,7 @@ export function preloadedDecorationProvider({
   routeJobs = new Map(),
   personalFlags = null,
   crawlSources = publicCrawlSources(defaultCrawlSources()),
+  systemCrawl = systemCrawlFromRows([]),
   now = Date.now(),
 } = {}) {
   const emptyIndex = { groupKey: () => "", peers: () => [], agrees: () => true, size: 0 };
@@ -3074,6 +3075,7 @@ export function preloadedDecorationProvider({
     driver: "postgres",
     now,
     sourceEnabled: (id) => enabledSources.has(id),
+    systemCrawl: () => systemCrawl,
     userId: Number(userId) || 0,
     prep: (postId) => prep.get(Number(postId) || 0) || null,
     personalIndex: () => index,
@@ -3178,12 +3180,14 @@ export async function preloadDecorationProviderAsync({
   if (driver === "postgres" && !settings) throw new Error("PG decoration requires settings");
   const conf = settings || getSettings();
   const clock = listingRequestTime(requestContext?.asOf);
-  const crawlSources = requestContext?.crawlSources || (driver === "postgres"
-    ? crawlSourcesFromRows(await exec("SELECT key, value FROM settings"))
-    : getCrawlSources());
+  const globalRows = requestContext ? null : (driver === "postgres"
+    ? await exec("SELECT key, value FROM settings")
+    : db.prepare("SELECT key, value FROM settings").all());
+  const crawlSources = requestContext?.crawlSources || crawlSourcesFromRows(globalRows);
+  const systemCrawl = requestContext?.systemCrawl || systemCrawlFromRows(globalRows || []);
   const uid = Number(userId) || 0;
   const voteUid = matchVoteUserId == null ? uid : Number(matchVoteUserId) || 0;
-  if (!list.length) return preloadedDecorationProvider({ userId: voteUid, crawlSources, now: clock.now });
+  if (!list.length) return preloadedDecorationProvider({ userId: voteUid, crawlSources, systemCrawl, now: clock.now });
 
   // 傳入 loader 時沿用其 memo（呼叫端會在候選階段與頁面階段各呼叫一次）。
   const loader = loaderIn || createDecorationDataLoader({ exec, driver });
@@ -3279,6 +3283,7 @@ export async function preloadDecorationProviderAsync({
   return preloadedDecorationProvider({
     userId: voteUid,
     crawlSources,
+    systemCrawl,
     now: clock.now,
     prep,
     personalIndex,
@@ -4108,7 +4113,7 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   const data = {};
   const searchKeys = await buildSearchKeysFromPg(exec, settingsTable, globalRows, data);
   return {
-    crawlSources, isolation, searchKeys, degraded: [], ...clock,
+    crawlSources, isolation, searchKeys, systemCrawl: systemCrawlFromRows(globalRows), degraded: [], ...clock,
     settingsForUser(userId) {
       const uid = Number(userId) || 0;
       return settingsFromRows({
@@ -5939,7 +5944,8 @@ export function listingsNeedingMrt(limit = 20) {
 }
 
 function mrtFields(row, settings, provider) {
-  const showMrt = getSystemCrawl().showMrt !== false;
+  const system = provider?.driver === "postgres" ? provider.systemCrawl() : getSystemCrawl();
+  const showMrt = system.showMrt !== false;
   if (!showMrt) {
     return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
@@ -6556,7 +6562,7 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
  * `flagMap` 同理（不傳時取自 SQLite）。
  */
 function assertListingProvider(provider) {
-  for (const key of ["prep", "personalIndex", "personalGroupAgrees", "splitPairs", "groupId", "groupMemberRows", "peerRows", "extras", "routeCache", "mrtCache", "routeJob", "sourceEnabled"]) {
+  for (const key of ["prep", "personalIndex", "personalGroupAgrees", "splitPairs", "groupId", "groupMemberRows", "peerRows", "extras", "routeCache", "mrtCache", "routeJob", "sourceEnabled", "systemCrawl"]) {
     if (typeof provider?.[key] !== "function") throw new Error(`PG decoration provider requires ${key}`);
   }
 }
@@ -7485,53 +7491,39 @@ export function listPublicListingsFast(args = {}) {
   return listPublicListingsSqlFirst(args) || listPublicListings(args);
 }
 
-/** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
-export function listPublicListings({
-  kind = "",
-  sources = "",
-  q = "",
-  sort = "newest",
-  limit = 40,
-  offset = 0,
-  districts = [],
-  settings: settingsOverride,
-  asOf = null,
-} = {}) {
-  const clock = listingRequestTime(asOf);
-  const queryDetails = {};
-  let stageStarted = performance.now();
-  const markStage = (name) => {
-    const now = performance.now();
-    queryDetails[name] = Math.round(now - stageStarted);
-    stageStarted = now;
-  };
-  ({ kind, sources } = normalizeListQuery("all", kind, sources));
-  const settings = settingsOverride || publicSearchSettings({});
+/** Public candidates keep the guest scope separate from member flags and notes. */
+export function buildPublicListingsClauses({ districts = [], settings, q = "", context = null, districtIds = null } = {}, { sqliteDb = db } = {}) {
+  if (sqliteDb == null && (!context?.isolation || !context?.crawlSources || !Array.isArray(context?.searchKeys))) {
+    throw new Error("PG public search requires visibility context");
+  }
   const requestedDistricts = (Array.isArray(districts) ? districts : String(districts || "").split(","))
-    .map((name) => String(name || "").trim()).filter(Boolean)
-    .slice(0, GUEST_MAX_DISTRICTS);
-  const districtSet = new Set(requestedDistricts);
-  const clauses = [];
-  const params = [];
-  searchWhere([], clauses, params);
-  listingVisibilityClauses(clauses, params, clock);
-  appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
+    .map((name) => String(name || "").trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
+  const clauses = [], params = [];
+  searchWhere([], clauses, params, context);
+  listingVisibilityClauses(clauses, params, context, { sqliteDb });
+  if (Array.isArray(districtIds)) {
+    clauses.push("post_id = ANY(?::bigint[])");
+    params.push(districtIds);
+  } else {
+    appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
+  }
   appendPriceCeilingCandidates(settings, clauses, params);
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   if (q) {
     const like = `%${q}%`;
-    clauses.push("(title LIKE ? OR address LIKE ? OR CAST(post_id AS TEXT) LIKE ?)");
+    clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?) OR CAST(post_id AS TEXT) LIKE ?)");
     params.push(like, like, like);
   }
-  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  markStage("prepare_ms");
-  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
-  markStage("sql_ms");
-  queryDetails.candidates = raw.length;
-  let rows = applyListingFilter(raw, settings);
+  return { where: `WHERE ${clauses.join(" AND ")}`, params, districtSet: new Set(requestedDistricts) };
+}
+
+export function buildPublicListingsRows(raw, { settings, kind = "", sources = "", sort = "newest", districtSet = new Set(), provider = null, now = Date.now(), markStage = () => {}, requireProvider = false } = {}) {
+  if (requireProvider) assertListingProvider(provider);
+  ({ kind, sources } = normalizeListQuery("all", kind, sources));
+  let rows = applyListingFilter(raw, settings, provider);
   rows = applyGuestStraightLineFilter(rows, settings);
-  rows = attachSameHouseRoles(rows, 0, null, clock.now);
+  rows = attachSameHouseRoles(rows, 0, provider, now);
   rows = rows.filter((row) => listingMatchesListFilter(row, "all"));
   rows = rows.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
   rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
@@ -7551,19 +7543,17 @@ export function listPublicListings({
       }, fitSettings, { guest: true }).fit_score;
     }
   }
-  rows = sortListingsRows(rows, sort, { filter: "all", settings, now: clock.now });
+  rows = sortListingsRows(rows, sort, { filter: "all", settings, now });
   markStage("sort_ms");
-  const totalMatched = rows.length;
-  const pageSize = Math.max(1, Math.min(Number(limit) || 40, 50));
-  const start = Math.max(0, Number(offset) || 0);
-  const page = rows.slice(start, start + pageSize);
-  const fullRows = page.length ? db.prepare(
-    `SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`,
-  ).all(...page.map((row) => row.post_id)) : [];
+  return rows;
+}
+
+export function decoratePublicListingsPage(page, fullRows, { settings, provider = null, now = Date.now(), requireProvider = false } = {}) {
+  if (requireProvider) assertListingProvider(provider);
   const fullById = new Map(fullRows.map((row) => [Number(row.post_id), row]));
   publicDecorateCount += 1;
   const listings = page.filter((row) => fullById.has(Number(row.post_id))).map((row) => {
-    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0);
+    const lite = decorateListingLite(Object.assign(fullById.get(Number(row.post_id)), row), settings, 0, provider);
     attachGuestCommute(lite, row, settings);
     if (!Number.isFinite(Number(row.guest_commute_km))) {
       const fit = listingFitFields(lite, guestFitSettings(settings), { guest: true });
@@ -7571,18 +7561,34 @@ export function listPublicListings({
       lite.fit_label = fit.fit_label;
     }
     const needPeers = Boolean(row.match_post_id || row.same_house_role);
-    return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0, now: clock.now });
+    return finalizeListingDecorate(lite, settings, 0, { sameHouse: needPeers, matchVoteUserId: 0, provider, now });
   });
-  markStage("hydrate_ms");
-  return {
-    listings,
-    totalMatched,
-    hasMore: start + pageSize < totalMatched,
-    nextOffset: start + pageSize,
-    queryVersion: 2,
-    queryDetails,
-    guest: true,
+
+  return listings;
+}
+
+/** Guest/public read of the shared listing pool. No user id, flags, events, or jobs. */
+export function listPublicListings({ kind = "", sources = "", q = "", sort = "newest", limit = 40, offset = 0, districts = [], settings: settingsOverride, asOf = null } = {}) {
+  const clock = listingRequestTime(asOf);
+  const queryDetails = {};
+  let stageStarted = performance.now();
+  const markStage = (name) => {
+    const time = performance.now(); queryDetails[name] = Math.round(time - stageStarted); stageStarted = time;
   };
+  const settings = settingsOverride || publicSearchSettings({});
+  const built = buildPublicListingsClauses({ districts, settings, q, context: clock });
+  markStage("prepare_ms");
+  const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${built.where} ORDER BY post_id`).all(...built.params);
+  markStage("sql_ms");
+  queryDetails.candidates = raw.length;
+  const rows = buildPublicListingsRows(raw, { settings, kind, sources, sort, districtSet: built.districtSet, now: clock.now, markStage });
+  const pageSize = Math.max(1, Math.min(Number(limit) || 40, 50));
+  const start = Math.max(0, Number(offset) || 0);
+  const page = rows.slice(start, start + pageSize);
+  const fullRows = page.length ? db.prepare(`SELECT * FROM listings WHERE post_id IN (${page.map(() => "?").join(",")})`).all(...page.map(row => row.post_id)) : [];
+  const listings = decoratePublicListingsPage(page, fullRows, { settings, now: clock.now });
+  markStage("hydrate_ms");
+  return { listings, totalMatched: rows.length, hasMore: start + pageSize < rows.length, nextOffset: start + pageSize, queryVersion: 2, queryDetails, guest: true };
 }
 
 const BACKFILL_STATUS_KEY = "sameHouseBackfillStatus";

@@ -77,6 +77,7 @@ test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收",
   }
   const { withPgFixture } = await import("./fixtures/prb-search.mjs");
   await withPgFixture(db, async driver => {
+    await jobQueue.ensurePgJobQueueIndex(driver.pool);
     const q = jobQueue.createJobQueue({ driver: "postgres", pgPool: driver });
     const now = 1_700_000_000_000;
     const enqueued = await q.enqueue({ jobType: "enrich", payload: { post_id: 42 }, idempotencyKey: "fixed-clock", now });

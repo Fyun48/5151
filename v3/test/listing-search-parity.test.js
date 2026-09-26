@@ -16,6 +16,19 @@ beforeEach(() => {
   db.exec('DELETE FROM users WHERE id IN (101,202)');
   seedBase(db);
 });
+
+test('nonempty PG provider pipeline decorates cards without any SQLite access, including MRT settings', async () => {
+  const raw = db.prepare('SELECT * FROM listings ORDER BY post_id').all();
+  const provider = app.preloadedDecorationProvider({now:Date.parse(AS_OF),systemCrawl:{showMrt:false}});
+  const {result,attempts} = await withoutSqliteIO(db, async () => {
+    const rows = app.buildListListingsRows(raw,{filter:'all',sort:'newest',uid:0,voteUid:0,
+      kind:'',sources:'',settings:SETTINGS,districtSet:new Set(DISTRICTS),provider,flagMap:new Map(),requireProvider:true});
+    return app.decorateListListingsPage(rows,raw,{settings:SETTINGS,provider,requireProvider:true});
+  });
+  assert.deepEqual(attempts,[]);
+  assert.equal(result.length,3);
+  assert.equal(result[0].mrt_station,null);
+});
 function ids(result) {
   assert.ok(Array.isArray(result.listings));
   assert.ok(Number.isInteger(result.totalMatched));
@@ -193,5 +206,36 @@ test('live PG: complete page and counters use one snapshot; next request sees co
     assert.deepEqual(nextAttempts,[]);
     assert.equal(next.stats.matched,4);
     assert.equal(next.stats.total,4);
+  });
+});
+
+test('live PG: anonymous search preserves guest filters and never reads private flags or SQLite', {skip}, async () => {
+  const {searchPublicListingsAsync} = await import('../src/publicListingSearchAsync.js');
+  db.prepare('INSERT INTO user_listing_flags(user_id,post_id,hidden,watched,viewed,watch_note) VALUES (?,?,?,?,?,?)')
+    .run(101,BASE+1,1,1,1,'private-only-keyword');
+  await withPgFixture(db,async driver => {
+    const cases = [
+      [{},[1,2,3]], [{offset:2,limit:2},[3]], [{q:'park 1'},[1]],
+      [{q:'private-only-keyword'},[]], [{districts:[DISTRICTS[1]]},[3]],
+      [{sources:'591'},[1,2,3]], [{priceMax:11500},[1]],
+      [{sort:'fit_desc'},[1,2,3]],
+    ];
+    for (const [query, expected] of cases) {
+      const input = {sort:'newest',limit:50,...query,userId:101,matchVoteUserId:101,asOf:AS_OF};
+      input.settings=app.publicSearchSettings(input);
+      const reference=app.listPublicListings(input);
+      const {result,attempts}=await withoutSqliteIO(db,()=>searchPublicListingsAsync(input,{driver:'postgres',pgDriver:driver}));
+      assert.deepEqual(attempts,[]);
+      assert.deepEqual(ids(result),expected,JSON.stringify(query));
+      assert.deepEqual(ids(result),ids(reference));
+      assert.deepEqual(cards(result),cards(reference));
+      assert.equal(result.totalMatched,reference.totalMatched);
+      assert.ok(result.listings.every(row=>!row.mine&&!row.watch_note&&!row.viewed&&!row.watched));
+    }
+    // PG-only data appears even when the SQLite store is deliberately different.
+    await driver.query('UPDATE listings SET title=$1 WHERE post_id=$2',['PG-only-visible',BASE+1]);
+    const {result,attempts}=await withoutSqliteIO(db,()=>searchPublicListingsAsync({q:'PG-only-visible',asOf:AS_OF},{driver:'postgres',pgDriver:driver}));
+    assert.deepEqual(attempts,[]);
+    assert.deepEqual(ids(result),[1]);
   });
 });

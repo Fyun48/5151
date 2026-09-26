@@ -146,6 +146,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: PR-B complete page benchmark (disposable fixture)
+        if: ${{ !cancelled() }}
         shell: bash
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

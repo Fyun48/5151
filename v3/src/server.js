@@ -1,9 +1,9 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
-import { searchListingsAsync } from "./listingSearchAsync.js";
+import { searchPublicListingsAsync } from "./publicListingSearchAsync.js";
+import { resolveDbDriver } from "./dbDriver.js";
 import { loadListingPage } from "./listingSearchPage.js";
 import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
-import { listingStatsAsync } from "./listingStatsAsync.js";
 import {
   armMemberExternalFetchAsync,
   deleteProfileAsync,
@@ -578,10 +578,10 @@ app.get("/api/public/listings", async (req, res) => {
       workLat: work.workLat,
       workLng: work.workLng,
     };
-    const listed = getCachedPublicListings(query, () => listPublicListingsFast({
+    const listed = await getCachedPublicListings(query, () => searchPublicListingsAsync({
       ...query,
       settings: publicSearchSettings(query),
-    }));
+    }), { namespace: resolveDbDriver() === "postgres" ? null : "sqlite:guest:v2" });
     res.setHeader("Cache-Control", "public, max-age=15");
     res.json({
       listings: listed.listings,
@@ -594,6 +594,7 @@ app.get("/api/public/listings", async (req, res) => {
       commute_error: work.error || undefined,
     });
   } catch (error) {
+    if (sendListingSearchUnavailable(res, error)) return;
     res.status(error.status || 400).json({ error: error.message });
   }
 });
@@ -3680,22 +3681,13 @@ app.get("/api/state", async (req, res) => {
   let listings = [];
   let events = [];
   try {
-    // The initial payload has to come from the same place the list does. GET /api/listings uses
-    // searchListingsAsync() + listingStatsAsync(); this endpoint uses them too, so "first paint"
-    // and "refresh" cannot disagree. With DB_DRIVER=sqlite both are the pre-existing SQLite
-    // chain (awaited), so today's production response is unchanged.
-    listingStats = await listingStatsAsync({ userId: uid });
     confirmExpiredOfflineFromSettings();
-    const listed = await searchListingsAsync({
-      filter: "all",
-      sort: "newest",
-      limit: 500,
-      offset: 0,
-      userId: uid,
-      matchVoteUserId: uid,
+    const page = await loadListingPage({
+      filter: "all", sort: "newest", limit: 500, offset: 0,
+      userId: uid, matchVoteUserId: uid,
     });
-    listings = listed.listings;
-    listingStats = { ...listingStats, matched: listed.totalMatched };
+    listings = page.listings;
+    listingStats = page.stats;
     events = recentEvents(30, uid);
   } catch (error) {
     if (sendListingSearchUnavailable(res, error)) return;

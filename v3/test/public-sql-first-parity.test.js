@@ -189,14 +189,14 @@ test("公開 builder：行政區可留空、分頁 SQL 帶 LIMIT，會員路徑�
   assert.equal(buildListingSearchSql({ sort: "newest", districts: [], settings: {} }, deps).ok, false);
 });
 
-test("訪客路由走 SQL-first 分派，且 SQL-first 只抓一頁（不再全撈候選）", () => {
+test("訪客路由走 async driver 分派，SQLite SQL-first 仍只抓一頁", () => {
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /getCachedPublicListings\(query, \(\) => listPublicListingsFast\(\{/);
+  assert.match(server, /await getCachedPublicListings\(query, \(\) => searchPublicListingsAsync\(\{/);
   const dbSrc = readFileSync(path.join(dir, "../src/db.js"), "utf8");
   assert.match(dbSrc, /return listPublicListingsSqlFirst\(args\) \|\| listPublicListings\(args\);/);
   const fast = dbSrc.slice(
     dbSrc.indexOf("export function listPublicListingsSqlFirst"),
-    dbSrc.indexOf("/** Guest/public read of the shared listing pool"),
+    dbSrc.indexOf("/** Public candidates keep the guest scope"),
   );
   assert.match(fast, /built\.pageQuery\(/);
   assert.match(fast, /built\.countQuery\.sql/);

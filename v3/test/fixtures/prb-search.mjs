@@ -74,7 +74,7 @@ export async function withoutSqliteIO(db, fn) {
     original.set(method, db[method]);
     db[method] = (...params) => {
       attempts.push({method, sql: String(params[0]).slice(0,180)});
-      throw new Error(`Forbidden SQLite ${method}`);
+      throw new Error(`Forbidden SQLite ${method}: ${String(params[0]).slice(0,100)}`);
     };
   }
   try { return { result: await fn(), attempts }; }

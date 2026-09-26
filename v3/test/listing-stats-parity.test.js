@@ -266,8 +266,8 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   // and the first /api/listings refresh cannot describe different stores.
   const stateStart = server.indexOf('app.get("/api/state"');
   const state = server.slice(stateStart, stateStart + 2400);
-  assert.match(state, /await listingStatsAsync\(\{ userId: uid \}\)/);
-  assert.match(state, /const listed = await searchListingsAsync\(\{/);
+  assert.match(state, /await loadListingPage\(\{/);
+  assert.match(state, /listings = page\.listings/);
   assert.doesNotMatch(state, /listListings\(/);
   assert.doesNotMatch(state, /stats\(undefined/);
 });
@@ -301,5 +301,4 @@ test("live PostgreSQL: the counters equal the SQLite counters", { skip }, async 
     assert.ok(actual.listings.length >= 3, `PG page size ${actual.listings.length}`);
   });
 });
-
 
