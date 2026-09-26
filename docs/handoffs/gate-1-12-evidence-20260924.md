@@ -11,7 +11,7 @@
 | **3 禁止錯誤回退** | PARTIAL | 會員、訪客、stats／page 正式 PG 入口失敗回 503／SEARCH_UNAVAILABLE；缺表與缺 provider 失敗；存在但為空的表可正常回空結果。真 PG 測試有 PG-only sentinel 及 SQLite 嘗試記錄；前端保留既有內容／分頁。 | PASS 僅限已驗證搜尋核心。整個 HTTP 請求的 auth、events 等仍有 SQLite；正式雙節點 HTTP E2E 尚未跑。 |
 | **4 搜尋／投影** | PARTIAL | 寬候選欄位、同一 asOf、primary／bundle／排序、個人旗標／投票者分離、通勤、訪客、兩頁與 total 在固定 fixture 通過 parity。正式 PG dispatcher 固定 node_pg；SQL PG 診斷獨立。SQLite dispatcher 使用完整 projection fixture。 | 120k CI smoke 與 NAS 驗收分開；目前正式資料全量／NAS 效能尚未驗收。舊 SQL-only same-house 不等價不再作正式入口，但未宣稱診斷 SQL 已完全等價。 |
 | **5 跨節點業務** | NOT_RUN | 無本次實機證據。 | A 建／B 讀／B 改／A 讀回，涵蓋設定、刊登、許願、人工配對、回饋、附件、auth；依賴 C～F 及既有遠端通道。 |
-| **6 交易／冪等** | PARTIAL | 原 persistListing／SAVEPOINT／change-log／bookkeeping 整合保留於真 PG CI；完整 page 用一個 Repeatable Read 唯讀快照；並行外部更新只在下一請求可見。queue 注入時鐘及隔離 claim／owner／retry 測試修正。 | 群組轉移、audit／outbox 中途故障、commit 後 client timeout 重试的全部業務情境未宣稱完成。 |
+| **6 交易／冪等** | PARTIAL | 原 persistListing／SAVEPOINT／change-log／bookkeeping 整合保留於真 PG CI；完整 page 用一個 Repeatable Read 唯讀快照；並行外部更新只在下一請求可見。queue 注入時鐘及隔離 claim／owner／retry 測試修正。 | 群組轉移、audit／outbox 中途故障、commit 後 client timeout 重試的全部業務情境未宣稱完成。 |
 | **7 抓取公平／取消** | NOT_RUN | 無本次完成證據。 | PR-C：AbortSignal、排程／擁有權。 |
 | **8 多 worker** | PARTIAL | 本批 queue fixture 驗證基本 lease、claim ownership、reclaim／retry，移除共用資料污染。 | PR-C 的多 worker 預算 reservation、取消與完整整合未完成。 |
 | **9 補遷** | NOT_RUN | 無本次完成證據。 | PR-D／E 資料、媒體核對與衝突處理。 |

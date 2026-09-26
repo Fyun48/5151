@@ -69,7 +69,17 @@ export async function withPgFixture(db, fn, { tables = SEARCH_TABLES } = {}) {
 // error and make a false claim that PostgreSQL never touched SQLite.
 export async function withoutSqliteIO(db, fn) {
   const original = new Map();
+  // Also intercept statements prepared before the measured path starts.
+  const statementPrototype=Object.getPrototypeOf(db.prepare('SELECT 1'));
+  const originalStatement=new Map();
   const attempts = [];
+  for(const method of ['get','all','run','iterate']) {
+    originalStatement.set(method,statementPrototype[method]);
+    statementPrototype[method]=function() {
+      attempts.push({method:`statement.${method}`,sql:'<previously prepared>'});
+      throw new Error(`Forbidden SQLite statement.${method}`);
+    };
+  }
   for (const method of ['prepare','exec']) {
     original.set(method, db[method]);
     db[method] = (...params) => {
@@ -78,5 +88,8 @@ export async function withoutSqliteIO(db, fn) {
     };
   }
   try { return { result: await fn(), attempts }; }
-  finally { for (const [method, value] of original) db[method] = value; }
+  finally {
+    for (const [method, value] of original) db[method] = value;
+    for (const [method, value] of originalStatement) statementPrototype[method] = value;
+  }
 }

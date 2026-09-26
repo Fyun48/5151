@@ -7,7 +7,7 @@
 //   ③ `decorateListListingsPage`（只碰**頁面列** ⇒ 由 `SELECT *` hydration 提供 ✓，不算候選欄位 ✓）
 //
 // 手法：把候選列包 `Proxy` 記錄 `get`／`has`／`ownKeys`／`set` ✓，用**真實管線 ＋ 假 provider**
-// （照 `listing-score.test.js` 的 `spyProvider` ✓）⇒ 得到有證據的最小欄位集 ✓。
+// （照 `listing-score.test.js` 的 `spyProvider` ✓）⇒ 記錄此 fixture 實際走過的欄位；不能推論其他分支不需要的欄位。
 //
 // 實測紅線：`provider=null` 會落同步 SQLite ✗（`attachSameHouseRoles` 的
 // `provider || sqliteDecorationProvider()` ✓）；`settings.commuteKm>0` 觸發 `warmRouteCache` ✗；
@@ -155,14 +155,16 @@ test("審計：候選階段（篩選＋分頁）對候選列實際讀取哪些�
 
   assert.ok(all.length > 0, "審計應量到至少一個欄位讀取");
   assert.deepEqual(missing, [], `候選階段讀到未登錄的欄位：${missing.join(", ")}`);
-  // 逐模式驗證「是否整列展開」✓：非 `fit_desc` 一律不得展開 ✓；
-  // `fit_desc` 已知會經 `applyCachedCoords` 複製整列 ✗（`db.js:6322` 上方註解即言 "cloning wide rows" ✓）
-  // ⇒ 縮減 SELECT 對該模式收益有限 ⇒ 需另外把 clone 改成就地或延後（後續工作 ✓，不可略過 ✗）。
-  const spreadModes = perMode.filter((entry) => entry.spreadCount > 0).map((entry) => entry.mode);
-  console.log(`PIPE-SPREAD-MODES ${JSON.stringify(spreadModes)}`);
-  const nonFitSpread = spreadModes.filter((mode) => mode.sort !== "fit_desc");
-  assert.deepEqual(nonFitSpread, [], `非 fit_desc 模式不得整列展開：${JSON.stringify(nonFitSpread)}`);
-  assert.deepEqual(spreadModes, [{ filter: "all", sort: "fit_desc" }],
-    "整列展開應只發生在 fit_desc（若變動請重新評估縮欄位的收益）");
+  // The measured memory optimization builds the complete personal-overlay
+  // object in one spread. In-place additions to wide PG rows made V8 use much
+  // larger dictionary properties; zero spreads is not a useful performance gate.
+  // Keep auditing every copied field, and require the full candidate contract.
+  for (const entry of perMode) {
+    assert.equal(entry.spreadCount, ROWS.length, 'each input row is copied once for personal flags');
+    for (const key of candidate) assert.ok(entry.modeReads.has(key), `full candidate copy includes ${key}`);
+  }
+  assert.ok(ROWS.every(row => !Object.hasOwn(row, 'viewed') && !Object.hasOwn(row, 'watched')),
+    'personal flags do not mutate the canonical input rows');
+
 });
 

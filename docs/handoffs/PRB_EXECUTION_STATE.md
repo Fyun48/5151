@@ -48,7 +48,7 @@ C1 CI smoke 通過，但 lag p99 168–404ms、max 242–814ms 均未達標；RS
 
 本批針對量到的主執行緒阻塞：候選／統計用同快照 cursor 每批 512 列完整讀取；
 共享 Node pipeline 加入可協作排程，保留全域配對及穩定排序；extras 僅保留實際關係 partner 的原值。
-新增跨 256 列邊界的角色、各排序及 counters parity、cursor 多批／參數／錯誤清理测试。
+新增跨 256 列邊界的角色、各排序及 counters parity、cursor 多批／參數／錯誤清理測試。
 每個 FETCH 都計入實際查詢數，不將批次傳輸冒充單一 SQL。必須等本批真 PG 與規模測量後決定是否保留。
 
 ## 第四批結果與下一批依據
@@ -67,6 +67,26 @@ EXPLAIN 實證：單區候選 execution 894.58ms，其中 JIT 814.72ms；全區�
 
 已備好 NAS 拋棄式 container runner 與 runbook；只通過 bash 語法檢查，沒有宣稱本機實跑 Docker。
 benchmark 的 NAS 模式檢查四案 p95 及 lag；CI 模式仍使用原 smoke 門檻。
+
+## 第五批結果與最終收尾
+
+`b6931207970b5186521ea64396c45cc1c4b22e01`，run `36221756986`：真 PG 128 pass／0 fail／1 optional shadow skip，
+CI smoke PASS；一般測試 2,596 pass／1 fail／34 skip。唯一失敗是舊欄位審計把「非 fit 不得 clone」當門檻，
+與已量測的完整物件建構優化衝突。改為驗證每列只完整複製一次、所有寬候選欄位保留、canonical input 不被個人旗標污染。
+不是移除 parity 或用重跑掩蓋功能錯誤。
+
+| 案例 | cold ms | warm p95 ms | lag p99 / max ms | peak RSS bytes | SQL / txn | errors |
+|---|---:|---:|---:|---:|---:|---:|
+| 單區 C1 | 994.79 | 920.31 | 26.87 / 35.26 | 392683520 | 132 / 3 | 0 |
+| 單區 C4 | 779.41 | 2368.79 | 42.14 / 94.24 | 954081280 | 132 / 3 | 0 |
+| 全區 C1 | 836.02 | 858.32 | 38.83 / 45.42 | 945106944 | 165 / 3 | 0 |
+| 全區 C4 | 839.96 | 2773.71 | 49.48 / 101.91 | 1048297472 | 165 / 3 | 0 |
+
+完整原始 evidence：`after-b693120.json`。全區 C4 lag max 還略超 100ms，不填 PASS。
+本次收尾把 stats 的整批 numeric normalization 也納入協作排程、CPU slice 改為 2ms。
+額外修正大量通勤／MRT／job 文字 key 的 PG bind 上限，改成單一 text array；真 PG 驗證 70,001 個 key 仍取得既有資料。
+SQLite I/O guard 也攔截事先 prepare 的 StatementSync 方法，包含被吞掉的例外。
+以上須等最終 HEAD CI；只因文件引用的舊 SHA 通過，不能代替最終版號。
 
 ## 效能驗收
 

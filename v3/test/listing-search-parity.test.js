@@ -306,3 +306,11 @@ test('live PG: batched snapshot reads bind parameters, retain all rows, and reco
     assert.equal((await driver.query('SHOW jit')).rows[0].jit,previousJit);
   });
 });
+
+
+test('SQLite guard records swallowed cached-statement I/O, then restores the statement',async()=>{
+  const cached=db.prepare('SELECT 42 AS n');
+  const {attempts}=await withoutSqliteIO(db,async()=>{try{cached.get();}catch{ /* simulate a hidden fallback */ }});
+  assert.deepEqual(attempts,[{method:'statement.get',sql:'<previously prepared>'}]);
+  assert.equal(cached.get().n,42);
+});

@@ -258,6 +258,12 @@ export async function loadListingExtras(exec, postIds, driver = "sqlite") {
   return map;
 }
 
+function textKeyFilter(column, keys, driver) {
+  return driver === "postgres"
+    ? {sql: `${column} = ANY(?::text[])`, params: [keys]}
+    : {sql: `${column} IN (${inList(keys, driver)})`, params: keys};
+}
+
 // db.js getCachedRoute(): route_cache rows keyed by route.js makeRouteKey(). The row is
 // returned raw - the parsing/rounding stays in db.js so both drivers share one parser.
 const ROUTE_CACHE_COLUMNS = "route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at";
@@ -266,10 +272,8 @@ export async function loadRouteCacheEntries(exec, keys, driver = "sqlite") {
   const map = new Map();
   const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
   if (!list.length) return map;
-  const rows = await exec(
-    `SELECT ${ROUTE_CACHE_COLUMNS} FROM route_cache WHERE route_key IN (${inList(list, driver)})`,
-    list,
-  );
+  const filter = textKeyFilter("route_key", list, driver);
+  const rows = await exec(`SELECT ${ROUTE_CACHE_COLUMNS} FROM route_cache WHERE ${filter.sql}`, filter.params);
   for (const row of rows || []) {
     map.set(String(row.route_key), normalizeRow(row, ["min_km", "min_m", "rush_am_min", "rush_pm_min"]));
   }
@@ -281,10 +285,8 @@ export async function loadMrtCacheEntries(exec, keys, driver = "sqlite") {
   const map = new Map();
   const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
   if (!list.length) return map;
-  const rows = await exec(
-    `SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE geo_key IN (${inList(list, driver)})`,
-    list,
-  );
+  const filter = textKeyFilter("geo_key", list, driver);
+  const rows = await exec(`SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE ${filter.sql}`, filter.params);
   for (const row of rows || []) {
     map.set(String(row.geo_key), normalizeRow(row, ["walk_km", "walk_min", "ride_km", "ride_min"]));
   }
@@ -296,10 +298,8 @@ export async function loadRouteJobs(exec, keys, driver = "sqlite") {
   const map = new Map();
   const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
   if (!list.length) return map;
-  const rows = await exec(
-    `SELECT * FROM route_jobs WHERE job_key IN (${inList(list, driver)})`,
-    list,
-  );
+  const filter = textKeyFilter("job_key", list, driver);
+  const rows = await exec(`SELECT * FROM route_jobs WHERE ${filter.sql}`, filter.params);
   for (const row of rows || []) map.set(String(row.job_key), normalizeRow(row, ["post_id", "attempts"]));
   return map;
 }

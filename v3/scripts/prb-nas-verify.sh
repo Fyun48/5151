@@ -16,10 +16,11 @@ network="$tag-net"
 pg_container="$tag-pg"
 app_container="$tag-app"
 deps_volume="$tag-deps"
+pg_volume="$tag-pgdata"
 cleanup() {
   docker rm -f "$app_container" "$pg_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
-  docker volume rm "$deps_volume" >/dev/null 2>&1 || true
+  docker volume rm "$deps_volume" "$pg_volume" >/dev/null 2>&1 || true
   git -C "$root" worktree remove --force "$work/checkout" >/dev/null 2>&1 || true
   rmdir "$work" >/dev/null 2>&1 || true
 }
@@ -30,6 +31,7 @@ git -C "$root" worktree add --detach "$work/checkout" "$sha"
 docker pull node:22-bookworm
 docker pull postgres:16.14-alpine
 docker volume create "$deps_volume" >/dev/null
+docker volume create "$pg_volume" >/dev/null
 # Installation has registry access but receives no PG or infrastructure secrets.
 docker run --rm --name "$app_container" \
   --mount "type=bind,src=$work,dst=$work" \
@@ -37,7 +39,7 @@ docker run --rm --name "$app_container" \
   --workdir "$work/checkout" node:22-bookworm npm ci
 docker network create --internal "$network" >/dev/null
 docker run -d --name "$pg_container" --network "$network" --network-alias prb-pg \
-  --tmpfs /var/lib/postgresql/data \
+  --mount "type=volume,src=$pg_volume,dst=/var/lib/postgresql/data" \
   --env POSTGRES_DB=tracker_prb_test --env POSTGRES_USER=postgres \
   --env POSTGRES_HOST_AUTH_METHOD=trust \
   --health-cmd 'pg_isready -U postgres -d tracker_prb_test' \

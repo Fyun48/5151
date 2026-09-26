@@ -9,7 +9,7 @@ export function runStepsSync(steps) {
   return step.value;
 }
 
-export async function runStepsAsync(steps, { budgetMs = 3 } = {}) {
+export async function runStepsAsync(steps, { budgetMs = 2 } = {}) {
   let deadline = performance.now() + budgetMs;
   while (true) {
     const step = steps.next();

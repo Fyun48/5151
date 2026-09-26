@@ -12,6 +12,7 @@
 // db.js publishes as `listingStatsBuildContext()`: the clause builders are the ones the
 // search path already uses and the row pipeline is the pure half of `stats()`, so a filter
 // or a counter can never drift between the list and its counters.
+import { runStepsAsync, transformChunks } from "../cooperative.js";
 import { numberFromPg } from "../dbDriverPostgres.js";
 import { toPostgresSql } from "../sqlDialect.js";
 import { buildListRequestContextFromPg } from "../db.js";
@@ -129,7 +130,7 @@ export function createListingStatsRepository({
       context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true});
-      const rows = (raw || []).map(normalizeStatsCandidateRow);
+      const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)));
       const flagMap = await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);
       const dbTotal = await countProductListings(runOne, requestContext);
