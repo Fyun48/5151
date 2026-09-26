@@ -89,7 +89,42 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 - 排練資源已清除：依 `prb-nas-verify=1` 查容器／volume 皆 0 筆，正式容器未受影響。
 - 紀錄留在 NAS `cutover-20260926/rehearsal-record.md`。
 
-## 五、下一步（第三節第 6 點、第四、五節）
+## 五、95 列內容衝突的處置（第三節第 5 點）
+
+對每一列衝突都取出兩邊的實際值再分類（不是只看筆數）。結果：**79 筆可用既定規則處理、
+16 筆需要 Owner 決定**。
+
+### 可用規則處理（79 筆，尚未套用）
+
+| 規則 | 筆數 | 說明 |
+|---|---:|---|
+| `listing_groups`：PG 非 admin 且 SQLite 的 `updated_at` 較新 → 取 SQLite | 73 | PG 的值多為 09-11～09-22、SQLite 為 09-24～09-26（watcher 到修好之前都寫 SQLite）。**若 PG 已是 `admin_confirmed` 則一律保留 PG**，不因時間較舊而降級人工確認。 |
+| 時間戳較新者勝（旗標以外的鍵） | 6 | `lastCoveringAt`／`lastSystemCoveringAt` → PG 較新（09-26 vs 09-22）；`memberFetchDueAt`×2 → PG 較新（09-26 vs 09-22）；`siteCatalogStats` → **SQLite 較新**（09-24 vs 09-19，PG 並非永遠較新）；`user_listing_flags` 1 筆有時間差。 |
+
+### 需要 Owner 決定（16 筆）
+
+| 表 | 筆數 | 為什麼不能自動決定 |
+|---|---:|---|
+| `user_listing_flags` | 8 | **兩邊時間戳完全相同、但狀態不同**（例：`watched_at` 一樣，一邊 `watched=1`、另一邊 `watched=0`）。`stampFlags` 在「關閉關注」時不會清掉 `watched_at`，所以時間戳無法判斷哪一邊是最後動作。這是會員的收藏／隱藏狀態，不能亂選。 |
+| `settings` | 3 | `housingData`／`sponsorLinks`／`rentalCatalogDraft` 是站台內容與設定（沒有可靠的更新時間），兩邊文字不同。 |
+| `user_settings` | 3 | `notifyMatrix`（通知矩陣）／`memberSmtp`／`settingProfiles`（搜尋設定檔），同樣沒有可靠時間戳。 |
+| `listing_group_members` | 2 | 同兩筆房源在 PG 屬於群組 `lg_b9cf4f…`、在三份 SQLite 都屬於 `lg_2b2746…`（兩個群組在 PG 都各只有這 2 名成員）。 |
+
+**建議給 Owner 的選項**（每一類都是二選一，不需要逐筆決定）：
+
+1. `user_listing_flags` 8 筆 → (a) 保留 PG（現行站上讀到的狀態）；(b) 取 SQLite（節點上最後的使用者動作）；
+   (c) 逐筆列出兩邊狀態再決定。**建議 (a)**：PG 是站上實際顯示的來源，改動會員狀態的風險高於保留現狀。
+2. `settings` 3 筆與 `user_settings` 3 筆 → (a) 全部保留 PG；(b) 全部取 SQLite；(c) 逐筆比對文字差異後決定。
+   **建議 (c)**：這 6 筆是站台內容與會員通知設定，內容差異可能是有意的編輯，逐筆看文字再決定成本很低。
+3. `listing_group_members` 2 筆 → (a) 保留 PG 的 `lg_b9cf4f…`；(b) 取 SQLite 的 `lg_2b2746…`。
+   **建議先看兩個群組在 SQLite 的完整成員**再決定（SQLite 多 66 名成員，可能代表後續的合併結果）。
+
+### 尚未對正式 PG 寫入任何衝突處置
+
+補遷的 133 列（第四節）與這 95 列的處置都還沒套用到正式 PG；正式切換時才依序執行
+「停寫舊庫 → 取最後差異 → 補遷 → 衝突處置 → 部署 → 恢復」。
+
+## 六、下一步（第三節第 6 點、第四、五節）
 
 1. 95 列內容衝突：依第三節的分類規則處理，其中 `user_settings` 5 筆與
    `listing_group_members` 2 筆需要 Owner 決定（會與其他待決事項一次提出）。
