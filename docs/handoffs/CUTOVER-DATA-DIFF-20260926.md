@@ -132,6 +132,23 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 3. `listing_group_members` 2 筆 → (a) 保留 PG 的 `lg_b9cf4f…`；(b) 取 SQLite 的 `lg_2b2746…`。
    **建議先看兩個群組在 SQLite 的完整成員**再決定（SQLite 多 66 名成員，可能代表後續的合併結果）。
 
+### 完整切換排練（隔離 PG，2026-09-27）
+
+在隔離容器 ＋ 獨立 volume（唯一 label、未掛正式 volume）上把**整條切換序列**跑過一次：
+還原 PG dump → `backfill.sql` → `conflicts.sql` → 冪等重跑 → 清理。紀錄留在 NAS
+`cutover-20260926/full-rehearsal-record.md`。
+
+- **還原與關聯核對（第四節 D）**：restore ok；102 張表、listings 126,994、users 28；
+  無 group 的成員 0 筆、無 listing 的成員 0 筆、無 listing 的旗標 0 筆
+  → PG dump 可還原且 schema／關聯完整。
+- **套用結果**：settings 28→29、user_listing_flags 705→743、listing_groups 14,486→14,511、
+  listing_group_members 45,181→45,250（合計 **+133**，與 dry-run 預測一致）。
+- **衝突處置生效查核**：`lg_d7f7133d…` confirmation_level = `auto_confirmed`；
+  `siteCatalogStats` 的 `at` = `2026-09-24T09:39:01.861Z`（取 SQLite 較新值）；
+  user 1 / post 21993087 = viewed 1、watched 1、hidden 0。
+- **冪等**：兩個腳本再各套一次，四張表筆數完全不變。
+- **清理**：容器與 volume 已刪除，依 label 查皆 0 筆。
+
 ### 尚未對正式 PG 寫入任何衝突處置
 
 補遷的 133 列（第四節）與這 95 列的處置都還沒套用到正式 PG；正式切換時才依序執行
