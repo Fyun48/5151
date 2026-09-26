@@ -212,13 +212,8 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     // 「fixture 沒種到」✗ 與「前置條件把它濾掉」✗。
     console.log(`PARITY-DETAILS-PG ${JSON.stringify(viaPg?.queryDetails ?? null)}`);
     console.log(`PARITY-DETAILS-SQLITE ${JSON.stringify(viaSqlite?.queryDetails ?? null)}`);
-    try {
-      const nPg = (await pgDriver.query("SELECT COUNT(*)::int AS n FROM listings WHERE source_key LIKE 'parity|%'")).rows[0].n;
-      const nSqlite = sqliteDb.prepare("SELECT COUNT(*) AS n FROM listings WHERE source_key LIKE 'parity|%'").get().n;
-      console.log(`PARITY-FIXTURE-PRESENT ${JSON.stringify({ pg: nPg, sqlite: nSqlite })}`);
-    } catch (error) {
-      console.log(`PARITY-FIXTURE-PRESENT ${JSON.stringify({ error: String(error && error.message || error) })}`);
-    }
+    // ✗ 已失效診斷（`source_key` 改為 `1|2` ⇒ `LIKE 'parity|%'` 恆為 0 ✗，只會誤導 ✓）⇒ 移除 ✓；
+    //   fixture 在位與否已由上面的 `PARITY-FIXTURE-CHECK`（逐欄讀回 ✓）證明 ✓。
 
     assert.ok(idsOf(viaPg).length > 0, `PG 結果不得為空（實際 ${JSON.stringify(idsOf(viaPg))}）`);
     assert.ok(idsOf(viaSqlite).length > 0, `SQLite 結果不得為空（實際 ${JSON.stringify(idsOf(viaSqlite))}）`);
@@ -229,9 +224,20 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
     // ③ same-house 角色／個人狀態 ✓
     assert.deepEqual(rolesOf(viaPg), rolesOf(viaSqlite), "same-house 角色必須一致");
     // ④ 分頁 ✓（offset 一頁）
+    // ④ 分頁 ✓（offset 一頁；`limit: 2` ＋ 三列 ⇒ 第二頁**必須有 1 列** ✓）
+    // ✗ CI 實證：`第二頁必須一致 + [900300003] - []` ⇒ PG 正確 ✓、SQLite dispatcher 回空 ✗。
+    //   原因＝正式 dispatcher 走 **SQL-first**（CI 日誌：`listing_search_projection 已與 listings 對齊，
+    //   訪客搜尋使用 SQL-first` ✗），而本 fixture 只寫 `listings` ✗ -> 投影路徑取不到列 ✗。
+    // ✓ 裁決 §4：核心語意 parity 用 SQLite **Node 參考** ✓；正式 dispatcher 的差異**單獨記錄** ✓
+    //   （不混入語意比對 ✗，也不以 skip／改名掩蓋 ✗）。
     const nextPg = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "postgres", pgDriver });
-    const nextSqlite = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "sqlite" });
-    assert.deepEqual(idsOf(nextPg), idsOf(nextSqlite), "第二頁必須一致");
+    const nextSqliteRef = app.listListings({ ...args, offset: args.limit });
+    const nextSqliteDispatch = await searchListingsAsync({ ...args, offset: args.limit }, { driver: "sqlite" });
+    console.log(`PARITY-PAGE2 ${JSON.stringify({
+      pg: idsOf(nextPg), sqliteRef: idsOf(nextSqliteRef), sqliteDispatch: idsOf(nextSqliteDispatch),
+    })}`);
+    assert.deepEqual(idsOf(nextPg), idsOf(nextSqliteRef), "第二頁必須一致（PG 正式入口 vs SQLite Node 參考）");
+    assert.deepEqual(idsOf(nextPg), [SEED + 2], "第二頁必須是第三列（三列、limit=2 ⇒ 不得為空 ✗）");
   } finally {
     // ✓ 裁決 §3（fixture 隔離）：失敗也要**清理自己建立的資料** ✓
     //（只刪自己那三列 ✓，不清空共享／正式資料 ✗；連線一律釋放 ✓，斷線不影響原本的失敗訊息 ✓）。
