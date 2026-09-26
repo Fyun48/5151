@@ -123,42 +123,48 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   //     **執行時推導**該 URL 的行政區 ✓（不猜行政區名 ✗），取成員填入兩引擎 fixture ✓。
   const { districtsFromSearchUrls } = await import("../src/regions.js");
   const allowedDistricts = districtsFromSearchUrls([URL_591]);
-  const district = allowedDistricts[0];
-  console.log(`PARITY-DISTRICTS ${JSON.stringify({ allowedDistricts, chosen: district })}`);
-  assert.ok(district, "必須由 URL 推導出至少一個行政區（否則 districtSet 條件無法成立）");
+  // ✗ 已由 CI 錯誤原文證明：`listings` **沒有 `district` 欄**（`table listings has no column named district` ✗）。
+  //   ✓ 正解（`regions.js:52-63`）：`districtNameFromListing` **先**用 `regionid/sectionid`，
+  //     再用 **`source_key` 以 `|` 切出的前兩段** 推導行政區 ✓
+  //   ⇒ 把 `source_key` 設成 `<regionid>|<sectionid>` ✓ 即命中 `districtSet` ✓
+  //（不新增欄位 ✗、不猜行政區 ✗；代碼直接由 URL 推導的 `allowedDistricts` 切出 ✓）。
+  const [regionId, sectionId] = String(allowedDistricts[0] || "").split("-");
+  console.log(`PARITY-DISTRICTS ${JSON.stringify({ allowedDistricts, regionId, sectionId })}`);
+  assert.ok(regionId && sectionId, "必須由 URL 推導出 region｜section（否則 districtSet 條件無法成立）");
+  const sourceKey = `${regionId}|${sectionId}`;
   const seeds = [0, 1, 2].map((i) => ({
-    post_id: SEED + i, source: "591", source_key: `parity|${i}`, search_key: key,
+    post_id: SEED + i, source: "591", source_key: sourceKey, search_key: key,
     title: `parity ${i}`, url: `https://example.test/parity/${i}`,
-    first_seen_at: iso, last_seen_at: iso, offline: 0, district,
+    first_seen_at: iso, last_seen_at: iso, offline: 0,
   }));
   const insertSqlite = sqliteDb.prepare(
     `INSERT OR REPLACE INTO listings
-     (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline, district)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of seeds) {
     insertSqlite.run(row.post_id, row.source, row.source_key, row.search_key, row.title, row.url,
-      row.first_seen_at, row.last_seen_at, row.offline, row.district);
+      row.first_seen_at, row.last_seen_at, row.offline);
   }
   // ✗ 根因（裁決 §2）：每列只用 6 個參數，卻把 `source_key` 與 `search_key` **都綁到 $2** ✗
   // ⇒ `$2` 的值是搜尋網址 ⇒ PG 的 `source_key` 不是 `parity|…` ⇒ 前綴計數自然是 0 ✗
   //（**不能**據此推論 insert 沒落地／寫錯 database／ON CONFLICT 跳過 ✗ —— 我先前正是這樣誤判 ✗）。
   // 修法：每列改 7 個參數 ✓，欄位順序 post_id, source, source_key, search_key, title, url,
   // first_seen_at, last_seen_at, offline = $1,'591',$2,$3,$4,$5,$6,$7,0 ✓。
-  const insertColumns = "post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline, district";
+  const insertColumns = "post_id, source, source_key, search_key, title, url, first_seen_at, last_seen_at, offline";
   const insertValues = seeds.map((_, i) => {
-    const n = i * 8;
-    return `($${n + 1}, '591', $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, $${n + 7}, 0, $${n + 8})`;
+    const n = i * 7;
+    return `($${n + 1}, '591', $${n + 2}, $${n + 3}, $${n + 4}, $${n + 5}, $${n + 6}, $${n + 7}, 0)`;
   }).join(",");
   const insertParams = seeds.flatMap((r) => [
-    r.post_id, r.source_key, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at, r.district,
+    r.post_id, r.source_key, r.search_key, r.title, r.url, r.first_seen_at, r.last_seen_at,
   ]);
   const seedRes = await pgDriver.query(
     `INSERT INTO listings (${insertColumns}) VALUES ${insertValues}
      ON CONFLICT (post_id) DO UPDATE SET
        source_key = excluded.source_key, search_key = excluded.search_key, title = excluded.title,
        url = excluded.url, first_seen_at = excluded.first_seen_at, last_seen_at = excluded.last_seen_at,
-       offline = excluded.offline, district = excluded.district`,
+       offline = excluded.offline`,
     insertParams,
   );
   const whereAmI = (await pgDriver.query(
@@ -168,14 +174,14 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
 
   // ✗ 依裁決 §2：**按本次 seed 的確切 post_id 逐欄讀回比對** ✓（prefix count **不能**取代 ✓）。
   const seedIds = seeds.map((r) => r.post_id);
-  const canonical = (rows) => rows.map((row) => [Number(row.post_id), String(row.source_key), String(row.search_key), String(row.district ?? "")]);
-  const expected = seeds.map((r) => [r.post_id, r.source_key, r.search_key, r.district]);
+  const canonical = (rows) => rows.map((row) => [Number(row.post_id), String(row.source_key), String(row.search_key)]);
+  const expected = seeds.map((r) => [r.post_id, r.source_key, r.search_key]);
   const pgRows = (await pgDriver.query(
-    "SELECT post_id, source_key, search_key, district FROM listings WHERE post_id = ANY($1::bigint[]) ORDER BY post_id",
+    "SELECT post_id, source_key, search_key FROM listings WHERE post_id = ANY($1::bigint[]) ORDER BY post_id",
     [seedIds],
   )).rows;
   const sqliteRows = sqliteDb.prepare(
-    `SELECT post_id, source_key, search_key, district FROM listings WHERE post_id IN (${seedIds.map(() => "?").join(",")}) ORDER BY post_id`,
+    `SELECT post_id, source_key, search_key FROM listings WHERE post_id IN (${seedIds.map(() => "?").join(",")}) ORDER BY post_id`,
   ).all(...seedIds);
   console.log(`PARITY-FIXTURE-CHECK ${JSON.stringify({ pg: pgRows, sqlite: sqliteRows })}`);
   assert.deepEqual(canonical(pgRows), expected, "PG 三列每欄都必須與 canonical fixture 相同");
