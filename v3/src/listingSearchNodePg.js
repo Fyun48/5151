@@ -51,7 +51,9 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0,
   // (2) 關係邊：配對雙向（無向圖）＋（選用）該使用者的同屋源群組。
   //     不把 id 清單當 SQL 參數（closure 可達數萬筆，會撐爆參數協定）；改在 Node 端算連通分量。
   const edges = [];
-  const linked = await exec("SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0", [], {batch:true});
+  // Typed PG bigint: the two ranges preserve NULL/zero/negative semantics and
+  // let the existing match-peer index avoid scanning every unrelated listing.
+  const linked = await exec("SELECT post_id, match_post_id FROM listings WHERE match_post_id > 0 OR match_post_id < 0", [], {batch:true});
   for (const row of linked) {
     const a = Number(row.post_id) || 0;
     const b = Number(row.match_post_id) || 0;

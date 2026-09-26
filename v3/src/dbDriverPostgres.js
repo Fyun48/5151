@@ -11,6 +11,7 @@
 //   3. env.PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE (read by `pg`)
 // Values are never logged; `describeConnection()` redacts credentials.
 import { toPostgresSql } from "./sqlDialect.js";
+import { createCandidateContentStore } from "./pgCandidateContent.js";
 
 export const POSTGRES_APPLICATION_NAME = "5151-v3";
 
@@ -109,11 +110,13 @@ export async function createPostgresDriver({
   const options = { ...resolved.options, ...poolOptions };
   const target = String(connectionString || resolved.connectionString || "").trim();
   const pool = new pg.Pool({ ...(target ? { connectionString: target } : {}), ...options });
+  const candidateContent = createCandidateContentStore();
 
   // A pool-level error (server restart, network drop) must not crash the process
   // the way an unhandled EventEmitter "error" would.
   const poolErrors = [];
   pool.on("error", (err) => {
+    candidateContent.clear();
     poolErrors.push({ message: err?.message || String(err), at: new Date().toISOString() });
     if (poolErrors.length > 20) poolErrors.shift();
   });
@@ -122,6 +125,7 @@ export async function createPostgresDriver({
     dialect: "postgres",
     kind: "postgres",
     pool,
+    candidateContent,
     config: {
       // Never expose the raw connection string: it carries the password and this
       // object ends up in logs / diagnostics / error reports.
@@ -168,6 +172,7 @@ export async function createPostgresDriver({
       return pool.query(toPostgresSql(text), params);
     },
     async close() {
+      candidateContent.clear();
       await pool.end();
     },
   };

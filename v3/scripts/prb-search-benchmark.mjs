@@ -25,7 +25,7 @@ const warms=Math.max(5,Number(process.env.PERF_WARMS)||5);
 const out=path.resolve(process.env.PERF_OUTPUT || 'artifacts/prb-search-benchmark.json');
 const root=fileURLToPath(new URL('../..',import.meta.url));
 const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
-const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','listingCandidateRow.js','listDistrictSql.js','cooperative.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
+const hashes=Object.fromEntries(['db.js','listingSearchPage.js','listingSearchNodePg.js','listingStatsAsync.js','pgReadSnapshot.js','pgCandidateContent.js','dbDriverPostgres.js','listingCandidateRow.js','listDistrictSql.js','cooperative.js','personalFlags.js','repository/listingStats.js','repository/decorationData.js'].map(f=>[f,createHash('sha256').update(readFileSync(new URL(`../src/${f}`,import.meta.url))).digest('hex')]));
 const evidence={status:'RUNNING',target,sourceSha:process.env.SOURCE_SHA||sha,checkoutSha:sha,moduleHashes:hashes,
   node:process.version,hardware:{platform:os.platform(),arch:os.arch(),cpus:os.cpus().length,cpu:os.cpus()[0]?.model,memoryBytes:os.totalmem()},
   fixture:{version:'prb-fixed-v1',asOf:AS_OF,totalRows,activeRows,chainLength:Math.min(activeRows,1024),description:'120k stored / 36k in the selected search scope; two districts; deterministic prices, long relation chain and cross-district peers'},
@@ -55,6 +55,7 @@ try {
     await driver.query('ANALYZE listings');
     const settings={...SETTINGS,searchUrls:[],watchDistricts:[]};
     for(const scope of ['single','all']) for(const concurrency of [1,4]) {
+      driver.candidateContent.clear(); // Each case starts with cold application content.
       const input={filter:'all',sort:'newest',limit:50,offset:0,userId:101,matchVoteUserId:202,
         searchKeys:[KEY],districts:scope==='single'?[DISTRICTS[0]]:[],settings,asOf:AS_OF};
       // Independently derived from the fixed increasing-price 1..1024 chain:
@@ -68,7 +69,9 @@ try {
       let captureCold=true;
       async function request(measure=false) {
         let count=0,tx=0;
-        const counted={query:()=>{throw new Error('outside snapshot');},pool:{connect:async()=>{
+        // Preserve the real pool's bounded content store while observing every
+        // client query; creating a wrapper must not create a different pool.
+        const counted={candidateContent:driver.candidateContent,query:()=>{throw new Error('outside snapshot');},pool:{connect:async()=>{
           const client=await driver.pool.connect();
           return {release:(...a)=>client.release(...a),query:async(sql,params)=>{
             const text=typeof sql==='string'?sql:sql.text;
@@ -80,7 +83,7 @@ try {
               const prior=coldQueries.at(-1);
               if(prior?.sql===normalized) {prior.calls++;prior.ms+=performance.now()-queryStart;prior.rows+=result.rowCount||0;}
               else coldQueries.push({sql:normalized,calls:1,ms:performance.now()-queryStart,rows:result.rowCount});
-              if(/^DECLARE /.test(text) && /SELECT post_id(?:, source,| FROM listings)/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
+              if(/^DECLARE /.test(text) && /SELECT post_id(?:, source,|, xmin| FROM listings)/.test(text)) planInputs.push({sql:text.replace(/^DECLARE .*? FOR /,''),params});
             }
             return result;
           }};
@@ -141,6 +144,7 @@ try {
         result.ciSmokePassed=concurrency===1?result.p95Ms<=(scope==='single'?2000:4000)&&!errors.length:null;
         result.lagTargetMet=result.lagP99Ms<=50&&result.lagMaxMs<=100;
         result.nasLatencyPassed=target==='nas'?result.p95Ms<=({single:{1:1000,4:2000},all:{1:2000,4:4000}}[scope][concurrency])&&!errors.length:null;
+        result.contentStore=driver.candidateContent.inspect();
         evidence.cases.push(result);save();console.log('PRB-PERF-CASE',JSON.stringify({...result,coldQueries:undefined,coldPlans:undefined}));
       });
       if(attempts.length) throw new Error(`SQLite I/O attempts: ${JSON.stringify(attempts)}`);
