@@ -17,6 +17,7 @@ const {withPgFixture,withoutSqliteIO,seedBase,AS_OF,KEY,SETTINGS,DISTRICTS,BASE}
 const db=sqliteHandle();
 const totalRows=Number(process.env.PERF_ROWS)||120000;
 const activeRows=Math.min(Number(process.env.PERF_ACTIVE_ROWS)||36000,totalRows);
+if(totalRows<120000||activeRows<36000) throw new Error('Acceptance requires at least 120k stored and 36k active rows');
 const target=process.env.PERF_TARGET||'ci';
 if(!['ci','nas'].includes(target)) throw new Error('PERF_TARGET must be ci or nas');
 const runs=Math.max(50,Number(process.env.PERF_RUNS)||50);
@@ -56,6 +57,11 @@ try {
     for(const scope of ['single','all']) for(const concurrency of [1,4]) {
       const input={filter:'all',sort:'newest',limit:50,offset:0,userId:101,matchVoteUserId:202,
         searchKeys:[KEY],districts:scope==='single'?[DISTRICTS[0]]:[],settings,asOf:AS_OF};
+      // Independently derived from the fixed increasing-price 1..1024 chain:
+      // only its first (odd-district) primary survives; remaining rows are solo.
+      const expected={matched:scope==='single'?Math.floor(activeRows/2)-512:activeRows-1023,
+        total:activeRows,dbTotal:totalRows,
+        pageIds:scope==='single'?Array.from({length:50},(_,i)=>BASE+1026+2*i):[BASE+1,...Array.from({length:49},(_,i)=>BASE+1025+i)]};
       const samples=[],queries=[],transactions=[],errors=[];
       let baseline=null,rss=0,heap=0;
       const stageSamples={},coldQueries=[],planInputs=[],coldPlans=[];
@@ -85,7 +91,10 @@ try {
             if(typeof value==='number' && key.endsWith('_ms')) (stageSamples[key] ||= []).push(value);
           }
           const serialized=JSON.stringify(page); // Include response serialization.
-          if(!page.listings.length || !(page.stats.matched>0)) throw new Error('empty benchmark fixture');
+          if(page.stats.matched!==expected.matched||page.stats.total!==expected.total||page.stats.dbTotal!==expected.dbTotal
+            || JSON.stringify(page.listings.map(r=>r.post_id))!==JSON.stringify(expected.pageIds)) {
+            throw new Error('fixed fixture IDs or totals differ from the independent expected result');
+          }
           const result=JSON.stringify({ids:page.listings.map(r=>r.post_id),matched:page.stats.matched,stats:page.stats});
           if(baseline!==null && baseline!==result) throw new Error('results changed across identical requests');
           baseline=result;
@@ -119,7 +128,8 @@ try {
           await Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);}));
           await pause(20);
         } finally {clearInterval(timer);lag.disable();}
-        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,
+        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,expected,
+          resultSignature:createHash('sha256').update(baseline).digest('hex'),
           stageP95Ms:Object.fromEntries(Object.entries(stageSamples).map(([key,values])=>[key,percentile(values,.95)])),
           p50Ms:percentile(samples,.5),p95Ms:percentile(samples,.95),maxMs:Math.max(...samples),
           lagP99Ms:lag.percentile(99)/1e6,lagMaxMs:lag.max/1e6,rssPeakBytes:rss,heapPeakBytes:heap,

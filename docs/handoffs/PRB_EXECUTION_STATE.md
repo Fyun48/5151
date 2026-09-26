@@ -88,6 +88,20 @@ CI smoke PASS；一般測試 2,596 pass／1 fail／34 skip。唯一失敗是舊�
 SQLite I/O guard 也攔截事先 prepare 的 StatementSync 方法，包含被吞掉的例外。
 以上須等最終 HEAD CI；只因文件引用的舊 SHA 通過，不能代替最終版號。
 
+## 第六批與最後一個已確認的大批傳輸
+
+`da6750d470e52070a6dcefd365254b4a05375c23`，run `36222113438` 全部完成：
+一般 2,598 pass／0 fail／34 skip；真 PG 129 pass／0 fail／1 optional shadow skip；CI smoke PASS。
+本機 Node 24：2,632 tests／2,598 pass／0 fail／34 skip。
+單區 C1 p95 727.53ms／C4 2,038.55ms；全區 C1 748.23ms／C4 2,233.20ms。
+四案 lag p99 都低於 50ms；單區 C4 max 101.38ms 仍略超 100ms（不宣稱完整 lag PASS）。
+原始 artifact 已保存 `after-da6750d.json`。
+
+單區仍一次回傳 60,000 個 district seed ID；本批把 seeds／關係讀取納入同快照 cursor，
+其 ID／root Set 建構也分段執行。query 數增加的原因是固定大小 FETCH，沒有逐房源／逐群組 N+1。
+benchmark 再加入獨立推導的固定 ID／matched／total／dbTotal，記錄結果 hash；
+不允許縮成少於 120k stored／36k active 來通關。待本批 CI 完成後更新 PR 本文的精確 HEAD 證據。
+
 ## 效能驗收
 
 `v3/scripts/prb-search-benchmark.mjs` 在自行建立的 PG schema 執行並自行清除。

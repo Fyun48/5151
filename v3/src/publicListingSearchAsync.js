@@ -21,7 +21,9 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
   try {
     const pg = options.pgDriver || await sharedPgDriver();
     return await withPgReadSnapshot(pg, async snapshot => {
-      const exec = (sql, params = []) => snapshot.query(toPostgresSql(sql), params).then(r => r.rows);
+      const exec = (sql, params = [], {batch = false} = {}) => batch
+        ? readPgRows(snapshot, toPostgresSql(sql), params)
+        : snapshot.query(toPostgresSql(sql), params).then(r => r.rows);
       const context = await buildListRequestContextFromPg(exec, { asOf: args.asOf });
       const settings = args.settings || publicSearchSettings(args);
       const districts = (Array.isArray(args.districts) ? args.districts : String(args.districts || "").split(","))

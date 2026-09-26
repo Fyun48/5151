@@ -24,6 +24,7 @@ import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { listingRequestTime } from "./listingRequestTime.js";
+import { runStepsAsync, transformChunks } from "./cooperative.js";
 import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 
 export const NODE_PG_QUERY_VERSION = 2;
@@ -48,22 +49,23 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0 
   const marks = (n) => Array.from({ length: n }, () => "?").join(",");
 
   // (1) 種子：落在所選行政區（或無法辨識的舊鍵）的 post_id。
-  const seeds = (await exec(
+  const seedRows = await exec(
     `SELECT post_id FROM listings WHERE (${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
-    [...allowed, ...allKeys],
-  )).map((row) => Number(row.post_id)).filter(Boolean);
+    [...allowed, ...allKeys], {batch:true},
+  );
+  const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows.map(row => Number(row.post_id)).filter(Boolean)));
 
   // (2) 關係邊：配對雙向（無向圖）＋（選用）該使用者的同屋源群組。
   //     不把 id 清單當 SQL 參數（closure 可達數萬筆，會撐爆參數協定）；改在 Node 端算連通分量。
   const edges = [];
-  const linked = await exec("SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0");
+  const linked = await exec("SELECT post_id, match_post_id FROM listings WHERE COALESCE(match_post_id, 0) <> 0", [], {batch:true});
   for (const row of linked) {
     const a = Number(row.post_id) || 0;
     const b = Number(row.match_post_id) || 0;
     if (a && b) edges.push([a, b]);
   }
   if (userId > 0) {
-    const members = await exec("SELECT post_id, group_key FROM user_same_house_members WHERE user_id = ?", [userId]);
+    const members = await exec("SELECT post_id, group_key FROM user_same_house_members WHERE user_id = ?", [userId], {batch:true});
     const byGroup = new Map();
     for (const row of members) {
       const key = String(row.group_key || "");
@@ -109,8 +111,15 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0 
     size.set(ra, (size.get(ra) || 1) + (size.get(rb) || 1));
   };
   for (const [a, b] of edges) union(a, b);
-  const seedRoots = new Set(seeds.map((id) => (parent.has(id) ? find(id) : id)));
-  const ids = new Set(seeds);
+  const seedRoots = new Set();
+  const ids = new Set();
+  await runStepsAsync((function* () {
+    let visited = 0;
+    for (const id of seeds) {
+      seedRoots.add(parent.has(id) ? find(id) : id); ids.add(id);
+      if (++visited % 256 === 0) yield;
+    }
+  })());
   for (const [a, b] of edges) {
     if (seedRoots.has(find(a))) { ids.add(a); ids.add(b); }
     if (seedRoots.has(find(b))) { ids.add(a); ids.add(b); }
@@ -132,7 +141,9 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     throw new Error("searchListingsNodePg requires deps.candidateColumns（用 listingSearchBuildContext()）");
   }
 
-  const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
+  const exec = (sql, params = [], {batch = false} = {}) => batch
+    ? readPgRows(pgDriver, toPostgresSql(sql), params)
+    : pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
   // Identity is explicit here; resolveUserId(undefined) consults SQLite.
   const uid = Number(args.userId) || 0;
   const voteUid = args.matchVoteUserId == null ? uid : Number(args.matchVoteUserId) || 0;
