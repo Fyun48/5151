@@ -1,5 +1,6 @@
 /** 個人刊登標記。只接受 db 連線，避免和 db.js 循環 import。 */
 import { nextWatchNote } from "./watchFlags.js";
+import { candidateRowWithPersonal } from "./listingCandidateRow.js";
 
 const MIGRATED_KEY = "personalFlagsMigrated";
 
@@ -33,7 +34,7 @@ export function ensureUser(conn, email, { role } = {}) {
   return Number(result.lastInsertRowid);
 }
 
-export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
+export function overlayPersonal(listing, flags, { inPlace = false, candidateShape = false } = {}) {
   if (!listing) return listing;
   const f = flags && typeof flags === "object" ? flags : emptyFlags();
   const systemDup = String(listing.match_verdict || "") === "yes";
@@ -48,7 +49,8 @@ export function overlayPersonal(listing, flags, { inPlace = false } = {}) {
   };
   // Create the complete shape at once. Adding seven fields to a wide PG row
   // with Object.assign converts V8's fast properties into a larger dictionary.
-  return inPlace ? Object.assign(listing, personal) : { ...listing, ...personal };
+  if (inPlace) return Object.assign(listing, personal);
+  return candidateShape ? candidateRowWithPersonal(listing, personal) : { ...listing, ...personal };
 }
 
 export function loadFlags(conn, userId, postId) {

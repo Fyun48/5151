@@ -1,4 +1,4 @@
-import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
+import { createListingExclusions, hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource } from "./location.js";
 import { areaNum } from "./match.js";
 import { passesPriceFilter } from "./listingCost.js";
@@ -33,6 +33,7 @@ export {
 
 function tagText(listing) {
   let tags = listing.tags;
+  if (tags == null || tags === "[]") return "";
   if (typeof tags === "string") {
     try {
       tags = JSON.parse(tags);
@@ -410,7 +411,12 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
   return true;
 }
 
-export function passesAttributeFilters(listing, settings = {}) {
+export function createAttributeFilter(settings = {}) {
+  const exclusions = createListingExclusions(settings);
+  return listing => passesAttributeFilters(listing, settings, exclusions);
+}
+
+export function passesAttributeFilters(listing, settings = {}, exclusions = null) {
   if (!passesPriceFilter(listing, settings)) return false;
   const minFloors = Number(settings.minBuildingFloors);
   if (Number.isFinite(minFloors) && minFloors > 0) {
@@ -419,10 +425,10 @@ export function passesAttributeFilters(listing, settings = {}) {
       return false;
     }
   }
-  if (isExcludedByKeyword(listing, settings.excludeKeywords)) {
+  if (exclusions ? exclusions.keyword(listing) : isExcludedByKeyword(listing, settings.excludeKeywords)) {
     return false;
   }
-  if (isExcludedByAgent(listing, settings)) {
+  if (exclusions ? exclusions.agent(listing) : isExcludedByAgent(listing, settings)) {
     return false;
   }
   const areaMax = Number(settings.areaMax);

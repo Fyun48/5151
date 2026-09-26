@@ -26,6 +26,7 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsAsync, transformChunks } from "./cooperative.js";
 import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
+import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 
 export const NODE_PG_QUERY_VERSION = 2;
 
@@ -241,6 +242,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
     filter, kind, sources, sort, uid, voteUid, settings,
     districtSet: built.districtSet, provider, flagMap, markStage,
     now: context.now, requireProvider: true,
+    candidateShape: candidateColumns === LIST_CANDIDATE_COLUMNS,
   });
 
   const paged = await paginateListListingsRowsAsync(rows, { sort, filter, settings, limit: args.limit, offset: args.offset, now: context.now });

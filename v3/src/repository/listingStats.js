@@ -18,6 +18,7 @@ import { toPostgresSql } from "../sqlDialect.js";
 import { buildListRequestContextFromPg } from "../db.js";
 import { WATCHED_COUNT_SQL } from "../watchLimits.js";
 import { loadPersonalFlagMap } from "./decorationData.js";
+import { LIST_CANDIDATE_COLUMNS } from "../listingCandidateRow.js";
 
 // SQLite hands these back as numbers, node-postgres as strings (int8). The stats pipeline
 // compares them numerically or truthily (`!row.viewed`, `row.offline`, `row.hidden`), so they
@@ -152,7 +153,8 @@ export function createListingStatsRepository({
         diagnostics.driver = "postgres";
         diagnostics.candidates = rows.length;
       }
-      return { uid, settings, rows, flagMap, requestContext, statusCounts: statusRow || {}, watchedTotal, dbTotal, failedRouteJobs };
+      return { uid, settings, rows, flagMap, requestContext, statusCounts: statusRow || {}, watchedTotal, dbTotal, failedRouteJobs,
+        candidateShape: context.candidateColumns === LIST_CANDIDATE_COLUMNS };
     },
   };
 }

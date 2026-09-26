@@ -83,6 +83,7 @@ export async function listingStatsAsync(
         userId: inputs.uid,
         settings: inputs.settings,
         provider,
+        candidateShape: inputs.candidateShape,
       });
       markStage("profile_ms");
       const result = await summarizeListingStatsAsync({

@@ -49,3 +49,58 @@ export function candidateRowFromValues(values) {
 
 export const LIST_CANDIDATE_KEYS = Object.freeze(Object.keys(candidateRowFromValues([])));
 export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");
+
+// Only for the canonical 42-column PG candidate projection, before decoration.
+// Explicit fields avoid enumerating/copying a wide object for every personal view.
+// Generic rows keep using overlayPersonal's spread so additional fields survive.
+export function candidateRowWithPersonal(row, personal) {
+  return {
+    post_id: row.post_id,
+    source: row.source,
+    source_id: row.source_id,
+    source_key: row.source_key,
+    url: row.url,
+    price: row.price,
+    price_num: row.price_num,
+    extra_fee: row.extra_fee,
+    extra_fees: row.extra_fees,
+    extra_fee_text: row.extra_fee_text,
+    price_contain_text: row.price_contain_text,
+    title: row.title,
+    address: row.address,
+    address_norm: row.address_norm,
+    area_name: row.area_name,
+    layout: row.layout,
+    floor_name: row.floor_name,
+    kind_name: row.kind_name,
+    tags: row.tags,
+    role_name: row.role_name,
+    contact_name: row.contact_name,
+    contact_role: row.contact_role,
+    contact_uid: row.contact_uid,
+    agency: row.agency,
+    lat: row.lat,
+    lng: row.lng,
+    geo_source: row.geo_source,
+    location_class: row.location_class,
+    match_post_id: row.match_post_id,
+    match_level: row.match_level,
+    match_verdict: row.match_verdict,
+    match_rejected: row.match_rejected,
+    offline: row.offline,
+    offline_confirmed: row.offline_confirmed,
+    hidden: personal.hidden,
+    hidden_at: personal.hidden_at,
+    last_event: row.last_event,
+    first_seen_at: row.first_seen_at,
+    last_seen_at: row.last_seen_at,
+    refresh_time: row.refresh_time,
+    listed_by_user_id: row.listed_by_user_id,
+    self_status: row.self_status,
+    viewed: personal.viewed,
+    watched: personal.watched,
+    watch_note: personal.watch_note,
+    viewed_at: personal.viewed_at,
+    watched_at: personal.watched_at,
+  };
+}

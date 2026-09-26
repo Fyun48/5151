@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
-import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
+import { createAttributeFilter, passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { commuteNetworkHint, makeRouteKey, roundCoord } from "./route.js";
@@ -6345,7 +6345,7 @@ function applyListingFilter(rows, settings = getSettings(), provider = null) {
   if (commuteOn && !provider) warmRouteCache();
   // Price/keyword/agent/area checks do not depend on routes. Avoid fetching
   // cached routes and cloning wide rows that these checks already exclude.
-  const candidates = rows.filter((row) => passesAttributeFilters(row, settings));
+  const candidates = rows.filter(createAttributeFilter(settings));
   const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings, provider)) : candidates;
   return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn }));
 }
@@ -6477,17 +6477,17 @@ function priceSortKey(row, settings = {}) {
   return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
-export function listingEffectiveUpdatedAt(row, now = Date.now()) {
-  const sourceUpdated = Date.parse(row?.source_updated_at || "");
+export function listingEffectiveUpdatedAt(row, now = Date.now(), parseDate = Date.parse) {
+  const sourceUpdated = parseDate(row?.source_updated_at || "");
   if (Number.isFinite(sourceUpdated)) return sourceUpdated;
-  const published = Date.parse(row?.source_published_at || "");
+  const published = parseDate(row?.source_published_at || "");
   if (Number.isFinite(published)) return published;
   const raw = String(row?.refresh_time || "").trim();
   if (raw && !/剛剛|秒前|分鐘前|小時|今日|今天|昨日|昨天|天前/.test(raw)) {
-    const abs = Date.parse(raw);
+    const abs = parseDate(raw);
     if (Number.isFinite(abs)) return abs;
   }
-  const first = Date.parse(row?.first_seen_at || "");
+  const first = parseDate(row?.first_seen_at || "");
   if (Number.isFinite(first)) return first;
   return listingRefreshAt({ ...row, refresh_time: "", last_seen_at: row?.first_seen_at }, now) || 0;
 }
@@ -6538,8 +6538,48 @@ export function sortListingsRows(rows, sort = "price_asc", options = {}) {
 
 function* sortListingsSteps(rows, sort = "price_asc", options = {}) {
   const list = rows || [];
-  const compare = yield* listingSortComparatorSteps(list, sort, options);
-  return yield* stableSortSteps(list, compare);
+  const {settings, now = Date.now()} = options;
+  // Sorting touches each key O(n log n) times. Keep scalar keys beside each row
+  // instead of probing object-keyed Maps in every comparison. The synchronous
+  // implementation above remains the reference for ordering and stable ties.
+  const dates = new Map();
+  const parseDate = value => {
+    if (typeof value !== 'string') return Date.parse(value);
+    if (dates.has(value)) return dates.get(value);
+    const parsed = Date.parse(value);
+    if (dates.size < 128) dates.set(value, parsed);
+    return parsed;
+  };
+  const needPrice = !['newest', 'fit_desc', 'commute_asc', 'commute_desc'].includes(sort);
+  const entries = yield* transformChunks(list, chunk => chunk.map(row => ({
+    row, id: Number(row.post_id) || 0,
+    updated: listingEffectiveUpdatedAt(row, now, parseDate),
+    price: needPrice ? rentSortValue(row, settings) : 0,
+    commute: sort === 'commute_asc' || sort === 'commute_desc' ? listingCommuteKm(row) : null,
+    fit: sort === 'fit_desc' ? Number(row.fit_score) : 0,
+  })));
+  const byUpdated = (a,b) => b.updated - a.updated || a.id - b.id;
+  let compare;
+  if (sort === 'newest') compare = byUpdated;
+  else if (sort === 'commute_asc' || sort === 'commute_desc') {
+    const direction = sort === 'commute_asc' ? 1 : -1;
+    compare = (a,b) => (a.commute == null ? b.commute == null ? 0 : 1
+      : b.commute == null ? -1 : (a.commute - b.commute) * direction) || byUpdated(a,b);
+  } else if (sort === 'fit_desc') {
+    compare = (a,b) => {
+      const aKnown = Number.isFinite(a.fit) && a.fit > 0;
+      const bKnown = Number.isFinite(b.fit) && b.fit > 0;
+      return aKnown !== bKnown ? aKnown ? -1 : 1 : (b.fit || 0) - (a.fit || 0) || byUpdated(a,b);
+    };
+  } else if (sort === 'price_desc') {
+    compare = (a,b) => (a.price > 0) !== (b.price > 0) ? a.price > 0 ? -1 : 1
+      : b.price - a.price || byUpdated(a,b);
+  } else {
+    compare = (a,b) => (a.price > 0 ? a.price : Number.MAX_SAFE_INTEGER)
+      - (b.price > 0 ? b.price : Number.MAX_SAFE_INTEGER) || byUpdated(a,b);
+  }
+  const sorted = yield* stableSortSteps(entries, compare);
+  return yield* transformChunks(sorted, chunk => chunk.map(entry => entry.row));
 }
 
 export function sortListingsRowsAsync(rows, sort = "price_asc", options = {}) {
@@ -6581,6 +6621,7 @@ function* buildListListingsSteps(raw, {
   filter, kind, sources, sort, uid, voteUid, settings, districtSet,
   provider = null, flagMap = null, markStage = () => {},
   now = provider?.now ?? Date.now(), requireProvider = false,
+  candidateShape = false,
 } = {}) {
   if (requireProvider) {
     assertListingProvider(provider);
@@ -6588,7 +6629,7 @@ function* buildListListingsSteps(raw, {
   }
   const flags = flagMap || loadFlagMap(db, uid);
   let rows = yield* transformChunks(raw, chunk => {
-    const overlaid = overlayRowsPersonal(chunk, flags);
+    const overlaid = overlayRowsPersonal(chunk, flags, {candidateShape});
     return filter === "watched" ? overlaid
       : filter === "offline" || filter === "suspected"
         ? overlaid.filter(row => passesPriceFilter(row, settings))
@@ -6612,8 +6653,8 @@ function* buildListListingsSteps(raw, {
         chunk = chunk.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
       }
 
-      chunk = chunk.filter((row) => matchesHousingKind(row, kind));
-      chunk = chunk.filter((row) => matchesListingSources(row, sources));
+      if (kind) chunk = chunk.filter((row) => matchesHousingKind(row, kind));
+      if (sources?.length) chunk = chunk.filter((row) => matchesListingSources(row, sources));
     }
     return chunk;
   });
@@ -6947,10 +6988,10 @@ export function listingStatsBuildContext() {
  * scope (district / price / keywords / commute / display filters). Driver-agnostic:
  * pure over the candidate rows, so the PostgreSQL path reuses it verbatim.
  */
-export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null } = {}) {
+export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, settings = null, provider = null, candidateShape = false } = {}) {
   const uid = Number(userId) || 0;
   const conf = settings || getSettings(uid);
-  const overlaid = overlayRowsPersonal(rows, flagMap)
+  const overlaid = overlayRowsPersonal(rows, flagMap, {candidateShape})
     .filter((row) => keepSelfListingForViewer(row, uid, conf, listingInMemberScope));
   return applyProfileScope(overlaid, conf, provider);
 }
