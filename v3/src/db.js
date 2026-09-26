@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { listingRequestTime } from "./listingRequestTime.js";
+import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
 import { passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
 import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
@@ -3206,10 +3207,11 @@ export async function preloadDecorationProviderAsync({
   // personalIndex 的 peer id」——`attachSameHouseRoles()` 就是靠這些 id 取 extras（db.js:3353）。
   // 這一段全是記憶體運算（O(candidates)），真正的 I/O 在下面的 2-hop fan-out。
   const prepIds = new Set(candidateIds);
+  const relatedIds = new Set();
   for (const row of list) {
     const mid = Number(row.match_post_id) || 0;
-    if (mid) prepIds.add(mid);
-    for (const pid of personalIndex.peers(row.post_id)) prepIds.add(pid);
+    if (mid) { prepIds.add(mid); relatedIds.add(mid); }
+    for (const pid of personalIndex.peers(row.post_id)) { prepIds.add(pid); relatedIds.add(pid); }
   }
   // ⚠️ peers／groupMembers 的唯一消費者 loadSameHousePeers() 只在「裝飾」路徑被呼叫
   // （db.js:3443，於 decorateListingLite 內）⇒ 這批逐列 I/O 屬**頁面層**，可延後到分頁後
@@ -3251,7 +3253,7 @@ export async function preloadDecorationProviderAsync({
   for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
   // Candidate rows already contain these fields. Preserve their raw values for
   // partners removed by profile filtering, then fetch only IDs not in that set.
-  const extras = listingExtrasSnapshot(list);
+  const extras = listingExtrasSnapshot(list.filter(row => relatedIds.has(Number(row.post_id))));
   for (const [id, row] of await loader.extrasMap([...prepIds].filter(id => !onPage.has(id)))) {
     if (row) extras.set(id, row);
   }
@@ -3399,14 +3401,24 @@ function loadUserSplitPairSet(userId) {
   }
 }
 
-function attachSameHouseRoles(rows, voteUserId, provider, now = provider?.now ?? Date.now()) {
+function attachSameHouseRoles(...args) {
+  return runStepsSync(attachSameHouseRoleSteps(...args));
+}
+
+function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.now ?? Date.now()) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return list;
   const source = provider || sqliteDecorationProvider(voteUserId);
   const personal = source.personalIndex();
-  const byId = new Map(list.map((row) => [Number(row.post_id), row]));
+  const byId = new Map();
+  let visited = 0;
+  for (const row of list) {
+    if (++visited % 256 === 0) yield;
+    byId.set(Number(row.post_id), row);
+  }
   const missing = new Set();
   for (const row of list) {
+    if (++visited % 256 === 0) yield;
     if (String(row.match_verdict || "") === "no") continue;
     const mid = Number(row.match_post_id) || 0;
     if (mid && !byId.has(mid)) missing.add(mid);
@@ -3423,6 +3435,7 @@ function attachSameHouseRoles(rows, voteUserId, provider, now = provider?.now ??
   const resolve = (id) => byId.get(id) || extras.get(id) || null;
   const splits = source.splitPairs();
   for (const row of list) {
+    if (++visited % 256 === 0) yield;
     const mid = Number(row.match_post_id) || 0;
     if (!mid || String(row.match_verdict || "") === "no") continue;
     const peer = resolve(mid);
@@ -3449,6 +3462,7 @@ function attachSameHouseRoles(rows, voteUserId, provider, now = provider?.now ??
   if (voteUserId) {
     const grouped = new Map();
     for (const row of list) {
+    if (++visited % 256 === 0) yield;
       const key = personal.groupKey(row.post_id);
       if (!key) continue;
       if (!grouped.has(key)) grouped.set(key, []);
@@ -3464,6 +3478,7 @@ function attachSameHouseRoles(rows, voteUserId, provider, now = provider?.now ??
         pool.push(item);
       };
       for (const row of members) {
+        if (++visited % 256 === 0) yield;
         add(row);
         for (const pid of personal.peers(row.post_id)) add(resolve(pid));
       }
@@ -3473,6 +3488,7 @@ function attachSameHouseRoles(rows, voteUserId, provider, now = provider?.now ??
       const primaryId = Number(primary.post_id);
       const primaryOffline = Number(primary.offline) === 1;
       for (const target of visible) {
+        if (++visited % 256 === 0) yield;
         if (!byId.has(Number(target.post_id))) continue;
         target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
         target.same_house_primary_id = primaryId;
@@ -6480,40 +6496,49 @@ function commuteMissingLast(a, b, dir = 1) {
   return (left - right) * dir;
 }
 
-export function sortListingsRows(rows, sort = "price_asc", { filter, settings, now = Date.now() } = {}) {
-  const list = [...(rows || [])];
-  const updated = new Map(list.map(row => [row, listingEffectiveUpdatedAt(row, now)]));
-  const prices = /^(price_asc|price_desc)$/.test(sort)
-    ? new Map(list.map(row => [row, rentSortValue(row, settings)])) : null;
+function* listingSortComparatorSteps(rows, sort, { settings, now = Date.now() } = {}) {
+  const updated = new Map();
+  const prices = /^(price_asc|price_desc)$/.test(sort) ? new Map() : null;
+  let visited = 0;
+  for (const row of rows) {
+    updated.set(row, listingEffectiveUpdatedAt(row, now));
+    if (prices) prices.set(row, rentSortValue(row, settings));
+    if (++visited % 256 === 0) yield;
+  }
   const byId = (a, b) => (Number(a.post_id) || 0) - (Number(b.post_id) || 0);
   const byUpdated = (a, b) => updated.get(b) - updated.get(a) || byId(a, b);
-  if (sort === "commute_asc") {
-    list.sort((a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b));
-  } else if (sort === "commute_desc") {
-    list.sort((a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b));
-  } else if (sort === "price_desc") {
-    list.sort((a, b) => {
-      const pa = prices.get(a);
-      const pb = prices.get(b);
-      if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
-      return pb - pa || byUpdated(a, b);
-    });
-  } else if (sort === "newest") {
-    list.sort(byUpdated);
-  } else if (sort === "fit_desc") {
-    list.sort((a, b) => {
-      const sa = Number(a.fit_score);
-      const sb = Number(b.fit_score);
-      const aKnown = Number.isFinite(sa) && sa > 0;
-      const bKnown = Number.isFinite(sb) && sb > 0;
-      if (aKnown !== bKnown) return aKnown ? -1 : 1;
-      return (sb || 0) - (sa || 0) || byUpdated(a, b);
-    });
-  } else {
-    const key = row => prices ? prices.get(row) > 0 ? prices.get(row) : Number.MAX_SAFE_INTEGER : priceSortKey(row, settings);
-    list.sort((a, b) => key(a) - key(b) || byUpdated(a, b));
-  }
-  return list;
+  if (sort === "commute_asc") return (a, b) => commuteMissingLast(a, b, 1) || byUpdated(a, b);
+  if (sort === "commute_desc") return (a, b) => commuteMissingLast(a, b, -1) || byUpdated(a, b);
+  if (sort === "price_desc") return (a, b) => {
+    const pa = prices.get(a), pb = prices.get(b);
+    if ((pa > 0) !== (pb > 0)) return pa > 0 ? -1 : 1;
+    return pb - pa || byUpdated(a, b);
+  };
+  if (sort === "newest") return byUpdated;
+  if (sort === "fit_desc") return (a, b) => {
+    const sa = Number(a.fit_score), sb = Number(b.fit_score);
+    const aKnown = Number.isFinite(sa) && sa > 0;
+    const bKnown = Number.isFinite(sb) && sb > 0;
+    if (aKnown !== bKnown) return aKnown ? -1 : 1;
+    return (sb || 0) - (sa || 0) || byUpdated(a, b);
+  };
+  const key = row => prices ? prices.get(row) > 0 ? prices.get(row) : Number.MAX_SAFE_INTEGER : priceSortKey(row, settings);
+  return (a, b) => key(a) - key(b) || byUpdated(a, b);
+}
+
+export function sortListingsRows(rows, sort = "price_asc", options = {}) {
+  const list = [...(rows || [])];
+  return list.sort(runStepsSync(listingSortComparatorSteps(list, sort, options)));
+}
+
+function* sortListingsSteps(rows, sort = "price_asc", options = {}) {
+  const list = rows || [];
+  const compare = yield* listingSortComparatorSteps(list, sort, options);
+  return yield* stableSortSteps(list, compare);
+}
+
+export function sortListingsRowsAsync(rows, sort = "price_asc", options = {}) {
+  return runStepsAsync(sortListingsSteps(rows, sort, options));
 }
 
 // All fields used by profile filters, grouping and sorting. Large bodies, photos,
@@ -6526,32 +6551,8 @@ const LIST_CANDIDATE_COLUMNS = `post_id, source, source_id, source_key, url, pri
   match_verdict, match_rejected, offline, offline_confirmed, hidden, hidden_at,
   last_event, first_seen_at, last_seen_at, refresh_time, listed_by_user_id, self_status`;
 
-/**
- * ✗ **已撤回（astra 2026-09-25 裁決 §2.1）**：本常數不再被任何正式入口使用 ✗。
- * 撤回原因：窄清單刪掉 `first_seen_at` ⇒ 改變 `newest` 排序（`listingEffectiveUpdatedAt()` 在
- * refresh_time 是相對時間或缺可解析絕對時間時會讀它 ✓；反例：寬 `[2,1]` vs 窄 `[1,2]` ✓），
- * 而**分頁前的排序錯了，頁面 hydration 救不回來** ✗。
- * 動態讀取紀錄只證明「走過的分支」，不能據此刪掉其他分支的必要輸入 ✗
- *（漏掉的還包括 `preferPrimaryListing()` 讀的 `last_seen_at`、tie-break 的 `source_id`／`url`、
- *  含附加費價格、個人自有房源、fit／通勤等條件分支 ✓）。
- * ⇒ 要再縮欄位，驗收必須是「寬版與優化版的總數／順序／角色／卡片狀態**完全相同**」✓，
- *   審計清單只能輔助 ✓，不能代替 parity ✗。
- *
- * 為什麼存在：實測（`v3/test/listing-search-pipeline-read-audit.test.js` ✓）用 Proxy 量測真實管線
- * （`buildListListingsRows` ＋ `paginateListListingsRows` ✓）對候選列的讀取 ⇒ 非 `fit_desc` 模式
- * 只需下列 **23 欄** ✓（`suspected` 唯一額外讀取是 `match_level` ✓），其餘 20 欄從未被讀 ✗。
- * 動機是實測最大的成本中心：候選查詢抓 43 個寬欄位 ⇒ `Index Scan listings` 吃 33,541 buffers
- *（≈268 MB、約每列 5 buffers ✗，見 handoff §逐節點歸因 ✓）。
- *
- * 使用範圍**刻意最小** ✓：只給 PostgreSQL 列表路徑（`listingSearchAsync.js` 的 `searchListingsNodePg`
- * 呼叫 ✓）覆寫 `candidateColumns` ✓。**不動** `listingStatsBuildContext`（統計 ✓）、
- * **不動** `listingDetailAsync` / `crawlerReads`（明細／爬蟲另有需求 ✓）、
- * **不動** SQLite 的 `listListings`（非本次量測對象 ✓）。
- *
- * ⚠️ `fit_desc`（`applyCachedCoords` 複製整列 ✗）目前讀不到全部欄位也沒問題（複製只是變小 ✓），
- * 但若未來在候選階段新增「需要被移除欄位」的邏輯，這個清單必須同步更新 ✗（由上述審計測試的護欄擋 ✓）。
- */
-// （23 欄窄清單常數已於本批刪除 ✓；撤回理由見上方註解 ✓。）
+// Keep the complete candidate contract; page hydration cannot repair a wrong
+// filter, primary or order chosen after dropping required candidate fields.
 
 /**
  * 搜尋路徑的同步後處理：與 stats 的 `buildListingStatsRows` 同一個精神——
@@ -6569,7 +6570,15 @@ function assertListingProvider(provider) {
   }
 }
 
-export function buildListListingsRows(raw, {
+export function buildListListingsRows(...args) {
+  return runStepsSync(buildListListingsSteps(...args));
+}
+
+export function buildListListingsRowsAsync(...args) {
+  return runStepsAsync(buildListListingsSteps(...args));
+}
+
+function* buildListListingsSteps(raw, {
   filter, kind, sources, sort, uid, voteUid, settings, districtSet,
   provider = null, flagMap = null, markStage = () => {},
   now = provider?.now ?? Date.now(), requireProvider = false,
@@ -6579,38 +6588,43 @@ export function buildListListingsRows(raw, {
     if (!(flagMap instanceof Map)) throw new Error("PG search requires flagMap");
   }
   const flags = flagMap || loadFlagMap(db, uid);
-  const overlaid = overlayRowsPersonal(raw, flags, { inPlace: true });
-  let rows =
-    filter === "watched"
-      ? overlaid
+  let rows = yield* transformChunks(raw, chunk => {
+    const overlaid = overlayRowsPersonal(chunk, flags, { inPlace: true });
+    return filter === "watched" ? overlaid
       : filter === "offline" || filter === "suspected"
-        ? overlaid.filter((row) => passesPriceFilter(row, settings))
+        ? overlaid.filter(row => passesPriceFilter(row, settings))
         : applyListingFilter(overlaid, settings, provider);
+  });
   markStage("profile_ms");
 
-  rows = attachSameHouseRoles(rows, voteUid, provider, now);
+  rows = yield* attachSameHouseRoleSteps(rows, voteUid, provider, now);
   markStage("relations_ms");
-  rows = rows.filter((row) => listingMatchesListFilter(row, filter));
-  rows = rows.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
+  rows = yield* transformChunks(rows, chunk => {
+    chunk = chunk.filter((row) => listingMatchesListFilter(row, filter));
+    chunk = chunk.filter((row) => keepSelfListingForViewer(row, uid, settings, listingInMemberScope));
 
-  // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
-  if (filter !== "watched") {
-    // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
-    rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-    // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
-    // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
-    if (districtSet.size) {
-      rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+    // 特別關注是配額管理清單，不被行政區／類型／樓層／來源再篩空，否則會滿額卻看不到、也無法取消。
+    if (filter !== "watched") {
+      // 整層／1F、行政區要在 limit 前套用，否則「全庫最便宜 500 筆」再前端篩選會漏掉新北等區
+      chunk = chunk.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+      // 「全部」（未指定行政區）＝只顯示此使用者自己設定的行政區（watchDistricts ∪ searchUrls），
+      // 而不是整個共用資料庫（listings 是跨使用者共用池；否則會看到別人／系統抓的其它縣市，如台中西屯）。
+      if (districtSet.size) {
+        chunk = chunk.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+      }
+
+      chunk = chunk.filter((row) => matchesHousingKind(row, kind));
+      chunk = chunk.filter((row) => matchesListingSources(row, sources));
     }
-
-    rows = rows.filter((row) => matchesHousingKind(row, kind));
-    rows = rows.filter((row) => matchesListingSources(row, sources));
-  }
+    return chunk;
+  });
   markStage("display_ms");
 
   const needFit = sort === "fit_desc";
   if (needFit) {
+    let visited = 0;
     for (const row of rows) {
+      if (++visited % 128 === 0) yield;
       // astra6 §0.2：fit／通勤不可留同步 SQLite 讀取 ⇒ provider 一路傳下去（PG 路徑傳 PG provider）。
       const located = applyCachedCoords(row, settings, provider);
       const km = canUseForRoadDistance(effectiveNotifyLocationClass(located, settings))
@@ -6758,7 +6772,14 @@ export function buildListListingsClauses({
 
 /** 排序 → 計數 → 分頁（不含取列與裝飾）。driver-agnostic。 */
 export function paginateListListingsRows(rows, { sort, filter, settings, limit = 500, offset = 0, now = Date.now() } = {}) {
-  const sorted = sortListingsRows(rows, sort, { filter, settings, now });
+  return paginateSortedListings(sortListingsRows(rows, sort, { filter, settings, now }), {limit, offset});
+}
+
+export async function paginateListListingsRowsAsync(rows, { sort, filter, settings, limit = 500, offset = 0, now = Date.now() } = {}) {
+  return paginateSortedListings(await sortListingsRowsAsync(rows, sort, {filter, settings, now}), {limit, offset});
+}
+
+function paginateSortedListings(sorted, {limit, offset}) {
   const totalMatched = sorted.length;
   const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
   const start = Math.max(0, Number(offset) || 0);
@@ -6929,6 +6950,24 @@ export function buildListingStatsRows({ rows = [], flagMap = null, userId = 0, s
   const overlaid = overlayRowsPersonal(rows, flagMap, { inPlace: true })
     .filter((row) => keepSelfListingForViewer(row, uid, conf, listingInMemberScope));
   return applyProfileScope(overlaid, conf, provider);
+}
+
+export function buildListingStatsRowsAsync(options = {}) {
+  return runStepsAsync(transformChunks(options.rows || [], rows => buildListingStatsRows({...options, rows})));
+}
+
+export function summarizeListingStatsAsync(options = {}) {
+  return runStepsAsync((function* () {
+    const {profileRows = [], ...shared} = options;
+    const total = summarizeListingStats({...shared, profileRows: []});
+    for (let start = 0; start < profileRows.length; start += 256) {
+      const counts = summarizeListingStats({...shared, profileRows: profileRows.slice(start, start + 256),
+        statusCounts: {}, watchedTotal: 0, dbTotal: 0});
+      for (const key of Object.keys(total)) total[key] += counts[key];
+      yield;
+    }
+    return total;
+  })());
 }
 
 /**
@@ -7520,32 +7559,44 @@ export function buildPublicListingsClauses({ districts = [], settings, q = "", c
   return { where: `WHERE ${clauses.join(" AND ")}`, params, districtSet: new Set(requestedDistricts) };
 }
 
-export function buildPublicListingsRows(raw, { settings, kind = "", sources = "", sort = "newest", districtSet = new Set(), provider = null, now = Date.now(), markStage = () => {}, requireProvider = false } = {}) {
+export function buildPublicListingsRows(...args) {
+  return runStepsSync(buildPublicListingsSteps(...args));
+}
+
+export function buildPublicListingsRowsAsync(...args) {
+  return runStepsAsync(buildPublicListingsSteps(...args));
+}
+
+function* buildPublicListingsSteps(raw, { settings, kind = "", sources = "", sort = "newest", districtSet = new Set(), provider = null, now = Date.now(), markStage = () => {}, requireProvider = false } = {}) {
   if (requireProvider) assertListingProvider(provider);
   ({ kind, sources } = normalizeListQuery("all", kind, sources));
-  let rows = applyListingFilter(raw, settings, provider);
-  rows = applyGuestStraightLineFilter(rows, settings);
-  rows = attachSameHouseRoles(rows, 0, provider, now);
-  rows = rows.filter((row) => listingMatchesListFilter(row, "all"));
-  rows = rows.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
-  rows = rows.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
-  if (districtSet.size) {
-    rows = rows.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
-  }
-  rows = rows.filter((row) => matchesHousingKind(row, kind));
-  rows = rows.filter((row) => matchesListingSources(row, sources));
+  let rows = yield* transformChunks(raw, chunk => applyGuestStraightLineFilter(applyListingFilter(chunk, settings, provider), settings));
+  rows = yield* attachSameHouseRoleSteps(rows, 0, provider, now);
+  rows = yield* transformChunks(rows, chunk => {
+    chunk = chunk.filter((row) => listingMatchesListFilter(row, "all"));
+    chunk = chunk.filter((row) => keepSelfListingForViewer(row, 0, settings, () => true));
+    chunk = chunk.filter((row) => passesDisplayFilters(row, settings, { skipWholeFloor: Boolean(kind) }));
+    if (districtSet.size) {
+      chunk = chunk.filter((row) => districtSet.has(row.district || districtNameFromListing(row)));
+    }
+    chunk = chunk.filter((row) => matchesHousingKind(row, kind));
+    chunk = chunk.filter((row) => matchesListingSources(row, sources));
+    return chunk;
+  });
   markStage("display_ms");
   const needFit = sort === "fit_desc";
   if (needFit) {
     const fitSettings = guestFitSettings(settings);
+    let visited = 0;
     for (const row of rows) {
+      if (++visited % 128 === 0) yield;
       row.fit_score = listingFitFields({
         ...row,
         commute_km: row.guest_commute_km ?? row.commute_km,
       }, fitSettings, { guest: true }).fit_score;
     }
   }
-  rows = sortListingsRows(rows, sort, { filter: "all", settings, now });
+  rows = yield* sortListingsSteps(rows, sort, { filter: "all", settings, now });
   markStage("sort_ms");
   return rows;
 }

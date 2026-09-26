@@ -128,7 +128,7 @@ export function createListingStatsRepository({
       context.appendDistrictCandidates(context.memberRegionDistrictNames(settings), clauses, params);
       context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-      const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params);
+      const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true});
       const rows = (raw || []).map(normalizeStatsCandidateRow);
       const flagMap = await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);

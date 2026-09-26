@@ -1,11 +1,11 @@
 import {
-  buildListRequestContextFromPg, buildPublicListingsClauses, buildPublicListingsRows,
+  buildListRequestContextFromPg, buildPublicListingsClauses, buildPublicListingsRowsAsync,
   decoratePublicListingsPage, GUEST_MAX_DISTRICTS, listingSearchBuildContext,
   listPublicListingsFast, preloadDecorationProviderAsync, publicSearchSettings,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
-import { withPgReadSnapshot } from "./pgReadSnapshot.js";
+import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { districtClosureIds } from "./listingSearchNodePg.js";
@@ -28,11 +28,11 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
         .map(x => String(x).trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
       const districtIds = await districtClosureIds(exec, { districtNames: districts, userId: 0 });
       const built = buildPublicListingsClauses({ districts, settings, q: args.q, context, districtIds }, { sqliteDb: null });
-      const raw = await exec(`SELECT ${listingSearchBuildContext().candidateColumns} FROM listings ${built.where} ORDER BY post_id`, built.params);
+      const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${listingSearchBuildContext().candidateColumns} FROM listings ${built.where} ORDER BY post_id`), built.params);
       const loader = createDecorationDataLoader({ exec, driver: "postgres" });
       const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings,
         userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
-      const rows = buildPublicListingsRows(raw, { settings, kind: args.kind, sources: args.sources,
+      const rows = await buildPublicListingsRowsAsync(raw, { settings, kind: args.kind, sources: args.sources,
         sort: args.sort, districtSet: built.districtSet, provider, now: context.now, requireProvider: true });
       const limit = Math.max(1, Math.min(Number(args.limit) || 40, 50));
       const start = Math.max(0, Number(args.offset) || 0);

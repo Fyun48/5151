@@ -4,7 +4,7 @@
 // ——在 PG 模式下那是另一個資料來源、內容可能落後，而且會讓「PG 失效就不回 SQLite」的保證形同虛設。
 //
 // 本模組讓那些查詢改走「候選、個人旗標、裝飾資料**全部來自 PG**」的 Node 管線，
-// 且後處理與 SQLite Node 路徑**共用同一份函式**（buildListListingsRows／paginate…／decorate…）。
+// 且後處理與 SQLite Node 路徑**共用同一份函式**（buildListListingsRowsAsync／paginate…／decorate…）。
 //
 // 不變式（依 astra6 §3）：
 //   1. 不得先 LIMIT 再過濾；`totalMatched` 必須由完整候選集合決定。
@@ -12,10 +12,10 @@
 //   3. PG 失敗一律往外拋，由呼叫端回 503 與既有穩定錯誤碼。
 import {
   buildListListingsClauses,
-  buildListListingsRows,
+  buildListListingsRowsAsync,
   buildListRequestContextFromPg,
   decorateListListingsPage,
-  paginateListListingsRows,
+  paginateListListingsRowsAsync,
   preloadDecorationProviderAsync,
   resolveListDistrictNames,
 } from "./db.js";
@@ -24,7 +24,7 @@ import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { listingRequestTime } from "./listingRequestTime.js";
-import { withPgReadSnapshot } from "./pgReadSnapshot.js";
+import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 
 export const NODE_PG_QUERY_VERSION = 2;
 
@@ -171,7 +171,7 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   // astra §5.5（B4）：明確候選順序。Node 後處理（同戶角色、配對）會依輸入列順序走訪，
   // 沒有 ORDER BY 時順序由 PG 掃描計畫決定 ⇒ 不可重現。以 post_id 排序固定輸入，
   // 使「同一份資料＋同一組 args＋同一個 asOf」得到同一個結果。
-  const raw = await exec(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`, built.params);
+  const raw = await readPgRows(pgDriver, toPostgresSql(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`), built.params);
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
   queryDetails.engine = "node_pg";
@@ -189,13 +189,13 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   ]);
   markStage("preload_ms");
 
-  const rows = buildListListingsRows(raw, {
+  const rows = await buildListListingsRowsAsync(raw, {
     filter, kind, sources, sort, uid, voteUid, settings,
     districtSet: built.districtSet, provider, flagMap, markStage,
     now: context.now, requireProvider: true,
   });
 
-  const paged = paginateListListingsRows(rows, { sort, filter, settings, limit: args.limit, offset: args.offset, now: context.now });
+  const paged = await paginateListListingsRowsAsync(rows, { sort, filter, settings, limit: args.limit, offset: args.offset, now: context.now });
   markStage("sort_ms");
   const fullRows = paged.page.length
     ? await exec(`SELECT * FROM listings WHERE post_id IN (${paged.page.map(() => "?").join(", ")})`, paged.pageIds)

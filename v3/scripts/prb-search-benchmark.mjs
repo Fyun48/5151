@@ -55,7 +55,7 @@ try {
         searchKeys:[KEY],districts:scope==='single'?[DISTRICTS[0]]:[],settings,asOf:AS_OF};
       const samples=[],queries=[],transactions=[],errors=[];
       let baseline=null,rss=0,heap=0;
-      const stageSamples={},coldQueries=[];
+      const stageSamples={},coldQueries=[],planInputs=[],coldPlans=[];
       let captureCold=true;
       async function request(measure=false) {
         let count=0,tx=0;
@@ -65,7 +65,13 @@ try {
             if(/^\s*(BEGIN|COMMIT|ROLLBACK|SET)\b/i.test(sql)) tx++; else count++;
             const queryStart=performance.now();
             const result=await client.query(sql,params);
-            if(captureCold) coldQueries.push({sql:sql.replace(/\s+/g,' ').slice(0,150),ms:performance.now()-queryStart,rows:result.rowCount});
+            if(captureCold) {
+              const normalized=sql.replace(/\s+/g,' ').slice(0,150);
+              const prior=coldQueries.at(-1);
+              if(prior?.sql===normalized) {prior.calls++;prior.ms+=performance.now()-queryStart;prior.rows+=result.rowCount||0;}
+              else coldQueries.push({sql:normalized,calls:1,ms:performance.now()-queryStart,rows:result.rowCount});
+              if(/^DECLARE .* FOR SELECT post_id, source,/.test(sql)) planInputs.push({sql:sql.replace(/^DECLARE .*? FOR /,''),params});
+            }
             return result;
           }};
         }}};
@@ -92,6 +98,11 @@ try {
       const {attempts}=await withoutSqliteIO(db,async()=>{
         const coldStart=performance.now();await request();
         const coldMs=performance.now()-coldStart;captureCold=false;
+        // Diagnose PG versus Node cost outside all timed request windows.
+        for(const query of planInputs) {
+          const explained=await driver.query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) '+query.sql,query.params);
+          coldPlans.push(explained.rows[0]['QUERY PLAN'][0]);
+        }
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));
         const lag=monitorEventLoopDelay({resolution:10});lag.enable();await pause(20);
         const timer=setInterval(()=>{const m=process.memoryUsage();rss=Math.max(rss,m.rss);heap=Math.max(heap,m.heapUsed);},10);
@@ -100,7 +111,7 @@ try {
           await Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);}));
           await pause(20);
         } finally {clearInterval(timer);lag.disable();}
-        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,
+        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,coldPlans,
           stageP95Ms:Object.fromEntries(Object.entries(stageSamples).map(([key,values])=>[key,percentile(values,.95)])),
           p50Ms:percentile(samples,.5),p95Ms:percentile(samples,.95),maxMs:Math.max(...samples),
           lagP99Ms:lag.percentile(99)/1e6,lagMaxMs:lag.max/1e6,rssPeakBytes:rss,heapPeakBytes:heap,

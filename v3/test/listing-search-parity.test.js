@@ -204,7 +204,7 @@ test('live PG: complete page and counters use one snapshot; next request sees co
       const client=await driver.pool.connect();
       return {release:(...a)=>client.release(...a),query:async(sql,params)=>{
         statements.push(sql);
-        if(!changed && /^SELECT post_id, source/i.test(sql)) {
+        if(!changed && /\bSELECT post_id, source/i.test(sql)) {
           changed=true;
           await driver.query(`INSERT INTO listings(post_id,source,source_key,search_key,title,url,price,price_num,first_seen_at,last_seen_at,offline,floor_name,area_name)
             SELECT $1,source,source_key,search_key,'New arrival','https://example.test/new',price,price_num,first_seen_at,last_seen_at,offline,floor_name,area_name FROM listings WHERE post_id=$2`,[BASE+20,BASE+1]);
@@ -214,6 +214,7 @@ test('live PG: complete page and counters use one snapshot; next request sees co
     }}};
     const {result:page,attempts}=await withoutSqliteIO(db,()=>loadListingPage(args(),{driver:'postgres',pgDriver:tracked}));
     assert.deepEqual(attempts,[]);
+    assert.equal(changed,true,'external write ran during the candidate read');
     assert.equal(connects,1);
     assert.equal(statements.filter(sql=>/^BEGIN/.test(sql)).length,1);
     assert.equal(statements.filter(sql=>/^ROLLBACK/.test(sql)).length,1);
@@ -254,5 +255,48 @@ test('live PG: anonymous search preserves guest filters and never reads private 
     const {result,attempts}=await withoutSqliteIO(db,()=>searchPublicListingsAsync({q:'PG-only-visible',asOf:AS_OF},{driver:'postgres',pgDriver:driver}));
     assert.deepEqual(attempts,[]);
     assert.deepEqual(ids(result),[1]);
+  });
+});
+
+
+test('cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries', async () => {
+  const template = db.prepare('SELECT * FROM listings ORDER BY post_id LIMIT 1').get();
+  const raw = Array.from({length:1057},(_,i)=>({...template,post_id:BASE+i+1,
+    price_num:i%13?10000+i%99:null, source_id:String(BASE+i+1),
+    match_post_id:i===255?BASE+257:0,match_level:i===255?'high':'',
+    first_seen_at:new Date(Date.parse(AS_OF)-i*60000).toISOString()}));
+  const provider=app.preloadedDecorationProvider({now:Date.parse(AS_OF)});
+  const options={filter:'all',kind:'',sources:'',sort:'newest',uid:101,voteUid:202,
+    settings:SETTINGS,districtSet:new Set(),provider,flagMap:new Map(),requireProvider:true,now:Date.parse(AS_OF)};
+  const reference=app.buildListListingsRows(structuredClone(raw),options);
+  const {result,attempts}=await withoutSqliteIO(db,async()=>{
+    const rows=await app.buildListListingsRowsAsync(structuredClone(raw),options);
+    assert.deepEqual(rows,reference);
+    for(const sort of ['newest','price_asc','price_desc','commute_asc','commute_desc','fit_desc']) {
+      const expected=app.paginateListListingsRows(reference,{...options,sort,offset:250,limit:500});
+      assert.deepEqual(await app.paginateListListingsRowsAsync(rows,{...options,sort,offset:250,limit:500}),expected);
+    }
+    const statsInput={rows:structuredClone(raw),flagMap:new Map(),userId:101,settings:SETTINGS,provider};
+    const profile=await app.buildListingStatsRowsAsync(statsInput);
+    assert.deepEqual(profile,app.buildListingStatsRows({...statsInput,rows:structuredClone(raw)}));
+    const counters={profileRows:profile,settings:SETTINGS,provider,watchedTotal:19,
+      statusCounts:{pending:7,confirmed:11},dbTotal:120000,failedRouteJobs:new Set()};
+    assert.deepEqual(await app.summarizeListingStatsAsync(counters),app.summarizeListingStats(counters));
+    return rows;
+  });
+  assert.deepEqual(attempts,[]);
+  assert.equal(result.length,1056,'a pair straddling chunk 256 still has one primary');
+});
+
+test('live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure', {skip}, async()=>{
+  const {withPgReadSnapshot,readPgRows}=await import('../src/pgReadSnapshot.js');
+  await withPgFixture(db,async driver=>{
+    const rows=await withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,
+      'SELECT i FROM generate_series(1,1059) i WHERE i > $1 ORDER BY i',[2]));
+    assert.deepEqual(rows.map(r=>r.i),Array.from({length:1057},(_,i)=>i+3));
+    await assert.rejects(withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,'SELECT * FROM missing_required_table')),
+      e=>e.code==='42P01');
+    const next=await withPgReadSnapshot(driver,snapshot=>readPgRows(snapshot,'SELECT 42 AS n'));
+    assert.deepEqual(next,[{n:42}]);
   });
 });

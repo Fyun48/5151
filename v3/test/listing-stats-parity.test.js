@@ -255,8 +255,8 @@ test("listingStatsAsync keeps the SQLite counters on the sqlite driver", async (
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(server, /const page = await loadListingPage\(args\);/);
   const facade = readFileSync(path.join(dir, "../src/listingStatsAsync.js"), "utf8");
-  assert.match(facade, /buildListingStatsRows\(\{/);
-  assert.match(facade, /summarizeListingStats\(\{/);
+  assert.match(facade, /await buildListingStatsRowsAsync\(\{/);
+  assert.match(facade, /await summarizeListingStatsAsync\(\{/);
   assert.match(facade, /return stats\(searchKeys, userId, settings, diagnostics\);/);
   assert.throws(
     () => createListingStatsRepository({ deps: {}, exec: async () => {} }),

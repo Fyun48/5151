@@ -1,11 +1,11 @@
 // PostgreSQL counters use PG settings and a read snapshot. Missing dependencies
 // fail with SEARCH_UNAVAILABLE; SQLite is only used in explicit SQLite mode.
 import {
-  buildListingStatsRows,
+  buildListingStatsRowsAsync,
   listingStatsBuildContext,
   preloadedDecorationProvider,
   stats,
-  summarizeListingStats,
+  summarizeListingStatsAsync,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -17,7 +17,7 @@ import { makeRouteKey } from "./route.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
-import { withPgReadSnapshot } from "./pgReadSnapshot.js";
+import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
 
 // Counters consume personal flags and routes. They do not decorate cards or
@@ -49,20 +49,22 @@ export async function listingStatsAsync(
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     return await withPgReadSnapshot(pgDriver, async snapshotDriver => {
       const exec = options.exec
-        || ((sql, params = []) => snapshotDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
+        || ((sql, params = [], { batch = false } = {}) => batch
+          ? readPgRows(snapshotDriver, toPostgresSql(sql), params)
+          : snapshotDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
       const deps = options.deps || listingStatsBuildContext();
       const repository = options.repository
         || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
       const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics, asOf, requestContext: options.requestContext });
       const provider = options.decorationProvider || await statsProvider(exec, inputs);
-      const profileRows = buildListingStatsRows({
+      const profileRows = await buildListingStatsRowsAsync({
         rows: inputs.rows,
         flagMap: provider.personalFlags(),
         userId: inputs.uid,
         settings: inputs.settings,
         provider,
       });
-      return summarizeListingStats({
+      return await summarizeListingStatsAsync({
         profileRows,
         settings: inputs.settings,
         statusCounts: inputs.statusCounts,

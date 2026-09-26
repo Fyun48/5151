@@ -38,6 +38,19 @@ PR [#497](https://github.com/Fyun48/5151/pull/497) 保持未合併、未部署�
 - `v3/test/listing-search-http.test.js`：使用正式 page loader 與錯誤回應 helper 的 HTTP 整合；不是完整 production/auth E2E。
 - lint：NOT_RUN。正式資料雙節點 HTTP E2E：NOT_RUN。
 
+## 第三批真實結果與目前修正
+
+`3a716ec30621107f60b60720caa05c957036fb3a`：Tests run `36220337010` 全部完成。
+一般 2,627 tests / 2,594 pass / 0 fail / 33 skip；PG 127 tests / 126 pass / 0 fail / 1 optional shadow skip。
+固定 120k fixture：單區 C1 p95 1,703.15ms、C4 4,668.29ms；全區 C1 1,750.99ms、C4 5,638.95ms。
+C1 CI smoke 通過，但 lag p99 168–404ms、max 242–814ms 均未達標；RSS 最高 2,583,490,560 bytes。
+原始 Actions artifact：`evidence/prb-codex-20260926/after-3a716ec.json`。不能因 CI 綠燈宣稱完整效能驗收通過。
+
+本批針對量到的主執行緒阻塞：候選／統計用同快照 cursor 每批 512 列完整讀取；
+共享 Node pipeline 加入可協作排程，保留全域配對及穩定排序；extras 僅保留實際關係 partner 的原值。
+新增跨 256 列邊界的角色、各排序及 counters parity、cursor 多批／參數／錯誤清理测试。
+每個 FETCH 都計入實際查詢數，不將批次傳輸冒充單一 SQL。必須等本批真 PG 與規模測量後決定是否保留。
+
 ## 效能驗收
 
 `v3/scripts/prb-search-benchmark.mjs` 在自行建立的 PG schema 執行並自行清除。
