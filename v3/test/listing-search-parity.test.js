@@ -91,7 +91,7 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
   const AS_OF = "2026-09-26T00:00:00.000Z";
   // ✗ 裁決 §3（有效案例）：三列 ＋ `limit: 20` ⇒ 第二頁**必為空** ⇒ 分頁永遠「通過」✗
   //   ⇒ 改 `limit: 2` ✓（第二頁必須有 1 列 ✓）。
-  const args = { ...ARGS, limit: 2, settings: { searchUrls: [URL_591] }, asOf: AS_OF };
+  const args = { ...ARGS, limit: 2, settings: { searchUrls: [URL_591] }, asOf: AS_OF, context: { asOf: AS_OF } };
 
   // ✗ 裁決 §3（schema 順序）：**先備妥所有必要 schema，再 seed** ✓
   //（原本先 INSERT settings、後 ensure settings ⇒ **錯序** ✗ ⇒ CI 拋棄式 PG 沒有 `settings` 表 ✓）。

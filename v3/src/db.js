@@ -6845,6 +6845,10 @@ export function listListings({
   matchVoteUserId,
   settings: settingsOverride,
   sameHouse = true,
+  // B4：呼叫端可傳 `context`（最小 `{ asOf }` 即可 ✓）⇒ 相對時間／時間相關條件與 PG 同一時間戳 ✓。
+  // 已確認安全 ✓：`searchWhere`（`db.js:4238`）只在 `context.searchKeys` 有值時改變行為 ✓；
+  // `browseIsolationClause`（`db.js:4263`）缺 `context.isolation` 且 `sqliteDb` 有值時照常走 SQLite ✓（不拋錯 ✗）。
+  context = null,
 } = {}) {
   const queryDetails = {};
   let stageStarted = performance.now();
@@ -6858,7 +6862,7 @@ export function listListings({
   ({ filter, kind, sources } = normalizeListQuery(filter, kind, sources));
   const settings = settingsOverride || getSettings(uid);
   const { clauses, params, where, districtNames, districtSet, requestedDistricts } = buildListListingsClauses({
-    filter, kind, sources, q, searchKeys, districts, settings, uid, voteUid,
+    filter, kind, sources, q, searchKeys, districts, settings, uid, voteUid, context,
   });
   markStage("prepare_ms");
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where}`).all(...params);
