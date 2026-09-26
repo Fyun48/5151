@@ -1,0 +1,98 @@
+name: NAS readiness inventory (read-only)
+run-name: "NAS read-only inventory by ${{ github.actor }}"
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type INSPECT-NAS-READONLY; no deployment, migration, backup deletion or failover"
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: casa
+            hostname: ssh-casa.reversalplay.me
+            fingerprint: SHA256:UpwkuYsK0rsIDIBBn6JabtCmdSbHC9fxerq8VyEo42w
+          - role: syn
+            hostname: ssh-tori.reversalplay.me
+            fingerprint: SHA256:9UrrjQEOrqJmLJrbhjAuQZuW+MwcMALJi2I6pnkSnXo
+    steps:
+      - name: Authorize manual inventory
+        env:
+          ALLOWED_ACTOR: ${{ vars.PRODUCTION_DEPLOY_ALLOWED_ACTOR }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = Fyun48/5151
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/master
+          test -n "$ALLOWED_ACTOR"
+          test "$CONFIRMATION" = INSPECT-NAS-READONLY
+          if [[ ( "$GITHUB_ACTOR" == cursor || "$GITHUB_ACTOR" == 'cursor[bot]' ) &&
+                ( "$GITHUB_TRIGGERING_ACTOR" == cursor || "$GITHUB_TRIGGERING_ACTOR" == 'cursor[bot]' ) ]]; then
+            exit 0
+          fi
+          test "$GITHUB_ACTOR" = "$ALLOWED_ACTOR"
+          test "$GITHUB_TRIGGERING_ACTOR" = "$ALLOWED_ACTOR"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify trusted script syntax
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n .github/scripts/nas-readiness-readonly.sh
+      # Do NOT provide ssh-user/key to the legacy bridge: its optional smoke
+      # test disables host verification. The authenticated check below pins it.
+      - name: Existing Cloudflare Access bridge
+        id: bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ${{ matrix.hostname }}
+          port: "2222"
+          cloudflared-url: https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-linux-amd64
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      - name: Verify host fingerprint then collect whitelisted observations
+        env:
+          NAS_ROLE: ${{ matrix.role }}
+          NAS_HOST: ${{ steps.bridge.outputs.host }}
+          NAS_PORT: ${{ steps.bridge.outputs.port }}
+          NAS_FINGERPRINT: ${{ matrix.fingerprint }}
+          NAS_USER: ${{ matrix.role == 'casa' && secrets.NAS_USER || secrets.V3_SYNOLOGY_USER }}
+          NAS_KEY: ${{ matrix.role == 'casa' && secrets.NAS_SSH_KEY || secrets.V3_SYNOLOGY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          inventory_tmp="$(mktemp -d)"
+          trap 'rm -rf "$inventory_tmp"' EXIT
+          test -n "$NAS_USER"
+          test -n "$NAS_KEY"
+          printf '%s\n' "$NAS_KEY" > "$inventory_tmp/key"
+          ssh-keyscan -T 15 -t ed25519 -p "$NAS_PORT" "$NAS_HOST" > "$inventory_tmp/known_hosts" 2>/dev/null
+          test "$(ssh-keygen -lf "$inventory_tmp/known_hosts" -E sha256 | awk '{print $2}')" = "$NAS_FINGERPRINT"
+          mkdir -p evidence
+          printf 'workflow_sha=%s run_id=%s role=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$NAS_ROLE" > "evidence/$NAS_ROLE.txt"
+          timeout --kill-after=5s 120s ssh -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$inventory_tmp/known_hosts" \
+            -o HostKeyAlgorithms=ssh-ed25519 -p "$NAS_PORT" -i "$inventory_tmp/key" \
+            "$NAS_USER@$NAS_HOST" bash -s -- "$NAS_ROLE" \
+            < .github/scripts/nas-readiness-readonly.sh >> "evidence/$NAS_ROLE.txt"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: nas-readiness-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/*.txt
+          if-no-files-found: warn
+          retention-days: 14
