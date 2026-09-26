@@ -1,10 +1,47 @@
 # PR-B 可接續狀態
 
 更新：2026-09-26，第三批程式 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5` 已推送，精確 SHA CI checks 全部成功。
-**第三批 NAS_NOT_RUN，維持 NOT_READY。**
-**最近完成的 NAS 驗收：受測 SHA `ae88ce66df0a2271dcc0e14f5525db6b2cf93bc0`，結果 `NAS_ACCEPTANCE_FAIL`；
-但 lag 大幅改善，四案有三案達標。**
+**最近完成的 NAS 驗收：受測 SHA `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5`，結果 `NAS_ACCEPTANCE_FAIL`；
+全區 C4 延遲首次達標、lag 兩案達標，另兩案只差 0.07 與 1.65 ms。**
 PR [#497](https://github.com/Fyun48/5151/pull/497) 保持 open、非草稿、未合併、未部署。維持 NOT_READY_FOR_REVIEW／NOT_READY_FOR_MERGE。
+
+## 第三批修正的 NAS 實測（受測 SHA 6703302）
+
+由 DeepSeek Harness 依交接通知在 CasaOS N3450 執行，**未改測文件 HEAD `b22c13c`**。
+暖機 5 輪、四案各 50 次；真 PG 149 tests／148 pass／0 fail／1 skip；`sqliteAttempts = 0`；runner exit = 1。
+`sourceSha`／`checkoutSha` 皆為該 SHA，14 個 module hash 全部相符。
+
+| 案例 | p95 ms | 目標 ms | 延遲結果 | lag p99／max ms | lag 門檻 | peak RSS／heap MiB | errors／timeouts |
+|---|---:|---:|---|---|---:|---:|---|
+| 單區 C1 | 1337.70 | 1000 | FAIL | 22.72／54.56 | **PASS** | 419.6／325.3 | 0／0 |
+| 單區 C4 | 3029.58 | 2000 | FAIL | 32.19／**100.07** | FAIL | 663.5／562.5 | 0／0 |
+| 全區 C1 | 1326.39 | 2000 | PASS | 26.56／46.99 | **PASS** | 662.1／376.0 | 0／0 |
+| 全區 C4 | 3529.45 | 4000 | **PASS** | 41.29／**101.65** | FAIL | 781.6／614.7 | 0／0 |
+
+- **全區 C4 首次進入 4000 ms 門檻**（餘裕 11.8%）。p95 對 `ae88ce6` 再降 6.5%／8.8%／8.4%／12.5%，
+  對最初 `848aa7e` 已降 71.1%／78.1%／71.8%／75.1%。
+- 單區 C4 lag max 超出 **0.07 ms**、全區 C4 超出 **1.65 ms**；四案 p99 全部在 50 ms 內。
+- **workTimeline 重疊分析**：單區 C4 的 100.0 ms gap 中 `gc.pause` 覆蓋 60.6 ms（61%）、
+  全區 C4 的 101.5 ms 中覆蓋 47.5 ms（47%）；單區 C1 與全區 C1 的最大 gap **沒有任何已插樁 span 重疊**。
+  沒有 `pg.fetch.wall`／`yieldWait` 與該視窗重疊，所以其餘 39%～53% 仍未被解釋，
+  PG parser／JSON 序列化／其他 I/O callback 不在插樁範圍內。不把不同事件最大值相加當因果。
+- **processCpu**：C4 兩案 CPU／wall 僅 1.08～1.09，平均只用約 1 顆核心，4 核未吃滿 → 併發瓶頸偏等待與排程。
+- **idleRoundTripMs**（空閒 SELECT 1，10 次）：p50 1.484／1.561／1.501／1.200 ms，CI 為 0.146 ms → NAS 的
+  PG 往返慢約一個數量級，是固定成本基準。
+- **PG 資源取樣**（12:36–12:54Z，含卡住時段；1442 筆可用）：`CPUPerc` p50 52.5%、p95 128%、max 162%；
+  `MemUsage` 22.1→166.5 MiB。粗粒度，無每筆 server execution time，不能單憑它判定 FETCH 慢的原因。
+- 證據：`evidence/prb-nas-6703302/`。
+
+### ⚠️ runner 瑕疵：EXIT cleanup 卡死本輪（新發現，必須修）
+
+量測 12:42Z 完成後，PG 容器到 12:53Z 仍存活、取樣檔持續成長、`runner-exit.txt` 未產生。原因：
+`cleanup()` 的 `kill "$metrics_pid"; wait "$metrics_pid"` 中，背景 `docker stats` **不接受 SIGTERM**。
+實測 runner `wchan=do_wait`、唯一子程序是 `docker stats`（存活 17 分鐘），補送 SIGTERM 後 8 秒仍存活。
+先寫下 `runner-cleanup-hang.txt` 診斷，再以 SIGKILL 解除；之後 cleanup 正常完成
+（exit=1、三項標籤查詢 0 筆、worktree 移除、正式容器未動）。**這是 runner 缺陷，不是量測失敗。**
+
+附帶瑕疵：`postgres-resource-stats.jsonl` 每次刷新帶 ANSI `\x1b[H`，不是可直接解析的 JSON Lines。
+建議下一版改用 `docker stats --no-stream` 迴圈，或在 cleanup 以 `kill -9`／`timeout` 包住取樣器。
 
 ## 第三批：降低中間配置與可對時的診斷（6703302）
 
@@ -38,7 +75,11 @@ CI p95：294.22／767.91／301.05／778.20 ms；lag p99：17.24／19.97／17.55�
 PG parser、其他 I/O callback、JSON serialization 等不全在 generator 的插樁範圍；不能排除未量到的長同步段。
 新增時間線用於確認是否重疊，仍不把重疊直接等同因果；舊 NAS raw JSON／logs／README 保留不改。
 
-### DeepSeek 下一輪指定 NAS
+### DeepSeek 下一輪指定 NAS — 已執行
+
+**已於 2026-09-26 由 DeepSeek Harness 執行完畢，結果見本檔第一節。**
+受測 SHA 就是指定的 `6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5`，未改測文件 HEAD `b22c13c`；
+證據目錄 `evidence/prb-nas-6703302/`。以下保留原始指令備查。
 
 精確 SHA CI 已全綠，請原 CasaOS N3450 透過既有 SSH 執行 **6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5**。
 不要自動改測後續文件 HEAD。指定 SHA 的 runner 用 `bash` 呼叫；後續文件提交會恢復 runner 的 executable bit，內容不變。

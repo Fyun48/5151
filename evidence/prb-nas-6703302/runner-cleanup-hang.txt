@@ -1,0 +1,16 @@
+runner cleanup hang diagnosis (recorded 2026-09-26T12:53:50Z)
+runner pid=1571328 state=S wchan=do_wait
+only child=1572053 docker stats --format {{json .}} prb-verify-prb-nas-ehgn1lef-pg (alive since 12:36Z)
+worktree /tmp/prb-nas.Ehgn1lEF/checkout still present -> cleanup blocked before resource removal
+cleanup() runs: kill $metrics_pid; wait $metrics_pid   (EXIT trap)
+conclusion: SIGTERM to docker stats did not terminate it, so wait never returns
+--- ps snapshot ---
+1571327 1571325       17:32 Ss   bash -c    bash v3/scripts/prb-nas-verify.sh \     6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5 \     /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302 \     > /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302/runner.log 2>&1   prb_run_exit=$?   echo "$prb_run_exit" > /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302/runner-exit.txt   exit "$prb_run_exit" 
+1571328 1571327       17:32 S    bash v3/scripts/prb-nas-verify.sh 6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5 /mnt/Storage1/prb-acceptance/evidence/prb-nas-6703302
+1572053 1571328       17:11 Sl   docker stats --format {{json .}} prb-verify-prb-nas-ehgn1lef-pg
+--- sampler /proc status ---
+State:	S (sleeping)
+SigBlk:	fffffffc3bba3a00
+SigIgn:	0000000000000001
+SigCgt:	fffffffd7fc1fefe
+confirmation: explicit SIGTERM to sampler at 2026-09-26T12:54:06Z did not terminate it after 8s; SIGKILL used to unblock the EXIT trap.
