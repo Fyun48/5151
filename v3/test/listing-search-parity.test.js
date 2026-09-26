@@ -189,6 +189,9 @@ test("live PG：列表搜尋雙向 parity（SQLite vs PG）", { skip: SKIP }, as
 
   try {
     const viaPg = await searchListingsAsync({ ...args }, { driver: "postgres", pgDriver });
+    // ✗ B4 決定性 ✓：呼叫端固定的 `asOf` 必須**貫穿**到 PG 的 `queryDetails.asOf` ✓
+    //（先前 CI 實證為 wall clock ✗ ⇒ `args.asOf` 被忽略 ✗；現在必須相等 ✓）。
+    assert.equal(viaPg?.queryDetails?.asOf, AS_OF, "呼叫端固定的 asOf 必須貫穿到 PG queryDetails");
     // ✗ 裁決 §4（核心語意 parity）：SQLite **Node 參考** `listListings` ✓ 對 PG **正式入口** ✓
     //（PG 端不覆寫 deps／candidateColumns／decorator ✓、不繞過正式 context 與單一快照 ✓）。
     const viaSqlite = app.listListings({ ...args });

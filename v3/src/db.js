@@ -4114,7 +4114,7 @@ function safeExecFactory(exec, degraded) {
  *   • searchKeys：與 currentSearchKeys() 同一語意（每使用者 searchUrls ＋ 全域 searchUrls ＋ crawl_covers 的 searchUrl），
  *     再以同一支 expandSearchKeysAgainst()（stored = PG `SELECT DISTINCT search_key FROM listings`）展開 ⇒ 零語意漂移。
  */
-export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "" } = {}) {
+export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = new Date().toISOString() } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const degraded = [];
   const safe = safeExecFactory(exec, degraded);
@@ -4151,7 +4151,8 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
     degraded,
     // astra §5.5（B4）：**固定 asOf**。`REPEATABLE READ` 只固定資料快照，不固定 JS 的「現在時間」✗；
     // 整個請求共用同一個時間戳 ⇒ 開啟中物件（expiry）等時間相關條件在同一請求內一致、可重現。
-    asOf: new Date().toISOString(),
+    // 呼叫端可傳 `asOf` 覆寫（決定性測試／重現用 ✓）；未傳才取 `new Date()`。
+    asOf,
   };
 }
 
