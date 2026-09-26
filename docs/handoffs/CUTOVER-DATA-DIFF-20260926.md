@@ -91,8 +91,13 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 
 ## 五、95 列內容衝突的處置（第三節第 5 點）
 
-對每一列衝突都取出兩邊的實際值再分類（不是只看筆數）。結果：**79 筆可用既定規則處理
-（其中真正需要寫入 PG 的只有 3 筆）、16 筆需要 Owner 決定**。
+對每一列衝突都取出兩邊的實際值再分類（不是只看筆數），並做成可重跑的腳本
+`v3/scripts/cutover-conflicts.mjs`（回歸 `v3/test/cutover-conflicts.test.js` 6 案）。
+最終分佈：**4 筆會寫入 PG、76 筆依規則保留 PG（不需要人決定）、15 筆需要 Owner 決定**，合計 95。
+
+腳本輸出的 `conflicts.sql` 只有 4 句 UPDATE、零 INSERT／DELETE／DDL，群組那句還帶
+`AND confirmation_level = 'suspected'` 護欄（只升不降）。SHA256 `5e6199c1…`，
+與 `conflicts-report.json`（`458250eb…`）一併留在 NAS 的 cutover 目錄。
 
 ### 可用規則處理（79 筆，尚未套用）
 
@@ -100,27 +105,27 @@ flags 38、settings 1），**零** UPDATE／DELETE／DDL。SHA256 `7579f128b4beb
 
 | 表／鍵 | 筆數 | 實質差異 | 處置 |
 |---|---:|---|---|
-| `listing_groups` | 73 | **`confirmation_level` 只有 1 筆真的不同**（PG `suspected` → SQLite `auto_confirmed`，是「確認程度提高」，符合既有優先序）；另外 72 筆只差 `primary_post_id`（代表物件）與 `updated_at` | 只把那 1 筆的 confirmation_level 升為 `auto_confirmed`；其餘 72 筆**不覆寫**——`primary_post_id`／`updated_at` 是 watcher 每輪會重算的衍生欄位，而程式修好後 watcher 已經寫 PG。沒有任何一筆 PG 是 `admin_confirmed`，所以不存在降級人工確認的風險。 |
+| `listing_groups` | 73 | **`confirmation_level` 只有 1 筆真的不同**（PG `suspected` → SQLite `auto_confirmed`，是「確認程度提高」，符合既有優先序）；另外 72 筆只差 `primary_post_id`（代表物件）與 `updated_at` | 只把那 1 筆升為 `auto_confirmed`（UPDATE 帶 `AND confirmation_level='suspected'` 護欄）；其餘 72 筆**不覆寫**——`primary_post_id`／`updated_at` 是 watcher 每輪會重算的衍生欄位，而程式修好後 watcher 已經寫 PG。沒有任何一筆 PG 是 `admin_confirmed`，不存在降級人工確認的風險。 |
 | `settings`：`siteCatalogStats` | 1 | SQLite（09-24）比 PG（09-19）新 | 取 SQLite 的值 |
-| `user_listing_flags`：1 筆 | 1 | SQLite 的 `viewed_at` 較新 | 取 SQLite 的值 |
+| `user_listing_flags` | 2 | SQLite 的時間戳較新 | 取 SQLite 的值（其餘 7 筆見下方 Owner 清單） |
 | `settings`：`lastCoveringAt`／`lastSystemCoveringAt`、`user_settings`：`memberFetchDueAt`×2 | 4 | **PG 較新** | 不動作（PG 保留） |
 
 `siteCatalogStats` 這一筆同時證明了**「PG 永遠較新」不是可靠假設**，所以是一列一列比對後才下規則。
 
-### 需要 Owner 決定（16 筆）
+### 需要 Owner 決定（15 筆）
 
 | 表 | 筆數 | 為什麼不能自動決定 |
 |---|---:|---|
-| `user_listing_flags` | 8 | **兩邊時間戳完全相同、但狀態不同**（例：`watched_at` 一樣，一邊 `watched=1`、另一邊 `watched=0`）。`stampFlags` 在「關閉關注」時不會清掉 `watched_at`，所以時間戳無法判斷哪一邊是最後動作。這是會員的收藏／隱藏狀態，不能亂選。 |
+| `user_listing_flags` | 7 | **兩邊時間戳完全相同、但狀態不同**（例：`watched_at` 一樣，一邊 `watched=1`、另一邊 `watched=0`）。`stampFlags` 在「關閉關注」時不會清掉 `watched_at`，所以時間戳無法判斷哪一邊是最後動作。這是會員的收藏／隱藏狀態，不能亂選。 |
 | `settings` | 3 | `housingData`／`sponsorLinks`／`rentalCatalogDraft` 是站台內容與設定（沒有可靠的更新時間），兩邊文字不同。 |
 | `user_settings` | 3 | `notifyMatrix`（通知矩陣）／`memberSmtp`／`settingProfiles`（搜尋設定檔），同樣沒有可靠時間戳。 |
 | `listing_group_members` | 2 | 同兩筆房源在 PG 屬於群組 `lg_b9cf4f…`、在三份 SQLite 都屬於 `lg_2b2746…`（兩個群組在 PG 都各只有這 2 名成員）。 |
 
 **建議給 Owner 的選項**（每一類都是二選一，不需要逐筆決定）：
 
-1. `user_listing_flags` 8 筆 → (a) 保留 PG（現行站上讀到的狀態）；(b) 取 SQLite（節點上最後的使用者動作）；
-   (c) 逐筆列出兩邊狀態再決定。**建議 (c)**：這 8 筆的 `watched`／`hidden` 兩邊不同、時間戳又相同，
-   其中 5 筆是「PG 說有關注、SQLite 說已取消」——這是會員自己的操作紀錄，建議看過兩邊狀態再定，
+1. `user_listing_flags` 7 筆 → (a) 保留 PG（現行站上讀到的狀態）；(b) 取 SQLite（節點上最後的使用者動作）；
+   (c) 逐筆列出兩邊狀態再決定。**建議 (c)**：這 7 筆的 `watched`／`hidden` 兩邊不同、時間戳又相同，
+   其中多筆是「PG 說有關注、SQLite 說已取消」——這是會員自己的操作紀錄，建議看過兩邊狀態再定，
    不要用規則猜。
 2. `settings` 3 筆與 `user_settings` 3 筆 → (a) 全部保留 PG；(b) 全部取 SQLite；(c) 逐筆比對文字差異後決定。
    **建議 (c)**：這 6 筆是站台內容與會員通知設定，內容差異可能是有意的編輯，逐筆看文字再決定成本很低。
