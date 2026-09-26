@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {monitorEventLoopDelay,performance} from 'node:perf_hooks';
 const dir=mkdtempSync(path.join(os.tmpdir(),'prb-perf-'));
 process.env.DATA_DIR=dir;
+process.env.DB_DRIVER='postgres';
 const {sqliteHandle}=await import('../src/db.js');
 const {loadListingPage}=await import('../src/listingSearchPage.js');
 const {withPgFixture,withoutSqliteIO,seedBase,AS_OF,KEY,SETTINGS,DISTRICTS,BASE}=await import('../test/fixtures/prb-search.mjs');
@@ -54,18 +55,26 @@ try {
         searchKeys:[KEY],districts:scope==='single'?[DISTRICTS[0]]:[],settings,asOf:AS_OF};
       const samples=[],queries=[],transactions=[],errors=[];
       let baseline=null,rss=0,heap=0;
+      const stageSamples={},coldQueries=[];
+      let captureCold=true;
       async function request(measure=false) {
         let count=0,tx=0;
         const counted={query:()=>{throw new Error('outside snapshot');},pool:{connect:async()=>{
           const client=await driver.pool.connect();
-          return {release:(...a)=>client.release(...a),query:(sql,params)=>{
+          return {release:(...a)=>client.release(...a),query:async(sql,params)=>{
             if(/^\s*(BEGIN|COMMIT|ROLLBACK|SET)\b/i.test(sql)) tx++; else count++;
-            return client.query(sql,params);
+            const queryStart=performance.now();
+            const result=await client.query(sql,params);
+            if(captureCold) coldQueries.push({sql:sql.replace(/\s+/g,' ').slice(0,150),ms:performance.now()-queryStart,rows:result.rowCount});
+            return result;
           }};
         }}};
         const start=performance.now();
         try {
           const page=await loadListingPage(input,{driver:'postgres',pgDriver:counted});
+          if(measure) for(const [key,value] of Object.entries({...page.timing.stages,stats_ms:page.timing.stats_ms})) {
+            if(typeof value==='number' && key.endsWith('_ms')) (stageSamples[key] ||= []).push(value);
+          }
           const serialized=JSON.stringify(page); // Include response serialization.
           if(!page.listings.length || !(page.stats.matched>0)) throw new Error('empty benchmark fixture');
           const result=JSON.stringify({ids:page.listings.map(r=>r.post_id),matched:page.stats.matched,stats:page.stats});
@@ -82,7 +91,7 @@ try {
       }
       const {attempts}=await withoutSqliteIO(db,async()=>{
         const coldStart=performance.now();await request();
-        const coldMs=performance.now()-coldStart;
+        const coldMs=performance.now()-coldStart;captureCold=false;
         for(let i=0;i<warms;i++) await Promise.all(Array.from({length:concurrency},()=>request()));
         const lag=monitorEventLoopDelay({resolution:10});lag.enable();await pause(20);
         const timer=setInterval(()=>{const m=process.memoryUsage();rss=Math.max(rss,m.rss);heap=Math.max(heap,m.heapUsed);},10);
@@ -91,7 +100,8 @@ try {
           await Promise.all(Array.from({length:concurrency},async()=>{while(next++<runs) await request(true);}));
           await pause(20);
         } finally {clearInterval(timer);lag.disable();}
-        const result={scope,concurrency,requests:samples.length,coldMs,
+        const result={scope,concurrency,requests:samples.length,coldMs,coldQueries,
+          stageP95Ms:Object.fromEntries(Object.entries(stageSamples).map(([key,values])=>[key,percentile(values,.95)])),
           p50Ms:percentile(samples,.5),p95Ms:percentile(samples,.95),maxMs:Math.max(...samples),
           lagP99Ms:lag.percentile(99)/1e6,lagMaxMs:lag.max/1e6,rssPeakBytes:rss,heapPeakBytes:heap,
           queryCount:{min:Math.min(...queries),p50:percentile(queries,.5),max:Math.max(...queries)},

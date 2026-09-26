@@ -236,6 +236,12 @@ export async function loadUserSplitPairSet(exec, userId) {
 // db.js attachSameHouseRoles(): same-house partners of the page that are NOT on the page.
 const EXTRAS_COLUMNS = `post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
        price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level`;
+const EXTRAS_KEYS = EXTRAS_COLUMNS.split(",").map(key => key.trim());
+
+export function listingExtrasSnapshot(rows) {
+  return new Map((rows || []).map(row => [Number(row.post_id),
+    Object.fromEntries(EXTRAS_KEYS.map(key => [key, row[key]]))]));
+}
 
 export async function loadListingExtras(exec, postIds, driver = "sqlite") {
   const map = new Map();

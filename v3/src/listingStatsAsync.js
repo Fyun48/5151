@@ -3,18 +3,40 @@
 import {
   buildListingStatsRows,
   listingStatsBuildContext,
-  preloadDecorationProviderAsync,
+  preloadedDecorationProvider,
   stats,
   summarizeListingStats,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingStatsRepository } from "./repository/listingStats.js";
+import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { isTrustedGeoSource } from "./location.js";
+import { hasWorkPoint } from "./geo.js";
+import { makeRouteKey } from "./route.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { withPgReadSnapshot } from "./pgReadSnapshot.js";
 import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
+
+// Counters consume personal flags and routes. They do not decorate cards or
+// compare house groups, so loading candidate extras/peers/MRT for them is wasteful.
+async function statsProvider(exec, inputs) {
+  const {settings, rows, requestContext} = inputs;
+  const keys = [];
+  if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) {
+    for (const row of rows) {
+      if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) continue;
+      keys.push(makeRouteKey(row.lat,row.lng,settings.workLat,settings.workLng,settings.commuteMode,"to_work"));
+      keys.push(makeRouteKey(settings.workLat,settings.workLng,row.lat,row.lng,settings.commuteMode,"from_work"));
+    }
+  }
+  const loader = createDecorationDataLoader({exec,driver:"postgres"});
+  return preloadedDecorationProvider({userId:inputs.uid,personalFlags:inputs.flagMap,
+    routeCache:await loader.routeCacheMap(keys),crawlSources:requestContext.crawlSources,
+    systemCrawl:requestContext.systemCrawl,now:requestContext.now});
+}
 
 export async function listingStatsAsync(
   { searchKeys, userId, settings, diagnostics, asOf = null } = {},
@@ -32,15 +54,7 @@ export async function listingStatsAsync(
       const repository = options.repository
         || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
       const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics, asOf, requestContext: options.requestContext });
-      const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
-        exec,
-        rows: inputs.rows,
-        settings: inputs.settings,
-        userId: inputs.uid,
-        matchVoteUserId: inputs.uid,
-        sameHouse: false,
-        requestContext: inputs.requestContext,
-      }));
+      const provider = options.decorationProvider || await statsProvider(exec, inputs);
       const profileRows = buildListingStatsRows({
         rows: inputs.rows,
         flagMap: provider.personalFlags(),

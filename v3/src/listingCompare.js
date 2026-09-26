@@ -234,7 +234,7 @@ export function compareHouseHeadline(listings = []) {
 }
 
 /** 最多 3 筆：只列有差異的欄，並給一句重點。 */
-export function compareHouseGroup(listings = []) {
+export function compareHouseGroup(listings = [], now = Date.now()) {
   const uniq = [];
   const seen = new Set();
   for (const row of displayableGroupMembers(listings)) {
@@ -244,7 +244,7 @@ export function compareHouseGroup(listings = []) {
     uniq.push(row);
   }
   if (uniq.length < 2) return null;
-  const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row), uniq[0]);
+  const primary = uniq.reduce((best, row) => preferPrimaryListing(best, row, now), uniq[0]);
   const others = uniq
     .filter((row) => Number(row.post_id) !== Number(primary.post_id))
     .sort((a, b) => listingCompareCost(b, { includeExtras: true }) - listingCompareCost(a, { includeExtras: true }));
@@ -380,7 +380,7 @@ export function sameHouseBundle(listing, peers = [], now = Date.now()) {
     hidden_count: collapsed.length,
     fold_label: collapsed.length ? `另有 ${collapsed.length} 筆同物件來源` : "",
     collapsed,
-    compare: compareHouseGroup([listing, ...others]),
+    compare: compareHouseGroup([listing, ...others], now),
     peers: others.map((row) => {
       const pub = publicSameHousePeer(row);
       return {

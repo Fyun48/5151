@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 const dataDir = mkdtempSync(path.join(os.tmpdir(), 'prb-parity-'));
 process.env.DATA_DIR = dataDir;
+// Match the production driver during live tests, including startup scheduling.
+if (process.env.PG_TEST_URL) process.env.DB_DRIVER = 'postgres';
 const app = await import('../src/db.js');
 const {searchListingsAsync} = await import('../src/listingSearchAsync.js');
 const {AS_OF, BASE, KEY, SETTINGS, DISTRICTS, args, seedBase, seedListing, withPgFixture, withoutSqliteIO} = await import('./fixtures/prb-search.mjs');
@@ -100,9 +102,11 @@ test('fixed request time changes the expected primary and card bundle independen
   const primary = at.listings.find(r=>r.post_id===BASE+4);
   assert.equal(primary.same_house_role,'primary');
   assert.equal(primary.same_house.primary_id,BASE+4);
+  assert.equal(primary.same_house.compare.ids[0],BASE+4);
   const before = app.listListings(args({limit:20,asOf:'2026-09-25T00:00:00.000Z'}));
   assert.deepEqual(ids(before),[1,5,2,3,6]);
   assert.equal(before.listings.find(r=>r.post_id===BASE+5).same_house.primary_id,BASE+5);
+  assert.equal(before.listings.find(r=>r.post_id===BASE+5).same_house.compare.ids[0],BASE+5);
 });
 const MATRIX = [
       ['baseline',{},[1,2,3,4,6]],
@@ -160,6 +164,19 @@ test('live PG: commute preloading never warms SQLite', {skip}, async () => {
       assert.deepEqual(ids(pg),[1]);
       assert.deepEqual(cards(pg),cards(ref));
     }
+  });
+});
+
+test('live PG: a partner removed by profile filters still determines the shared house primary', {skip}, async () => {
+  seedRelations();
+  db.prepare('UPDATE listings SET area_name=? WHERE post_id=?').run('100坪',BASE+4);
+  const input=args({limit:20,settings:{...SETTINGS,areaMax:20}});
+  const reference=app.listListings(input);
+  assert.deepEqual(ids(reference),[1,2,3,6]);
+  await withPgFixture(db,async driver=>{
+    const pg=await pgSearch(driver,input);
+    assert.deepEqual(ids(pg),ids(reference));
+    assert.deepEqual(cards(pg),cards(reference));
   });
 });
 test('live PG: missing required schema fails; existing empty tables return a normal empty result', {skip}, async () => {

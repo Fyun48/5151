@@ -126,7 +126,7 @@ export function createListingStatsRepository({
         params,
       );
       context.appendDistrictCandidates(context.memberRegionDistrictNames(settings), clauses, params);
-      context.appendPriceCeilingCandidates(settings, clauses, params);
+      context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params);
       const rows = (raw || []).map(normalizeStatsCandidateRow);
@@ -144,5 +144,4 @@ export function createListingStatsRepository({
     },
   };
 }
-
 

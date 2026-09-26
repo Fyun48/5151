@@ -43,7 +43,7 @@ import {
   personalGroupKeyFor,
   splitPersonalSameHouse,
 } from "./userSameHouse.js";
-import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
 import { createWritePath } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -564,7 +564,7 @@ export function refreshPublicListingsProjectionReady() {
   }
   return publicProjectionReady;
 }
-setTimeout(() => {
+if (resolveDbDriver() !== "postgres") setTimeout(() => {
   let idleSteps = 0;
   const step = () => {
     let progress = { added: 0 };
@@ -3249,9 +3249,11 @@ export async function preloadDecorationProviderAsync({
   }
   const prep = new Map();
   for (const [id, row] of await loader.prepMap([...prepIds])) if (row) prep.set(id, row);
-  const extras = new Map();
-  for (const [id, row] of await loader.extrasMap([...prepIds])) {
-    if (row && !onPage.has(id)) extras.set(id, row);
+  // Candidate rows already contain these fields. Preserve their raw values for
+  // partners removed by profile filtering, then fetch only IDs not in that set.
+  const extras = listingExtrasSnapshot(list);
+  for (const [id, row] of await loader.extrasMap([...prepIds].filter(id => !onPage.has(id)))) {
+    if (row) extras.set(id, row);
   }
 
   const routeKeys = [];
@@ -6672,7 +6674,7 @@ export function buildListListingsClauses({
     } else {
       appendDistrictCandidates(districtNames, clauses, params, { preserveRelationsFor: voteUid });
     }
-    appendPriceCeilingCandidates(settings, clauses, params);
+    appendPriceCeilingCandidates(settings, clauses, params, { driver: sqliteDb == null ? "postgres" : "sqlite" });
   } else {
     // astra6 §2.1：watched 原本直接 `applyBrowseIsolation(…, sqliteDb, …)` ⇒ 讀 SQLite
     // （`PRAGMA table_info(listings)`）。改走與 listingVisibilityClauses 同一條 context 路徑
@@ -7507,7 +7509,7 @@ export function buildPublicListingsClauses({ districts = [], settings, q = "", c
   } else {
     appendDistrictCandidates(requestedDistricts, clauses, params, { preserveRelationsFor: 0 });
   }
-  appendPriceCeilingCandidates(settings, clauses, params);
+  appendPriceCeilingCandidates(settings, clauses, params, { driver: sqliteDb == null ? "postgres" : "sqlite" });
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   if (q) {
