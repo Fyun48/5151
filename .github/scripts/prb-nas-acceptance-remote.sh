@@ -19,7 +19,8 @@ resource_ids() {
   fi
 }
 for kind in container network volume; do
-  [[ -z "$(resource_ids "$kind")" ]] || { echo 'EXISTING_ACCEPTANCE_RESOURCES' >&2; exit 5; }
+  ids="$(resource_ids "$kind")" || { echo "RESOURCE_QUERY_FAILED:$kind" >&2; exit 5; }
+  [[ -z "$ids" ]] || { echo 'EXISTING_ACCEPTANCE_RESOURCES' >&2; exit 5; }
 done
 output="/mnt/Storage1/prb-acceptance/evidence/prb-nas-${sha:0:7}-gha-$run_id-$attempt"
 mkdir "$output"
@@ -42,7 +43,8 @@ done
 [[ "$done_running" == true ]] || { echo 'RUN_STILL_PENDING; detached run and evidence preserved' >&2; exit 6; }
 clean=true
 for kind in container network volume; do
-  if [[ -n "$(resource_ids "$kind")" ]]; then
+  ids="$(resource_ids "$kind")" || { echo "RESOURCE_QUERY_FAILED:$kind" >&2; exit 7; }
+  if [[ -n "$ids" ]]; then
     printf '%s=REMAINS\n' "$kind" >> "$output/cleanup-check.txt"
     clean=false
   else
