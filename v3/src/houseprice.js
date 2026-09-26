@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { appendAppearanceTags, appearanceLabelFromText, passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { listingKitFields } from "./listingKit.js";
@@ -959,7 +960,7 @@ export async function fetchHpDetailInspected(id) {
         Referer: hpDetailUrl(key),
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(15000),
+      signal: crawlRequestSignal(AbortSignal.timeout(15000)),
     });
   } catch {
     return inspectHpDetailResponse({ timeout: true, fetch_ms: Date.now() - started, parse_ms: 0, expectedId: key });
@@ -1010,7 +1011,7 @@ async function defaultGetHtml(url) {
       Accept: isJson ? "application/json, text/plain, */*" : "text/html,application/xhtml+xml",
       Referer: `${HP_SITE}/`,
     },
-    signal: AbortSignal.timeout(15000),
+    signal: crawlRequestSignal(AbortSignal.timeout(15000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
     throw new Error(`5168 暫時無法抓取（HTTP ${res.status}）`);

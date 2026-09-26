@@ -138,11 +138,11 @@ test("watcher still crawls 住商 when 591 is closed", () => {
   const src = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(src, /fetchHbCoveringListings/);
   assert.match(src, /wantHb/);
-  assert.match(src, /isCrawlSourceEnabled\("hbhousing"\)/);
-  assert.match(src, /isCrawlSourceEnabled\("sinyi"\)/);
+  assert.match(src, /runtime\.sourceEnabled\("hbhousing"\)/);
+  assert.match(src, /runtime\.sourceEnabled\("sinyi"\)/);
   assert.match(src, /fetchSinyiCoveringListings/);
   assert.match(src, /fetchHpCoveringListings/);
-  assert.match(src, /isCrawlSourceEnabled\("housefun"\)/);
+  assert.match(src, /runtime\.sourceEnabled\("housefun"\)/);
   assert.match(src, /fetchHfCoveringListings/);
   assert.match(src, /skipped: "portals"/);
 });

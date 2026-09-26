@@ -12,6 +12,7 @@
     "dev:v3": "PORT=5153 DATA_DIR=data-v3 node --watch v3/src/server.js",
     "dev:ops": "OPS_PORT=5154 OPS_DATA_DIR=data-ops node --watch ops/src/server.js",
     "test": "node --test test/*.test.js v3/test/*.test.js ops/test/*.test.js",
+    "test:pg": "node v3/scripts/pg-integration-setup.mjs && bash v3/scripts/run-pg-integration.sh",
     "pack:kit": "node design-system/scripts/pack-kit.js"
   },
   "engines": {

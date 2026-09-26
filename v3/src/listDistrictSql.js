@@ -14,16 +14,42 @@ export function ensureDistrictCandidateIndex(db) {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_listings_district_prefix ON listings(${prefix})`);
 }
 
+// 行政區鍵的共用知識（給需要自行組查詢的 driver 用；B3b 的 PG closure 就靠它）。
+export function districtKeyLists(names) {
+  const selected = new Set(names || []);
+  const allowed = known.filter(row => selected.has(row.name)).map(row => row.key);
+  return { allowed, allKeys };
+}
+
+/**
+ * 行政區前綴的 SQL 表達式（同一份知識、兩種 dialect）：
+ * SQLite 用 instr/substr；PostgreSQL 用 split_part（`city|district|`）。
+ */
+export function districtKeyPrefixExpression(dialect = "sqlite") {
+  // 注意：SQLite 版本的 prefix 是 `cityId|districtId`（**不帶尾端 `|`**，與 known 的 key 同格式），
+  // 所以 PG 版也必須完全相同，否則 IN/NOT IN 比對不到（實測踩過）。
+  if (String(dialect) === "pg") {
+    return `(split_part(COALESCE(source_key, ''), '|', 1) || '|' || split_part(COALESCE(source_key, ''), '|', 2))`;
+  }
+  return prefix;
+}
+
 // Keep unrecognised/legacy keys for the existing address/title fallback.
 // This is a conservative candidate reduction, not a new district classifier.
-export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor } = {}) {
+export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor, driver = "sqlite", relatedIds = null } = {}) {
   const selected = new Set(names || []);
   if (!selected.size) return;
   const allowed = known.filter(row => selected.has(row.name)).map(row => row.key);
   if (!allowed.length || allowed.length === allKeys.length) return;
   const marks = values => values.map(() => "?").join(",");
-  const alternatives = [`${prefix} IN (${marks(allowed)})`, `${prefix} NOT IN (${marks(allKeys)})`];
+  const districtPrefix = driver === "postgres" ? districtKeyPrefixExpression("pg") : prefix;
+  const alternatives = [`${districtPrefix} IN (${marks(allowed)})`, `${districtPrefix} NOT IN (${marks(allKeys)})`];
   params.push(...allowed, ...allKeys);
+  if (Array.isArray(relatedIds) && relatedIds.length) {
+    if (driver !== "postgres") throw new Error("District relation IDs require PostgreSQL");
+    alternatives.push("post_id = ANY(?::bigint[])");
+    params.push(relatedIds);
+  }
   // Keep complete relation components of district candidates, including incoming
   // one-sided matches and the viewer's personal groups. Unrelated matches in
   // other districts cannot affect their roles. UNION terminates mutual cycles.
@@ -55,5 +81,7 @@ export function appendDistrictCandidates(names, clauses, params, { preserveRelat
   }
   // Select IDs from the narrow index before reading wide listing fields. A
   // direct OR predicate on SELECT <all fields> otherwise causes a table scan.
-  clauses.push(`post_id IN (SELECT post_id FROM listings WHERE ${alternatives.join(" OR ")})`);
+  clauses.push(driver === "postgres"
+    ? `(${alternatives.join(" OR ")})`
+    : `post_id IN (SELECT post_id FROM listings WHERE ${alternatives.join(" OR ")})`);
 }

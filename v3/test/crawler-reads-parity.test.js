@@ -32,6 +32,7 @@ const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
 const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL crawler reads)";
 
 const TABLES = [
+  "settings",
   "listings",
   // persistListing() also syncs the projection and bumps the change log, so the write-back
   // subtest needs both (this is the "mirror a fully-initialised store" rule from the runbook).

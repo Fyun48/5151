@@ -1,0 +1,584 @@
+{
+  "beforeSha": "6703302cf57deeaa8cc5b8866f08fb4f8d6e23c5",
+  "afterSha": "92e8210adbe362e98c79ba869d8bd65c99ddbfd2",
+  "fixtureMetadataEqual": true,
+  "note": "SQL strings are truncated prefixes; root summaries do not prove equality of complete plan trees. No controlled before/after host-load comparison.",
+  "comparisons": [
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "planIndex": 0,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.649,
+        "executionMs": 118.854,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 299749.76,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.777,
+        "executionMs": 199.875,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 306791.14,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "planIndex": 1,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 33.806,
+        "executionMs": 155.461,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 81.3,
+        "executionMs": 361.455,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "planIndex": 2,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.378,
+        "executionMs": 208.766,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 9801.01,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.378,
+        "executionMs": 269.185,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 9801.01,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "planIndex": 3,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 1.991,
+        "executionMs": 5.528,
+        "jit": null,
+        "root": {
+          "node": "Index Scan",
+          "rows": 512,
+          "loops": 1,
+          "totalCost": 1738.52,
+          "sharedHitBlocks": 2117,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 2.542,
+        "executionMs": 8.849,
+        "jit": null,
+        "root": {
+          "node": "Index Scan",
+          "rows": 512,
+          "loops": 1,
+          "totalCost": 1738.52,
+          "sharedHitBlocks": 2117,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 1,
+      "planIndex": 4,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 3.379,
+        "executionMs": 137.794,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 18512,
+          "loops": 1,
+          "totalCost": 301069.17,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 8.153,
+        "executionMs": 298.453,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 18512,
+          "loops": 1,
+          "totalCost": 308142.85,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "planIndex": 0,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.672,
+        "executionMs": 120.897,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 299749.76,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.712,
+        "executionMs": 149.779,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 306791.14,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "planIndex": 1,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 33.972,
+        "executionMs": 141.769,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 45.071,
+        "executionMs": 143.172,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "planIndex": 2,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.344,
+        "executionMs": 86.83,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 464,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.33,
+        "executionMs": 125.609,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 464,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "planIndex": 3,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 1.661,
+        "executionMs": 5.513,
+        "jit": null,
+        "root": {
+          "node": "Index Scan",
+          "rows": 512,
+          "loops": 1,
+          "totalCost": 1738.52,
+          "sharedHitBlocks": 2117,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 1.934,
+        "executionMs": 5.699,
+        "jit": null,
+        "root": {
+          "node": "Index Scan",
+          "rows": 512,
+          "loops": 1,
+          "totalCost": 1738.52,
+          "sharedHitBlocks": 2117,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "single",
+      "concurrency": 4,
+      "planIndex": 4,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 2.74,
+        "executionMs": 137.437,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 18512,
+          "loops": 1,
+          "totalCost": 301069.17,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 4.499,
+        "executionMs": 171.283,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 18512,
+          "loops": 1,
+          "totalCost": 308142.85,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "planIndex": 0,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.7,
+        "executionMs": 120.57,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 299749.76,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 9.759,
+        "executionMs": 211.564,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 306791.14,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "planIndex": 1,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 31.596,
+        "executionMs": 133.872,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 43.676,
+        "executionMs": 386.295,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "planIndex": 2,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.338,
+        "executionMs": 82.543,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 464,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.332,
+        "executionMs": 193.601,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 464,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 1,
+      "planIndex": 3,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 1.187,
+        "executionMs": 113.087,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 302347.89,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 1.275,
+        "executionMs": 162.23,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 309457.51,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "planIndex": 0,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.647,
+        "executionMs": 119.42,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 299749.76,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.822,
+        "executionMs": 146.711,
+        "jit": null,
+        "root": {
+          "node": "Bitmap Heap Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 306791.14,
+          "sharedHitBlocks": 2434,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "planIndex": 1,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 31.833,
+        "executionMs": 151.28,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 46.367,
+        "executionMs": 186.042,
+        "jit": null,
+        "root": {
+          "node": "Seq Scan",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 9891,
+          "sharedHitBlocks": 8001,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "planIndex": 2,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 0.346,
+        "executionMs": 78.707,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 464,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 0.36,
+        "executionMs": 153.14,
+        "jit": null,
+        "root": {
+          "node": "Aggregate",
+          "rows": 1,
+          "loops": 1,
+          "totalCost": 4210.64,
+          "sharedHitBlocks": 465,
+          "sharedReadBlocks": 0
+        }
+      }
+    },
+    {
+      "scope": "all",
+      "concurrency": 4,
+      "planIndex": 3,
+      "sameSqlPrefix": true,
+      "before": {
+        "planningMs": 1.21,
+        "executionMs": 114.073,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 302347.89,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      },
+      "after": {
+        "planningMs": 1.284,
+        "executionMs": 123.974,
+        "jit": null,
+        "root": {
+          "node": "Merge Join",
+          "rows": 36000,
+          "loops": 1,
+          "totalCost": 309457.51,
+          "sharedHitBlocks": 2438,
+          "sharedReadBlocks": 0
+        }
+      }
+    }
+  ]
+}

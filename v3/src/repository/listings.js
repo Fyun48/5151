@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS ${PROJECTION_TABLE} (
   district TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL DEFAULT '',
+  kind_keys TEXT NOT NULL DEFAULT '',
   rent BIGINT NOT NULL DEFAULT 0,
   total_monthly_cost BIGINT NOT NULL DEFAULT 0,
   area DOUBLE PRECISION,
@@ -50,6 +51,15 @@ const PG_PROJECTION_INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_proj_total_cost ON ${PROJECTION_TABLE}(total_monthly_cost)`,
   `CREATE INDEX IF NOT EXISTS idx_proj_district ON ${PROJECTION_TABLE}(district)`,
   `CREATE INDEX IF NOT EXISTS idx_proj_commute ON ${PROJECTION_TABLE}(commute_km)`,
+];
+
+// F3：CREATE TABLE IF NOT EXISTS 不會替既有表補欄位（pgSchema.js 只做 CREATE，沒有 ALTER），
+// 所以在同一個迴圈裡補 idempotent 遷移，否則新欄位會讓 upsert 多送一個值而整批失敗。
+const PG_PROJECTION_MIGRATIONS = [
+  // 用 `ALTER TABLE IF EXISTS` 是刻意的：ensureProjection() 會用
+  // /(TABLE IF NOT EXISTS |EXISTS |ON )<table>/ 改寫成帶 schema 的形式，
+  // 這個寫法才會被正確加上 schema（在帶 schema 的環境才不會打錯表）。
+  `ALTER TABLE IF EXISTS ${PROJECTION_TABLE} ADD COLUMN IF NOT EXISTS kind_keys TEXT NOT NULL DEFAULT ''`,
 ];
 
 export const LISTINGS_REPOSITORY_TABLES = ["listings", "user_listing_flags", PROJECTION_TABLE];
@@ -159,7 +169,7 @@ function createPostgresListingsRepository({ pgDriver, deps, schema = "", buildSq
         return ensurePgSchema(pgDriver, deps.sqliteDb, { schema, tables: [PROJECTION_TABLE] });
       }
       await pgDriver.exec(schema ? `CREATE SCHEMA IF NOT EXISTS ${schema}` : "SELECT 1");
-      for (const statement of [PG_PROJECTION_DDL, ...PG_PROJECTION_INDEXES]) {
+      for (const statement of [PG_PROJECTION_DDL, ...PG_PROJECTION_INDEXES, ...PG_PROJECTION_MIGRATIONS]) {
         await pgDriver.exec(statement.replace(
           new RegExp(`(TABLE IF NOT EXISTS |EXISTS |ON )${PROJECTION_TABLE}`, "g"),
           `$1${schema ? `${schema}.` : ""}${PROJECTION_TABLE}`,

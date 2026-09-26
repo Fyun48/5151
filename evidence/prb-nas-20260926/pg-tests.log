@@ -1,0 +1,872 @@
+
+> 5151@1.0.0 test:pg
+> node v3/scripts/pg-integration-setup.mjs && bash v3/scripts/run-pg-integration.sh
+
+(node:22) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+PG-SCHEMA {"statements":97,"tables":97,"rows":79,"sequences":73}
+PG-INDEXES {"created":132,"skippedTables":["listings"]}
+[pg] 執行 22 個整合測試檔
+TAP version 13
+# (node:45) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：budgetStore 與同步函式走出同一串結果
+ok 1 - sqlite 模式：budgetStore 與同步函式走出同一串結果
+  ---
+  duration_ms: 146.511697
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+ok 2 - postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+  ---
+  duration_ms: 231.684897
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：預算 store 在 PostgreSQL 上真的保留、結算、釋放
+ok 3 - live：預算 store 在 PostgreSQL 上真的保留、結算、釋放
+  ---
+  duration_ms: 550.068023
+  type: 'test'
+  ...
+# (node:57) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the crawler reads go through the driver-aware entry point
+ok 4 - the crawler reads go through the driver-aware entry point
+  ---
+  duration_ms: 1827.547875
+  type: 'test'
+  ...
+# Subtest: the backfill scans find the fixture's work on the sqlite driver
+ok 5 - the backfill scans find the fixture's work on the sqlite driver
+  ---
+  duration_ms: 13.75101
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back
+    # Subtest: existing row and fingerprint lookup
+    ok 1 - existing row and fingerprint lookup
+      ---
+      duration_ms: 910.539413
+      type: 'test'
+      ...
+    # Subtest: the offline sweep scans match
+    ok 2 - the offline sweep scans match
+      ---
+      duration_ms: 577.068895
+      type: 'test'
+      ...
+    # Subtest: the backfill scans match
+    ok 3 - the backfill scans match
+      ---
+      duration_ms: 654.525275
+      type: 'test'
+      ...
+    # Subtest: match candidates match on both paths
+    ok 4 - match candidates match on both paths
+      ---
+      duration_ms: 604.387746
+      type: 'test'
+      ...
+    # Subtest: a listing written through PostgreSQL is readable back
+    ok 5 - a listing written through PostgreSQL is readable back
+      ---
+      duration_ms: 804.813977
+      type: 'test'
+      ...
+    1..5
+ok 6 - live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is readable back
+  ---
+  duration_ms: 3560.948725
+  type: 'test'
+  ...
+# (node:69) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：async 入口與原本的同步函式輸出完全相同
+ok 7 - sqlite 模式：async 入口與原本的同步函式輸出完全相同
+  ---
+  duration_ms: 63.655305
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的 payload
+ok 8 - postgres 路徑（離線 exec）給出與 sqlite 相同的 payload
+  ---
+  duration_ms: 58.465957
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：搜尋與標籤都要與 sqlite 相同
+ok 9 - postgres 路徑：搜尋與標籤都要與 sqlite 相同
+  ---
+  duration_ms: 51.664166
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：CRM 關閉時 module 的旗標與 sqlite 相同
+ok 10 - postgres 路徑：CRM 關閉時 module 的旗標與 sqlite 相同
+  ---
+  duration_ms: 51.793329
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：找不到聯絡人時的行為與 sqlite 相同
+ok 11 - postgres 路徑：找不到聯絡人時的行為與 sqlite 相同
+  ---
+  duration_ms: 60.045579
+  type: 'test'
+  ...
+# Subtest: live shadow PostgreSQL：同一組 CRM 讀取斷言
+ok 12 - live shadow PostgreSQL：同一組 CRM 讀取斷言
+  ---
+  duration_ms: 341.466985
+  type: 'test'
+  ...
+# Subtest: 第二段：七個寫入動作在兩個 driver 給出相同結果
+ok 13 - 第二段：七個寫入動作在兩個 driver 給出相同結果
+  ---
+  duration_ms: 220.553824
+  type: 'test'
+  ...
+# Subtest: 第二段：CRM 關閉時寫入會被擋下（兩邊一致）
+ok 14 - 第二段：CRM 關閉時寫入會被擋下（兩邊一致）
+  ---
+  duration_ms: 44.491974
+  type: 'test'
+  ...
+# Subtest: 第二段：同步開啟時，寫入會把快照寫進 crm_outbox（PG 也一樣）
+ok 15 - 第二段：同步開啟時，寫入會把快照寫進 crm_outbox（PG 也一樣）
+  ---
+  duration_ms: 107.1086
+  type: 'test'
+  ...
+# Subtest: 第二段：crm_outbox 的 claim／sent／failure／stats 在兩個 driver 一致
+ok 16 - 第二段：crm_outbox 的 claim／sent／failure／stats 在兩個 driver 一致
+  ---
+  duration_ms: 119.047951
+  type: 'test'
+  ...
+# Subtest: 第二段：deliverCrmOutboxOnce 走 ops 時，成功與失敗的標記與 sqlite 相同
+ok 17 - 第二段：deliverCrmOutboxOnce 走 ops 時，成功與失敗的標記與 sqlite 相同
+  ---
+  duration_ms: 154.697131
+  type: 'test'
+  ...
+# Subtest: 第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀得到
+ok 18 - 第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀得到
+  ---
+  duration_ms: 102.149401
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）
+ok 19 - live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）
+  ---
+  duration_ms: 139.135382
+  type: 'test'
+  ...
+# (node:81) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: decoration data loaders read the SQLite fixture
+ok 20 - decoration data loaders read the SQLite fixture
+  ---
+  duration_ms: 24.091729
+  type: 'test'
+  ...
+# Subtest: the loader memoises one read per user and per id set
+ok 21 - the loader memoises one read per user and per id set
+  ---
+  duration_ms: 8.163148
+  type: 'test'
+  ...
+# Subtest: PostgreSQL returns the same decoration data as SQLite
+ok 22 - PostgreSQL returns the same decoration data as SQLite
+  ---
+  duration_ms: 1467.325015
+  type: 'test'
+  ...
+# (node:92) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: job 佇列：SQLite 路徑的行為（離線基準）
+ok 23 - job 佇列：SQLite 路徑的行為（離線基準）
+  ---
+  duration_ms: 26.506055
+  type: 'test'
+  ...
+# Subtest: job 佇列：SQLite 佇列介面與原本的同步函式等價
+ok 24 - job 佇列：SQLite 佇列介面與原本的同步函式等價
+  ---
+  duration_ms: 25.944049
+  type: 'test'
+  ...
+# Subtest: live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收
+ok 25 - live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收
+  ---
+  duration_ms: 398.466873
+  type: 'test'
+  ...
+# Subtest: PG enqueue uses the supplied clock for immediate availability and honors explicit scheduling
+ok 26 - PG enqueue uses the supplied clock for immediate availability and honors explicit scheduling
+  ---
+  duration_ms: 6.314377
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:104) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: detail reads go through the driver-aware entry point
+ok 27 - detail reads go through the driver-aware entry point
+  ---
+  duration_ms: 1500.509105
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the detail read matches the SQLite read
+    # Subtest: member detail for every shape
+    ok 1 - member detail for every shape
+      ---
+      duration_ms: 830.980151
+      type: 'test'
+      ...
+    # Subtest: sameHouse:false (the crawler's read) still matches
+    ok 2 - sameHouse:false (the crawler's read) still matches
+      ---
+      duration_ms: 554.217077
+      type: 'test'
+      ...
+    1..2
+ok 28 - live PostgreSQL: the detail read matches the SQLite read
+  ---
+  duration_ms: 1389.779207
+  type: 'test'
+  ...
+# (node:116) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: sqlite 模式：async 入口與同步函式輸出完全相同
+ok 29 - sqlite 模式：async 入口與同步函式輸出完全相同
+  ---
+  duration_ms: 13.175583
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的統計
+ok 30 - postgres 路徑（離線 exec）給出與 sqlite 相同的統計
+  ---
+  duration_ms: 6.896844
+  type: 'test'
+  ...
+# Subtest: live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_URL 決定）
+ok 31 - live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_URL 決定）
+  ---
+  duration_ms: 270.590132
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：sqlite 模式 async 入口與同步函式做出同一件事
+ok 32 - 寫入路徑：sqlite 模式 async 入口與同步函式做出同一件事
+  ---
+  duration_ms: 67.85155
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+ok 33 - 寫入路徑：postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同
+  ---
+  duration_ms: 68.91846
+  type: 'test'
+  ...
+# Subtest: 寫入路徑：PG 路徑的列數判斷用 rowCount（拿不到 rowCount 就不算搶到）
+ok 34 - 寫入路徑：PG 路徑的列數判斷用 rowCount（拿不到 rowCount 就不算搶到）
+  ---
+  duration_ms: 24.110957
+  type: 'test'
+  ...
+# Subtest: 種子查詢：sqlite 與 postgres 路徑挑出同一批候選並產生同一批工作
+ok 35 - 種子查詢：sqlite 與 postgres 路徑挑出同一批候選並產生同一批工作
+  ---
+  duration_ms: 49.371373
+  type: 'test'
+  ...
+# Subtest: 種子查詢：來源停用時不播種（sync 與 async 一致）
+ok 36 - 種子查詢：來源停用時不播種（sync 與 async 一致）
+  ---
+  duration_ms: 21.108255
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metrics 與回收
+ok 37 - live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metrics 與回收
+  ---
+  duration_ms: 402.701735
+  type: 'test'
+  ...
+# Subtest: live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite
+ok 38 - live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite
+  ---
+  duration_ms: 208.903294
+  type: 'test'
+  ...
+# Subtest: live：種子查詢讀的是 PostgreSQL，不是本機 SQLite
+ok 39 - live：種子查詢讀的是 PostgreSQL，不是本機 SQLite # SKIP PG_SHADOW_URL is not set（需要匯入正式站資料的影子站；不屬於 CI 必要 gate）
+  ---
+  duration_ms: 1.81148
+  type: 'test'
+  ...
+# (node:128) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the field writes go through the driver-aware entry point
+ok 40 - the field writes go through the driver-aware entry point
+  ---
+  duration_ms: 1576.434524
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the field writes land in the same store as the reads
+    # Subtest: setListingDetail writes the detail columns
+    ok 1 - setListingDetail writes the detail columns
+      ---
+      duration_ms: 949.069048
+      type: 'test'
+      ...
+    # Subtest: persistHpListingFields writes the 5168 columns and kit
+    ok 2 - persistHpListingFields writes the 5168 columns and kit
+      ---
+      duration_ms: 660.114366
+      type: 'test'
+      ...
+    # Subtest: the MRT and community caches are written where the reads look
+    ok 3 - the MRT and community caches are written where the reads look
+      ---
+      duration_ms: 644.67927
+      type: 'test'
+      ...
+    # Subtest: the 5168 prep row is stored in PostgreSQL
+    ok 4 - the 5168 prep row is stored in PostgreSQL
+      ---
+      duration_ms: 631.075136
+      type: 'test'
+      ...
+    1..4
+ok 41 - live PostgreSQL: the field writes land in the same store as the reads
+  ---
+  duration_ms: 2892.201745
+  type: 'test'
+  ...
+# (node:140) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# LIVE-ENTRY-KEYS ["listings","totalMatched","hasMore","nextOffset","queryVersion","queryDetails"]
+# LIVE-ENTRY-IDS []
+# Subtest: live PG：正式入口（不注入 deps）能查真 PG，且連續兩次結果一致
+ok 42 - live PG：正式入口（不注入 deps）能查真 PG，且連續兩次結果一致
+  ---
+  duration_ms: 305.613789
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:152) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: nonempty PG provider pipeline decorates cards without any SQLite access, including MRT settings
+ok 43 - nonempty PG provider pipeline decorates cards without any SQLite access, including MRT settings
+  ---
+  duration_ms: 103.073231
+  type: 'test'
+  ...
+# Subtest: SQLite dispatcher: complete projection yields both nonempty pages
+ok 44 - SQLite dispatcher: complete projection yields both nonempty pages
+  ---
+  duration_ms: 81.990453
+  type: 'test'
+  ...
+# PARITY-BASELINE {"engines":["node_pg","node_sqlite","sql_first"],"ids":[1,2,3],"sqliteAttempts":0}
+# Subtest: live PG: canonical fields, Node reference and SQLite dispatcher agree across both pages
+ok 45 - live PG: canonical fields, Node reference and SQLite dispatcher agree across both pages
+  ---
+  duration_ms: 1301.960548
+  type: 'test'
+  ...
+# Subtest: fixed request time changes the expected primary and card bundle independently of wall time
+ok 46 - fixed request time changes the expected primary and card bundle independently of wall time
+  ---
+  duration_ms: 214.60246
+  type: 'test'
+  ...
+# Subtest: reference fixture has explicit expected filters and personal roles
+ok 47 - reference fixture has explicit expected filters and personal roles
+  ---
+  duration_ms: 280.21489
+  type: 'test'
+  ...
+# PARITY-MATRIX {"cases":12,"sqliteAttempts":0}
+# Subtest: live PG: relations, viewer/voter identity, filters, extras and time match the Node reference
+ok 48 - live PG: relations, viewer/voter identity, filters, extras and time match the Node reference
+  ---
+  duration_ms: 1951.233725
+  type: 'test'
+  ...
+# Subtest: live PG: commute preloading never warms SQLite
+ok 49 - live PG: commute preloading never warms SQLite
+  ---
+  duration_ms: 1083.805823
+  type: 'test'
+  ...
+# Subtest: live PG: a partner removed by profile filters still determines the shared house primary
+ok 50 - live PG: a partner removed by profile filters still determines the shared house primary
+  ---
+  duration_ms: 1056.790107
+  type: 'test'
+  ...
+# Subtest: live PG: missing required schema fails; existing empty tables return a normal empty result
+ok 51 - live PG: missing required schema fails; existing empty tables return a normal empty result
+  ---
+  duration_ms: 1015.781822
+  type: 'test'
+  ...
+# Subtest: live PG: complete page and counters use one snapshot; next request sees committed changes
+ok 52 - live PG: complete page and counters use one snapshot; next request sees committed changes
+  ---
+  duration_ms: 1131.9959
+  type: 'test'
+  ...
+# Subtest: live PG: anonymous search preserves guest filters and never reads private flags or SQLite
+ok 53 - live PG: anonymous search preserves guest filters and never reads private flags or SQLite
+  ---
+  duration_ms: 1353.533028
+  type: 'test'
+  ...
+# Subtest: cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries
+ok 54 - cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries
+  ---
+  duration_ms: 910.887507
+  type: 'test'
+  ...
+# Subtest: live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure
+ok 55 - live PG: batched snapshot reads bind parameters, retain all rows, and recover after failure
+  ---
+  duration_ms: 966.081663
+  type: 'test'
+  ...
+# Subtest: SQLite guard records swallowed cached-statement I/O, then restores the statement
+ok 56 - SQLite guard records swallowed cached-statement I/O, then restores the statement
+  ---
+  duration_ms: 45.631353
+  type: 'test'
+  ...
+# (node:164) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 第二段：suggestFromNewHashAsync 兩個 driver 寫出等價的建議
+ok 57 - 第二段：suggestFromNewHashAsync 兩個 driver 寫出等價的建議
+  ---
+  duration_ms: 62.705775
+  type: 'test'
+  ...
+# Subtest: 第二段：recordCrawlInsightAsync 把洞察列寫進 PG（provider 以 llmInsight 注入）
+ok 58 - 第二段：recordCrawlInsightAsync 把洞察列寫進 PG（provider 以 llmInsight 注入）
+  ---
+  duration_ms: 34.648307
+  type: 'test'
+  ...
+# Subtest: 第二段：enqueueListingSimilarityAsync 在功能關閉時明確回 disabled、不誤寫
+ok 59 - 第二段：enqueueListingSimilarityAsync 在功能關閉時明確回 disabled、不誤寫
+  ---
+  duration_ms: 23.265234
+  type: 'test'
+  ...
+# Subtest: sqlite 模式：async 入口與原本的同步函式輸出完全相同
+ok 60 - sqlite 模式：async 入口與原本的同步函式輸出完全相同
+  ---
+  duration_ms: 22.299558
+  type: 'test'
+  ...
+# Subtest: postgres 路徑（離線 exec）給出與 sqlite 相同的 admin payload
+ok 61 - postgres 路徑（離線 exec）給出與 sqlite 相同的 admin payload
+  ---
+  duration_ms: 18.288595
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：設定讀寫與 shouldEnqueueSimilarity 與 sqlite 相同
+ok 62 - postgres 路徑：設定讀寫與 shouldEnqueueSimilarity 與 sqlite 相同
+  ---
+  duration_ms: 29.426028
+  type: 'test'
+  ...
+# Subtest: postgres 路徑：reviewSimilarity 的驗證與回傳與 sqlite 相同
+ok 63 - postgres 路徑：reviewSimilarity 的驗證與回傳與 sqlite 相同
+  ---
+  duration_ms: 26.266795
+  type: 'test'
+  ...
+# Subtest: live shadow PostgreSQL：同一組 admin 斷言
+ok 64 - live shadow PostgreSQL：同一組 admin 斷言
+  ---
+  duration_ms: 406.902572
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:176) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the state writes go through the driver-aware entry point
+ok 65 - the state writes go through the driver-aware entry point
+  ---
+  duration_ms: 1697.71022
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the state writes land where the site reads
+    # Subtest: offline -> alive -> restored -> checked match SQLite field for field
+    ok 1 - offline -> alive -> restored -> checked match SQLite field for field
+      ---
+      duration_ms: 948.026797
+      type: 'test'
+      ...
+    # Subtest: invalidateLocation clears the route_jobs rows
+    ok 2 - invalidateLocation clears the route_jobs rows
+      ---
+      duration_ms: 495.597198
+      type: 'test'
+      ...
+    1..2
+ok 66 - live PostgreSQL: the state writes land where the site reads
+  ---
+  duration_ms: 1448.514151
+  type: 'test'
+  ...
+# (node:188) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: listingStatsAsync keeps the SQLite counters on the sqlite driver
+ok 67 - listingStatsAsync keeps the SQLite counters on the sqlite driver
+  ---
+  duration_ms: 1659.173574
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the counters equal the SQLite counters
+    # Subtest: without commute settings
+    ok 1 - without commute settings
+      ---
+      duration_ms: 831.762407
+      type: 'test'
+      ...
+    # Subtest: with commute settings and a cached route
+    ok 2 - with commute settings and a cached route
+      ---
+      duration_ms: 654.084013
+      type: 'test'
+      ...
+    # Subtest: the initial payload page matches the SQLite page
+    ok 3 - the initial payload page matches the SQLite page
+      ---
+      duration_ms: 736.815439
+      type: 'test'
+      ...
+    1..3
+ok 68 - live PostgreSQL: the counters equal the SQLite counters
+  ---
+  duration_ms: 2227.767146
+  type: 'test'
+  ...
+# (node:200) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the decision chain answers with the reasons the SQLite path acts on
+ok 69 - the decision chain answers with the reasons the SQLite path acts on
+  ---
+  duration_ms: 1216.556891
+  type: 'test'
+  ...
+# Subtest: the PostgreSQL enqueue answers the SQLite rows through its own executor
+ok 70 - the PostgreSQL enqueue answers the SQLite rows through its own executor
+  ---
+  duration_ms: 495.453527
+  type: 'test'
+  ...
+# Subtest: every event site goes through the driver-aware entry point
+ok 71 - every event site goes through the driver-aware entry point
+  ---
+  duration_ms: 5.280606
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: the enqueue writes the queue the site reads
+    # Subtest: the same members are queued with the same columns
+    ok 1 - the same members are queued with the same columns
+      ---
+      duration_ms: 1779.080046
+      type: 'test'
+      ...
+    1..1
+ok 72 - live PostgreSQL: the enqueue writes the queue the site reads
+  ---
+  duration_ms: 1781.621945
+  type: 'test'
+  ...
+# (node:212) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the notification queue reads and writes through the driver-aware entry point
+ok 73 - the notification queue reads and writes through the driver-aware entry point
+  ---
+  duration_ms: 1467.537855
+  type: 'test'
+  ...
+# Subtest: live PostgreSQL: the notification queue drains the same store it writes
+    # Subtest: the pending page matches SQLite (rows and order)
+    ok 1 - the pending page matches SQLite (rows and order)
+      ---
+      duration_ms: 421.94807
+      type: 'test'
+      ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+    # Subtest: updateEventNotify writes the same columns as SQLite
+    ok 2 - updateEventNotify writes the same columns as SQLite
+      ---
+      duration_ms: 222.571549
+      type: 'test'
+      ...
+    # Subtest: markEventNotified takes the event out of the queue it wrote to
+    ok 3 - markEventNotified takes the event out of the queue it wrote to
+      ---
+      duration_ms: 245.563682
+      type: 'test'
+      ...
+    1..3
+ok 74 - live PostgreSQL: the notification queue drains the same store it writes
+  ---
+  duration_ms: 894.557305
+  type: 'test'
+  ...
+# (node:224) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: rowsPerStatement respects the bind-parameter limit and the batch size
+ok 75 - rowsPerStatement respects the bind-parameter limit and the batch size
+  ---
+  duration_ms: 4.678328
+  type: 'test'
+  ...
+# Subtest: multiRowInsertSql numbers the placeholders across rows
+ok 76 - multiRowInsertSql numbers the placeholders across rows
+  ---
+  duration_ms: 2.166097
+  type: 'test'
+  ...
+# Subtest: an imported store re-syncs the identity sequences
+ok 77 - an imported store re-syncs the identity sequences
+  ---
+  duration_ms: 3.321723
+  type: 'test'
+  ...
+# Subtest: readTableChunks streams rowid-ordered chunks without holding the table
+ok 78 - readTableChunks streams rowid-ordered chunks without holding the table
+  ---
+  duration_ms: 5.640597
+  type: 'test'
+  ...
+# Subtest: the multi-row path sends one statement per chunk and flattens the params
+ok 79 - the multi-row path sends one statement per chunk and flattens the params
+  ---
+  duration_ms: 4.136085
+  type: 'test'
+  ...
+# Subtest: multiRow:false keeps the legacy per-row path (batch transaction)
+ok 80 - multiRow:false keeps the legacy per-row path (batch transaction)
+  ---
+  duration_ms: 3.25924
+  type: 'test'
+  ...
+# Subtest: live PostgreSQL: both import paths write the same rows
+    # Subtest: multi-row import (and a rerun stays idempotent)
+    ok 1 - multi-row import (and a rerun stays idempotent)
+      ---
+      duration_ms: 166.60608
+      type: 'test'
+      ...
+    # Subtest: per-row import writes the same content
+    ok 2 - per-row import writes the same content
+      ---
+      duration_ms: 293.538868
+      type: 'test'
+      ...
+    1..2
+ok 81 - live PostgreSQL: both import paths write the same rows
+  ---
+  duration_ms: 595.321607
+  type: 'test'
+  ...
+# (node:235) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: live PostgreSQL: driver, schema import, listings parity and queue claim
+    # Subtest: driver health check reports the server role
+    ok 1 - driver health check reports the server role
+      ---
+      duration_ms: 3.679994
+      type: 'test'
+      ...
+    # Subtest: the SQLite schema is mirrored into PostgreSQL with identical row counts
+    ok 2 - the SQLite schema is mirrored into PostgreSQL with identical row counts
+      ---
+      duration_ms: 17.91652
+      type: 'test'
+      ...
+    # Subtest: import is idempotent (re-import adds no rows)
+    ok 3 - import is idempotent (re-import adds no rows)
+      ---
+      duration_ms: 77.620028
+      type: 'test'
+      ...
+    # Subtest: listings search returns the same ids/order/paging/cursor as the SQLite path
+    ok 4 - listings search returns the same ids/order/paging/cursor as the SQLite path
+      ---
+      duration_ms: 839.843211
+      type: 'test'
+      ...
+    # Subtest: outside the envelope the PostgreSQL repository reports null (Node fallback)
+    ok 5 - outside the envelope the PostgreSQL repository reports null (Node fallback)
+      ---
+      duration_ms: 2.156403
+      type: 'test'
+      ...
+    # Subtest: durable queue: two workers never claim the same job (FOR UPDATE SKIP LOCKED)
+    ok 6 - durable queue: two workers never claim the same job (FOR UPDATE SKIP LOCKED)
+      ---
+      duration_ms: 123.764613
+      type: 'test'
+      ...
+    # Subtest: durable queue: expired lease is reclaimed and re-claimed by the other worker
+    ok 7 - durable queue: expired lease is reclaimed and re-claimed by the other worker
+      ---
+      duration_ms: 21.154452
+      type: 'test'
+      ...
+    # Subtest: durable queue: idempotency key collapses duplicate enqueues
+    ok 8 - durable queue: idempotency key collapses duplicate enqueues
+      ---
+      duration_ms: 18.801814
+      type: 'test'
+      ...
+    1..8
+ok 82 - live PostgreSQL: driver, schema import, listings parity and queue claim
+  ---
+  duration_ms: 4963.56771
+  type: 'test'
+  ...
+# (node:247) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PG 整合：設定 PG 後必須真的連得上（連不上＝失敗，不是略過）
+ok 83 - PG 整合：設定 PG 後必須真的連得上（連不上＝失敗，不是略過）
+  ---
+  duration_ms: 190.29846
+  type: 'test'
+  ...
+# Subtest: PG 整合：缺 pgDriver 時 canRunNodePg 必須為 false（不得誤判可跑）
+ok 84 - PG 整合：缺 pgDriver 時 canRunNodePg 必須為 false（不得誤判可跑）
+  ---
+  duration_ms: 672.70971
+  type: 'test'
+  ...
+# Subtest: PG 整合：完整路徑走 node_pg、單一快照只取一次連線、資料查詢都走該 client
+ok 85 - PG 整合：完整路徑走 node_pg、單一快照只取一次連線、資料查詢都走該 client
+  ---
+  duration_ms: 156.399123
+  type: 'test'
+  ...
+# Subtest: PG 整合：districtClosureIds 走 PG（不得拋錯；不需行政區條件時可為 null）
+ok 86 - PG 整合：districtClosureIds 走 PG（不得拋錯；不需行政區條件時可為 null）
+  ---
+  duration_ms: 48.166739
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:259) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PG 分支：儲存設定寫進 user_settings，且讀回來與寫入相符
+ok 87 - PG 分支：儲存設定寫進 user_settings，且讀回來與寫入相符
+  ---
+  duration_ms: 52.42522
+  type: 'test'
+  ...
+# Subtest: PG 分支：site 層鍵寫進 settings、跳過的鍵不寫（與 SQLite 分支同一份規則）
+ok 88 - PG 分支：site 層鍵寫進 settings、跳過的鍵不寫（與 SQLite 分支同一份規則）
+  ---
+  duration_ms: 9.846749
+  type: 'test'
+  ...
+# Subtest: PG 分支：儲存設定會啟用對應的搜尋設定檔，換一個會把舊的關掉
+ok 89 - PG 分支：儲存設定會啟用對應的搜尋設定檔，換一個會把舊的關掉
+  ---
+  duration_ms: 20.16212
+  type: 'test'
+  ...
+# Subtest: PG 分支：saveAsProfileAsync 建立設定檔並排下次抓取時間
+ok 90 - PG 分支：saveAsProfileAsync 建立設定檔並排下次抓取時間
+  ---
+  duration_ms: 22.187505
+  type: 'test'
+  ...
+# Subtest: live：PG 上的設定寫入可被讀回（PG_TEST_URL）
+ok 91 - live：PG 上的設定寫入可被讀回（PG_TEST_URL）
+  ---
+  duration_ms: 436.915554
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:271) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 政策：讀取預設允許 fallback，寫入預設拒絕（未設 PG_SQLITE_FALLBACK）
+ok 92 - 政策：讀取預設允許 fallback，寫入預設拒絕（未設 PG_SQLITE_FALLBACK）
+  ---
+  duration_ms: 3.984184
+  type: 'test'
+  ...
+# Subtest: 政策：PG_SQLITE_FALLBACK=open 與 options.fallback='open' 連寫入都放行
+ok 93 - 政策：PG_SQLITE_FALLBACK=open 與 options.fallback='open' 連寫入都放行
+  ---
+  duration_ms: 1.220646
+  type: 'test'
+  ...
+# Subtest: 政策：strict=true 一律往上丟（連環境變數也壓不過）
+ok 94 - 政策：strict=true 一律往上丟（連環境變數也壓不過）
+  ---
+  duration_ms: 6.086679
+  type: 'test'
+  ...
+# Subtest: PG 模式寫入失敗（交易型入口）：往上丟，且不動本機 SQLite
+ok 95 - PG 模式寫入失敗（交易型入口）：往上丟，且不動本機 SQLite
+  ---
+  duration_ms: 11.459694
+  type: 'test'
+  ...
+# Subtest: PG 模式讀取失敗：仍回本機 SQLite 的答案（fail-open 保留給讀取）
+ok 96 - PG 模式讀取失敗：仍回本機 SQLite 的答案（fail-open 保留給讀取）
+  ---
+  duration_ms: 5.783512
+  type: 'test'
+  ...
+# Subtest: 緊急逃生門：PG_SQLITE_FALLBACK=open 時寫入回退成舊行為（真的寫進 SQLite）
+ok 97 - 緊急逃生門：PG_SQLITE_FALLBACK=open 時寫入回退成舊行為（真的寫進 SQLite）
+  ---
+  duration_ms: 11.152817
+  type: 'test'
+  ...
+# Subtest: 讀寫混合模組：寫入入口帶 write 旗標才擋住 fallback，讀取入口仍 fail-open
+ok 98 - 讀寫混合模組：寫入入口帶 write 旗標才擋住 fallback，讀取入口仍 fail-open
+  ---
+  duration_ms: 8.029065
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# (node:279) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: the hot-path writes land the expected rows on SQLite
+ok 99 - the hot-path writes land the expected rows on SQLite
+  ---
+  duration_ms: 45.90727
+  type: 'test'
+  ...
+# Subtest: PostgreSQL writes read back identically to SQLite
+ok 100 - PostgreSQL writes read back identically to SQLite
+  ---
+  duration_ms: 381.379761
+  type: 'test'
+  ...
+1..100
+# tests 130
+# suites 0
+# pass 129
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 70403.695747

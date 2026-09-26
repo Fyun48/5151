@@ -187,11 +187,11 @@ export function extraFeeRows(listing = {}) {
 }
 
 export function rentAmount(listing = {}) {
-  const fromText = parseTwdAmount(listing.price);
   const n = Number(listing.price_num);
   const fromNum = Number.isFinite(n) && n > 0 ? n : 0;
   // 部分來源把 3.8萬存成 3.8；小於 1000 的數字當月租不合理，改回萬元。
   if (fromNum >= 1000) return Math.round(fromNum);
+  const fromText = parseTwdAmount(listing.price);
   if (fromText >= 1000) return fromText;
   if (fromNum > 0 && fromNum < 1000) return Math.round(fromNum * 10000);
   return fromText > 0 ? fromText : 0;

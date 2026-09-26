@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -205,7 +206,7 @@ async function defaultPostForm(url, body) {
         Referer: `${SINYI_SITE}/`,
       },
       body,
-      signal: AbortSignal.timeout(12000),
+      signal: crawlRequestSignal(AbortSignal.timeout(12000)),
     });
     if (res.status === 403 || res.status === 429) {
       throw new Error(`信義暫時無法抓取（HTTP ${res.status}）`);

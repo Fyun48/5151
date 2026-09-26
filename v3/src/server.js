@@ -1,7 +1,9 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
-import { searchListingsAsync } from "./listingSearchAsync.js";
-import { listingStatsAsync } from "./listingStatsAsync.js";
+import { searchPublicListingsAsync } from "./publicListingSearchAsync.js";
+import { resolveDbDriver } from "./dbDriver.js";
+import { loadListingPage } from "./listingSearchPage.js";
+import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
 import {
   armMemberExternalFetchAsync,
   deleteProfileAsync,
@@ -576,10 +578,10 @@ app.get("/api/public/listings", async (req, res) => {
       workLat: work.workLat,
       workLng: work.workLng,
     };
-    const listed = getCachedPublicListings(query, () => listPublicListingsFast({
+    const listed = await getCachedPublicListings(query, () => searchPublicListingsAsync({
       ...query,
       settings: publicSearchSettings(query),
-    }));
+    }), { namespace: resolveDbDriver() === "postgres" ? null : "sqlite:guest:v2" });
     res.setHeader("Cache-Control", "public, max-age=15");
     res.json({
       listings: listed.listings,
@@ -592,6 +594,7 @@ app.get("/api/public/listings", async (req, res) => {
       commute_error: work.error || undefined,
     });
   } catch (error) {
+    if (sendListingSearchUnavailable(res, error)) return;
     res.status(error.status || 400).json({ error: error.message });
   }
 });
@@ -3371,7 +3374,9 @@ let geoBackfillBusy = false;
 
 async function ensureWorkCoords() {
   const uid = defaultUserId();
-  const current = getSettings(uid);
+  // 上班地址與座標是會員設定，必須與其他節點同源：PG 模式下讀寫本機 SQLite 會讓
+  // 「在 A 儲存的地址、B 讀不到」而重複補座標或覆蓋新值。
+  const current = await getSettingsAsync(uid);
   if (!(Number(current.commuteKm) > 0)) return current;
   const workAddress = String(current.workAddress || "").trim();
   if (!workAddress || (hasWorkPoint(current) && isTaiwanCoord(current.workLat, current.workLng))) return current;
@@ -3379,7 +3384,7 @@ async function ensureWorkCoords() {
     const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2, allowAdmin: false });
     if (!geo) return current;
     setCachedGeo(workAddress, geo.lat, geo.lng, geo);
-    return saveSettings({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
+    return await saveSettingsAsync({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
   } catch (error) {
     console.warn("補上班地址座標失敗：", error.message);
     return current;
@@ -3484,7 +3489,9 @@ function queueGeoBackfill(settings = getSettings()) {
 }
 
 import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
-import { rotateCoveringJobs } from "./crawlPolicy.js";
+import { withPgCrawlOwner } from "./crawlOwnership.js";
+import { sharedPgDriver } from "./pgSharedDriver.js";
+import { coveringPlanAsync, reserveCoveringPlan } from "./crawlScheduleAsync.js";
 
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
@@ -3504,61 +3511,64 @@ async function tick(reason = "schedule") {
   }
   const tickGen = tickGate.begin();
   try {
-    expireStaleVerifyTokens({
-      onExpire: (user) => {
-        if (user?.email) queueSystemMail("verify_expired", user.email);
-      },
-    });
-    try {
-      pauseIdleMembers();
-    } catch (error) {
-      console.warn("閒置暫停失敗：", error.message);
-    }
-    const now = Date.now();
-    const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
-    if (
-      reason === "manual"
-      && !systemDue
-      && lastRun?.checked_at
-      && !lastRun.error
-      && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
-    ) {
-      const duePlan = coveringPlan({ now, includeSystem: false });
-      if (!duePlan.jobs.length) {
+    const execute = async () => {
+      expireStaleVerifyTokens({
+        onExpire: (user) => {
+          if (user?.email) queueSystemMail("verify_expired", user.email);
+        },
+      });
+      try {
+        pauseIdleMembers();
+      } catch (error) {
+        console.warn("閒置暫停失敗：", error.message);
+      }
+      const now = Date.now();
+      const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
+      if (
+        reason === "manual"
+        && !systemDue
+        && lastRun?.checked_at
+        && !lastRun.error
+        && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
+      ) {
+        const duePlan = await coveringPlanAsync({ now, includeSystem: false });
+        if (!duePlan.jobs.length) {
+          return {
+            ...lastRun,
+            skipped: "interval",
+            reason,
+            message: "設定已記下，下次排程會用最新條件檢查",
+          };
+        }
+      }
+      const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
+      const plan = await reserveCoveringPlan({ now, includeSystem });
+      if (!plan.jobs.length) {
         return {
-          ...lastRun,
-          skipped: "interval",
+          skipped: "idle",
           reason,
-          message: "設定已記下，下次排程會用最新條件檢查",
+          message: "目前沒有要向外抓取的條件",
+          checked_at: new Date().toISOString(),
+          searches: [],
+          events: [],
         };
       }
-    }
-    const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
-    const plan = coveringPlan({ now, includeSystem });
-    if (!plan.jobs.length) {
-      return {
-        skipped: "idle",
-        reason,
-        message: "目前沒有要向外抓取的條件",
-        checked_at: new Date().toISOString(),
-        searches: [],
-        events: [],
-      };
-    }
-    const result = await withBudget(
-      () => runWatch({
+      const result = await runWatch({
         skipHeavyGeo: true,
-        // 每輪只跑一段覆蓋條件（時間輪替）：19 組全跑會超過 15 分鐘預算而被放棄。
-        jobs: rotateCoveringJobs(plan.jobs, { now, intervalMs: crawlIntervalMinutes() * 60 * 1000 }),
-        includedUserIds: plan.includedUserIds,
+        jobs: plan.jobs,
+        memberRequirements: plan.memberRequirements,
         includeSystem: plan.includeSystem,
-      }),
-      TICK_BUDGET_MS,
-      "這輪抓取",
-    );
-    if (!tickGate.isCurrent(tickGen)) return result;
+      });
+      return result;
+    };
+    const result = await withBudget(async signal => {
+      if (resolveDbDriver() !== "postgres") return execute();
+      return withPgCrawlOwner(await sharedPgDriver(), execute, { signal });
+    }, TICK_BUDGET_MS, "這輪抓取", { signal: tickGate.signal(tickGen) });
+    if (!tickGate.isCurrent(tickGen) || ["owner_busy", "idle", "interval"].includes(result?.skipped)) return result;
     lastRun = result;
     lastRun.reason = reason;
+    // Independent background jobs must not inherit the finished crawl's owner.
     broadcastWatch(lastRun);
     if (reason !== "startup") queueGeoBackfill();
     return lastRun;
@@ -3678,24 +3688,16 @@ app.get("/api/state", async (req, res) => {
   let listings = [];
   let events = [];
   try {
-    // The initial payload has to come from the same place the list does. GET /api/listings uses
-    // searchListingsAsync() + listingStatsAsync(); this endpoint uses them too, so "first paint"
-    // and "refresh" cannot disagree. With DB_DRIVER=sqlite both are the pre-existing SQLite
-    // chain (awaited), so today's production response is unchanged.
-    listingStats = await listingStatsAsync({ userId: uid });
     confirmExpiredOfflineFromSettings();
-    const listed = await searchListingsAsync({
-      filter: "all",
-      sort: "newest",
-      limit: 500,
-      offset: 0,
-      userId: uid,
-      matchVoteUserId: uid,
+    const page = await loadListingPage({
+      filter: "all", sort: "newest", limit: 500, offset: 0,
+      userId: uid, matchVoteUserId: uid,
     });
-    listings = listed.listings;
-    listingStats = { ...listingStats, matched: listed.totalMatched };
+    listings = page.listings;
+    listingStats = page.stats;
     events = recentEvents(30, uid);
   } catch (error) {
+    if (sendListingSearchUnavailable(res, error)) return;
     console.warn("讀取物件列表失敗：", error.message);
     listingStats = { ...listingStats, error: error.message };
   }
@@ -3767,34 +3769,15 @@ app.get("/api/listings", async (req, res) => {
     matchVoteUserId: uid,
     sameHouse: req.query.sameHouse !== "0",
   };
-  // SQL-first fast path (Phase 7/8): push the district re-check + ORDER BY +
-  // LIMIT/OFFSET into SQL. Each fast path returns null outside its
-  // exact-equivalence envelope, so fall back to the Node path when it does.
-  // The chain is awaited (searchListingsAsync) so the same handler can serve the
-  // PostgreSQL driver; with DB_DRIVER=sqlite the returned object is unchanged.
-  const listed = await searchListingsAsync(args, {
-    allowUndecorated: process.env.PG_LISTINGS_UNDECORATED === "1",
-  });
-  const queryMs = Date.now() - started;
-  const statsStarted = Date.now();
-  const statsDetails = {};
-  // Awaited so the PostgreSQL driver answers the counters from the store the list itself reads
-  // (listingStatsAsync.js); with DB_DRIVER=sqlite the returned object is unchanged.
-  const listingStats = await listingStatsAsync({ userId: uid, diagnostics: statsDetails });
-  const statsMs = Date.now() - statsStarted;
-  res.setHeader("Server-Timing", `list;dur=${queryMs}, stats;dur=${statsMs}`);
-  res.json({
-    stats: { ...listingStats, matched: listed.totalMatched },
-    listings: listed.listings,
-    hasMore: listed.hasMore === true,
-    nextOffset: listed.nextOffset || 0,
-    nextCursor: listed.nextCursor || null,
-    queryVersion: listed.queryVersion || 2,
-    timing: {
-      query_ms: queryMs, stats_ms: statsMs, total_ms: Date.now() - started,
-      dataset: listed.totalMatched, stages: listed.queryDetails, stats_stages: statsDetails,
-    },
-  });
+  try {
+    const page = await loadListingPage(args);
+    res.setHeader("Server-Timing", `list;dur=${page.timing.query_ms}, stats;dur=${page.timing.stats_ms}`);
+    page.timing.total_ms = Date.now() - started;
+    res.json(page);
+  } catch (error) {
+    if (sendListingSearchUnavailable(res, error)) return;
+    throw error;
+  }
 });
 
 app.post("/api/listings/hide-many", (req, res) => {

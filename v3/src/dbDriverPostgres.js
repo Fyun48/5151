@@ -11,6 +11,9 @@
 //   3. env.PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE (read by `pg`)
 // Values are never logged; `describeConnection()` redacts credentials.
 import { toPostgresSql } from "./sqlDialect.js";
+import { createCandidateContentStore } from "./pgCandidateContent.js";
+import { currentCrawlOwner } from "./crawlOwnership.js";
+import { currentCrawlExecution, isCrawlRollback, throwIfCrawlCancelled } from "./crawlExecution.js";
 
 export const POSTGRES_APPLICATION_NAME = "5151-v3";
 
@@ -109,19 +112,74 @@ export async function createPostgresDriver({
   const options = { ...resolved.options, ...poolOptions };
   const target = String(connectionString || resolved.connectionString || "").trim();
   const pool = new pg.Pool({ ...(target ? { connectionString: target } : {}), ...options });
+  const candidateContent = createCandidateContentStore();
 
   // A pool-level error (server restart, network drop) must not crash the process
   // the way an unhandled EventEmitter "error" would.
   const poolErrors = [];
   pool.on("error", (err) => {
+    candidateContent.clear();
     poolErrors.push({ message: err?.message || String(err), at: new Date().toISOString() });
     if (poolErrors.length > 20) poolErrors.shift();
   });
+
+  function assertCrawlerActive() {
+    throwIfCrawlCancelled();
+    currentCrawlOwner()?.assertActive();
+  }
+
+  async function transact(fn) {
+    assertCrawlerActive();
+    const owner = currentCrawlOwner();
+    if (owner) {
+      if (owner.pool !== pool) throw new Error("Crawler cannot write through a different PostgreSQL pool");
+      return owner.transact(client => transactOn(client, fn, false));
+    }
+    return transactOn(await pool.connect(), fn, true);
+  }
+
+  async function transactOn(client, fn, release) {
+    try {
+      assertCrawlerActive();
+      await client.query("BEGIN");
+      const guarded = (currentCrawlExecution() || currentCrawlOwner()) ? new Proxy(client, {
+        get(target, key) {
+          if (key === "query") return async (sql, ...args) => {
+            const rollback = isCrawlRollback(typeof sql === "string" ? sql : sql?.text);
+            if (!rollback) assertCrawlerActive();
+            const result = await target.query(sql, ...args);
+            if (!rollback) assertCrawlerActive();
+            return result;
+          };
+          const value = Reflect.get(target, key, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }) : client;
+      const result = await fn(guarded);
+      assertCrawlerActive();
+      await client.query("COMMIT");
+      return result;
+    } catch (err) {
+      try { await client.query("ROLLBACK"); } catch { /* preserve the original error */ }
+      throw err;
+    } finally {
+      if (release) client.release();
+    }
+  }
+
+  async function query(text, params = []) {
+    // Only crawler-scoped calls need the extra transaction. An in-flight
+    // statement can finish after abort, but must roll back before COMMIT.
+    // A COMMIT already submitted before abort cannot be retroactively undone.
+    if (currentCrawlExecution() || currentCrawlOwner()) return transact(client => client.query(text, params));
+    return pool.query(text, params);
+  }
 
   return {
     dialect: "postgres",
     kind: "postgres",
     pool,
+    candidateContent,
     config: {
       // Never expose the raw connection string: it carries the password and this
       // object ends up in logs / diagnostics / error reports.
@@ -132,32 +190,17 @@ export async function createPostgresDriver({
     },
     poolErrors,
     async query(text, params = []) {
-      return pool.query(text, params);
+      return query(text, params);
     },
     async queryOne(text, params = []) {
-      const res = await pool.query(text, params);
+      const res = await query(text, params);
       return res.rows[0] ?? null;
     },
     async exec(sql) {
-      await pool.query(sql);
+      await query(sql);
     },
     async withTransaction(fn) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        const result = await fn(client);
-        await client.query("COMMIT");
-        return result;
-      } catch (err) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {
-          // A failed ROLLBACK (e.g. the connection already died) must not mask `err`.
-        }
-        throw err;
-      } finally {
-        client.release();
-      }
+      return transact(fn);
     },
     async healthCheck() {
       const res = await pool.query("SELECT 1 AS ok, pg_is_in_recovery() AS in_recovery");
@@ -165,11 +208,11 @@ export async function createPostgresDriver({
     },
     // Convenience for callers holding SQLite-flavoured SQL: translate then run.
     async runSqliteSql(text, params = []) {
-      return pool.query(toPostgresSql(text), params);
+      return query(toPostgresSql(text), params);
     },
     async close() {
+      candidateContent.clear();
       await pool.end();
     },
   };
 }
-

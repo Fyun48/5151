@@ -10,6 +10,7 @@ import {
   invalidateListingLocation as invalidateListingLocationSync,
   markListingAlive as markListingAliveSync,
   markListingOffline as markListingOfflineSync,
+  markSourceKitRetry as markSourceKitRetrySync,
   restoreListingOnline as restoreListingOnlineSync,
   setCachedMrt as setCachedMrtSync,
   setCommunityCache as setCommunityCacheSync,
@@ -18,6 +19,7 @@ import {
   persistHpListingFields as persistHpListingFieldsSync,
   listingFieldsBuildContext,
 } from "./db.js";
+import * as crawlerProgressRepo from "./repository/crawlerProgress.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { upsertListingPrepAsync as upsertListingPrepRepo } from "./listingEnrichQueue.js";
 import {
@@ -165,6 +167,25 @@ export function upsertListingPrepAsync(postId, listing, evalResult, options = {}
     options,
     (exec) => upsertListingPrepRepo(exec, { postId, listing, evalResult }),
     () => null,
+  );
+}
+
+// db.js markSourceKitRetry(): source-kit 抓取失敗後的重試排程。
+// 原本只寫呼叫端那台節點的 SQLite，所以 A 排定的重試 B 看不到 → 同一筆房源在另一台被當成
+// 從未重試而重複排、或永遠不重試。時間計算沿用 db.js 的 max(60s, delayMs)。
+export function markSourceKitRetryAsync(postId, { error = "", delayMs = 15 * 60 * 1000 } = {}, options = {}) {
+  const next = new Date(Date.now() + Math.max(60_000, Number(delayMs) || 0)).toISOString();
+  return write(
+    options,
+    async (exec) => {
+      await exec(crawlerProgressRepo.MARK_SOURCE_KIT_RETRY_SQL, [
+        String(error || "").slice(0, 200),
+        next,
+        postId,
+      ]);
+      return true;
+    },
+    () => markSourceKitRetrySync(postId, { error, delayMs }),
   );
 }
 

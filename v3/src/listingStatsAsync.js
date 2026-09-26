@@ -1,37 +1,61 @@
-// Asynchronous listing-stats hot path (PostgreSQL cutover blocker).
-//
-// `/api/listings` used to answer its counters with the synchronous SQLite `stats()`. With
-// DB_DRIVER=postgres the page came from PostgreSQL while the counters came from SQLite, so the
-// page listed an item and the counters said zero
-// (v3/evidence/pg-rw-drill-20260921/README.md, gap 1 - the last blocker named by
-// v3/POSTGRES_SWITCH_PLAN.md section 2.6).
-//
-// Driver behaviour:
-//   • sqlite (today's production default) - `stats()` exactly as before.
-//   • postgres - repository/listingStats.js reads the inputs from PostgreSQL, the decoration
-//     provider is preloaded through repository/decorationData.js (route cache for
-//     `missingRoute`), and the pure pipeline db.js also uses for SQLite
-//     (`buildListingStatsRows` + `summarizeListingStats`) produces the counters. The numbers
-//     therefore describe the store the list itself reads.
-//
-// One safety valve remains: any failure (a missing table, a connection drop) falls back to the
-// SQLite counters instead of failing the page - and records why in `diagnostics`.
+// PostgreSQL counters use PG settings and a read snapshot. Missing dependencies
+// fail with SEARCH_UNAVAILABLE; SQLite is only used in explicit SQLite mode.
 import {
-  buildListingStatsRows,
+  buildListingStatsRowsAsync,
   listingStatsBuildContext,
-  preloadDecorationProviderAsync,
+  preloadedDecorationProvider,
   stats,
-  summarizeListingStats,
+  summarizeListingStatsAsync,
+  summarizeRawListingStatsAsync,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingStatsRepository } from "./repository/listingStats.js";
+import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { isTrustedGeoSource } from "./location.js";
+import { hasWorkPoint } from "./geo.js";
+import { makeRouteKey } from "./route.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
+import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
+
+const statsExecutor = driver => (sql, params = [], { batch = false, arrayRows = false } = {}) => batch
+  ? readPgRows(driver, toPostgresSql(sql), params, {arrayRows})
+  : driver.query(toPostgresSql(sql), params).then(res => res.rows);
+
+// The caller owns the snapshot. loadListingPage uses these same raw rows for
+// ID-based list hydration and then for counters, without changing either scope.
+export async function loadPgListingStatsInputs(args = {}, options = {}) {
+  const exec = options.exec || statsExecutor(options.pgDriver);
+  const repository = options.repository || createListingStatsRepository({
+    driver: "postgres", pgDriver: options.pgDriver, exec,
+    deps: options.deps || listingStatsBuildContext(),
+  });
+  return repository.loadInputs({...args, requestContext:options.requestContext});
+}
+
+// Counters consume personal flags and routes. They do not decorate cards or
+// compare house groups, so loading candidate extras/peers/MRT for them is wasteful.
+async function statsProvider(exec, inputs) {
+  const {settings, rows, requestContext} = inputs;
+  const keys = [];
+  if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) {
+    for (const row of rows) {
+      if (!isTrustedGeoSource(row.geo_source) || !Number.isFinite(Number(row.lat)) || !Number.isFinite(Number(row.lng))) continue;
+      keys.push(makeRouteKey(row.lat,row.lng,settings.workLat,settings.workLng,settings.commuteMode,"to_work"));
+      keys.push(makeRouteKey(settings.workLat,settings.workLng,row.lat,row.lng,settings.commuteMode,"from_work"));
+    }
+  }
+  const loader = createDecorationDataLoader({exec,driver:"postgres"});
+  return preloadedDecorationProvider({userId:inputs.uid,personalFlags:inputs.flagMap,
+    routeCache:await loader.routeCacheMap(keys),crawlSources:requestContext.crawlSources,
+    systemCrawl:requestContext.systemCrawl,now:requestContext.now});
+}
 
 export async function listingStatsAsync(
-  { searchKeys, userId, settings, diagnostics } = {},
+  { searchKeys, userId, settings, diagnostics, asOf = null } = {},
   options = {},
 ) {
   const driver = options.driver || resolveDbDriver();
@@ -39,41 +63,52 @@ export async function listingStatsAsync(
 
   try {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
-    const exec = options.exec
-      || ((sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
-    const deps = options.deps || listingStatsBuildContext();
-    const repository = options.repository
-      || createListingStatsRepository({ driver: "postgres", pgDriver, exec, deps });
-    const inputs = await repository.loadInputs({ searchKeys, userId, settings, diagnostics });
-    const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
-      exec,
-      rows: inputs.rows,
-      settings: inputs.settings,
-      userId: inputs.uid,
-      matchVoteUserId: inputs.uid,
-      sameHouse: false,
-    }));
-    const profileRows = buildListingStatsRows({
-      rows: inputs.rows,
-      flagMap: provider.personalFlags(),
-      uid: inputs.uid,
-      settings: inputs.settings,
-      provider,
-    });
-    return summarizeListingStats({
-      profileRows,
-      settings: inputs.settings,
-      statusCounts: inputs.statusCounts,
-      watchedTotal: inputs.watchedTotal,
-      failedRouteJobs: inputs.failedRouteJobs,
-      dbTotal: inputs.dbTotal,
-      provider,
+    return await withPgReadSnapshot(pgDriver, async snapshotDriver => {
+      const exec = options.exec || statsExecutor(snapshotDriver);
+      let stageStarted = performance.now();
+      const markStage = name => {
+        const now = performance.now();
+        if (diagnostics) diagnostics[name] = Math.round(now - stageStarted);
+        stageStarted = now;
+      };
+      const inputs = options.preloadedStatsInputs || await loadPgListingStatsInputs(
+        {searchKeys, userId, settings, diagnostics, asOf},
+        {...options, pgDriver:snapshotDriver, exec},
+      );
+      markStage(options.preloadedStatsInputs ? "reuse_inputs_ms" : "inputs_ms");
+      const provider = options.decorationProvider || await statsProvider(exec, inputs);
+      markStage("provider_ms");
+      if (inputs.candidateShape) {
+        return summarizeRawListingStatsAsync({
+          rows:inputs.rows, flagMap:provider.personalFlags(), userId:inputs.uid,
+          settings:inputs.settings, provider, candidateShape:true,
+          statusCounts:inputs.statusCounts, watchedTotal:inputs.watchedTotal,
+          failedRouteJobs:inputs.failedRouteJobs, dbTotal:inputs.dbTotal,
+        }, diagnostics);
+      }
+      const profileRows = await buildListingStatsRowsAsync({
+        rows: inputs.rows,
+        flagMap: provider.personalFlags(),
+        userId: inputs.uid,
+        settings: inputs.settings,
+        provider,
+        candidateShape: inputs.candidateShape,
+      });
+      markStage("profile_ms");
+      const result = await summarizeListingStatsAsync({
+        profileRows,
+        settings: inputs.settings,
+        statusCounts: inputs.statusCounts,
+        watchedTotal: inputs.watchedTotal,
+        failedRouteJobs: inputs.failedRouteJobs,
+        dbTotal: inputs.dbTotal,
+        provider,
+      });
+      markStage("count_ms");
+      return result;
     });
   } catch (error) {
-    // Never fail the page because a counter could not be read from PostgreSQL.
-    if (options.strict) throw error;
-    if (diagnostics) diagnostics.sqlite_fallback = String(error?.message || error);
-    return stats(searchKeys, userId, settings, diagnostics);
+    if (isListingSearchUnavailable(error)) throw error;
+    throw new ListingSearchUnavailableError(error);
   }
 }
-

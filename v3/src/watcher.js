@@ -13,7 +13,6 @@ import {
   listingCountForSearch,
   listMatchCandidates,
   listingHasTrustedGeo,
-  markSourceKitRetry,
   listingCommutePatch,
   upsertRouteJob,
   getRouteJob,
@@ -39,16 +38,18 @@ import {
   isCrawlSourceEnabled,
   persistHpListingFields,
   invalidateListingLocation,
-  getRakuyaPageCursors,
-  saveRakuyaPageCursors,
   persistListing,
   sendUserWebPush,
   pushPayloadFromEvents,
 } from "./db.js";
-import { replaceCrawlCovers } from "./crawlCovers.js";
-import { markCoveringCompletedAsync, markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
+import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
+// 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
+// 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
+import { saveSettingsAsync } from "./settingsAsync.js";
+import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
+import { throwIfCrawlCancelled } from "./crawlExecution.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
@@ -101,6 +102,7 @@ import {
   invalidateListingLocationAsync,
   markListingAliveAsync,
   markListingOfflineAsync,
+  markSourceKitRetryAsync,
   persistHpListingFieldsAsync,
   restoreListingOnlineAsync,
   setCachedMrtAsync,
@@ -109,6 +111,8 @@ import {
   touchListingCheckedAsync,
   upsertListingPrepAsync,
 } from "./crawlerWrites.js";
+// 樂屋抓取游標：PG 模式下不再讀寫本機 SQLite（見 crawlerProgressAsync.js 的說明）。
+import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawlerProgressAsync.js";
 
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
@@ -631,13 +635,15 @@ export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Dat
 }
 
 export async function runWatch(options = {}) {
-  const want591 = isCrawlSourceEnabled("591");
-  const wantHb = isCrawlSourceEnabled("hbhousing");
-  const wantSinyi = isCrawlSourceEnabled("sinyi");
-  const wantHp = isCrawlSourceEnabled("houseprice");
-  const wantDd = isCrawlSourceEnabled("ddroom");
-  const wantHf = isCrawlSourceEnabled("housefun");
-  const wantRakuya = isCrawlSourceEnabled("rakuya");
+  throwIfCrawlCancelled();
+  const runtime = await crawlRuntimeAsync();
+  const want591 = runtime.sourceEnabled("591");
+  const wantHb = runtime.sourceEnabled("hbhousing");
+  const wantSinyi = runtime.sourceEnabled("sinyi");
+  const wantHp = runtime.sourceEnabled("houseprice");
+  const wantDd = runtime.sourceEnabled("ddroom");
+  const wantHf = runtime.sourceEnabled("housefun");
+  const wantRakuya = runtime.sourceEnabled("rakuya");
   if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf && !wantRakuya) {
     return {
       checked_at: nowIso(),
@@ -647,14 +653,15 @@ export async function runWatch(options = {}) {
       message: "591 與外站來源都已在後台關閉，這次沒有抓取",
     };
   }
-  const settings = getSettings();
+  const settings = runtime.settings;
   const plan = Array.isArray(options.jobs)
     ? {
       jobs: options.jobs,
       includedUserIds: options.includedUserIds || [],
+      memberRequirements: options.memberRequirements || [],
       includeSystem: options.includeSystem === true,
     }
-    : coveringPlan({
+    : await reserveCoveringPlan({
       now: Date.now(),
       includeSystem: options.includeSystem !== false,
     });
@@ -662,7 +669,6 @@ export async function runWatch(options = {}) {
   if (!jobs.length) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
-  replaceCrawlCovers(db, jobs);
   bindNotifyJobSnapshots();
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
@@ -670,6 +676,7 @@ export async function runWatch(options = {}) {
   const hbPages = CRAWL_PAGES_EXTERNAL;
   const collected = [];
   const errors = [];
+  const sourceSuccess = [];
   const fetchOptions = {
     minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     excludeKeywords: settings.excludeKeywords,
@@ -682,16 +689,21 @@ export async function runWatch(options = {}) {
   };
 
   if (want591) {
+    const successful = new Set();
+    sourceSuccess.push(successful);
     let consecutiveTimeouts = 0;
     for (const job of jobs) {
       try {
         const result = await fetchListings(job.searchUrl, pages, fetchOptions);
+        throwIfCrawlCancelled();
         collected.push(result);
+        if (!result.errors?.length) successful.add(job.searchUrl);
         consecutiveTimeouts = 0;
         if (result.total > 0 && result.listings.length === 0) {
           errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
         }
       } catch (error) {
+        throwIfCrawlCancelled();
         errors.push(`${job.searchUrl} → ${error.message}`);
         const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
         consecutiveTimeouts = skip.consecutive;
@@ -704,9 +716,13 @@ export async function runWatch(options = {}) {
   }
 
   async function collectExternal(label, run) {
+    const successful = new Set();
+    sourceSuccess.push(successful);
     try {
       const batches = await run();
+      throwIfCrawlCancelled();
       for (const batch of batches) {
+        if (!batch.errors?.length && batch.searchUrl) successful.add(batch.searchUrl);
         for (const error of batch.errors || []) {
           errors.push(`${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`);
         }
@@ -717,6 +733,7 @@ export async function runWatch(options = {}) {
         }
       }
     } catch (error) {
+      throwIfCrawlCancelled();
       errors.push(`${label} → ${error.message}`);
     }
   }
@@ -759,11 +776,13 @@ export async function runWatch(options = {}) {
   }
   if (wantRakuya) {
     repairRakuyaScopes(db, jobs);
+    // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼（重抓或跳頁）。
+    const startPages = await getRakuyaPageCursorsAsync();
     await collectExternal("樂屋網", () => fetchRakuyaCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       fetchText: options.rakuyaFetchText,
-      startPages: getRakuyaPageCursors(),
+      startPages,
     }));
   }
 
@@ -870,7 +889,7 @@ export async function runWatch(options = {}) {
   const rakuyaProgress = collected.filter(batch => batch.parsed.source === "rakuya"
     && (!batch.errors?.length || batch.progress?.resetReason === "PAGE_OUT_OF_RANGE"))
     .map(batch => batch.progress).filter(Boolean);
-  if (rakuyaProgress.length) saveRakuyaPageCursors(rakuyaProgress);
+  if (rakuyaProgress.length) await saveRakuyaPageCursorsAsync(rakuyaProgress);
 
   if (needsListingGeo(settings) && freshIds.length > 0 && freshIds.length <= LIST_PAGE_SIZE) {
     await ingestListingGeoBatch(freshIds);
@@ -919,7 +938,7 @@ export async function runWatch(options = {}) {
       });
     } catch (error) {
       if (error?.code === "FETCH_BLOCKED") skipBlockedKit.add(row.source);
-      markSourceKitRetry(row.post_id, {
+      await markSourceKitRetryAsync(row.post_id, {
         error: error?.code || error?.message || "kit_failed",
         delayMs: error?.code === "FETCH_BLOCKED" ? 60 * 60 * 1000 : 15 * 60 * 1000,
       });
@@ -929,13 +948,15 @@ export async function runWatch(options = {}) {
 
   const events = options.silent ? [] : await flushPendingNotifications(settings, { silent: options.silent });
   if (settings.hasBaseline !== true) {
-    saveSettings({ hasBaseline: true });
+    await saveSettingsAsync({ hasBaseline: true });
   }
   // 整輪完成的紀錄（lastCoveringAt／lastSystemCoveringAt ＋ crawl_covers.last_run_at）要走 driver-aware
   // 入口：只寫 SQLite 的話，PG 模式的「該抓了」判定永遠讀到舊值 → 每分鐘重跑一整輪（2026-09-24 事故）。
-  await markCoveringCompletedAsync({
-    includedUserIds: plan.includedUserIds,
-    includeSystem: plan.includeSystem === true,
+  // A partial source failure is not a successful cover. Be conservative until
+  // every enabled source reports success; never postpone unprocessed members.
+  await completeCoveringPlan({
+    successfulJobs: jobs.filter(job => sourceSuccess.length > 0 && sourceSuccess.every(set => set.has(job.searchUrl))),
+    memberRequirements: plan.memberRequirements,
     at: nowIso(),
   });
 

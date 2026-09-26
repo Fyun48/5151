@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { allDistricts } from "./regions.js";
 import {
   GEO_FAST_BUDGET_MS,
@@ -190,20 +191,43 @@ export function normalizeBoxes(value) {
   return boxes;
 }
 
-export function isExcludedByKeyword(listing, keywords) {
-  const terms = normalizeKeywords(keywords).filter((term) => term.length >= 2);
+function exclusionTerms(value) {
+  return normalizeKeywords(value).filter(term => term.length >= 2).map(term => term.toLowerCase());
+}
+
+function matchesExcludedKeyword(listing, terms) {
   if (!terms.length) return false;
   const hay = `${listing.title || ""} ${listing.address || ""} ${listing.area_name || ""}`.toLowerCase();
-  return terms.some((term) => hay.includes(term.toLowerCase()));
+  return terms.some(term => hay.includes(term));
+}
+
+function matchesExcludedAgent(listing, ids, terms) {
+  if (listing.contact_uid && ids.includes(Number(listing.contact_uid))) return true;
+  if (!terms.length) return false;
+  const hay = `${listing.contact_name || ""} ${listing.agency || ""} ${listing.role_name || ""} ${listing.contact_role || ""}`.toLowerCase();
+  return terms.some(term => hay.includes(term));
+}
+
+export function isExcludedByKeyword(listing, keywords) {
+  return matchesExcludedKeyword(listing, exclusionTerms(keywords));
 }
 
 export function isExcludedByAgent(listing, settings = {}) {
-  const ids = (settings.excludeAgentIds || []).map(Number).filter((id) => id > 0);
+  const ids = (settings.excludeAgentIds || []).map(Number).filter(id => id > 0);
   if (listing.contact_uid && ids.includes(Number(listing.contact_uid))) return true;
-  const terms = normalizeKeywords(settings.excludeAgents).filter((term) => term.length >= 2);
-  if (!terms.length) return false;
-  const hay = `${listing.contact_name || ""} ${listing.agency || ""} ${listing.role_name || ""} ${listing.contact_role || ""}`.toLowerCase();
-  return terms.some((term) => hay.includes(term.toLowerCase()));
+  return matchesExcludedAgent(listing, [], exclusionTerms(settings.excludeAgents));
+}
+
+// The batch owns these predicates. Settings are normalized once for this call,
+// with no module cache or reuse across requests, users or snapshots.
+export function createListingExclusions(settings = {}) {
+  const keywords = exclusionTerms(settings.excludeKeywords);
+  const agents = exclusionTerms(settings.excludeAgents);
+  const ids = (settings.excludeAgentIds || []).map(Number).filter(id => id > 0);
+  return {
+    keyword: listing => matchesExcludedKeyword(listing, keywords),
+    agent: listing => matchesExcludedAgent(listing, ids, agents),
+  };
 }
 
 export function hasActiveBoxes(boxes) {
@@ -476,7 +500,7 @@ async function photonSearch(query, { fetchFn = fetch, timeoutMs = 4000 } = {}) {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+    signal: crawlRequestSignal(AbortSignal.timeout(Math.max(500, timeoutMs))),
   });
   geoMetrics.provider_ms.push({ provider: "photon", ms: Date.now() - started, status: res.status });
   if (res.status === 429 || res.status === 503) return { busy: true, provider: "photon" };
@@ -527,7 +551,7 @@ async function nominatimSearch(params, { fetchFn = fetch, timeoutMs = 4000 } = {
       "User-Agent": GEO_UA,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(Math.max(500, timeoutMs)),
+    signal: crawlRequestSignal(AbortSignal.timeout(Math.max(500, timeoutMs))),
   });
   geoMetrics.provider_ms.push({ provider: "nominatim", ms: Date.now() - started, status: res.status });
   return res;

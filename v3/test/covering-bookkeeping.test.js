@@ -81,16 +81,16 @@ test("SQLite 分支：沿用同步讀（不動原本行為）", async () => {
   assert.equal(typeof bookkeeping.lastSystemCoveringAt, "string");
 });
 
-test("PG 分支：進度紀錄只寫 lastCoveringAt，includeSystem 才寫系統時間、且不動 crawl_covers", async () => {
+test("PG 分支：進度不冒充完成；includeSystem 只更新排程節奏，不動 cover 或會員", async () => {
   const { calls, exec } = fakeExec();
   const at = "2026-09-24T11:40:00.000Z";
   await markCoveringProgressAsync({ at }, { driver: "postgres", exec });
-  assert.deepEqual(insertCalls(calls).map((call) => call.params[0]), ["lastCoveringAt"]);
+  assert.deepEqual(insertCalls(calls).map((call) => call.params[0]), []);
   assert.equal(calls.some((call) => /UPDATE crawl_covers/.test(call.sql)), false);
 
   const withSystem = fakeExec();
   await markCoveringProgressAsync({ at, includeSystem: true }, { driver: "postgres", exec: withSystem.exec });
-  assert.deepEqual(insertCalls(withSystem.calls).map((call) => call.params[0]), ["lastCoveringAt", "lastSystemCoveringAt"]);
+  assert.deepEqual(insertCalls(withSystem.calls).map((call) => call.params[0]), ["lastSystemCoveringAt"]);
 });
 
 test("每輪只跑一段覆蓋條件：輪替會接著跑一輪，掃完全部後回到開頭", async () => {

@@ -1,4 +1,4 @@
-import { hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
+import { createListingExclusions, hasActiveBoxes, isExcludedByAgent, isExcludedByBox, isExcludedByKeyword, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTrustedGeoSource } from "./location.js";
 import { areaNum } from "./match.js";
 import { passesPriceFilter } from "./listingCost.js";
@@ -12,6 +12,7 @@ import {
 } from "./geoPrecision.js";
 import {
   HOUSING_KINDS,
+  LEGACY_RENTAL_KINDS,
   commercialCategories,
   effectiveAppearanceCategories,
   elevatorRequired,
@@ -32,6 +33,7 @@ export {
 
 function tagText(listing) {
   let tags = listing.tags;
+  if (tags == null || tags === "[]") return "";
   if (typeof tags === "string") {
     try {
       tags = JSON.parse(tags);
@@ -302,6 +304,21 @@ export function listingMatchesKindKey(listing, kind) {
   return true;
 }
 
+// F3（PR-B）：投影用的 canonical kind key 集合，回傳 ",key1,key2," 這種可做集合包含比對的字串。
+// 產生與判斷都走同一支 listingMatchesKindKey，因此 SQL 端只需 kind_keys LIKE '%,key,%' 即可與
+// matchesHousingKind()（floors.js:305）等價——等價性證據：v3/scripts/kind-parity-probe.mjs
+// （14 種查詢 × 2,000 列真實資料，mismatch=0）。
+const KIND_KEY_UNIVERSE = [...new Set([
+  ...HOUSING_KINDS,
+  ...(LEGACY_RENTAL_KINDS || []),
+  "elevator", "apartment", "apartment_huaxia", "suite_shared", "whole",
+])];
+
+export function listingKindKeys(listing) {
+  const keys = KIND_KEY_UNIVERSE.filter((key) => listingMatchesKindKey(listing, key) === true);
+  return keys.length ? `,${keys.join(",")},` : ",";
+}
+
 export function matchesHousingKind(listing, kind) {
   const query = kindsToQuery(kind);
   if (query.rentalMode === "any" && !query.categories.length && !query.elevatorManual && !query.legacyRental) {
@@ -394,7 +411,12 @@ export function passesDisplayFilters(listing, settings = {}, { skipWholeFloor = 
   return true;
 }
 
-export function passesAttributeFilters(listing, settings = {}) {
+export function createAttributeFilter(settings = {}) {
+  const exclusions = createListingExclusions(settings);
+  return listing => passesAttributeFilters(listing, settings, exclusions);
+}
+
+export function passesAttributeFilters(listing, settings = {}, exclusions = null) {
   if (!passesPriceFilter(listing, settings)) return false;
   const minFloors = Number(settings.minBuildingFloors);
   if (Number.isFinite(minFloors) && minFloors > 0) {
@@ -403,10 +425,10 @@ export function passesAttributeFilters(listing, settings = {}) {
       return false;
     }
   }
-  if (isExcludedByKeyword(listing, settings.excludeKeywords)) {
+  if (exclusions ? exclusions.keyword(listing) : isExcludedByKeyword(listing, settings.excludeKeywords)) {
     return false;
   }
-  if (isExcludedByAgent(listing, settings)) {
+  if (exclusions ? exclusions.agent(listing) : isExcludedByAgent(listing, settings)) {
     return false;
   }
   const areaMax = Number(settings.areaMax);
@@ -481,14 +503,15 @@ export function decideNotifyDecision(listing, settings = {}) {
 }
 
 export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
+  const km = Number(settings.commuteKm);
+  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
+  const boxesOn = hasActiveBoxes(settings.excludeBoxes);
+  if (!commuteOn && !boxesOn) return true;
   const cls = resolveLocationClass(listing);
   const usableRoad = canUseForRoadDistance(cls) && hasTrustedCoords(listing);
   if (usableRoad && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
     return false;
   }
-  const km = Number(settings.commuteKm);
-  const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
-  const boxesOn = hasActiveBoxes(settings.excludeBoxes);
   if (strict && boxesOn && !usableRoad) return false;
   if (commuteOn) {
     if (strict && !usableRoad) return false;

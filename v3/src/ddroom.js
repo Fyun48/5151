@@ -1,3 +1,4 @@
+import { crawlRequestSignal } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -280,7 +281,7 @@ async function defaultGetJson(url) {
       Origin: DD_SITE,
       Referer: `${DD_SITE}/search`,
     },
-    signal: AbortSignal.timeout(15000),
+    signal: crawlRequestSignal(AbortSignal.timeout(15000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
     throw Object.assign(new Error(`租租通暫時無法抓取（HTTP ${res.status}）`), {
