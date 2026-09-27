@@ -1290,6 +1290,16 @@ server.js  await saveAdminSiteBudget(req.body || {})
 （尺規的缺陷 (4) 修過一次「`budgetStore()` 委派的函式其實已經是 driver-aware」，
 看起來沒有涵蓋 `saveAdminSiteBudget` 這一個。）
 
+**可重跑的證據**（注入式 `exec` 只有 PG 分支會用到）：
+
+```js
+const calls = [];
+const exec = async (sql, params = []) => { calls.push(sql); return []; };
+await saveAdminSiteBudget({ monthly_limit_twd: 1234 }, { driver: "postgres", exec, strict: true }).catch(() => {});
+// 實測 calls.length === 2，第一句是 `SELECT value FROM settings WHERE key = ?`
+// ⇒ PG 分支確實被走到（沒有回退 SQLite）。
+```
+
 **下一次要碰這裡時**：先確認是不是同一個偽陽性類型（**凡是經過 `budgetStore()` 的都先查**），
 要嘛把 `saveAdminSiteBudget` 這種「只委派給 driver-aware facade」的函式補進尺規規則
 （並依既有紀律留下新舊基準與單調性證據），要嘛就承認那條路由不需要移植。
