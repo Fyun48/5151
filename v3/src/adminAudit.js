@@ -23,7 +23,7 @@ export function redactAuditValue(value, depth = 0) {
   return out;
 }
 
-function rowToEntry(row) {
+export function rowToEntry(row) {
   const parse = (text) => {
     if (text == null || text === "") return null;
     try {
@@ -68,6 +68,22 @@ export function listAdminAudit({ limit = 80 } = {}) {
   ).map(rowToEntry);
 }
 
+// 稽核項目的純建構（兩個 driver 共用）。抽出來是為了讓 PG 分支用**完全相同**的
+// 截斷與遮蔽規則——這些規則（長度上限、密鑰遮蔽）寫兩份一定會漂。
+export function buildAuditEntry({
+  actorId = 0, actorEmail = "", action = "", target = "", before = null, after = null, now = new Date(),
+} = {}) {
+  return {
+    at: (now instanceof Date ? now : new Date(now)).toISOString(),
+    actorId: Number(actorId) || 0,
+    actorEmail: String(actorEmail || "").trim().slice(0, 200),
+    action: String(action || "").trim().slice(0, 80),
+    target: String(target || "").trim().slice(0, 240),
+    before: redactAuditValue(before),
+    after: redactAuditValue(after),
+  };
+}
+
 export function appendAdminAudit({
   actorId = 0,
   actorEmail = "",
@@ -78,15 +94,7 @@ export function appendAdminAudit({
   now = new Date(),
 } = {}) {
   ensureAdminAuditTable(db);
-  const entry = {
-    at: (now instanceof Date ? now : new Date(now)).toISOString(),
-    actorId: Number(actorId) || 0,
-    actorEmail: String(actorEmail || "").trim().slice(0, 200),
-    action: String(action || "").trim().slice(0, 80),
-    target: String(target || "").trim().slice(0, 240),
-    before: redactAuditValue(before),
-    after: redactAuditValue(after),
-  };
+  const entry = buildAuditEntry({ actorId, actorEmail, action, target, before, after, now });
   db.prepare(
     `INSERT INTO admin_audit(at, actor_id, actor_email, action, target, before_json, after_json)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
