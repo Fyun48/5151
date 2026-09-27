@@ -1234,6 +1234,22 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    這一批**風險最高**（動到登入），而且與 §13 的 session 解析高度耦合，
    建議等前面的都清完、而且 Owner 有時間盯的時候再做。
 
+### 下一步的**實際障礙**（先看這裡，省下摸索時間）
+
+1. **`ensureUser`（3 條）不是「接一個函式」而已。** 尺規看到的 `ensureUser` 是
+   `personalFlags.js:23`（吃 `conn`、回 user id），但 `server.js` **沒有直接引用它**——
+   三條路由（`POST /api/admin/crm/contacts`、`…/contacts/:id/notes`、
+   `POST /api/admin/similarity/:id/review`）是**經過別的模組**呼叫的。
+   **動它之前要先追出呼叫端**（`grep -rn "ensureUser" v3/src/*.js` 是起點），
+   否則會改了函式卻沒接到路由、尺規不動。
+2. **`saveAdminMailSettings`／`saveAdminOauthSettings` 需要 Owner 決定。** 它們除了寫
+   settings，還會寫**節點本機的 `auth.env`**。PG 之後「每個節點都有自己的檔案」與
+   「設定應該只有一份」直接衝突——這是政策問題，不是技術問題：
+   (a) 只寫 PG、`auth.env` 改成啟動時從 PG 產生？(b) 兩個都寫（節點間仍可能不一致）？
+   (c) 這兩個端點維持同步、明確標成「節點本機設定」？
+3. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
+   會自己補預設值，所以 settings 那段是很少走到的備援）與一個沒查到底的 `version` 疑點。
+
 ### 交接紀律（這一輪累積下來的，全部都有實例）
 
 1. **動手前先確認 PG 有沒有那個約束。** `CREATE TABLE` 裡的 `UNIQUE(...)`（表約束）與欄位
@@ -1259,6 +1275,15 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    寫「驗 bootstrap 補建」的 live 測試時，**要自己把環境還原成「還沒補建」的狀態**（否則重跑會紅）。
 10. **量尺有缺陷就修，但要留下基準**：每一版尺規的 `--json` 輸出都留著，
     並驗證**單調性**（加邊只能增加、不能減少）。
+11. **`settingsKvAsync` 的 JSON 語意不適用於「原生 SQL 讀者」。** `setSiteSettingAsync` 會
+    `JSON.stringify`，把 `"1"` 寫成 `"\"1\""`；`remote-cs` 那個鍵的讀者
+    （`siteCommandApply.js` 的 `isRemoteCsStopped`）是直接比對**原始文字**，
+    所以會變成「開關永遠失效且沒有任何錯誤」。要動某個 settings 鍵之前，
+    **先確認有誰用原生 SQL 讀它**。
+12. **parity 可以過，而絕對斷言才是鑑別力所在。** `applyBrandUpload` 那批我兩個絕對斷言
+    都寫錯（url 要用本地 `/brand/…` 才過白名單、`mark` 不存在 `markUrl` 欄位），
+    但 parity 全程是綠的——因為錯的是**我的期望值**，不是程式。
+    兩種斷言都要留：parity 抓移植漂移，絕對值抓「兩邊一起錯」。
 
 ## 三、做法（照這個做，不要發明新的）
 
