@@ -427,6 +427,41 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 遠端客服開關 PG 分支的變異集（v3/test/site-command-async.test.js）。
+const SC_SRC = "v3/src/siteCommandAsync.js";
+const SITECOMMAND_MUTATIONS = [
+  {
+    name: "落地改成 JSON.stringify（存成 \"1\" 含引號 ⇒ isRemoteCsStopped 永遠 false）",
+    file: SC_SRC,
+    from: '    await exec(STOP_UPSERT_SQL, [REMOTE_CS_STOP_KEY, flag ? "1" : "0"]);',
+    to: '    await exec(STOP_UPSERT_SQL, [REMOTE_CS_STOP_KEY, JSON.stringify(flag ? "1" : "0")]);',
+    expect: "落地格式必須是原始字串",
+  },
+  {
+    name: "讀取不查 PG（永遠當成沒有存值 ⇒ 開關永遠關不掉）",
+    file: SC_SRC,
+    from: "  const rows = await exec(STOP_SELECT_SQL, [REMOTE_CS_STOP_KEY]);\n  const raw = rows?.[0]?.value;\n  return raw == null ? null : String(raw);",
+    to: "  return null;",
+    expect: '有存值（"1"）',
+  },
+  {
+    name: "讀取把任何非空值都當成停止（\"0\" 也會變停止）",
+    file: SC_SRC,
+    from: "  return raw == null ? null : String(raw);",
+    to: '  return raw == null ? null : "1";',
+    expect: '存值 "0" 也要是 false',
+  },
+  {
+    name: "寫入不再 fail-closed（PG 失敗就無聲寫進沒人讀的 SQLite）",
+    file: SC_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    return runSqlite();",
+    to: "    return runSqlite();",
+    // ⚠️ 殺手是**新的 strict 測試**，不是「非 postgres 模式」那一條（那條只走成功路徑）。
+    // 這已經是第三次 expect 指錯測試名而報成假 SURVIVED——改測試名或補測試時要一起看。
+    expect: "strict：PG 失敗時必須往上丟",
+  },
+];
+
 // 推播訂閱 PG 分支的變異集（v3/test/web-push-async.test.js）。
 // 這批很小，但每一條都對應一個「壞掉會直接 42P10 或寫錯人」的地方。
 const WP_SRC = "v3/src/webPushAsync.js";
@@ -1429,7 +1464,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /web-push-async/.test(testFile) ? PUSH_MUTATIONS
+const MUTATIONS = /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
+  : /web-push-async/.test(testFile) ? PUSH_MUTATIONS
   : /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
   : /comms-async/.test(testFile) ? COMMS_MUTATIONS
   : /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS

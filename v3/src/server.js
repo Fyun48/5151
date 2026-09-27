@@ -300,6 +300,7 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
 import {
   applyRentalCatalogTemplateAsync,
@@ -2230,13 +2231,13 @@ app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
   res.json(setOpsDeliveryStop(stop));
 });
 
-app.get("/api/admin/remote-cs", requireAdminApi, (_req, res) => {
-  res.json(getRemoteCsControl());
+app.get("/api/admin/remote-cs", requireAdminApi, async (_req, res) => {
+  res.json(await getRemoteCsControlAsync());
 });
 
-app.put("/api/admin/remote-cs", requireAdminApi, (req, res) => {
+app.put("/api/admin/remote-cs", requireAdminApi, async (req, res) => {
   const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
-  res.json(setRemoteCsStop(stop));
+  res.json(await setRemoteCsStopAsync(stop));
 });
 
 app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
