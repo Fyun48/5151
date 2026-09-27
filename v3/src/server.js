@@ -2183,8 +2183,8 @@ app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, async (_req
   }
 });
 
-app.get("/api/admin/rental-marketplace-flags", requireAdminApi, (_req, res) => {
-  res.json(publicRentalMarketplaceFlags(getRentalMarketplaceFlags()));
+app.get("/api/admin/rental-marketplace-flags", requireAdminApi, async (_req, res) => {
+  res.json(publicRentalMarketplaceFlags(await getRentalMarketplaceFlagsAsync()));
 });
 
 app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {

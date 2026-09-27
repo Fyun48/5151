@@ -591,6 +591,13 @@ const RENTALCAT_MUTATIONS = [
     expect: "找不到範本時",
   },
   {
+    name: "開關讀取不查 PG（永遠回預設值）",
+    file: RC_SRC,
+    from: "  return normalizeRentalMarketplaceFlags((await readPg(KEYS.flags, options)) || {});",
+    to: "  return normalizeRentalMarketplaceFlags({});",
+    expect: "開關（rental-marketplace-flags）",
+  },
+  {
     name: "寫入不再 fail-closed（PG 失敗就無聲寫進沒人讀的 SQLite）",
     file: RC_SRC,
     from: "    if (!sqliteFallbackAllowed(options, { write: !read })) throw error;\n    return runSqlite();",

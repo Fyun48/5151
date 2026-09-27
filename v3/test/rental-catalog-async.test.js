@@ -345,6 +345,30 @@ test("安全檢查：帶禁用字詞的目錄要擋下，且不得落地", async
   assert.equal(settingsRows(exec.raw).length, 0, "被擋下就不得落地");
 });
 
+test("開關（rental-marketplace-flags）：PG 的設定值要與同步版逐欄相同", async () => {
+  const exec = resetBoth();
+  const flags = { rental_catalog_v2: { enabled: true }, wish_owner_matching: { enabled: true } };
+  db.prepare("INSERT INTO settings(key, value) VALUES('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .run(JSON.stringify(flags));
+  exec.raw.prepare("INSERT INTO settings(key, value) VALUES('rentalMarketplaceFlags', ?)").run(JSON.stringify(flags));
+
+  const pg = await asyncMod.getRentalMarketplaceFlagsAsync({ ...PG, exec });
+  const lite = syncDb.getRentalMarketplaceFlags();
+  assert.deepEqual(pg, syncDb.getRentalMarketplaceFlags() === undefined ? null : pg, "不該是 undefined");
+  assert.deepEqual(Object.keys(pg).sort(), Object.keys(lite).sort(), "鍵集合必須相同");
+  // 逐欄比對（`normalizeRentalMarketplaceFlags` 會補一堆預設旗標）。
+  for (const key of Object.keys(lite)) assert.deepEqual(pg[key], lite[key], `${key} 必須相同`);
+  assert.ok(Object.keys(pg).length > 0, "旗標不得是空物件，否則比對沒有鑑別力");
+});
+
+test("開關：非 postgres 模式讀磁碟那一份", async () => {
+  const exec = resetBoth();
+  db.prepare("INSERT INTO settings(key, value) VALUES('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    .run(JSON.stringify({ rental_catalog_v2: { enabled: true } }));
+  const lite = await asyncMod.getRentalMarketplaceFlagsAsync({ driver: "sqlite", exec });
+  assert.deepEqual(lite, syncDb.getRentalMarketplaceFlags());
+});
+
 test("rentalMatchAdminRules：與同步版逐欄相同（且會先 hydrate）", async () => {
   const exec = resetBoth();
   const pg = await asyncMod.rentalMatchAdminRulesAsync({ ...PG, exec });
