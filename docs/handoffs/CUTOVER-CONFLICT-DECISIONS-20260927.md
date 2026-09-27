@@ -1,0 +1,62 @@
+# 切換衝突：15 筆待 Owner 裁定（2026-09-27）
+
+切換時 SQLite 與 PG 兩邊都有、但內容不同的資料列。已在 `cutover-conflicts.mjs` 分成三桶：
+自動套用 4 筆、無需動作 76 筆、**需 Owner 裁定 15 筆**（本文件）。
+
+目前這 15 筆**維持 PG 現值、未做任何變更**（零風險預設）。
+
+比對來源：SQLite 最終快照 `/volume1/homes/tori/5151-shadow/cutover-20260926/final/5151-web-B-final.db`
+對生產 PG `5151_shadow`（2026-09-27 讀取）。
+
+## A. `settings`（3 筆）
+
+| key | SQLite | PG | 差異 | 建議 |
+|---|---|---|---|---|
+| `housingData` | `updatedAt` **2026-09-23T15:29** | `updatedAt` 2026-09-22T05:49 | 內容完全相同，**只有更新時間不同** | **採用 SQLite 版**（較新，且內容一致） |
+| `rentalCatalogDraft` | `null` | 完整目錄設定（version 1、7 類別、26 條件） | PG 有真實內容、SQLite 是空的 | **維持 PG**（確定） |
+| `sponsorLinks` | bmc 標籤 `「吉比需要你的支持~來份飼料~!」` | bmc 標籤 `「用杯最便宜的咖啡錢贊助吉比本站」` | 只有這一句文案不同 | **需 Owner 選一句** |
+
+## B. `user_settings`（3 筆，都是 user 1）
+
+| key | 差異 | 說明 |
+|---|---|---|
+| `memberSmtp` | SQLite 有完整 Gmail 設定（host／user／pass 皆有值）；**PG 的 host／user／pass 都是空的** | 見下方「關於 memberSmtp」 |
+| `notifyMatrix` | `new.mail`：SQLite `false`、PG `true` | 新物件是否寄信通知。**需 Owner 決定** |
+| `settingProfiles` | 內容不同（同一組 profile id `p-1788528854038`「暫存」） | **需 Owner 決定**要用哪一份 |
+
+### 關於 `memberSmtp`（需要確認，但我沒有證據說是故障）
+
+- PG 的 `host`／`user`／`pass` 是空的，SQLite 有值。
+- **但生產容器日誌沒有出現「系統信尚未能寄信」的警告**（本機重現環境有出現），
+  代表生產的寄信設定應該是走 `auth.env` 環境變數，不是這個欄位。
+- 因此影響可能只是**後台 SMTP 欄位顯示為空**，而非寄信壞掉。
+- **請 Owner 開後台確認 SMTP 欄位**：若確實是空的而信仍寄得出去，代表走 env、可忽略；
+  若信寄不出去，這就是原因，應把 SQLite 的值補回 PG。
+
+## C. `user_listing_flags`（7 筆，都是 user 1）
+
+| listing | 差異 |
+|---|---|
+| 21937940、21973978、22034034、22035846、22043512、22044082 | **`watched`：SQLite `0`、PG `1`**（其餘欄位相同，`watched_at` 兩邊相同） |
+| 22024606 | 現在兩邊**完全相同**，已不再是衝突 |
+
+- 這 6 筆在兩邊的 `watched_at` 都是同一個時間戳，但 `watched` 不同。
+  SQLite 是 `watched=0` 卻留著 `watched_at`（狀態不一致）；PG 是 `watched=1`（與時間戳一致）。
+- 兩者都「合理」，取決於 Owner 當時是否真的要追蹤這 6 筆。
+- **最省事的確認方式**：Owner 直接在網站上看「追蹤清單」有沒有這 6 筆。
+  有且想留 → 維持 PG；不想要 → 這 6 筆改回 `watched=0`。
+- 影響很小（6 筆顯示與否），且 Owner 可隨時在 UI 自行改。
+
+## D. `listing_group_members`（2 筆）
+
+- `21974336`、`22053558`：在 SQLite 快照中存在。
+- 我以 `post_id IN (21974336,22053558)` 查生產 PG **沒有查到**，但衝突報告把它們列為
+  「內容衝突」而非「PG 缺少」。兩者說法不一致，**我還没有查清**。
+- 待辦：確認這 2 筆在 PG 的真實狀態（可能 `post_id` 型別／群組鍵不同），再決定是否補入。
+- 這一項**我不建議現在動手**：`listing_group_members` 是使用者可見的群組歸屬，
+  在確認清楚之前補資料的風險比留著高。
+
+## 我沒有做的事
+
+以上**沒有任何一筆被我改動**。這一桶之所以是「owner 決策」就是因為沒有可靠規則可自動判斷；
+我不會代替 Owner 猜測使用者的意圖。
