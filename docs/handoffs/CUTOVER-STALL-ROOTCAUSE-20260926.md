@@ -3,6 +3,73 @@
 > 本文件只寫**我自己實測**到的結論。凡引用他人留下的說法，一律標明來源，並與我的量測分開。
 > 撰寫者：DeepSeek Harness（DSH）。Owner 質疑過第 2 點的出處，因此本文逐條附出處。
 
+## 零、2026-09-27 00:35Z 第二次上線：**修正了 reconcile 查詢，首次檢查仍然失敗**
+
+Owner 核准「先送 A」後，修正版（master `bd10d885`、image digest `sha256:a6b94ce2…`）
+已完成 build / predeploy / deploy，但：
+
+- 部署後首次檢查**仍然失敗**，簽章與上次一模一樣：
+  ```
+  00:34:51  容器啟動
+  00:35:11  第一次檢查：19 組覆蓋條件
+  00:35:22  居住數據自動更新：6 筆          ← 期間有寫入成功
+  00:35:41  第一次檢查失敗： Connection terminated unexpectedly
+  ```
+- **00:35:11 → 00:35:41 正好 30 秒。**
+- `listings.last_seen_at` 停在 `00:34:31`（＝舊容器最後一次寫入），新版上線後**沒有寫入任何房源**。
+- 已於 00:37Z 回滾至 `9c6b7b04`；回滾後 `max(last_seen_at)` 與 `now()` 只差 **0.5 秒**，crawling 立即恢復。
+
+### 新找到的關鍵事實：HAProxy 有 30 秒逾時
+
+`5151-haproxy`（`haproxy:2.9-alpine`，CasaOS）設定：
+
+```
+timeout connect 5s
+timeout client  30s
+timeout server  30s
+backend pg_primary
+    server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2
+    server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 backup
+```
+
+**App → HAProxy(`192.168.0.140:25433`) → PG primary。** 這兩個 30 秒是**閒置逾時**：
+
+- `timeout server 30s`：PG 端 30 秒沒有吐出任何資料 → HAProxy 切斷連線。
+- `timeout client 30s`：App 端 30 秒沒有送出任何資料 → HAProxy 切斷連線。
+
+`Connection terminated unexpectedly` 正是 node-postgres 在「連線已被對方關掉、但自己不知道」
+時丟出的訊息（`node_modules/pg/lib/client.js:204`）。
+
+**因此這個錯誤的本質是「逾時」，不是崩潰。** 但**我還沒有證明**是哪一邊、以及是哪個操作造成：
+
+- 假設 (a)：首次檢查裡有一個查詢本身跑超過 30 秒（`timeout server`）。
+- 假設 (b)：連線閒置超過 30 秒（App 在做不碰 DB 的長工作），之後再拿同一條連線用（`timeout client`）。
+
+我唯一一次 `pg_stat_activity` 快照（失敗後約 2 分鐘）看到的是**全部 idle、沒有任何長查詢**，
+所以那次快照**不足以區分 (a) 與 (b)**，兩者都還沒有被證實。
+
+### 為什麼重點變了
+
+我先前把停擺歸因於 reconcile 的 127k 全表掃描（993 次／5 分鐘）。那**確實是一個真問題**
+（已修、已建索引、已用 EXPLAIN 證明），但**它顯然不是首次檢查失敗的原因**——
+修正後首次檢查依然在 30 秒失敗。所以：
+
+- **已經修好的**：reconcile 候選查詢的全表掃描（300ms → 36ms，BitmapOr 生效）。
+- **還沒找到的**：首次檢查中超過 30 秒（或造成連線閒置超過 30 秒）的那個操作。
+  這才是 crawler 起不來的直接原因。
+
+### 另一個必須修的觀察性缺口
+
+`v3/src/server.js:3591` 的常規迴圈是：
+
+```js
+timer = setInterval(() => { tick("schedule").catch(() => {}); }, 60 * 1000);
+```
+
+**錯誤被 `.catch(() => {})` 完全吞掉。** 所以 `tick("schedule")` 每 60 秒失敗一次也不會留下
+任何日誌——這正是上一次能夠安靜地死 5 小時、而我在日誌裡只看到一行啟動失敗的原因。
+`startStartupWork()`（`server.js:4302`）也是一次性嘗試，失敗只 `console.warn`，不重試。
+
 ## 一、結論（先講）
 
 失敗版本（PR #497 + #501，image digest `sha256:913da82c…`）上線後，crawler 的
@@ -11,6 +78,11 @@
 根因是**單一查詢**：同屋重複評估（same-house reconcile）的候選查詢，在 PostgreSQL 上
 **每次執行都是 127k 筆全表掃描（約 300ms）**，而它被放在 crawler 的**逐筆熱路徑**上。
 crawler 的每一個 tick 幾乎全被這個查詢吃掉，週期永遠跑不完 → 看起來像「crawler 壞掉」。
+
+> ⚠️ 上面這段是 2026-09-27 00:35Z 第二次上線**之前**寫的。第二次上線證明它**不足以解釋**
+> 首次檢查失敗（見第零節）：reconcile 全表掃描是真的、已修好，但它不是 crawler 起不來的
+> 直接原因。請以第零節為準。
+
 
 **這是我自己的量測，不是 astra6 的殘留資料。**
 
