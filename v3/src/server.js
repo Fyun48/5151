@@ -301,6 +301,7 @@ import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import { importMetaAsync } from "./listingImportAsync.js";
+import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -2582,9 +2583,9 @@ app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/same-house/reconcile", requireAdminApi, (_req, res) => {
+app.get("/api/admin/same-house/reconcile", requireAdminApi, async (_req, res) => {
   res.json({
-    ...sameHouseBackfillStatus(),
+    ...(await sameHouseBackfillStatusAsync()),
     note: "POST 此路徑執行一批歷史 reconciliation，可中斷續跑。",
   });
 });

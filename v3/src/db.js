@@ -7805,7 +7805,7 @@ export function listPublicListings({ kind = "", sources = "", q = "", sort = "ne
   return { listings, totalMatched: rows.length, hasMore: start + pageSize < rows.length, nextOffset: start + pageSize, queryVersion: 2, queryDetails, guest: true };
 }
 
-const BACKFILL_STATUS_KEY = "sameHouseBackfillStatus";
+export const BACKFILL_STATUS_KEY = "sameHouseBackfillStatus";
 
 export function runSameHouseBackfill({ limit = RECONCILE_BATCH, cursor } = {}) {
   const startCursor = cursor == null ? Number(settingKey(BACKFILL_SETTING_KEY) || 0) : Number(cursor) || 0;

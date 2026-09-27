@@ -427,6 +427,39 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// reconciliation 進度狀態 PG 分支的變異集（v3/test/same-house-backfill-status.test.js）。
+const SHB_SRC = "v3/src/sameHouseAsync.js";
+const BACKFILL_MUTATIONS = [
+  {
+    name: "last 不再 parse（回傳 JSON 字串而不是物件）",
+    file: SHB_SRC,
+    from: '    const last = JSON.parse((await read(BACKFILL_STATUS_KEY)) || "{}");',
+    to: '    const last = (await read(BACKFILL_STATUS_KEY)) || "{}";',
+    expect: "兩層編碼都要處理",
+  },
+  {
+    name: "cursor 不轉數字（回傳字串）",
+    file: SHB_SRC,
+    from: "  const cursor = Number((await read(BACKFILL_SETTING_KEY)) || 0);",
+    to: "  const cursor = (await read(BACKFILL_SETTING_KEY)) || 0;",
+    expect: "兩層編碼都要處理",
+  },
+  {
+    name: "讀錯鍵（cursor 與 last 對調）",
+    file: SHB_SRC,
+    from: "  const cursor = Number((await read(BACKFILL_SETTING_KEY)) || 0);",
+    to: "  const cursor = Number((await read(BACKFILL_STATUS_KEY)) || 0);",
+    expect: "兩層編碼都要處理",
+  },
+  {
+    name: "last 壞掉時直接把例外往外丟（端點會 500）",
+    file: SHB_SRC,
+    from: "  } catch {\n    return { cursor, batch: RECONCILE_BATCH, last: {} };\n  }",
+    to: "  } catch (error) {\n    throw error;\n  }",
+    expect: "last 壞掉時回空物件",
+  },
+];
+
 // 匯入功能說明 PG 分支的變異集（v3/test/listing-import-async.test.js）。
 const LI_SRC = "v3/src/listingImportAsync.js";
 const LISTINGIMPORT_MUTATIONS = [
@@ -1518,7 +1551,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS
+const MUTATIONS = /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS
+  : /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS
   : /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
   : /web-push-async/.test(testFile) ? PUSH_MUTATIONS
   : /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS

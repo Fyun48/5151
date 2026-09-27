@@ -336,3 +336,29 @@ export async function rejectSuspectedMatchAsync(postId, userId, { peerId, admin 
     already: existing?.vote === "split",
   };
 }
+
+// ---- 歷史 reconciliation 的進度狀態 ----
+//
+// 對應 `db.js:7851 sameHouseBackfillStatus()`。它只讀**兩個 settings 鍵**：
+//   * `BACKFILL_SETTING_KEY` 存的是 `String(cursor)`（`writeSettingKey` 會 JSON.stringify）
+//   * `BACKFILL_STATUS_KEY`  存的是 `JSON.stringify({...})`（等於被 stringify 兩次）
+// 所以 `getSiteSettingAsync()`（JSON.parse 一次）在這裡是 `settingKey()` 的**直接替代**——
+// 兩邊取到的都是「再 parse 一次才拿到物件」的字串。判斷與回傳形狀完全照抄。
+import { getSiteSettingAsync } from "./settingsKvAsync.js";
+import { BACKFILL_SETTING_KEY, RECONCILE_BATCH } from "./sameHouseReconcile.js";
+import { BACKFILL_STATUS_KEY } from "./db.js";
+
+export async function sameHouseBackfillStatusAsync(options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    const { sameHouseBackfillStatus } = await import("./db.js");
+    return sameHouseBackfillStatus();
+  }
+  const read = (key) => getSiteSettingAsync(key, { ...options, driver: "postgres" });
+  const cursor = Number((await read(BACKFILL_SETTING_KEY)) || 0);
+  try {
+    const last = JSON.parse((await read(BACKFILL_STATUS_KEY)) || "{}");
+    return { cursor, batch: RECONCILE_BATCH, last: last && typeof last === "object" ? last : {} };
+  } catch {
+    return { cursor, batch: RECONCILE_BATCH, last: {} };
+  }
+}
