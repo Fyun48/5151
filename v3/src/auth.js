@@ -128,14 +128,23 @@ export async function readSessionAsync(req, options = {}) {
 }
 
 // 靜態資產不需要 session；帶 cookie 載入 30 個檔案不該換來 30 次 users 查詢。
-// 只涵蓋「確定不讀 session」的檔案伺服路徑（/media/* 三個 handler 都是純 sendFile）。
-const STATIC_PREFIXES = ["/vendor/", "/icons/", "/brand/", "/media/"];
+//
+// 規則：**符合靜態副檔名、且不在 `/api/` 底下**就當靜態。
+// ⚠️ 第一版只認 `/vendor/`、`/icons/`、`/brand/`、`/media/` 四個前綴，於是
+// `express.static(v3/public)` 服務的**根目錄檔案**（`/app.js`、`/support-page.css`…）
+// 全部沒被跳過——那才是最大一批。改成看副檔名之後，四個前綴自然被涵蓋。
+//
+// 安全前提：目前唯一「符合副檔名卻不是靜態檔」的路由是 `GET /sw.js`（純 `sendFile`，
+// 用 `_req` 不讀 session）。`route-data-map.test.js` 有一條守衛會盯著這件事：
+// 之後若有人加了會讀 session 的副檔名路由，那一條會紅，屆時把它加進 DYNAMIC_ASSET_PATHS。
 const STATIC_EXT = /\.(?:js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+export const DYNAMIC_ASSET_PATHS = Object.freeze([]);
 
 export function isStaticAssetPath(pathname) {
   const p = String(pathname || "");
   if (!STATIC_EXT.test(p)) return false;
-  return STATIC_PREFIXES.some((prefix) => p.startsWith(prefix));
+  if (p.startsWith("/api/")) return false;
+  return !DYNAMIC_ASSET_PATHS.includes(p);
 }
 
 // 掛在 app 層（所有路由註冊之前）：每請求解析一次並快取。

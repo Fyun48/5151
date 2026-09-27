@@ -173,6 +173,20 @@ test("被低估的那一批：/api/admin/campaigns 必須看得到 listCampaigns
     `舊尺只顯示 getCommsConfig，於是這批看起來「只被 2 個函式卡住」。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
+test("副檔名路由的守衛：符合靜態副檔名的路由只能是「不讀 session 的檔案伺服」", () => {
+  // `isStaticAssetPath()`（auth.js）用「符合靜態副檔名、且不在 /api/ 底下」決定要不要
+  // 跳過 session 解析。這個判斷的**前提**是「沒有動態路由長得像靜態檔」。
+  // 目前唯一符合的是 `GET /sw.js`（純 sendFile，用 `_req`）。
+  // 之後若有人加了會讀 session 的副檔名路由，這一條會紅——那時要把它加進
+  // auth.js 的 `DYNAMIC_ASSET_PATHS`，**不要**直接把這一條刪掉。
+  const EXT = /\.(?:js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+  const known = ["GET /sw.js"];
+  const found = [...rows.keys()].filter((k) => EXT.test(k.slice(k.indexOf(" ") + 1)));
+  assert.deepEqual(found.sort(), known,
+    `出現新的「像靜態檔」的路由了。它會讀 session 嗎？會的話加進 DYNAMIC_ASSET_PATHS。`
+    + `實際：${found.join(" / ") || "（無）"}`);
+});
+
 test("純函式不得被列為 SQLite 卡點：normalizeLineUrl 必須完全不出現", () => {
   // `normalizeLineUrl()`（selfListings.js:502）只做字串處理、一個 regex 與 `throw`，**完全不碰 DB**。
   // 它一度出現在 **18 條**路由的 sqlite 欄裡，根因是剝註解用 regexp 而**不辨識正規表達式字面量**：

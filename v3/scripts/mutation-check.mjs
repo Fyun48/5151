@@ -491,11 +491,20 @@ const SESSION_MUTATIONS = [
     expect: "靜態資產即使帶 cookie",
   },
   {
+    name: "靜態判斷退回四個前綴（public 根目錄的 .js／.css 每個檔案都查一次 users）",
+    file: AUTH_SRC,
+    from: "  return !DYNAMIC_ASSET_PATHS.includes(p);",
+    to: '  return ["/vendor/", "/icons/", "/brand/", "/media/"].some((prefix) => p.startsWith(prefix));',
+    expect: "isStaticAssetPath：靜態檔要跳過",
+  },
+  {
     name: "isStaticAssetPath 不比對副檔名（/media/self 這種動態路徑被當成靜態）",
     file: AUTH_SRC,
     from: "  if (!STATIC_EXT.test(p)) return false;\n",
     to: "",
-    expect: "isStaticAssetPath：動態路由不得被誤判成靜態",
+    // 測試名在 2026-09-27 改過（合併成「靜態檔要跳過、動態路由不得被誤判」），
+    // 這裡的 expect 也要跟著改——不然會變成「有殺手卻指名不到」的假 SURVIVED。
+    expect: "isStaticAssetPath：靜態檔要跳過",
   },
   {
     name: "身分欄位漏掉 plan（形狀與舊版不一致）",

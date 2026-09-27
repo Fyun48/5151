@@ -217,12 +217,20 @@ test("靜態資產即使帶 cookie 也不解析 session（/media、/vendor、/ic
   assert.equal(exec.calls.length, 1);
 });
 
-test("isStaticAssetPath：動態路由不得被誤判成靜態", () => {
-  for (const p of ["/media/lib/a.png", "/vendor/x.js", "/icons/i.svg", "/brand/b.png"]) {
+test("isStaticAssetPath：靜態檔要跳過、動態路由不得被誤判", () => {
+  // ⚠️ 第一版只認四個前綴（/vendor/、/icons/、/brand/、/media/），於是
+  // `express.static(v3/public)` 服務的**根目錄檔案**全部沒被跳過——那才是最大一批
+  // （登入者每次載入頁面都會為每個 .js／.css 各查一次 users）。
+  for (const p of ["/media/lib/a.png", "/vendor/htmx.min.js", "/icons/i.svg", "/brand/b.png",
+    // 這一組是第一版漏掉的：
+    "/app.js", "/support-page.css", "/admin-support.js", "/cities-embed.js", "/sw.js"]) {
     assert.equal(isStaticAssetPath(p), true, `${p} 應為靜態`);
   }
   for (const p of ["/api/media", "/api/media/tags", "/l/abc", "/w/abc", "/", "/index.html",
-    "/media/self", "/api/public/listings", "/go/123", "/api/brand"]) {
+    "/terms.html", "/media/self", "/api/public/listings", "/go/123", "/api/brand",
+    "/manifest.webmanifest",
+    // `/api/` 底下即使帶副檔名也必須解析（API 一律要身分）
+    "/api/export/report.csv", "/api/thing.json"]) {
     assert.equal(isStaticAssetPath(p), false, `${p} 不該被當成靜態資產`);
   }
 });
