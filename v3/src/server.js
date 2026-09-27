@@ -298,6 +298,24 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
+// 站內公告與贊助活動的 PG 島嶼入口。
+import {
+  announcementInboxForUserAsync,
+  bannerAnnouncementsAsync,
+  createAnnouncementAsync,
+  createCampaignAsync,
+  dismissAnnouncementAsync,
+  listAnnouncementsAdminAsync,
+  listCampaignsAdminAsync,
+  listingCampaignsAsync,
+  markAnnouncementReadAsync,
+  publicActiveAnnouncementsAsync,
+  publicCommsBundleAsync,
+  publishAnnouncementAsync,
+  recordSponsoredEventAsync,
+  updateAnnouncementAsync,
+  updateCampaignAsync,
+} from "./commsAsync.js";
 // 內容文件（條款／隱私權）的 PG 島嶼入口。
 // `legalCopyFromDocumentsAsync` 是很多條路由的共用卡點（/api/disclaimer、/api/me、註冊流程…）。
 import {
@@ -1658,29 +1676,29 @@ function sendCommsError(res, error) {
   res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
 }
 
-app.get("/api/admin/announcements", requireAdminApi, (_req, res) => {
-  res.json({ items: listAnnouncementsAdmin(db), meta: commsMeta() });
+app.get("/api/admin/announcements", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listAnnouncementsAdminAsync(), meta: commsMeta() });
 });
 
-app.post("/api/admin/announcements", requireAdminApi, (req, res) => {
+app.post("/api/admin/announcements", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createAnnouncement(db, commsActor(req), req.body || {}));
+    res.status(201).json(await createAnnouncementAsync(commsActor(req), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.patch("/api/admin/announcements/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/announcements/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateAnnouncement(db, commsActor(req), Number(req.params.id), req.body || {}));
+    res.json(await updateAnnouncementAsync(commsActor(req), Number(req.params.id), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/announcements/:id/publish", requireAdminApi, async (req, res) => {
   try {
-    const published = publishAnnouncement(db, commsActor(req), Number(req.params.id));
+    const published = await publishAnnouncementAsync(commsActor(req), Number(req.params.id));
     auditReq(req, "announcement_publish", published?.title || req.params.id, { status: "draft" }, { status: "published" });
     res.json(published);
   } catch (error) {
@@ -1688,21 +1706,21 @@ app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => 
   }
 });
 
-app.get("/api/admin/campaigns", requireAdminApi, (_req, res) => {
-  res.json({ items: listCampaignsAdmin(db), config: getCommsConfig(), meta: commsMeta() });
+app.get("/api/admin/campaigns", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listCampaignsAdminAsync(), config: await getCommsConfigAsync(), meta: commsMeta() });
 });
 
-app.post("/api/admin/campaigns", requireAdminApi, (req, res) => {
+app.post("/api/admin/campaigns", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createCampaign(db, commsActor(req), req.body || {}));
+    res.status(201).json(await createCampaignAsync(commsActor(req), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.patch("/api/admin/campaigns/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/campaigns/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateCampaign(db, commsActor(req), Number(req.params.id), req.body || {}));
+    res.json(await updateCampaignAsync(commsActor(req), Number(req.params.id), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
@@ -1720,40 +1738,40 @@ app.put("/api/admin/comms-config", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/announcements", (_req, res) => {
-  res.json({ items: publicActiveAnnouncements(db), banner: bannerAnnouncements(db) });
+app.get("/api/announcements", async (_req, res) => {
+  res.json({ items: await publicActiveAnnouncementsAsync(), banner: await bannerAnnouncementsAsync() });
 });
 
-app.get("/api/announcements/inbox", (req, res) => {
+app.get("/api/announcements/inbox", async (req, res) => {
   const session = readSession(req);
-  res.json({ items: announcementInboxForUser(db, session?.userId || null) });
+  res.json({ items: await announcementInboxForUserAsync(session?.userId || null) });
 });
 
-app.post("/api/announcements/:id/read", (req, res) => {
+app.post("/api/announcements/:id/read", async (req, res) => {
   const session = readSession(req);
-  res.json(markAnnouncementRead(db, session?.userId || null, Number(req.params.id)));
+  res.json(await markAnnouncementReadAsync(session?.userId || null, Number(req.params.id)));
 });
 
-app.post("/api/announcements/:id/dismiss", (req, res) => {
+app.post("/api/announcements/:id/dismiss", async (req, res) => {
   const session = readSession(req);
-  res.json(dismissAnnouncement(db, session?.userId || null, Number(req.params.id)));
+  res.json(await dismissAnnouncementAsync(session?.userId || null, Number(req.params.id)));
 });
 
-app.get("/api/sponsored", (_req, res) => {
-  const config = getCommsConfig();
+app.get("/api/sponsored", async (_req, res) => {
+  const config = await getCommsConfigAsync();
   res.json({
     interval: config.listing_ad_interval,
     listing_enabled: config.sponsored_master_enabled && config.listing_placement_enabled,
     session_cap: 3,
-    cards: listingCampaigns(db, config).map((row) => publicCampaignView(row)),
+    cards: (await listingCampaignsAsync({ config })).map((row) => publicCampaignView(row)),
   });
 });
 
-app.post("/api/sponsored/:id/event", (req, res) => {
+app.post("/api/sponsored/:id/event", async (req, res) => {
   try {
     const kind = String(req.body?.kind || "");
     const placement = String(req.body?.placement || "listing");
-    res.json(recordSponsoredEvent(db, Number(req.params.id), kind, placement));
+    res.json(await recordSponsoredEventAsync(Number(req.params.id), kind, placement));
   } catch (error) {
     sendCommsError(res, error);
   }
@@ -1763,8 +1781,8 @@ app.get("/api/comms", async (req, res) => {
   const session = readSession(req);
   // 支持方式（後台「贊助連結」）是公開資訊：未登入訪客也要拿得到，才不會在「支持本站」看到死路。
   const publicSponsorOffer = await publicSponsorSettingsAsync({});
-  res.json(publicCommsBundle(db, {
-    config: getCommsConfig(),
+  res.json(await publicCommsBundleAsync({
+    config: await getCommsConfigAsync(),
     sponsorOffer: session ? await publicSponsorSettingsAsync(session) : {},
     sponsorLinks: publicSponsorOffer.links,
     user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},

@@ -427,6 +427,127 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// comms（公告／贊助活動）PG 分支的變異集（v3/test/comms-async.test.js）。
+const COMMS_SRC = "v3/src/commsAsync.js";
+const COMMS_SYNC_SRC = "v3/src/comms.js";
+const COMMS_MUTATIONS = [
+  {
+    name: "關閉公告時不再保留原本的已讀時間（COALESCE 拿掉）",
+    file: COMMS_SRC,
+    from: "ON CONFLICT(announcement_id, user_id) DO UPDATE SET dismissed_at=excluded.dismissed_at, read_at=COALESCE(announcement_member_state.read_at, excluded.read_at)",
+    to: "ON CONFLICT(announcement_id, user_id) DO UPDATE SET dismissed_at=excluded.dismissed_at, read_at=excluded.read_at",
+    expect: "upsert 語意",
+  },
+  {
+    name: "已讀改成整列覆蓋（會清掉 dismissed_at）",
+    file: COMMS_SRC,
+    from: "ON CONFLICT(announcement_id, user_id) DO UPDATE SET read_at=excluded.read_at",
+    to: "ON CONFLICT(announcement_id, user_id) DO UPDATE SET read_at=excluded.read_at, dismissed_at=NULL",
+    expect: "upsert 語意",
+  },
+  {
+    name: "公告更新不再遞增 version",
+    file: COMMS_SRC,
+    from: "      updated_at=?, version=version+1",
+    to: "      updated_at=?",
+    expect: "更新公告：version 遞增",
+  },
+  {
+    name: "建立公告不寫稽核",
+    file: COMMS_SRC,
+    from: '      entity_type: "announcement", entity_id: doc.id, action: "create",\n      actor_id: actorId, detail: data.status, now: asDate(now),\n',
+    to: "",
+    expect: "建立公告",
+  },
+  {
+    name: "生效窗判斷拿掉（過期公告照樣出現）",
+    file: COMMS_SYNC_SRC,
+    from: "    .filter((row) => isWithinWindow(row, now));\n}\n\nexport function publicActiveAnnouncements",
+    to: "    ;\n}\n\nexport function publicActiveAnnouncements",
+    expect: "生效窗",
+  },
+  {
+    name: "未登入也去寫公告狀態（訪客會被寫進 announcement_member_state）",
+    file: COMMS_SRC,
+    from: '  if (!userId) return { ok: true, anonymous: true }; // 未登入：不動 DB（同步版同義）\n',
+    to: "",
+    expect: "未登入",
+  },
+  {
+    name: "贊助活動更新時頻道整包取代（不是合併）",
+    file: COMMS_SRC,
+    from: "      channels: { ...current.channels, ...(input.channels || {}) },",
+    to: "      channels: { ...(input.channels || {}) },",
+    // ⚠️ expect 比對的是**測試名稱**，不是斷言訊息。第一版寫「頻道要合併」，但測試名是
+    // 「建立／更新活動：頻道**合併**、落地列與稽核…」——殺手其實有跑出來，卻因為字串對不上
+    // 而被報成假 SURVIVED。這已經是第二次（上一次是改名後忘了同步改 expect）。
+    expect: "頻道合併",
+  },
+  {
+    name: "曝光／點擊不再檢查活動是否已發布（草稿也會被計數）",
+    file: COMMS_SRC,
+    from: '    if (!campaign || !campaign.enabled || campaign.status !== "published") return { ok: false };\n',
+    to: "",
+    expect: "曝光／點擊事件",
+  },
+  {
+    name: "曝光只寫事件列不推計數（數字永遠 0）",
+    file: COMMS_SRC,
+    from: '    await exec(kind === "impression" ? IMPRESSION_BUMP_SQL : CLICK_BUMP_SQL, [Number(campaignId)]);\n',
+    to: "",
+    expect: "曝光／點擊事件",
+  },
+  {
+    name: "事件類型不驗證（view 這種亂傳的值也會落地）",
+    file: COMMS_SRC,
+    from: '  if (!allowed) throw httpError("事件類型不正確");\n',
+    to: "",
+    expect: "曝光／點擊事件",
+  },
+  {
+    name: "listing 版位不再看 listing_placement（下架的活動仍會出現）",
+    file: COMMS_SRC,
+    from: "  return rows.filter((row) => row.listing_placement);",
+    to: "  return rows;",
+    expect: "活動的生效窗與 master",
+  },
+  {
+    name: "master 開關失效（關掉贊助主開關仍然投放）",
+    file: COMMS_SRC,
+    from: "      if (config.sponsored_master_enabled === false) return [];\n",
+    to: "",
+    expect: "活動的生效窗與 master",
+  },
+  {
+    name: "公開整包忘了拿掉 created_by（後台欄位外洩到公開 API）",
+    file: COMMS_SRC,
+    from: "    announcements: announcements.map((row) => ({ ...row, created_by: undefined })),",
+    to: "    announcements,",
+    expect: "publicCommsBundleAsync",
+  },
+  {
+    name: "公開整包不再過濾 channel_inapp（沒開站內通道的也進通知）",
+    file: COMMS_SRC,
+    from: "      notify: notify.filter((row) => row.channels.inapp).map((row) => publicCampaignView(row)),",
+    to: "      notify: notify.map((row) => publicCampaignView(row)),",
+    expect: "publicCommsBundleAsync",
+  },
+  {
+    name: "comms 的三個索引不補建（訪客端點退化成全表掃描）",
+    file: COMMS_SRC,
+    from: '  "CREATE INDEX IF NOT EXISTS idx_announcements_active ON system_announcements(enabled, status, start_at, end_at)",\n',
+    to: "",
+    expect: "ensureCommsStoreOnce",
+  },
+  {
+    name: "announcement_member_state 的複合主鍵拿掉（ON CONFLICT 會找不到目標）",
+    file: COMMS_SRC,
+    from: "     dismissed_at TEXT,\n     PRIMARY KEY (announcement_id, user_id)\n   )`,",
+    to: "     dismissed_at TEXT\n   )`,",
+    expect: "ensureCommsStoreOnce",
+  },
+];
+
 // 內容文件 PG 分支的變異集（v3/test/content-documents-async.test.js）。
 // 這一組的重點是「不可變性」——那是用 PG trigger 實作的業務規則，不是加固。
 const CD_SRC = "v3/src/contentDocumentsAsync.js";
@@ -1115,7 +1236,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
+const MUTATIONS = /comms-async/.test(testFile) ? COMMS_MUTATIONS
+  : /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
   : /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS

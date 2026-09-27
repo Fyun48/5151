@@ -978,6 +978,71 @@ effective_until）**不會**被誤擋。
 * **live PG 1/1**（隔離 repro）；既有 `content-documents.test.js` 7/7 不變；
   尺規守衛 14/14 不變。
 
+### 第十七批（2026-09-27）：`comms.js`（公告 ＋ 贊助活動，14 條路由）
+
+`v3/src/commsAsync.js`（新）＋ 14 條路由改 async。
+SQLite 15→**12**、MIXED 139→**128**、PG 114→**128**、缺口 154→**140**。
+
+涵蓋：後台公告 4 條、後台活動 3 條、公開公告 4 條、曝光／點擊 1 條，
+外加 `/api/sponsored`、`/api/comms`（`publicCommsBundleAsync` 把已移植的三個積木接起來）。
+
+#### 17.1 這批沒有新方言陷阱，要自己補的是**索引**
+
+`ON CONFLICT … DO UPDATE SET excluded.x` 與 `version=version+1` 兩邊都合法，所以這批
+幾乎是機械轉換。真正要處理的是：正式站那五張表**只有 pkey**，
+`idx_announcements_active`／`idx_campaigns_active`／`idx_sponsored_events_bucket`
+都不存在。它們不是唯一約束（少了不會壞），但 `/api/announcements` 是**每個訪客都會打**
+的端點，少了索引就是全表掃描。bootstrap 補建。
+
+#### 17.2 最細的一條語意：公告狀態的 upsert
+
+```sql
+-- 已讀
+ON CONFLICT(announcement_id, user_id) DO UPDATE SET read_at = excluded.read_at
+-- 關閉
+ON CONFLICT(announcement_id, user_id) DO UPDATE SET dismissed_at = excluded.dismissed_at,
+                                                   read_at = COALESCE(announcement_member_state.read_at, excluded.read_at)
+```
+
+關閉時**不得**把原本的已讀時間蓋成關閉時間（那兩句寫錯都不會壞，但時間語意會失真）。
+測試雙向驗：先讀再關（read_at 保留原值）、先關再讀（dismissed_at 不被清掉）。
+
+#### 17.3 變異測試逼出的三個問題（兩條空測試 ＋ 一次字串不符）
+
+第一次跑 **14/16**：
+
+| 問題 | 根因 | 修法 |
+|---|---|---|
+| 「頻道整包取代」殺不死 | `normalizeCampaignInput` 對 `inapp` 的預設是 `channels.inapp !== false`（true），我卻用預設值去測 ⇒ 合併與取代算出來剛好一樣 | 先把 `inapp` 設成 **false** 再只更新 webhook |
+| 「不過濾 channel_inapp」殺不死 | 只種了一筆 `inapp:true` 的活動 ⇒ 過濾是 no-op | 再種一筆 `inapp:false`，斷言它進 cards 但**不進** notify |
+| 換標的之後仍報 SURVIVED | `expect` 寫「頻道**要**合併」，測試名是「頻道**合併**…」 | 對齊字串 |
+
+> **`expect` 比對的是測試名稱，不是斷言訊息。** 這已經是第二次踩到（上一次是改測試名忘了
+> 同步改 `expect`）。兩次都表現成「有殺手卻報成 SURVIVED」的**假訊號**，比紅燈更危險。
+
+#### 17.4 量尺守衛**第四次**換標的——這次是先用實測反推，不是憑感覺挑
+
+`/api/admin/campaigns`（`listCampaignsAdmin`）被這批移植掉 ⇒ 「被低估的那一批」守衛失效。
+換標的過程本身有兩個坑：
+
+1. 先挑 `addDemandReply` → **殺不死**：它是 db.js 的包裝（`addDemandReply as addDemandReplyOn`），
+   在「只認 db.js」的缺陷下照樣被算進去。
+2. 再挑 `countWatched`（`watchLimits.js`，server.js 直接 import）→ **還是殺不死**：
+   實測把缺陷套回去跑一次，288 條裡**只有 2 條**判定會變，`countWatched` 不在其中
+   （它與 db.js 的集合重疊）。
+
+最後是**把缺陷套回去實跑、反推出那 2 條**，才找到 `changesSince`／`currentRevision`
+（`dataRevision.js`，沒有 import db.js）與 `searchAdminListings`。
+性質測試的清單也一併換成這三個，門檻從 3 降到 2。
+
+> **教訓**：換守衛標的時，「看起來是那一類」不算數——要**把缺陷套回去實測**，
+> 確認那個標的真的會變。這一輪為此白換了兩次。
+
+#### 17.5 驗收
+
+* `v3/test/comms-async.test.js` **16/16**（新）；變異測試 **16/16 KILLED**。
+* 尺規變異 **7/7 KILLED**；既有 `comms.test.js` 8/8 不變。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。

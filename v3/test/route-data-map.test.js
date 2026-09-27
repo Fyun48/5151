@@ -170,27 +170,45 @@ test("跨模組的 handle helper 是可替換的守衛（單一標的移植掉�
   // 上面那條是「指名一個標的」，移植掉就得人工換——已經換過三次了。
   // 這一條改驗**性質**：缺陷 (2) 一旦回來，這些「住在 db.js 以外、吃 handle 參數」的 helper
   // 會**同時**從整張表消失；只移植掉一兩個模組則不會讓它變紅。
-  // 門檻設 3：留替換空間，但「只認 db.js」的退化一定被擋下。
+  // 門檻設 2：這三個只要少一個就代表「只認 db.js」的退化回來了。
+  // 清單一律挑「定義在 db.js 以外」的（`listCampaignsAdmin` 第十六批移植掉了；
+  // `addDemandReply`／`getRentalCatalog` 其實是 db.js 的包裝，對這個缺陷沒有鑑別力——
+  // 第一版就是混進了那兩個，才會出現「清單看起來很長、變異卻殺不死」的假象）。
+  // ⚠️ 清單要挑「缺陷 (2) 下真的會消失」的：實測只有 `searchAdminListings`、
+  // `changesSince`、`currentRevision` 三個（其餘大多與 db.js 的集合重疊）。
+  // 第一版混進了 db.js 的包裝，看起來清單很長、實際上沒有鑑別力。
   const NON_DB_HANDLE_HELPERS = [
-    "getWishExample",          // demand.js
-    "listDocuments",           // contentDocuments.js
-    "listCampaignsAdmin",      // comms.js
-    "addDemandReply",          // demand.js
-    "listAdminListingImports", // listingImport.js
-    "getRentalCatalog",        // rentalCatalog.js
+    "changesSince",         // dataRevision.js（server.js 直接 import）
+    "currentRevision",      // dataRevision.js
+    "searchAdminListings",  // adminOverview.js
   ];
   const visible = new Set();
   for (const [, r] of rows) for (const fn of r.sqlite) visible.add(fn);
   const found = NON_DB_HANDLE_HELPERS.filter((fn) => visible.has(fn));
-  assert.ok(found.length >= 3,
+  assert.ok(found.length >= 2,
     `缺陷 (2)（sqlite 歸屬只看 db.js）會讓這類 helper 全部隱形。只看得到 ${found.length} 個：${found.join(", ") || "（無）"}`);
 });
 
-test("被低估的那一批：/api/admin/campaigns 必須看得到 listCampaignsAdmin", () => {
-  const r = route("GET /api/admin/campaigns");
+test("被低估的那一批：/api/demand/:id/reply 必須看得到 addDemandReply", () => {
+  // 📌 **測試名稱的「被低估的那一批」刻意保持不變**（只換標的）：變異集的 `expect` 比對的是
+  // 測試名稱，改名就得同步改 `expect`——那個坑已經踩過兩次（一次是改名忘了改，一次是
+  // expect 與測試名差一個字），兩次都變成「有殺手卻報成 SURVIVED」的假訊號。
+  //
+  // 這條**已經換過一次標的**：原本是 `/api/admin/campaigns` ← `listCampaignsAdmin`，
+  // 第十六批把 comms.js 移植成 PG 之後失效（理由與「吃 handle 參數的 helper」那條相同：
+  // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效**）。
+  // 這次挑 `demand.js`（1698 行、沒有 import db.js）的 `addDemandReply(db, …)`。
+  // ⚠️ 移植 demand.js 時，這一條要再換標的，**不要刪掉斷言**。
+  // ⚠️ 標的必須是**真的住在 db.js 以外**、server.js **直接 import**、而且**在缺陷 (2) 下
+  // 真的會消失**的 helper。這件事我換了兩次才對：
+  //   * `addDemandReply` → 是 db.js 的包裝（`addDemandReply as addDemandReplyOn`），缺陷下照樣被算進去。
+  //   * `countWatched`（watchLimits.js）→ 也是類似的重疊，實測缺陷 (2) 下 288 條裡只有 **2 條**會變。
+  // 最後用實測反推：把缺陷套回去跑一次，只有這兩條會失去卡點，其中之一就是這裡用的
+  // `changesSince`／`currentRevision`（`dataRevision.js`，**沒有** import db.js）。
+  const r = route("GET /api/events/revision");
   assert.equal(r.verdict, "MIXED", `實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("listCampaignsAdmin"),
-    `舊尺只顯示 getCommsConfig，於是這批看起來「只被 2 個函式卡住」。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.ok(r.sqlite.includes("changesSince") && r.sqlite.includes("currentRevision"),
+    `舊尺看不到「吃 handle 參數且住在 db.js 以外」的 helper。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
 test("副檔名路由的守衛：符合靜態副檔名的路由只能是「不讀 session 的檔案伺服」", () => {
