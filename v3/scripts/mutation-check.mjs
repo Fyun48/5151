@@ -64,6 +64,53 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const MAP_SRC = "v3/scripts/route-data-map.mjs";
+
+// 進度量尺的變異集（v3/test/route-data-map.test.js）。
+// 這一組要證明的是「兩個缺陷真的被鎖住了」——把修正還原，對應的路由就必須被判錯。
+const MAP_MUTATIONS = [
+  {
+    name: "還原缺陷 (1)：函式本文切到下一個 function 宣告（會吞掉整段路由）",
+    file: MAP_SRC,
+    from: "  for (const hit of text.matchAll(re)) fns.set(hit[1], sliceFunctionBody(text, hit.index));",
+    to: "  const hits = [...text.matchAll(re)];\n  for (let i = 0; i < hits.length; i += 1) fns.set(hits[i][1], text.slice(hits[i].index, i + 1 < hits.length ? hits[i + 1].index : text.length));",
+    // 注意：殺手是 support/public 而不是 demo——缺陷 (2) 的修正對 demo 有重疊覆蓋。
+    expect: "/api/support/public",
+  },
+  {
+    name: "還原缺陷 (1) 的錯誤修法：從簽名後第一個 { 起算（被 destructured default 截斷）",
+    file: MAP_SRC,
+    from: `  let i = text.indexOf("(", start);
+  if (i === -1) return text.slice(start);
+  let parenDepth = 0;
+  for (; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === "\u0060") { i = skipString(text, i) - 1; continue; }
+    if (ch === "(") parenDepth += 1;
+    else if (ch === ")") {
+      parenDepth -= 1;
+      if (parenDepth === 0) { i += 1; break; }
+    }
+  }
+  const open = text.indexOf("{", i);`,
+    to: `  let i = start;
+  const open = text.indexOf("{", i);`,
+    expect: "/api/admin/members",
+  },
+  {
+    name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
+    file: MAP_SRC,
+    from: "    if (sqliteNodes.has(nodeKey(target.to, target.orig))) sqlite.add(target.orig);",
+    to: "    if (target.to === \"db.js\" && touches.has(target.orig)) sqlite.add(target.orig);",
+    expect: "/api/support/public",
+  },
+  // 刻意**沒有**「接收者改成萬用字元」這一條：實測它是**等價變異**。
+  // 改成 `\w+\.(prepare|exec|…)` 確實多算了 52 個命中（1178 vs 1126，全是 re.exec() 之類），
+  // 但 288 條的判定**完全沒變**（189/47/26/26）——那些 parser 函式從路由不可達。
+  // 所以白名單是**防禦性**的（保護 sqliteNodes 的正確性），不是靠測試守住的；
+  // 留一條永遠 SURVIVED 的變異只會讓報告失去意義。
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -187,7 +234,9 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS : REJECT_MUTATIONS;
+const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /route-data-map/.test(testFile) ? MAP_MUTATIONS
+    : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。
 const PRISTINE = new Map();
