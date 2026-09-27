@@ -75,6 +75,25 @@ node v3/scripts/route-data-map.mjs
 **這份清單就是步驟 2 的輸入**：要確認 PG 的 schema 有沒有這些表與欄位（schema 本來就是照
 SQLite 鏡射，預期大多已有，但要逐項確認而不是假設）。
 
+## 步驟 2：PG schema 已完整對應 SQLite（2026-09-27）
+
+把兩邊的 schema 全量比對（CasaOS `591-tracker-v3:/data/v3.db` 對生產 PG `5151_shadow`）：
+
+| | 表數 | 欄位數 |
+|---|---:|---:|
+| PostgreSQL | 102 | 1,018 |
+| SQLite | 98 | 997 |
+| **SQLite 有、PG 沒有** | **0 張** | |
+| **兩邊都有但欄位不同** | **0 張** | |
+
+PG 多出來的 4 張表：`drill_marker`、`job_queue`、`rejoin_probe`、`repl_test`
+（名稱看起來是 HA 演練／複寫測試留下的，不是缺口）。
+
+**結論：schema 不是問題，也不需要補。** 98 張表、997 個欄位在 PG 全部存在，且欄位集合完全相同。
+所以後續工作純粹是「把還在 SQLite 的路由切過去」，不涉及資料庫結構變更。
+
+這也讓步驟 3 的風險降低：不需要 migration、不需要 `ALTER TABLE`、不會有欄位對不上的情況。
+
 ## 全量對照表（288 條）
 
 | # | method | path | handler | 判定 | 證據 | SQLite 函式 | PG 函式 | 涉及表 |
