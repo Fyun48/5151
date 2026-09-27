@@ -427,6 +427,74 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 推播訂閱 PG 分支的變異集（v3/test/web-push-async.test.js）。
+// 這批很小，但每一條都對應一個「壞掉會直接 42P10 或寫錯人」的地方。
+const WP_SRC = "v3/src/webPushAsync.js";
+const PUSH_MUTATIONS = [
+  {
+    name: "不補建 UNIQUE(endpoint)（正式站只有 pkey ⇒ ON CONFLICT 直接 42P10）",
+    file: WP_SRC,
+    // ⚠️ 刻意**不是**「刪掉這個 const」：那會讓整個模組載入失敗，工具只看到
+    // 「整個檔案失敗」而抓不到任何測試名 ⇒ 變成假 SURVIVED。改成換成 no-op 語句。
+    from: '  "CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_key ON push_subscriptions(endpoint)";',
+    to: '  "SELECT 1";',
+    expect: "bootstrap：先清重複再建 UNIQUE",
+  },
+  {
+    name: "先建唯一索引才清重複（有重複時 CREATE UNIQUE INDEX 直接失敗）",
+    file: WP_SRC,
+    from: "    const dupes = await pgDriver.query(PG_DUPLICATE_ENDPOINTS_SQL);\n    for (const row of dupes.rows) {\n      await pgDriver.query(toPostgresSql(PG_DROP_DUPLICATE_ENDPOINT_SQL), [row.endpoint, row.keep_id]);\n    }\n    await pgDriver.exec(PG_CREATE_ENDPOINT_INDEX_SQL);",
+    to: "    await pgDriver.exec(PG_CREATE_ENDPOINT_INDEX_SQL);",
+    expect: "bootstrap：先清重複再建 UNIQUE",
+  },
+  {
+    name: "schema bootstrap 不快取（每次訂閱都重建一次）",
+    file: WP_SRC,
+    from: "  if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);\n",
+    to: "",
+    expect: "只做一次",
+  },
+  {
+    name: "upsert 的衝突目標拿掉（同一支手機每次訂閱都新增一列）",
+    file: WP_SRC,
+    from: "   ON CONFLICT(endpoint) DO UPDATE SET\n     user_id = excluded.user_id,\n     p256dh = excluded.p256dh,\n     auth = excluded.auth,\n     last_seen_at = excluded.last_seen_at`;",
+    to: "   `;",
+    expect: "同一個 endpoint 再訂一次",
+  },
+  {
+    name: "格式驗證不再共用（PG 分支放行任何 endpoint）",
+    file: WP_SRC,
+    from: "  const { endpoint, p256dh, auth } = pushSubscriptionFields(sub);",
+    to: '  const { endpoint, p256dh, auth } = { endpoint: String(sub.endpoint || ""), p256dh: String(sub.p256dh || ""), auth: String(sub.auth || "") };',
+    expect: "格式驗證",
+  },
+  {
+    name: "取消訂閱不驗擁有者（會刪到別人的訂閱）",
+    file: WP_SRC,
+    from: 'export const PUSH_DELETE_SQL = "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?";',
+    to: 'export const PUSH_DELETE_SQL = "DELETE FROM push_subscriptions WHERE endpoint = ? AND ? IS NOT NULL";',
+    expect: "取消訂閱",
+  },
+  {
+    // ⚠️ 刻意**沒有**「拿掉 `if (!uid || !url) return {ok:true}`」那一條：實測是**等價變異**
+    // ——那個 early return 只是短路，刪除語句本身就按 `user_id` 過濾，拿掉之後仍然刪不掉東西，
+    // 所以沒有任何測試該為它變紅。留一條永遠 SURVIVED 的變異只會讓報告失去意義。
+    // 真正會壞的是「刪除不比對 endpoint」：
+    name: "取消訂閱不比對 endpoint（同一使用者的其他裝置會被一起刪掉）",
+    file: WP_SRC,
+    from: 'export const PUSH_DELETE_SQL = "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?";',
+    to: 'export const PUSH_DELETE_SQL = "DELETE FROM push_subscriptions WHERE user_id = ? AND ? IS NOT NULL";',
+    expect: "取消訂閱",
+  },
+  {
+    name: "寫入不再 fail-closed（PG 失敗就無聲寫進沒人讀的 SQLite）",
+    file: WP_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    return runSqlite();",
+    to: "    return runSqlite();",
+    expect: "strict：PG 失敗時必須往上丟",
+  },
+];
+
 // 租屋目錄 PG 分支的變異集（v3/test/rental-catalog-async.test.js）。
 // 這一組的重點是**行程內快取的一致性**：PG 寫完只改 DB 不改快取，同步路徑就會拿到舊目錄。
 const RC_SRC = "v3/src/rentalCatalogAsync.js";
@@ -1340,7 +1408,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
+const MUTATIONS = /web-push-async/.test(testFile) ? PUSH_MUTATIONS
+  : /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
   : /comms-async/.test(testFile) ? COMMS_MUTATIONS
   : /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
   : /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS

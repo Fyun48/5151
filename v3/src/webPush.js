@@ -93,21 +93,28 @@ export function vapidConfigured() {
   return Boolean(keys.publicKey && keys.privateKey);
 }
 
-function httpError(message, status = 400) {
+export function httpError(message, status = 400) {
   const err = new Error(message);
   err.status = status;
   return err;
 }
 
-export function savePushSubscription(db, userId, sub = {}) {
-  const uid = Number(userId) || 0;
-  if (!uid) throw httpError("請先登入", 401);
+// 訂閱欄位的正規化與驗證（純函式）。PG 分支（webPushAsync.js）共用同一份，
+// 所以「什麼叫做格式正確」只會有一個答案。
+export function pushSubscriptionFields(sub = {}) {
   const endpoint = String(sub.endpoint || "").trim();
   const p256dh = String(sub.keys?.p256dh || sub.p256dh || "").trim();
   const auth = String(sub.keys?.auth || sub.auth || "").trim();
   if (!/^https:\/\//i.test(endpoint) || !p256dh || !auth) {
     throw httpError("推播訂閱格式不正確");
   }
+  return { endpoint, p256dh, auth };
+}
+
+export function savePushSubscription(db, userId, sub = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入", 401);
+  const { endpoint, p256dh, auth } = pushSubscriptionFields(sub);
   const now = new Date().toISOString();
   db.prepare(
     `INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth, created_at, last_seen_at)

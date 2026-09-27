@@ -1148,6 +1148,49 @@ privacy:    privacy?.body || defaults.privacy,       // ← 沒有文件也有�
 > 「讓測試通過」，而不是「先確認規格」。下次遇到這種來回，**先停下來把被呼叫函式的
 > 實際回傳值印出來**（我最後才印，一印就發現兩邊都是預設值）。
 
+### 第二十批（2026-09-27）：`webPush.js`（推播訂閱，2 條路由）
+
+`v3/src/webPushAsync.js`（新）＋ 2 條路由改 async。
+SQLite 12（不變）、MIXED 119→**117**、PG 137→**139**、缺口 131→**129**。
+
+#### 20.1 又是一條「PG 上根本不存在」的約束
+
+```sql
+INSERT INTO push_subscriptions(...) VALUES (...) ON CONFLICT(endpoint) DO UPDATE SET ...
+```
+
+`ON CONFLICT(endpoint)` 需要 endpoint 上的唯一約束，而 SQLite 的
+`endpoint TEXT NOT NULL UNIQUE` 是**欄位約束** ⇒ 隱式索引 `sqlite_autoindex_…` ⇒
+不在 `sqlite_master` 的具名索引裡 ⇒ `pgSchema` 鏡射不到。實測正式站 `push_subscriptions`
+**只有 pkey**，所以那句話在 PG 上會直接 `42P10`
+（`there is no unique or exclusion constraint matching the ON CONFLICT specification`）。
+bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建 `UNIQUE(endpoint)`。
+
+這是**同一個坑的第四次**（listingTools 的帳號聯絡人、memberMedia 的標籤名、comms 的複合主鍵、
+現在的推播 endpoint）。判準很簡單：**`CREATE TABLE` 裡的 `UNIQUE(...)` 或欄位 `UNIQUE`
+在 PG 都不會存在**，用到 `ON CONFLICT` 或依賴唯一性之前，先確認 PG 有沒有那個約束。
+
+#### 20.2 變異測試暴露的兩個「工具／測試」問題（不是程式問題）
+
+第一次 **6/8**，兩個存活都不是程式的錯：
+
+| 存活 | 真正的原因 | 修法 |
+|---|---|---|
+| 不補建 `UNIQUE(endpoint)` | 變異寫成**刪掉那個 const 定義** ⇒ 模組載入直接失敗 ⇒ 工具只看到「整個檔案失敗」、抓不到任何測試名 ⇒ **假 SURVIVED** | 改成把語句換成 `SELECT 1`（模組仍可載入，行為真的少了索引） |
+| 取消訂閱不比對 endpoint | 測試資料裡 user 1 **只有一筆**訂閱 ⇒「只按 user_id 刪」也會刪掉剛好那一筆 | user 1 改成兩筆（模擬兩台裝置），斷言另一筆必須留著 |
+
+另外抓到一條**空斷言**：`first.includes(asyncMod.PG_CREATE_ENDPOINT_INDEX_SQL)` 在常數變成
+`undefined` 時**恆真**（`[undefined].includes(undefined)` 是 true）。改成字面 regex 比對。
+
+> **兩個可重用的教訓**：
+> 1. **變異不要用「刪掉宣告」**——那會讓模組載入失敗，工具分不出「測試變紅」與「檔案爆掉」，
+>    結果是假 SURVIVED。要改成同一個位置的**等價但無效**的實作（`SELECT 1`、`return null`）。
+> 2. **斷言不要 `includes(某常數)`**：常數被移除時它會變成 `undefined`，那種斷言會恆真。
+
+#### 20.3 驗收
+
+* `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。

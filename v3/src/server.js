@@ -298,6 +298,7 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
+import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
 import {
   applyRentalCatalogTemplateAsync,
@@ -3445,27 +3446,27 @@ app.post("/api/admin/self-listings/:id/hide", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/push/subscribe", (req, res) => {
+app.post("/api/push/subscribe", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(saveUserPushSubscription(session.userId, req.body || {}));
+    res.json(await savePushSubscriptionAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/push/unsubscribe", (req, res) => {
+app.post("/api/push/unsubscribe", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(deleteUserPushSubscription(session.userId, req.body?.endpoint));
+    res.json(await deletePushSubscriptionAsync(session.userId, req.body?.endpoint));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
