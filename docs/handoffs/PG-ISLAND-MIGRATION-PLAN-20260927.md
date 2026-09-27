@@ -15,21 +15,40 @@
 node v3/scripts/route-data-map.mjs
 ```
 
-**最新一次量測（2026-09-27，第二批之後；由下一個 session 自己重跑確認）：**
+### 🚨 2026-09-27：分析器的兩個缺陷已修，**基準換了**——兩套數字並列
 
-| 判定 | 條數 | 與第二批前相比 |
-|---|---:|---|
-| 無直接DB | 117 | — |
-| **SQLite（缺口）** | **80** | −1 |
-| MIXED | 36 | −3 |
-| **PG** | **55** | +4 |
+我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
+換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
+
+| 判定 | 舊尺（有缺陷） | **新尺（已修）** | 差距 |
+|---|---:|---:|---:|
+| SQLite | 80 | **189** | +109 |
+| MIXED | 36 | **47** | +11 |
+| 無直接DB | 117 | **26** | −91 |
+| PG | 55 | **26** | −29 |
+| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **+120** |
+
+**這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
+把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
+
+> ⚠️ 舊尺的數字仍然有用：`80／36／117／55` 是所有**舊 PR 與舊文件**引用的值，
+> 要跟歷史紀錄對照時用它。**新的判斷與排優先順序一律用新尺。**
+
+### 舊尺數字（2026-09-27 第二批之後）
+
+| 判定 | 條數 |
+|---|---:|
+| 無直接DB | 117 |
+| **SQLite（缺口）** | **80** |
+| MIXED | 36 |
+| **PG** | **55** |
 
 起點是 SQLite 95 / PG 22（2026-09-27 盤點時）。
 
 > ⚠️ **判讀進度請用「SQLite ＋ MIXED」合計**，不要只看 SQLite 那一格。
 > 一個 `*Async` 入口接上之後，路由通常是從 **MIXED** 移到 PG（不是從 SQLite），因為
 > MIXED 代表「已經有 PG 路徑、但還有殘留的同步函式」。第二批前的合計是 81+39=120，
-> 第二批後是 80+36=116。
+> 第二批後是 80+36=116（舊尺）。
 
 ### 2026-09-27 修正：分析器加上 driver-aware 規則
 
@@ -172,15 +191,27 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
 `rentalMarketplaceFlags`（有資料搬遷）、`adminMapsSettings`（寫 auth.env）、
 `adminAdsSettings`（已停用路徑）、`GET /api/comms`（直接吃 SQLite handle）。
 
-### 建議的下一個標的（有證據支持）
+### 建議的下一個標的（2026-09-27 用**新尺**重排，證據在第 7.4 節）
 
-先做**盤點**而不是直接動手：把目前仍判 SQLite／MIXED 的路由，逐條列出「卡住的同步函式」，
+**頭號目標是 session 解析，不是 `getListing`。**
+
+| 優先 | 標的 | 卡住的路由 | 為什麼 |
+|---|---|---:|---|
+| **1** | **`readSession()` → `findUserByEmail()`** | **137／236** | 每一條已登入路由都在讀節點本機 SQLite 解析 session。**這是活的正确性問題**（role／plan／deleted_at 兩台可能不同）。修一條解鎖 **58%** 的缺口 |
+| 2 | `getListing` → `getListingAsync`（已存在） | 8 | 便宜，但順位在 session 之後 |
+| 3 | `getSettings` → `getSettingsAsync`（已存在） | 8 | 同上 |
+| 4 | `getCommsConfig` → `getCommsConfigAsync`（已存在） | 10 | **注意：這不是 2 個函式就能解決的**——背後的 `comms.js` 是 812 行、約 20 個吃 handle 的函式（第 7.2 節的實例） |
+
+> 舊尺把 comms 家族顯示成「10 條路由只被 2 個函式卡住」，看起來是最划算的一批。
+> **那是缺陷 (2) 造成的低估**：`listCampaignsAdmin(db)`／`createCampaign(db, …)`／
+> `publicCommsBundle(db, …)` 全部隱形。動手前務必用新尺再看一次。
+
+### 舊尺時代的建議（保留供對照）
+
+先做**盤點**而不是直接動手：把仍判 SQLite／MIXED 的路由逐條列出「卡住的同步函式」，
 再對照 `v3/src/*Async.js` 既有的 export，找出**已經有 PG 版本、只是呼叫端沒接**的那些。
 第二批的 `stats` 就是這樣撿到的（3 個字的替換解鎖 3 條路由）。
-
-從上面的表看，下一個最可能是 **`getListing` → `getListingAsync`**：
-`getListingAsync` 已經存在且已被多條路由使用，而 `getListing` 仍出現在
-`recheck`、`report-gone`、`flags`、`commute/focus`、`/api/admin/maps` 的 SQLite 欄位裡。
+**但這個盤點在舊尺下會低估**——見第 7.2 節。
 
 ## 五、未決事項（**已由 Owner 於 2026-09-27 決定**）
 
@@ -198,58 +229,101 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
    - `listing_groups`（1 筆）／`listing_group_members`（5+2 筆）→ **以 PG 為準**（不補）。
      理由：那是機器推導的聚合，PG 的 reconcile 在轉換後已重算；硬補會與 `lg_b9cf4fc4…` 的歸組衝突。
    - 順序不變：**先轉換（步驟 3）→ 再對帳（步驟 4）**，因為節點 SQLite 仍在被寫入。
+3. **【新，需 Owner 決定】session 解析要不要改成不讀節點 SQLite。**
+   新尺顯示 `readSession() → findUserByEmail()` 卡住 **137／236** 條缺口路由（第 7.4 節）。
+   三條路，取捨不同：
+
+   | 選項 | 做法 | 好處 | 代價 |
+   |---|---|---|---|
+   | **A. async `readSession`** | 加 `readSessionAsync()`，把呼叫端改 async + await | 語意完全不變、最正確 | **呼叫端極多**（幾乎每個 handler），diff 巨大、回歸風險高 |
+   | **B. session 帶著身分** | cookie 內已載 `userId`／`role`／`plan`，加上 `deleted_at` 的判斷方式，`readSession` 就不必讀 DB | 一次解鎖 137 條、且**同步函式不必改** | **語意改變**：role／plan 變更與停權要等 token 更新才生效——這是**安全相關**的取捨 |
+   | **C. 把 `users` 同步進節點 SQLite** | 由 PG 週期性同步 `users` 到本機檔案，維持同步讀取 | 不必動呼叫端 | 新增一條同步機制與快取失效問題；兩台仍可能短暫不一致 |
+
+   **我的建議是 B＋縮短 session 有效期**，但這涉及安全語意，必須 Owner 決定。
+   在決定之前，`readSession` 保持原狀（現行行為不變）。
 
 
-## 七、🚨 量測工具本身有兩個缺陷（2026-09-27 實測，**未修**）
+## 七、量測工具：兩個缺陷已修，而且一修好就找到真正的頭號卡點
 
-`route-data-map.mjs` 是這個專案的進度尺。實測發現它有**兩個方向相反**的缺陷。
-**文件上所有進度數字都是用現在這版量的**，所以還沒有失真——但改這支工具之前必須知道這些。
+`route-data-map.mjs` 是這個專案的進度尺。它原本有**兩個方向相反**的缺陷，
+2026-09-27 兩個一起修好（**不能只修一個**），修完之後第一個跑出來的結果就改變了優先順序。
 
-### 7.1 過度回報：頂層函式的本文會吞掉整段路由
+### 7.1 缺陷 (1) 過度回報：頂層函式的本文會吞掉整段路由 → 已修
 
-函式本文用「切到下一個 `function` 宣告」取得，那假設頂層函式相鄰。**server.js 不是。**
+本文原本切成「到下一個 `function` 宣告」，那假設頂層函式相鄰。**server.js 不是。**
 `yieldEventLoop()`（約行 431）後面接著 **51 個路由註冊**，下一個 `function` 宣告在很後面，
 所以它的「本文」把整段吞進去，**任何呼叫它的路由都繼承那一整段裡所有路由的函式引用**。
 
-實測證據：我在 `/api/health` 加了一個從 `*Async.js` 匯出的函式引用之後，
-`GET /api/demo` 從「無直接DB」變成 **PG**——只因為行 451 的 `/api/health` 落在同一段裡，
-而 `/api/demo` 根本沒碰那個函式。
+實測證據：在 `/api/health` 加了一個 `*Async.js` 的函式引用之後，`GET /api/demo`
+從「無直接DB」變成 **PG**——只因為同段的 `/api/health` 引用了它，而 `/api/demo` 根本沒碰。
 
-**這會虛報進度，比漏報危險**（本系列已經有過一次過度回報的紀錄）。
+修法：`sliceFunctionBody()` —— **先跳過參數列（從 `(` 做括號配對），再取之後的第一個 `{`**，
+然後括號配對到收合（跳過字串與正規表達式字面量）。
 
-### 7.2 低估：把 SQLite handle 當參數傳的 helper 完全看不到
+> ⚠️ **這裡踩過一次，務必記住**：第一版用「簽名後第一個 `{`」當起點，結果**災難性低估**——
+> `function f(userId, { docType = "" } = {})` 的第一個 `{` 在**參數列**裡，配對到參數的 `}`
+> 就結束，本文被截斷。288 條裡 **55 條**判定改變，連文件明寫「真的還沒轉換」的
+> `/api/admin/legal-copy` 都變成「無直接DB」。**函式本文的起點必須跳過參數列。**
 
-`touches`（「只走 SQLite」的函式集合）**只從 `db.js` 計算**。但有一整類 helper 把 handle
-當**參數**傳：
+### 7.2 缺陷 (2) 低估：吃 handle 參數的 helper 完全看不到 → 已修
+
+`touches`（「只走 SQLite」的函式集合）原本**只從 `db.js` 計算**。但有一整類 helper 把
+SQLite handle 當**參數**傳，住在自己的模組、**沒有 import db.js**：
 
 ```js
 app.get("/api/support/public", (_req, res) => res.json(publicSupportConfig(db)));
+app.get("/api/admin/campaigns", requireAdminApi, (_req, res) =>
+  res.json({ items: listCampaignsAdmin(db), config: getCommsConfig(), meta: commsMeta() }));
 ```
 
-`publicSupportConfig` 住在自己的模組、**沒有 import db.js**，所以永遠不進 `touches`。
+`publicSupportConfig`／`listCampaignsAdmin` 這類函式永遠不進 `touches`，於是那些路由被
+判成「無直接DB」。修法：`sqliteNodes` 改成**跨模組、以 `(檔, 函式)` 為鍵**，
+任何模組裡「本文直接碰 handle 且不是 driver-aware」的函式都算 SQLite 節點，再沿同模組呼叫傳遞。
 
-實測證據：把 7.1 修好之後，`GET /api/support/public` 從 MIXED（一長串 sqlite 函式）
-變成「**無直接DB**」——但它明明在寫 SQLite。**288 條裡有 55 條的判定會因此改變。**
+> ⚠️ **接收者必須列白名單，不能寫成 `\w+\.(prepare|exec|…)`。**
+> 全站 receiver 分佈實測：`db` 1027、`conn` 92（`conn.prepare(` 83）、`sqliteDb` 7；
+> 其餘 `re.exec()`／`dest.exec()`／`target.exec()` 全是**正規表達式**的 exec。
+> 圖省事寫成萬用字元會製造大量誤判。目前白名單是 `db|conn|sqliteDb` ＋ `sqliteHandle`。
 
-### 7.3 為什麼我沒有直接修
+### 7.3 修好之後的驗收（逐條人工核對，不是只看數字）
 
-我先試著修了 7.1（括號配對取真正的函式本文），結果**第一版更糟**：用「簽名後第一個 `{`」
-當起點，遇到 `function f(userId, { docType = "" } = {})` 會配對到**參數的 `}`** 就結束，
-本文被截斷，55 條判定改變、連文件明寫「真的還沒轉換」的 `/api/admin/legal-copy`
-都變成「無直接DB」。改成「先跳過參數列、再取 `{`」之後 7.1 確實修好了
-（`/api/demo` 與 `/api/health` 都回到「無直接DB」），但 7.2 就浮出來。
+| 路由 | 舊尺 | 新尺 | 人工核對 |
+|---|---|---|---|
+| `GET /api/health` | PG | **無直接DB** | 只讀行程內計數器，確實不碰 DB ✓ |
+| `GET /api/demo` | 無直接DB | **SQLite** | 經 `buildDemoState` 呼叫 `findUserByEmail`，確實讀 SQLite ✓ |
+| `GET /api/support/public` | 無直接DB | **SQLite** | 呼叫 `publicSupportConfig(db)` ✓ |
+| `GET /api/admin/campaigns` | SQLite（只 2 個卡點） | **SQLite**（含 `listCampaignsAdmin`） | `comms.js` 是 812 行、約 20 個吃 handle 的函式 ✓ |
+| `GET/PUT /api/admin/legal-copy` | SQLite | **SQLite** | 與文件原本的說法一致 ✓ |
+| `POST /api/listings/:id/reject-match` | PG | **MIXED** | 見 7.4——這條最有意義 |
 
-**兩個缺陷方向相反，只修一個就重新基準化一定會誤導。** 換尺會讓所有既有數字失去可比性，
-所以我把工具**還原成原狀**（只留註解說明），等 Owner 決定。
+### 7.4 🚨 新尺揭示的頭號卡點：**每一條已登入路由都在讀節點本機 SQLite**
 
-**建議**：兩個一起修（7.1 用參數列跳過＋括號配對；7.2 讓 `touches` 跨模組計算
-「本文內直接使用 `db.prepare` 等、且該 `db` 是參數」的函式），修完重跑一次完整基準，
-並把新舊兩份數字並列公告，不要默默換掉。
+`auth.js:71`：
 
-> 順帶記一個**已經修好**的同類問題：`GET /api/health` 一度被判成 PG，因為它引用了
-> `auditFailureStats()`——那個函式只是行程內的計數器、**完全不碰 DB**，只因為它住在
-> `adminAuditAsync.js`（`*Async.js` ⇒ 一律算 PG）。修法是把它移到 `adminAuditHealth.js`，
-> 語意上也更正確（它不是 driver-aware 的 DB 入口）。移完之後 288 條的判定與基準完全一致。
+```js
+export function readSession(req) {
+  ...
+  const user = findUserByEmail(data.e);   // ← SQLite 讀取
+  ...
+}
+```
+
+`readSession()` 被**幾乎每一個** handler 呼叫，而它會用 `findUserByEmail()` 讀**節點本機
+SQLite** 來解析 session。所以：
+
+- **137 條**（缺口 236 條中的 **58%**）的 sqlite 集合含 `findUserByEmail`。
+- 連我這一輪剛移植完、離線與真 PG 都測過的 `/api/listings/:id/reject-match`，
+  新尺也正確地標成 **MIXED**——寫入走 PG，但**解析 session 仍在讀節點本機檔案**。
+
+**這是舊尺完全看不到的一整類問題**，而且是**活的正确性問題**：`users` 在兩台節點的
+SQLite 各有一份，`role`／`plan`／`deleted_at` 都從本機檔案讀。公開站經 HAProxy 在兩台之間
+輪流 ⇒ 同一個人在兩台可能拿到不同的 role／plan，**停權或刪帳號也可能只在一台生效**。
+
+**修法有三條路，各有取捨，需要 Owner 決定**（見第五節第 3 點）。
+
+> 次要但同樣是「一整類」的：`getUserById`（27 條）、`tableColumns`（23）、
+> `sqlExcludeFixtureRows`（23）、`isFixtureMaturityAuthorized`（21）、`ensureUser`（20）。
+> 這些全是吃 handle 參數的 helper，以前完全不在雷達上。
 
 ## 八、步驟 4～7（後續步驟）
 
