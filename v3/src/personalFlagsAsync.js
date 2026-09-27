@@ -17,7 +17,8 @@ import {
 // setFlags() 在 db.js（personalFlags.js 只有 setUserListingFlags 等底層函式）。
 // 2026-09-26 這裡曾誤寫成從 personalFlags.js 匯入，離線測試沒涵蓋本模組所以 CI 沒抓到，
 // 是 build-production-image 的隔離 smoke 測試擋下來的（模組匯入錯誤會讓服務起不來）。
-import { setFlags as setFlagsSync } from "./db.js";
+import { hideMany as hideManySync, setFlags as setFlagsSync } from "./db.js";
+import { listingStatsAsync } from "./listingStatsAsync.js";
 import { WRITE_PATH_SQL } from "./repository/writePath.js";
 import { watchLimitForActor, watchLimitMessage } from "./watchLimits.js";
 import { groupIdForPost } from "./listingGroupsAsync.js";
@@ -137,4 +138,31 @@ export async function setFlags(postId, flags, userId, options = {}) {
 export async function setFlagsAsync(postId, flags, userId, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") return setFlagsSync(postId, flags, userId);
   return setFlags(postId, flags, userId, options);
+}
+
+// db.js hideMany() 的 PG 分支。與同步版逐條對應：去重、過濾無效 id、
+// **在單一交易內**逐筆設為 hidden，最後回傳 { count, stats }。
+// 注意：setFlags() 內部也會呼叫 runInTransaction，但這裡把 exec 傳進去，
+// 所以它會沿用同一個交易，不會另外開一層。
+// id 正規化（與 db.js hideMany() 內的規則相同）：去重、只留 > 0 的有限數字。
+// 抽成純函式是為了能單獨測試——交易與 stats 那段需要較重的夾具。
+export function normalizeHideIds(ids) {
+  return [...new Set((ids || []).map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+}
+
+export async function hideMany(ids, userId, options = {}) {
+  const list = normalizeHideIds(ids);
+  const uid = await resolveUserId(options.exec || (await pgExec(options)), userId);
+  await runInTransaction(options, async (exec) => {
+    for (const id of list) {
+      await setFlags(id, { hidden: true }, uid, { ...options, exec });
+    }
+  });
+  // stats 要在交易之外算：交易提交後原本的 tx 已經不能再用。
+  return { count: list.length, stats: await listingStatsAsync({ userId: uid }, options) };
+}
+
+export async function hideManyAsync(ids, userId, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return hideManySync(ids, userId);
+  return hideMany(ids, userId, options);
 }
