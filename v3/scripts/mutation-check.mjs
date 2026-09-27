@@ -64,6 +64,45 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const HOUSING_SRC = "v3/src/siteContentAsync.js";
+const HOUSING_FETCH_SRC = "v3/src/housingFetch.js";
+
+// 居住數據的變異集（v3/test/housing-refresh-async.test.js）。
+const HOUSING_MUTATIONS = [
+  {
+    name: "🚨 refreshHousingData 不 await getData（async 回呼會被當成 Promise ⇒ 資料換成預設）",
+    file: HOUSING_FETCH_SRC,
+    from: "  let data = normalizeHousingData(getData ? await getData() : {});",
+    to: "  let data = normalizeHousingData(getData ? getData() : {});",
+    expect: "await 回呼",
+  },
+  {
+    name: "🚨 refreshHousingData 不 await writeData（寫入還沒完成就回報成功）",
+    file: HOUSING_FETCH_SRC,
+    from: "  if (writeData) await writeData(data);",
+    to: "  if (writeData) writeData(data);",
+    expect: "await 回呼",
+  },
+  {
+    name: "raw 版本誤用 public 形狀（語意不同，排程更新會拿到錯的資料）",
+    file: HOUSING_SRC,
+    from: "  return normalizeHousingData(stored ?? defaultHousingData());",
+    to: "  return publicHousingData(stored ?? defaultHousingData());",
+    expect: "getHousingDataRawAsync",
+  },
+  {
+    name: "writeHousingData 不做 normalize（落地值與同步版不同）",
+    file: HOUSING_SRC,
+    from: "  await setSiteSettingAsync(HOUSING_KEY, normalizeHousingData(data), options);",
+    to: "  await setSiteSettingAsync(HOUSING_KEY, data, options);",
+    expect: "落地的 settings 位元組",
+  },
+  // 刻意**沒有**「非 postgres 不回退」這一條：實測是**等價變異**（第三個同類案例）。
+  // 拿掉外層 guard 之後，委派的 `getSiteSettingAsync()` 自己會判斷 driver 並回退，
+  // `driver:"sqlite"` 時仍然讀磁碟。回退**行為**有測試（第 5 項，兩邊種不同的值），
+  // 只是殺不掉這個冗餘的 guard。
+];
+
 const SELFLIST_SRC = "v3/src/selfListingsAsync.js";
 
 // 站內刊登讀取的變異集（v3/test/self-listings-async.test.js）。
@@ -382,6 +421,7 @@ const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
       : /support-async/.test(testFile) ? SUPPORT_MUTATIONS
         : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
+          : /housing-refresh-async/.test(testFile) ? HOUSING_MUTATIONS
       : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。

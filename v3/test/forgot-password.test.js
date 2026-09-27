@@ -312,6 +312,9 @@ test("db wrapper and admin test mail read getStoredSmtp", () => {
     server.indexOf('app.post("/api/admin/mail/test"'),
     server.indexOf("app.use(express.static"),
   );
-  assert.match(mailTest, /getStoredSmtp\(\)/);
+  // 2026-09-27：mail/test 改走 driver-aware 的 `getStoredSmtpAsync()`（PG 模式下讀 PG 的 smtp 設定，
+  // 沒有存值時仍回 `smtpFromEnv()` 的 fallback）。**意圖不變**——這條測的是
+  // 「這三條寄信路徑都從**儲存的設定**讀 SMTP，而不是只看環境變數」。
+  assert.match(mailTest, /await getStoredSmtpAsync\(\)/);
   assert.match(mailTest, /\bsmtp,/);
 });

@@ -312,7 +312,8 @@ import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
 import {
-  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync,
+  getHousingDataRawAsync, writeHousingDataAsync, getSpiritAsync,
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
@@ -360,6 +361,7 @@ import { auditFailureStats } from "./adminAuditHealth.js";
 // （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
 import {
   getAdminMailSettingsAsync,
+  getStoredSmtpAsync,
   getAdminOauthSettingsAsync,
   getAdminSponsorSettingsAsync,
   getBrandMascotAsync,
@@ -2256,8 +2258,12 @@ app.put("/api/admin/housing-data", requireAdminApi, async (req, res) => {
 
 app.post("/api/admin/housing-data/refresh", requireAdminApi, async (_req, res) => {
   try {
-    const summary = await refreshHousingData({ getData: getHousingDataRaw, writeData: writeHousingData });
-    res.json({ ok: true, ...summary, data: getHousingData() });
+    // 這三個都改走 driver-aware 版本：PG 模式下讀寫 PostgreSQL，不再只寫回答你那台的本機檔。
+    const summary = await refreshHousingData({
+      getData: () => getHousingDataRawAsync(),
+      writeData: (data) => writeHousingDataAsync(data),
+    });
+    res.json({ ok: true, ...summary, data: await getHousingDataAsync() });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -3361,7 +3367,7 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
     const session = readSession(req);
     const to = String(req.body?.to || session?.email || "").trim();
     if (!to) throw new Error("請先填收件信箱");
-    const smtp = getStoredSmtp();
+    const smtp = await getStoredSmtpAsync();
     if (!mailConfigured(smtp)) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
     await sendMail({
       to,
@@ -4349,7 +4355,11 @@ app.get("/api/events/stream", (req, res) => {
 });
 
 function runHousingRefresh() {
-  refreshHousingData({ getData: getHousingDataRaw, writeData: writeHousingData })
+  // ⚠️ 這是**排程**的居住數據自動更新（日誌「居住數據自動更新：N 筆」就是它）。
+  // 原本用同步的 SQLite 讀寫 ⇒ PG 模式下自動抓到的居住成本只寫進回答你那台的本機檔，
+  // 另一台看不到、PG 也永遠不會更新（`housingData` 本來就已經是「三個來源各一版」）。
+  // 改走 driver-aware 版本才是真正修掉分歧，不只是讓判定變綠。
+  refreshHousingData({ getData: () => getHousingDataRawAsync(), writeData: (data) => writeHousingDataAsync(data) })
     .then((s) => { if (s.count) console.log(`居住數據自動更新：${s.count} 筆${s.errors.length ? `（${s.errors.length} 個來源失敗）` : ""}`); })
     .catch((error) => console.warn("居住數據自動更新失敗：", error.message));
 }

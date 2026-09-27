@@ -20,11 +20,13 @@ import {
   getCrawlSources as getCrawlSourcesSync,
   getHelpQa as getHelpQaSync,
   getHousingData as getHousingDataSync,
+  getHousingDataRaw as getHousingDataRawSync,
   getSpirit as getSpiritSync,
   saveCommsConfig as saveCommsConfigSync,
   saveCrawlSources as saveCrawlSourcesSync,
   saveHelpQa as saveHelpQaSync,
   saveHousingData as saveHousingDataSync,
+  writeHousingData as writeHousingDataSync,
   saveSpirit as saveSpiritSync,
 } from "./db.js";
 
@@ -41,6 +43,23 @@ export async function getHousingDataAsync(options = {}) {
   if (!isPg(options)) return getHousingDataSync();
   const stored = await getSiteSettingAsync(HOUSING_KEY, options);
   return publicHousingData(stored ?? defaultHousingData());
+}
+
+// `getHousingDataRaw()`／`writeHousingData()`（db.js:1716／1720）的 PG 分支。
+// 為什麼需要：`POST /api/admin/housing-data/refresh` 把這兩個當**回呼**傳給
+// `refreshHousingData({ getData, writeData })`，用的是**原始（未經 public 形狀）**的資料，
+// 與 `getHousingDataAsync`／`saveHousingDataAsync` 那組（公開形狀、部分合併）語意不同，
+// 所以不能互相取代。
+export async function getHousingDataRawAsync(options = {}) {
+  if (!isPg(options)) return getHousingDataRawSync();
+  const stored = await getSiteSettingAsync(HOUSING_KEY, options);
+  return normalizeHousingData(stored ?? defaultHousingData());
+}
+
+export async function writeHousingDataAsync(data, options = {}) {
+  if (!isPg(options)) return writeHousingDataSync(data);
+  await setSiteSettingAsync(HOUSING_KEY, normalizeHousingData(data), options);
+  return getHousingDataAsync(options);
 }
 
 export async function saveHousingDataAsync(partial = {}, options = {}) {

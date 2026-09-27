@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | 第三批後 | 第四批後 | **第五批後** |
-|---|---:|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | 173 | **170** |
-| MIXED | 36 | 47 | 49 | 49 | **50** |
-| 無直接DB | 117 | 26 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | 40 | **42** |
-| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** | **222** | **220** |
+| 判定 | 舊尺 | 新尺 | 第三批 | 第四批 | 第五批 | **第六批** |
+|---|---:|---:|---:|---:|---:|---:|
+| SQLite | 80 | 189 | 179 | 173 | 170 | **169** |
+| MIXED | 36 | 47 | 49 | 49 | 50 | **50** |
+| 無直接DB | 117 | 26 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | 42 | **43** |
+| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -280,6 +280,59 @@ node -e 'import("./v3/src/supportAsync.js").then(m=>console.log(Object.keys(m)))
 3. **又一個等價變異**：把外層的「非 postgres 回退」guard 拿掉，行為不變——因為內層的
    `getSelfRowAsync()` 自己也有 `isPg()` 判斷並回退（與 `adminSettingsAsync` 那批同一類）。
    回退**行為**有測試，但殺不掉這個冗餘的 guard，所以從變異集移除並註明。
+
+### 第六批（2026-09-27）：居住數據 ＋ 最後一哩的清單
+
+#### 6.1 先問「哪些路由只差已經寫好的 Async 版本？」
+
+我用一個腳本交叉比對「缺口路由的真卡點」與「`*Async.js` 既有的匯出」，答案只有 **3 條**。
+其中：
+- `POST /api/admin/housing-data/refresh` → 補 `getHousingDataRawAsync`／`writeHousingDataAsync`
+- `POST /api/admin/mail/test` → 改用既有的 `getStoredSmtpAsync`（1 行）
+- `PUT /api/admin/providers/site-budget` → **不需要動**（見 6.3，那是量尺的誤報）
+
+#### 6.2 🚨 順手抓到一個**排程工作的真實分歧**（不只是指標）
+
+`runHousingRefresh()`（server.js，啟動後 30 秒 ＋ 每 24 小時執行一次；日誌
+「居住數據自動更新：N 筆」就是它）原本用**同步 SQLite** 的 `getHousingDataRaw`／`writeHousingData`。
+也就是說 PG 模式下：**自動抓到的居住成本只寫進回答你那台的本機檔**，
+另一台看不到、PG 永遠不會更新——而 `housingData` 本來就已經是「三個來源各一版」。
+**這不是讓判定變綠，是真正修掉一個持續發生的分歧。**
+
+連帶修掉一個容易漏的地方：`refreshHousingData()` 原本**同步呼叫**回呼
+（`getData()`／`writeData(data)`，沒有 `await`）。一旦傳 async 版本進去，
+`normalizeHousingData(getData())` 收到的是 Promise ⇒ **整份資料被換成預設值，而且不會拋錯**。
+已改成 `await`（await 非 Promise 是 no-op，所以 sqlite 模式行為不變），並用測試專門守住這個 `await`。
+
+#### 6.3 量尺缺陷 (4)：**已 driver-aware 的函式被算成 SQLite**（過度回報）
+
+`PUT /api/admin/providers/site-budget` 被判成 SQLite，卡點是 `saveSiteBudget`。
+但實際讀碼：db.js 的 `saveAdminSiteBudget()` 是 `budgetStore({ sqliteDb: db, options }).saveSiteBudget(...)`，
+而 `budgetStore()`（budgetStore.js:53）**明確呼叫 `resolveDbDriver()`**，driver 是 postgres 時回 PG store。
+**它早就是 driver-aware 的，這條路由不需要做任何事。**
+
+原因：量尺的「driver-aware ⇒ 不計 SQLite」規則只看**函式自己的本文**有沒有 `resolveDbDriver(`，
+看不到「委派給一個 driver-aware 的 factory」這種寫法。同一類還有
+`getAdminProviderSettings`／`saveAdminProviderSettings`／`testAdminProvider`。
+
+> **影響**：這一類是**過度回報**（虛增缺口）。要修的話得讓規則也檢查「被呼叫的 factory 是否 driver-aware」。
+> 我沒有動它——本輪已經在別處修過三次，且這一項不影響我目前的工作排序（我改用「真卡點」清單來排）。
+
+#### 6.4 量尺缺陷 (5)：**以參考傳遞的函式完全看不到**
+
+`getHousingDataRaw`／`writeHousingData` 在 refresh 路由裡是**當參數傳**
+（`{ getData: getHousingDataRaw, writeData: writeHousingData }`），不是被呼叫，
+所以 `callsIn()`（要求 `NAME\s*\(`）抓不到——這條路由的卡點清單只列出 `getHousingData`，
+**少算了兩個**。這與 7.4.1 的「中介層以參考傳遞」是同一個盲點。
+
+> **實務影響**：**凡是靠「唯一卡點」清單挑出來的批次，都要人工再看一眼 handler**，
+> 因為傳參考的呼叫不會出現在清單裡。本批就是這樣才發現另外兩個函式。
+
+#### 6.5 又一個等價變異
+
+「非 postgres 不回退」在這批**第三次**是等價變異（委派的 `getSiteSettingAsync` 自己會回退）。
+一樣從變異集移除並註明——**同樣的形狀出現三次，代表這類 guard 在整個島嶼模式裡都是防禦性的**，
+不該期待變異測試能守住它們；能守住的是**行為**（兩邊種不同的值）。
 
 ## 三、做法（照這個做，不要發明新的）
 
