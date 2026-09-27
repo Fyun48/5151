@@ -32,11 +32,19 @@ const PG = { driver: "postgres" };
 // 它會用 `new Date()`（現在的系統時間，2026-09-27）算出「進行中」而被這條測試抓到。
 const NOW = new Date("2027-06-01T00:00:00.000Z");
 const diskPath = () => path.join(dataDir, "v3.db");
+// 要**清空**的表（每次 resetBoth 都清）。
 const TABLES = [
   "support_operating_cost", "support_tier", "support_provider",
   "support_transaction", "support_sponsor", "support_cta_rule",
-  "support_page_config", "support_event",
+  "support_page_config", "support_event", "support_prompt_state",
+  "user_listing_flags",
 ];
+// 要**複製 DDL** 的表：`user_listing_flags` 有 FOREIGN KEY 指向 `users`，
+// 夾具少了它就會 "no such table: main.users"。
+// 但 `users` **不能列入清空**——磁碟那邊的 handle 開了 `PRAGMA foreign_keys`（db.js:503），
+// 而 `user_settings`／`user_events` 等表還留著指向它的資料列，刪了會 FOREIGN KEY constraint failed。
+// 所以只鏡射 DDL、不動資料。
+const MIRROR = [...TABLES, "users"];
 
 const PG_ILLEGAL = [
   [/LIMIT\s+-1\b/i, "LIMIT must not be negative"],
@@ -50,11 +58,11 @@ function pgFixture() {
   const mem = new DatabaseSync(":memory:");
   const disk = new DatabaseSync(diskPath(), { readOnly: true });
   const rows = disk.prepare(
-    `SELECT sql FROM sqlite_master WHERE type='table' AND name IN (${TABLES.map(() => "?").join(",")})`,
-  ).all(...TABLES);
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name IN (${MIRROR.map(() => "?").join(",")})`,
+  ).all(...MIRROR);
   disk.close();
   for (const row of rows) if (row.sql) mem.exec(row.sql);
-  assert.equal(rows.length, TABLES.length, `必須抓到全部 ${TABLES.length} 張表的 DDL（否則測試是空的）`);
+  assert.equal(rows.length, MIRROR.length, `必須抓到全部 ${MIRROR.length} 張表的 DDL（否則測試是空的）`);
   const exec = async (sql, params = []) => {
     for (const [pattern, message] of PG_ILLEGAL) if (pattern.test(sql)) throw new Error(message);
     return mem.prepare(sql).all(...params);
@@ -502,6 +510,164 @@ test("recordSupportEventAsync：不合法的 kind 回 {ok:false} 且不寫入", 
   assert.deepEqual(a, s);
   assert.deepEqual(a, { ok: false });
   assert.equal(tableOf(exec.raw, "support_event").length, 0, "不合法時不得寫入");
+  disk.close();
+});
+
+// ---------------------------------------------------------------------------
+// CTA 狀態機與結帳
+//
+// 注意 `support_prompt_state` 的 PK 是 user_id，且 sync 版用 ON CONFLICT(user_id) DO UPDATE，
+// 所以「重複顯示要累加 shown_count」是真正會被比對到的行為。
+
+const enableCta = (h, extra = {}) => seedConfig(h, {
+  flags_json: JSON.stringify({ enabled: true, cta_enabled: true }),
+  draft_json: JSON.stringify({}),
+  ...extra,
+});
+const seedRule = (h, values = {}) => seed(h, "support_cta_rule", {
+  rule_type: "view_count", threshold: 1, message: "支持一下", cooldown_days: 7,
+  enabled: 1, priority: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z", ...values,
+});
+const promptState = (h) => h.prepare("SELECT * FROM support_prompt_state ORDER BY user_id").all();
+
+test("dismissSupportCtaAsync：落地的 prompt 狀態必須逐欄相同", async () => {
+  const [disk, exec] = resetBoth();
+  // ⚠️ `days` 必須是 `DISMISS_DAY_OPTIONS = [7,14,30]` 裡的值：`dismissUntilFromDays()`
+  // 對不在清單裡的值會**夾成 7**，所以我第一版用 `days: 3` 時，「固定寫死 7 天」的變異
+  // 產生完全相同的结果 ⇒ 等價變異、活了下來。用 14 才驗得到「有把傳入的天數用上」。
+  const s = support.dismissSupportCta(disk, { userId: 5, days: 14, clientState: {}, now: NOW });
+  const a = await asyncMod.dismissSupportCtaAsync({ userId: 5, days: 14, clientState: {}, now: NOW, ...PG, exec });
+  assert.deepEqual(a, s);
+  assert.deepEqual(promptState(exec.raw), promptState(disk), "落地的 prompt 狀態必須相同");
+  assert.equal(promptState(disk).length, 1, "必須真的寫入");
+  assert.notEqual(a.dismissedUntil, support.dismissSupportCta(disk, { userId: 5, days: 7, now: NOW }).dismissedUntil,
+    "14 天與 7 天必須不同（否則這條測試對『有沒有用傳入的天數』沒有鑑別力）");
+  disk.close();
+});
+
+test("dismissSupportCtaAsync：未登入（userId=null）時不寫入，兩邊一致", async () => {
+  const [disk, exec] = resetBoth();
+  const s = support.dismissSupportCta(disk, { userId: null, days: 3, now: NOW });
+  const a = await asyncMod.dismissSupportCtaAsync({ userId: null, days: 3, now: NOW, ...PG, exec });
+  assert.deepEqual(a, s);
+  assert.equal(promptState(exec.raw).length, 0, "沒有 userId 不得寫入");
+  disk.close();
+});
+
+test("markSupportCtaShownAsync：shown_count 要累加，落地狀態必須相同", async () => {
+  const [disk, exec] = resetBoth();
+  const s1 = support.markSupportCtaShown(disk, { userId: 5, clientState: {}, now: NOW });
+  const a1 = await asyncMod.markSupportCtaShownAsync({ userId: 5, clientState: {}, now: NOW, ...PG, exec });
+  assert.deepEqual(a1, s1);
+  assert.equal(a1.shownCount, 1);
+
+  // 第二次：從既有狀態累加（ON CONFLICT 路徑）
+  const s2 = support.markSupportCtaShown(disk, { userId: 5, clientState: {}, now: NOW });
+  const a2 = await asyncMod.markSupportCtaShownAsync({ userId: 5, clientState: {}, now: NOW, ...PG, exec });
+  assert.deepEqual(a2, s2);
+  assert.equal(a2.shownCount, 2, "第二次必須累加成 2（不是重寫成 1）");
+  assert.deepEqual(promptState(exec.raw), promptState(disk));
+  disk.close();
+});
+
+test("evaluateSupportCtaAsync：未開啟／沒有可用規則時的回傳形狀相同", async () => {
+  // (a) flags 未開啟
+  {
+    const [disk, exec] = resetBoth();
+    seedConfig(disk, { flags_json: JSON.stringify({ enabled: false }) });
+    seedConfig(exec.raw, { flags_json: JSON.stringify({ enabled: false }) });
+    const a = await asyncMod.evaluateSupportCtaAsync({ userId: 5, now: NOW, ...PG, exec });
+    assert.deepEqual(a, support.evaluateSupportCta(disk, { userId: 5, now: NOW }));
+    assert.deepEqual(a, { show: false, reason: "disabled" });
+    disk.close();
+  }
+  // (b) 開啟但沒有任何規則 ⇒ cooldown_or_threshold
+  {
+    const [disk, exec] = resetBoth();
+    enableCta(disk); enableCta(exec.raw);
+    const a = await asyncMod.evaluateSupportCtaAsync({ userId: 5, usage: { views: 99 }, now: NOW, ...PG, exec });
+    assert.deepEqual(a, support.evaluateSupportCta(disk, { userId: 5, usage: { views: 99 }, now: NOW }));
+    assert.equal(a.show, false);
+    assert.equal(a.reason, "cooldown_or_threshold");
+    disk.close();
+  }
+});
+
+test("🚨 handleSupportCtaRequestAsync：完整流程（評估→標記→寫事件）落地結果必須相同", async () => {
+  const [disk, exec] = resetBoth();
+  for (const h of [disk, exec.raw]) {
+    enableCta(h);
+    // 規則型別必須是 `CTA_RULE_TYPES` 白名單內的（watch／view_listing／search／commute）；
+    // `usageValue` 會把 watch 對到 usage.watches。第一版我用不存在的 `view_count`，
+    // 規則永遠不合格 ⇒ `show:false` ⇒ 斷言失敗（而且那樣整條流程都沒被測到）。
+    seedRule(h, { rule_type: "watch", threshold: 1 });
+  }
+  const s = support.handleSupportCtaRequest(disk, { userId: 5, usage: { watches: 5 }, now: NOW });
+  const a = await asyncMod.handleSupportCtaRequestAsync({ userId: 5, usage: { watches: 5 }, now: NOW, ...PG, exec });
+  assert.deepEqual(a, s, "回傳值必須相同");
+  assert.equal(a.show, true, "應該有規則可顯示（否則這條測試沒鑑別力）");
+  assert.deepEqual(promptState(exec.raw), promptState(disk), "prompt 狀態必須相同");
+  assert.deepEqual(tableOf(exec.raw, "support_event"), tableOf(disk, "support_event"), "事件必須相同");
+  assert.equal(tableOf(disk, "support_event").length, 1);
+  assert.equal(JSON.parse(tableOf(disk, "support_event")[0].meta_json).ruleId, a.ruleId);
+  disk.close();
+});
+
+test("createSupportCheckoutAsync：未開啟／沒有收款方式／找不到方案，三種情形都要一致", async () => {
+  // (a) flags 未開啟
+  {
+    const [disk, exec] = resetBoth();
+    seedConfig(disk, { flags_json: JSON.stringify({ enabled: false }) });
+    seedConfig(exec.raw, { flags_json: JSON.stringify({ enabled: false }) });
+    const a = await asyncMod.createSupportCheckoutAsync({ amount: 100 }, { ...PG, exec });
+    assert.deepEqual(a, await support.createSupportCheckout(disk, { amount: 100 }));
+    assert.equal(a.available, false);
+    disk.close();
+  }
+  // (b) 開啟但沒有啟用的收款方式
+  {
+    const [disk, exec] = resetBoth();
+    enableCta(disk); enableCta(exec.raw);
+    const a = await asyncMod.createSupportCheckoutAsync({ amount: 100 }, { ...PG, exec });
+    assert.deepEqual(a, await support.createSupportCheckout(disk, { amount: 100 }));
+    assert.equal(a.available, false);
+    disk.close();
+  }
+  // (c) 有收款方式但 tierId 不存在 ⇒ 兩邊都 404
+  {
+    const [disk, exec] = resetBoth();
+    for (const h of [disk, exec.raw]) {
+      enableCta(h);
+      seed(h, "support_provider", {
+        kind: "buy_me_a_coffee", display_name: "咖啡", page_url: "https://buymeacoffee.com/x",
+        is_active: 1, is_default: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z",
+      });
+    }
+    // 找不到方案時同步版是**拋 404**（不是回傳 available:false），所以要比對錯誤形狀。
+    let syncErr = null, asyncErr = null;
+    try { await support.createSupportCheckout(disk, { tierId: 99999, amount: 100 }); } catch (e) { syncErr = e; }
+    try { await asyncMod.createSupportCheckoutAsync({ tierId: 99999, amount: 100 }, { ...PG, exec }); } catch (e) { asyncErr = e; }
+    assert.ok(syncErr, "同步版應該拋錯");
+    assert.equal(asyncErr?.status, syncErr?.status, "status 必須相同");
+    assert.equal(asyncErr?.message, syncErr?.message, "訊息必須相同");
+    disk.close();
+  }
+});
+
+test("createSupportCheckoutAsync：成功路徑（外部收款頁）必須與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  for (const h of [disk, exec.raw]) {
+    enableCta(h);
+    seed(h, "support_provider", {
+      kind: "buy_me_a_coffee", display_name: "咖啡", page_url: "https://buymeacoffee.com/x",
+      is_active: 1, is_default: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z",
+    });
+  }
+  const a = await asyncMod.createSupportCheckoutAsync({ amount: 250 }, { ...PG, exec });
+  const s = await support.createSupportCheckout(disk, { amount: 250 });
+  assert.deepEqual(a, s);
+  assert.equal(a.available, true, "應該可以結帳");
+  assert.match(a.url, /buymeacoffee\.com/, "checkout URL 必須是收款頁");
   disk.close();
 });
 

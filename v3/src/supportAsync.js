@@ -13,22 +13,32 @@
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
-import { adminProviderView } from "./supportProviders.js";
+import {
+  SupportPaymentUnavailable,
+  adminProviderView,
+  resolveSupportCheckout,
+} from "./supportProviders.js";
 import {
   BILLING_CYCLES,
   COST_CATEGORIES,
   CTA_RULE_TYPES,
   DEFAULT_SUPPORT_FLAGS,
+  DISMISS_DAY_OPTIONS,
   SPONSOR_STATUSES,
   SUPPORT_EVENT_KINDS,
   SUPPORT_PROVIDER_KINDS,
   TRANSACTION_STATUSES,
   httpError,
+  dismissUntilFromDays,
+  emptyUsage,
   iso,
+  mergeCtaState,
   moneyAmount,
   normalizeGoalDisplay,
   normalizePageCopy,
   normalizeSupportFlags,
+  pickEligibleCtaRule,
+  sanitizeUsage,
   sortSupportTiers,
   transactionDedupeKey,
 } from "./supportDomain.js";
@@ -41,7 +51,10 @@ import {
   bool01,
   cleanText,
   defaultDraft,
+  dismissSupportCta as dismissSupportCtaSync,
+  evaluateSupportCta as evaluateSupportCtaSync,
   createManualTransaction as createManualTransactionSync,
+  createSupportCheckout as createSupportCheckoutSync,
   createSupportCost as createSupportCostSync,
   createSupportSponsor as createSupportSponsorSync,
   createSupportTier as createSupportTierSync,
@@ -53,6 +66,8 @@ import {
   listSupportSponsors as listSupportSponsorsSync,
   listSupportTiers as listSupportTiersSync,
   getSupportFlags as getSupportFlagsSync,
+  handleSupportCtaRequest as handleSupportCtaRequestSync,
+  markSupportCtaShown as markSupportCtaShownSync,
   listSupportTransactions as listSupportTransactionsSync,
   parseJson,
   publishSupportConfig as publishSupportConfigSync,
@@ -108,10 +123,12 @@ export async function listSupportSponsorsAsync({ now = new Date() } = {}, option
   return (await exec(SPONSORS_SQL, [])).map((row) => sponsorRow(row, now));
 }
 
+// exec 版的 CTA 規則讀取：對外入口與 CTA 狀態機共用同一份（避免兩份漂移）。
+const listCtaRulesPg = async (exec) => (await exec(CTA_RULES_SQL, [])).map(ctaRow);
+
 export async function listCtaRulesAsync(options = {}) {
   if (!isPg(options)) return listCtaRulesSync(sqliteHandle());
-  const exec = await pgExec(options);
-  return (await exec(CTA_RULES_SQL, [])).map(ctaRow);
+  return listCtaRulesPg(await pgExec(options));
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +285,152 @@ export async function updateSupportProviderAsync(id, body = {}, { now = new Date
     Number(id) || 0,
   ]);
   return adminProviderView((await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+// ---------------------------------------------------------------------------
+// CTA 狀態機（support_prompt_state）＋ 結帳
+//
+// 這群是「同步函式互相呼叫」的典型：`handleSupportCtaRequest` → `evaluateSupportCta`
+// →（readFlags／memberUsageFromFlags／readPromptState／listCtaRules）→ `markSupportCtaShown`
+// →（readPromptState／writePromptState）→ `recordSupportEvent`。這裡照著同樣的順序逐一 await，
+// 純判斷（mergeCtaState／pickEligibleCtaRule／sanitizeUsage／dismissUntilFromDays）留在原模組共用。
+const PROMPT_STATE_SQL = "SELECT * FROM support_prompt_state WHERE user_id=?";
+const UPSERT_PROMPT_STATE_SQL = `INSERT INTO support_prompt_state(user_id, last_shown_at, dismissed_until, shown_count, updated_at)
+   VALUES (?, ?, ?, ?, ?)
+   ON CONFLICT(user_id) DO UPDATE SET
+     last_shown_at=excluded.last_shown_at,
+     dismissed_until=excluded.dismissed_until,
+     shown_count=excluded.shown_count,
+     updated_at=excluded.updated_at`;
+const MEMBER_USAGE_SQL = `SELECT
+       SUM(CASE WHEN viewed=1 THEN 1 ELSE 0 END) AS views,
+       SUM(CASE WHEN watched=1 THEN 1 ELSE 0 END) AS watches
+     FROM user_listing_flags WHERE user_id=?`;
+// 與同步版逐字相同：**先挑有 page_url 的**，沒有才退而挑任何啟用的；排序都是 is_default DESC, id ASC。
+const CHECKOUT_PROVIDER_WITH_URL_SQL =
+  "SELECT * FROM support_provider WHERE is_active=1 AND page_url!='' ORDER BY is_default DESC, id ASC LIMIT 1";
+const CHECKOUT_PROVIDER_ANY_SQL =
+  "SELECT * FROM support_provider WHERE is_active=1 ORDER BY is_default DESC, id ASC LIMIT 1";
+
+// 同步版把整段包在 try/catch（沒有個人旗標表時只用客戶端用量），這裡照抄。
+async function memberUsageFromFlagsAsync(exec, userId) {
+  const usage = emptyUsage();
+  if (!userId) return usage;
+  try {
+    const row = (await exec(MEMBER_USAGE_SQL, [userId]))[0];
+    usage.views = Number(row?.views) || 0;
+    usage.watches = Number(row?.watches) || 0;
+  } catch {
+    // 沒有個人旗標表時只用客戶端用量
+  }
+  return usage;
+}
+
+const readPromptStateAsync = async (exec, userId) => {
+  if (!userId) return null;
+  const row = (await exec(PROMPT_STATE_SQL, [userId]))[0];
+  if (!row) return null;
+  return {
+    lastShownAt: row.last_shown_at || "",
+    dismissedUntil: row.dismissed_until || "",
+    shownCount: Number(row.shown_count) || 0,
+  };
+};
+
+const writePromptStateAsync = async (exec, userId, state, now = new Date()) => {
+  if (!userId) return state;
+  await exec(UPSERT_PROMPT_STATE_SQL, [
+    userId,
+    state.lastShownAt || null,
+    state.dismissedUntil || null,
+    Number(state.shownCount) || 0,
+    iso(now),
+  ]);
+  return state;
+};
+
+export async function evaluateSupportCtaAsync({ userId = null, usage = {}, clientState = {}, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return evaluateSupportCtaSync(sqliteHandle(), { userId, usage, clientState, now });
+  const exec = await pgExec(options);
+  const flags = await readFlagsAsync(exec);
+  if (!flags.enabled || !flags.cta_enabled) {
+    return { show: false, reason: "disabled" };
+  }
+  const mergedUsage = sanitizeUsage({
+    ...(await memberUsageFromFlagsAsync(exec, userId)),
+    ...usage,
+  });
+  const state = mergeCtaState(await readPromptStateAsync(exec, userId), clientState, now);
+  const rule = pickEligibleCtaRule(await listCtaRulesPg(exec), mergedUsage, state, now);
+  if (!rule) return { show: false, reason: "cooldown_or_threshold", state };
+  return {
+    show: true,
+    ruleId: rule.id,
+    message: rule.message,
+    dismissDays: DISMISS_DAY_OPTIONS.slice(),
+    cooldownDays: rule.cooldown_days,
+    state,
+  };
+}
+
+export async function markSupportCtaShownAsync({ userId = null, clientState = {}, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return markSupportCtaShownSync(sqliteHandle(), { userId, clientState, now });
+  const exec = await pgExec(options);
+  const current = mergeCtaState(await readPromptStateAsync(exec, userId), clientState, now);
+  const next = {
+    ...current,
+    lastShownAt: iso(now),
+    shownCount: (Number(current.shownCount) || 0) + 1,
+  };
+  await writePromptStateAsync(exec, userId, next, now);
+  return next;
+}
+
+export async function handleSupportCtaRequestAsync({ userId = null, usage = {}, clientState = {}, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return handleSupportCtaRequestSync(sqliteHandle(), { userId, usage, clientState, now });
+  const result = await evaluateSupportCtaAsync({ userId, usage, clientState, now, ...options });
+  if (!result.show) return result;
+  const state = await markSupportCtaShownAsync({ userId, clientState: result.state, now, ...options });
+  await recordSupportEventAsync("support_cta_shown", { userId, meta: { ruleId: result.ruleId }, now, ...options });
+  return { ...result, state };
+}
+
+export async function dismissSupportCtaAsync({ userId = null, days = 7, clientState = {}, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return dismissSupportCtaSync(sqliteHandle(), { userId, days, clientState, now });
+  const exec = await pgExec(options);
+  const current = mergeCtaState(await readPromptStateAsync(exec, userId), clientState, now);
+  const next = { ...current, dismissedUntil: dismissUntilFromDays(days, now) };
+  await writePromptStateAsync(exec, userId, next, now);
+  return next;
+}
+
+export async function createSupportCheckoutAsync({ tierId, amount } = {}, options = {}) {
+  if (!isPg(options)) return createSupportCheckoutSync(sqliteHandle(), { tierId, amount });
+  const exec = await pgExec(options);
+  const flags = await readFlagsAsync(exec);
+  if (!flags.enabled) {
+    return { available: false, message: "目前尚未開放支持。" };
+  }
+  const provider = (await exec(CHECKOUT_PROVIDER_WITH_URL_SQL, []))[0]
+    || (await exec(CHECKOUT_PROVIDER_ANY_SQL, []))[0];
+  if (!provider) {
+    return { available: false, message: "目前支持付款服務暫時無法使用，稍後再試即可。" };
+  }
+  let payAmount = moneyAmount(amount);
+  if (tierId) {
+    const tier = tierRow((await exec(TIER_BY_ID_SQL, [Number(tierId) || 0]))[0]);
+    if (!tier || !tier.is_active) throw httpError("找不到支持方案", 404);
+    if (tier.amount > 0) payAmount = tier.amount;
+  }
+  try {
+    const checkout = await resolveSupportCheckout(provider, { amount: payAmount });
+    return { available: true, ...checkout };
+  } catch (error) {
+    if (error instanceof SupportPaymentUnavailable) {
+      return { available: false, message: error.message };
+    }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

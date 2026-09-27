@@ -22,11 +22,11 @@ node v3/scripts/route-data-map.mjs
 
 | 判定 | 舊尺 | 新尺 | 五批前 | 第四批 | 第五批 | 第六批 | 第七批 | 第八批 | **第九批** |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | 169 | **165** |
-| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | 40 | **41** |
-| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | 53 | **56** |
-| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** | **206** |
+| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | 169 | 165 | **164** |
+| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | 40 | 41 | **42** |
+| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | 53 | 56 | **56** |
+| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** | **206** | **206** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -479,6 +479,54 @@ PG 分支逐字照抄同樣的結構，**不做「查一次共用」的最佳化
 `wall_enabled` 讀不出來、draft／published 讀反、publish 發佈錯的欄位、
 事件 kind 白名單拿掉、meta 不做白名單過濾）。
 跑完用 **sha1** 確認 `supportAsync.js` 沒有停在變異狀態（第 8.3 節的教訓）。
+
+### 第十批（2026-09-27）：CTA 狀態機 ＋ 結帳
+
+#### 10.1 內容
+
+`supportAsync.js` 新增 5 個函式：`evaluateSupportCtaAsync`、`markSupportCtaShownAsync`、
+`handleSupportCtaRequestAsync`、`dismissSupportCtaAsync`、`createSupportCheckoutAsync`。
+
+這群是「同步函式互相呼叫」的典型：`handleSupportCtaRequest` → `evaluateSupportCta`
+→（`readFlags`／`memberUsageFromFlags`／`readPromptState`／`listCtaRules`）→ `markSupportCtaShown`
+→（`readPromptState`／`writePromptState`）→ `recordSupportEvent`。PG 分支照同樣順序逐一 await，
+純判斷（`mergeCtaState`／`pickEligibleCtaRule`／`sanitizeUsage`／`dismissUntilFromDays`）留在原模組。
+
+#### 10.2 ⚠️ 這批**沒有讓任何路由變成 PG**——原因就是 session 解析
+
+三條路由（`POST /api/support/cta`、`/api/support/cta/dismiss`、`/api/support/checkout`）
+的 support.js 卡點都清掉了，但新尺顯示它們**只剩 `findUserByEmail`**：
+
+```
+POST /api/support/cta          MIXED  sqlite=[findUserByEmail]
+POST /api/support/cta/dismiss  MIXED  sqlite=[findUserByEmail]
+POST /api/support/checkout     MIXED  sqlite=[findUserByEmail]
+```
+
+**這是「session 解析仍是前置條件」最具體的一次示範**：工作確實做完了，
+但只要 session 還讀節點本機檔案，指標上就永遠是 MIXED。
+缺口合計維持 206（SQLite 165→164，MIXED 41→42）。
+
+> 這不改變「移植寫入仍有價值」的結論——這三條的 CTA 狀態與結帳流程不再寫節點本機檔案。
+> 只是**指標已經飽和**，再怎麼做單條路由都不會動。
+
+#### 10.3 兩個「測試資料沒踩到差異」（又是同一類，第 N 次）
+
+1. **規則型別要用白名單內的**：我第一版把 CTA 規則的 `rule_type` 設成 `view_count`，
+   但 `CTA_RULE_TYPES` 只有 `watch`／`view_listing`／`search`／`commute`，
+   而 `usageValue()` 把 `watch` 對到 `usage.watches`。設錯 ⇒ 規則永遠不合格 ⇒ `show:false`
+   ⇒ **整條流程根本沒被測到**。
+2. **`days` 要用 `DISMISS_DAY_OPTIONS` 裡的值**：`dismissUntilFromDays()` 對不在
+   `[7,14,30]` 裡的值會**夾成 7**，所以我用 `days: 3` 時，「寫死 7 天」的變異產生完全相同的結果
+   ⇒ 等價變異活了下來。改用 14 之後才殺得掉。
+
+另外修掉夾具的一個結構問題：`user_listing_flags` 有 FK 指向 `users`，夾具少了 `users` 的 DDL 會
+`no such table`；但把 `users` 列入**清空**又會因為 `user_settings`／`user_events` 還指向它而
+`FOREIGN KEY constraint failed`。正解是**只鏡射 DDL、不清資料**（`MIRROR` 與 `TABLES` 分開）。
+
+#### 10.4 變異測試
+
+`support-async` 的變異集擴到 **22 條，全部 KILLED**。跑完用 sha1 確認模組沒停在變異狀態。
 
 ## 三、做法（照這個做，不要發明新的）
 

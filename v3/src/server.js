@@ -373,6 +373,9 @@ import {
 import {
   adminSupportConfigAsync,
   createManualTransactionAsync,
+  createSupportCheckoutAsync,
+  dismissSupportCtaAsync,
+  handleSupportCtaRequestAsync,
   createSupportCostAsync,
   createSupportSponsorAsync,
   createSupportTierAsync,
@@ -1748,7 +1751,7 @@ app.get("/api/support/tiers", (_req, res) => {
 app.post("/api/support/checkout", async (req, res) => {
   try {
     assertSupportCheckoutAllowed(clientIp(req));
-    const result = await createSupportCheckout(db, {
+    const result = await createSupportCheckoutAsync({
       tierId: req.body?.tierId,
       amount: req.body?.amount,
     });
@@ -1767,10 +1770,10 @@ app.post("/api/support/checkout", async (req, res) => {
   }
 });
 
-app.post("/api/support/cta", (req, res) => {
+app.post("/api/support/cta", async (req, res) => {
   try {
     const session = readSession(req);
-    const result = handleSupportCtaRequest(db, {
+    const result = await handleSupportCtaRequestAsync({
       userId: session?.userId || null,
       usage: req.body?.usage,
       clientState: req.body?.clientState,
@@ -1784,7 +1787,7 @@ app.post("/api/support/cta", (req, res) => {
 app.post("/api/support/cta/dismiss", async (req, res) => {
   try {
     const session = readSession(req);
-    const state = dismissSupportCta(db, {
+    const state = await dismissSupportCtaAsync({
       userId: session?.userId || null,
       days: req.body?.days,
       clientState: req.body?.clientState,
