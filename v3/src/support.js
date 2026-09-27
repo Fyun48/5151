@@ -67,7 +67,7 @@ export function assertSupportCheckoutAllowed(ip, now = Date.now()) {
   }
 }
 
-function parseJson(text, fallback) {
+export function parseJson(text, fallback) {
   if (!text) return fallback;
   try {
     const value = JSON.parse(text);
@@ -101,7 +101,7 @@ export function bool01(value, fallback = 0) {
   return fallback;
 }
 
-function defaultDraft() {
+export function defaultDraft() {
   return {
     copy: { ...DEFAULT_PAGE_COPY },
     show_goal: true,

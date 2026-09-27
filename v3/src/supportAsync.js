@@ -18,12 +18,17 @@ import {
   BILLING_CYCLES,
   COST_CATEGORIES,
   CTA_RULE_TYPES,
+  DEFAULT_SUPPORT_FLAGS,
   SPONSOR_STATUSES,
+  SUPPORT_EVENT_KINDS,
   SUPPORT_PROVIDER_KINDS,
   TRANSACTION_STATUSES,
   httpError,
   iso,
   moneyAmount,
+  normalizeGoalDisplay,
+  normalizePageCopy,
+  normalizeSupportFlags,
   sortSupportTiers,
   transactionDedupeKey,
 } from "./supportDomain.js";
@@ -32,8 +37,10 @@ import { sanitizeHttpUrl } from "./sponsorLinks.js";
 // 所以拿 `sqliteHandle()`——與 `listingGroupsAsync.js` 同一個既有模式，不必讓呼叫端多傳一個參數。
 import { sqliteHandle } from "./db.js";
 import {
+  adminSupportConfig as adminSupportConfigSync,
   bool01,
   cleanText,
+  defaultDraft,
   createManualTransaction as createManualTransactionSync,
   createSupportCost as createSupportCostSync,
   createSupportSponsor as createSupportSponsorSync,
@@ -45,7 +52,12 @@ import {
   listSupportProviders as listSupportProvidersSync,
   listSupportSponsors as listSupportSponsorsSync,
   listSupportTiers as listSupportTiersSync,
+  getSupportFlags as getSupportFlagsSync,
   listSupportTransactions as listSupportTransactionsSync,
+  parseJson,
+  publishSupportConfig as publishSupportConfigSync,
+  recordSupportEvent as recordSupportEventSync,
+  saveSupportConfig as saveSupportConfigSync,
   sponsorRow,
   tierRow,
   txRow,
@@ -256,6 +268,127 @@ export async function updateSupportProviderAsync(id, body = {}, { now = new Date
     Number(id) || 0,
   ]);
   return adminProviderView((await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+// ---------------------------------------------------------------------------
+// 後台設定（support_page_config）＋ 事件記錄
+//
+// `adminSupportConfig()` 內部會呼叫 `configRow()` **四次**（自己一次 + readFlags／readDraft／
+// readPublished 各一次），而且**每次都重新 SELECT**。這裡逐字照抄同樣的結構，
+// 不做「查一次共用」的最佳化——那是行為等價但形狀不同的改寫，留給之後有意為之的人。
+const CONFIG_ROW_SQL = "SELECT * FROM support_page_config WHERE id=1";
+const UPDATE_CONFIG_SQL = `UPDATE support_page_config
+   SET flags_json=?, draft_json=?, goal_amount=?, goal_label=?, goal_display=?, wall_enabled=?, updated_at=?
+   WHERE id=1`;
+const PUBLISH_CONFIG_SQL = `UPDATE support_page_config
+   SET published_json=?, published_at=?, updated_at=?
+   WHERE id=1`;
+const INSERT_EVENT_SQL = `INSERT INTO support_event(kind, user_id, guest_key, meta_json, created_at)
+   VALUES (?, ?, ?, ?, ?)`;
+
+const configRowAsync = async (exec) => (await exec(CONFIG_ROW_SQL, []))[0];
+const readFlagsAsync = async (exec) => {
+  const row = await configRowAsync(exec);
+  return normalizeSupportFlags(parseJson(row?.flags_json, DEFAULT_SUPPORT_FLAGS));
+};
+const readDraftAsync = async (exec) => {
+  const row = await configRowAsync(exec);
+  const draft = parseJson(row?.draft_json, defaultDraft());
+  return {
+    ...defaultDraft(),
+    ...draft,
+    copy: normalizePageCopy(draft.copy),
+    show_goal: draft.show_goal !== false,
+    show_cost: draft.show_cost !== false,
+    show_supporters: draft.show_supporters !== false,
+    show_sponsors: draft.show_sponsors !== false,
+  };
+};
+const readPublishedAsync = async (exec) => {
+  const row = await configRowAsync(exec);
+  const published = parseJson(row?.published_json, defaultDraft());
+  return {
+    ...defaultDraft(),
+    ...published,
+    copy: normalizePageCopy(published.copy),
+    show_goal: published.show_goal !== false,
+    show_cost: published.show_cost !== false,
+    show_supporters: published.show_supporters !== false,
+    show_sponsors: published.show_sponsors !== false,
+  };
+};
+
+export async function getSupportFlagsAsync(options = {}) {
+  if (!isPg(options)) return getSupportFlagsSync(sqliteHandle());
+  return readFlagsAsync(await pgExec(options));
+}
+
+export async function adminSupportConfigAsync(options = {}) {
+  if (!isPg(options)) return adminSupportConfigSync(sqliteHandle());
+  const exec = await pgExec(options);
+  const row = await configRowAsync(exec);
+  return {
+    flags: await readFlagsAsync(exec),
+    draft: await readDraftAsync(exec),
+    published: await readPublishedAsync(exec),
+    published_at: row?.published_at || "",
+    goal_amount: moneyAmount(row?.goal_amount),
+    goal_label: row?.goal_label || "",
+    goal_display: normalizeGoalDisplay(row?.goal_display),
+    wall_enabled: Number(row?.wall_enabled) === 1,
+    updated_at: row?.updated_at || "",
+  };
+}
+
+export async function saveSupportConfigAsync(partial = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return saveSupportConfigSync(sqliteHandle(), partial, now);
+  const exec = await pgExec(options);
+  const current = await adminSupportConfigAsync({ ...options, exec });
+  const src = partial && typeof partial === "object" ? partial : {};
+  const flags = normalizeSupportFlags({ ...current.flags, ...(src.flags || {}) });
+  const draft = {
+    ...current.draft,
+    ...(src.draft || {}),
+    copy: normalizePageCopy({ ...current.draft.copy, ...(src.draft?.copy || src.copy || {}) }),
+    show_goal: src.draft?.show_goal ?? src.show_goal ?? current.draft.show_goal,
+    show_cost: src.draft?.show_cost ?? src.show_cost ?? current.draft.show_cost,
+    show_supporters: src.draft?.show_supporters ?? src.show_supporters ?? current.draft.show_supporters,
+    show_sponsors: src.draft?.show_sponsors ?? src.show_sponsors ?? current.draft.show_sponsors,
+  };
+  const goalAmount = src.goal_amount != null ? moneyAmount(src.goal_amount) : current.goal_amount;
+  const goalLabel = src.goal_label != null ? cleanText(src.goal_label, 80) : current.goal_label;
+  const goalDisplay = src.goal_display != null ? normalizeGoalDisplay(src.goal_display) : current.goal_display;
+  const wallEnabled = src.wall_enabled != null ? bool01(src.wall_enabled, 0) : current.wall_enabled ? 1 : 0;
+  await exec(UPDATE_CONFIG_SQL, [
+    JSON.stringify(flags), JSON.stringify(draft), goalAmount, goalLabel, goalDisplay, wallEnabled, iso(now),
+  ]);
+  return adminSupportConfigAsync({ ...options, exec });
+}
+
+export async function publishSupportConfigAsync({ now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return publishSupportConfigSync(sqliteHandle(), now);
+  const exec = await pgExec(options);
+  const current = await adminSupportConfigAsync({ ...options, exec });
+  await exec(PUBLISH_CONFIG_SQL, [JSON.stringify(current.draft), iso(now), iso(now)]);
+  return adminSupportConfigAsync({ ...options, exec });
+}
+
+// `recordSupportEvent()`：不在白名單的 kind 直接回 `{ok:false}`（同步版就是這樣，不是拋錯）。
+export async function recordSupportEventAsync(kind, { userId = null, guestKey = "", meta = {}, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return recordSupportEventSync(sqliteHandle(), kind, { userId, guestKey, meta, now });
+  if (!SUPPORT_EVENT_KINDS.includes(kind)) return { ok: false };
+  const exec = await pgExec(options);
+  const safe = {};
+  if (meta && typeof meta === "object") {
+    if (meta.ruleId) safe.ruleId = Number(meta.ruleId) || 0;
+    if (meta.tierId) safe.tierId = Number(meta.tierId) || 0;
+    if (meta.sponsorId) safe.sponsorId = Number(meta.sponsorId) || 0;
+    if (meta.days) safe.days = Number(meta.days) || 0;
+  }
+  await exec(INSERT_EVENT_SQL, [
+    kind, userId, String(guestKey || "").slice(0, 80), JSON.stringify(safe), iso(now),
+  ]);
+  return { ok: true };
 }
 
 // ---- 贊助商／支持紀錄／CTA 規則的寫入（第二群）----

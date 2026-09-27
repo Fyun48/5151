@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺 | 新尺 | 第三批 | 第四批 | 第五批 | 第六批 | 第七批 | **第八批** |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | **169** |
-| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | **40** |
-| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | **53** |
-| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** |
+| 判定 | 舊尺 | 新尺 | 五批前 | 第四批 | 第五批 | 第六批 | 第七批 | 第八批 | **第九批** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | 169 | **165** |
+| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | 40 | **41** |
+| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | 53 | **56** |
+| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** | **206** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -443,6 +443,42 @@ sponsor 的 `amount` 空字串要寫 `null`（不是 0）。
 | `route-data-map` | 4 | 全 KILLED |
 | `housing-refresh-async` | 4 | 全 KILLED |
 | **合計** | **51** | **0 SURVIVED、0 SKIP** |
+
+### 第九批（2026-09-27）：後台設定（support_page_config）＋ 事件記錄
+
+#### 9.1 內容
+
+`supportAsync.js` 新增 5 個函式：`getSupportFlagsAsync`、`adminSupportConfigAsync`、
+`saveSupportConfigAsync`、`publishSupportConfigAsync`、`recordSupportEventAsync`
+（後者順便接上三個呼叫點：`/api/support/event`、checkout、cta/dismiss）。
+
+**4 條路由**：`GET/PUT /api/admin/support/config`、`POST /api/admin/support/config/publish`
+（→**PG**）、`POST /api/support/event`（→MIXED，只剩 session 讀取）；checkout 與 cta/dismiss
+的卡點清單也少了 `recordSupportEvent`。
+
+**量尺**：SQLite 169→**165**、PG 53→**56**、缺口 209→**206**。
+
+#### 9.2 忠實照抄勝過「順手最佳化」
+
+`adminSupportConfig()` 內部會呼叫 `configRow()` **四次**，而且**每次都重新 SELECT**。
+PG 分支逐字照抄同樣的結構，**不做「查一次共用」的最佳化**——那是行為等價但形狀不同的改寫，
+要做的話應該是有意為之、而不是順手。
+
+#### 9.3 兩個「我的測試假設錯了」（不是程式錯）
+
+1. `normalizePageCopy()` **只留 `DEFAULT_PAGE_COPY` 白名單內的鍵**。
+   我第一版用 `copy.title` 當測試資料，它不在白名單裡 ⇒ 被丟掉 ⇒ 斷言失敗。
+   改用真實的鍵（`cta_label`）才有鑑別力。
+2. `published_json` 存的是**正規化後的 draft 檢視**（`adminSupportConfig().draft`），
+   **不是** DB 裡那個原始的 `draft_json`（原始的可能缺欄位）。
+   第一版我拿兩者直接比，當然不同。這兩個若沒被測試擋下，就是我對資料形狀的理解錯誤。
+
+#### 9.4 變異測試
+
+`support-async` 的變異集擴到 **17 條，全部 KILLED**（新增 6 條涵蓋 config 與事件：
+`wall_enabled` 讀不出來、draft／published 讀反、publish 發佈錯的欄位、
+事件 kind 白名單拿掉、meta 不做白名單過濾）。
+跑完用 **sha1** 確認 `supportAsync.js` 沒有停在變異狀態（第 8.3 節的教訓）。
 
 ## 三、做法（照這個做，不要發明新的）
 

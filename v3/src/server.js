@@ -371,6 +371,7 @@ import {
 } from "./adminSettingsAsync.js";
 // Support 後台列表（卡點全在 handler 內的那一群）。
 import {
+  adminSupportConfigAsync,
   createManualTransactionAsync,
   createSupportCostAsync,
   createSupportSponsorAsync,
@@ -381,6 +382,9 @@ import {
   listSupportSponsorsAsync,
   listSupportTiersAsync,
   listSupportTransactionsAsync,
+  publishSupportConfigAsync,
+  recordSupportEventAsync,
+  saveSupportConfigAsync,
   updateCtaRuleAsync,
   updateSupportCostAsync,
   updateSupportProviderAsync,
@@ -1749,7 +1753,7 @@ app.post("/api/support/checkout", async (req, res) => {
       amount: req.body?.amount,
     });
     const session = readSession(req);
-    recordSupportEvent(db, "support_checkout_opened", {
+    await recordSupportEventAsync("support_checkout_opened", {
       userId: session?.userId || null,
       meta: { tierId: req.body?.tierId },
     });
@@ -1777,7 +1781,7 @@ app.post("/api/support/cta", (req, res) => {
   }
 });
 
-app.post("/api/support/cta/dismiss", (req, res) => {
+app.post("/api/support/cta/dismiss", async (req, res) => {
   try {
     const session = readSession(req);
     const state = dismissSupportCta(db, {
@@ -1785,7 +1789,7 @@ app.post("/api/support/cta/dismiss", (req, res) => {
       days: req.body?.days,
       clientState: req.body?.clientState,
     });
-    recordSupportEvent(db, "support_cta_dismissed", {
+    await recordSupportEventAsync("support_cta_dismissed", {
       userId: session?.userId || null,
       meta: { days: req.body?.days },
     });
@@ -1795,10 +1799,10 @@ app.post("/api/support/cta/dismiss", (req, res) => {
   }
 });
 
-app.post("/api/support/event", (req, res) => {
+app.post("/api/support/event", async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(recordSupportEvent(db, String(req.body?.kind || ""), {
+    res.json(await recordSupportEventAsync(String(req.body?.kind || ""), {
       userId: session?.userId || null,
       guestKey: String(req.body?.guestKey || "").slice(0, 80),
       meta: req.body?.meta,
@@ -1829,18 +1833,18 @@ app.get("/api/admin/support/dashboard", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/config", requireAdminApi, (_req, res) => {
-  res.json(adminSupportConfig(db));
+app.get("/api/admin/support/config", requireAdminApi, async (_req, res) => {
+  res.json(await adminSupportConfigAsync());
 });
 
 app.get("/api/admin/support/preview", requireAdminApi, (_req, res) => {
   res.json(previewSupportConfig(db));
 });
 
-app.put("/api/admin/support/config", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/config", requireAdminApi, async (req, res) => {
   try {
-    const before = adminSupportConfig(db);
-    const after = saveSupportConfig(db, req.body || {});
+    const before = await adminSupportConfigAsync();
+    const after = await saveSupportConfigAsync(req.body || {});
     auditReq(req, "support.config.update", "support_page_config", before, after);
     res.json(after);
   } catch (error) {
@@ -1848,10 +1852,10 @@ app.put("/api/admin/support/config", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/admin/support/config/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/config/publish", requireAdminApi, async (req, res) => {
   try {
-    const before = adminSupportConfig(db);
-    const after = publishSupportConfig(db);
+    const before = await adminSupportConfigAsync();
+    const after = await publishSupportConfigAsync();
     auditReq(req, "support.page.publish", "support_page_config", before, after);
     res.json(after);
   } catch (error) {

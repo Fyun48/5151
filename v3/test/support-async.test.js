@@ -35,6 +35,7 @@ const diskPath = () => path.join(dataDir, "v3.db");
 const TABLES = [
   "support_operating_cost", "support_tier", "support_provider",
   "support_transaction", "support_sponsor", "support_cta_rule",
+  "support_page_config", "support_event",
 ];
 
 const PG_ILLEGAL = [
@@ -388,6 +389,119 @@ test("updateCtaRuleAsync：threshold／cooldown_days 的下限（Math.max(1,…)
   assert.equal(a.threshold, s.threshold);
   assert.ok(Number(a.threshold) >= 1, "threshold 不得被寫成 0");
   assert.ok(Number(a.cooldown_days) >= 1, "cooldown_days 不得被寫成 0");
+  disk.close();
+});
+
+// ---------------------------------------------------------------------------
+// 後台設定（support_page_config）與事件記錄
+
+// 設定列固定是 id=1；同步版的 readFlags／readDraft／readPublished 都靠這一列。
+const seedConfig = (h, values = {}) => {
+  h.prepare("DELETE FROM support_page_config").run();
+  seed(h, "support_page_config", { id: 1, updated_at: "2026-09-01T00:00:00.000Z", ...values });
+};
+
+test("adminSupportConfigAsync：預設狀態（沒有任何設定列）必須與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  const a = await asyncMod.adminSupportConfigAsync({ ...PG, exec });
+  assert.deepEqual(a, support.adminSupportConfig(disk));
+  assert.equal(a.flags.enabled, false, "預設必須是未開啟");
+  disk.close();
+});
+
+test("adminSupportConfigAsync：有設定值時逐欄相同（flags／draft／goal／wall）", async () => {
+  const [disk, exec] = resetBoth();
+  const stored = {
+    flags_json: JSON.stringify({ enabled: true, cta_enabled: true }),
+    draft_json: JSON.stringify({ intro: "草稿說明", show_goal: false }),
+    published_json: JSON.stringify({ intro: "已發佈說明" }),
+    published_at: "2026-09-02T00:00:00.000Z",
+    goal_amount: 5000,
+    goal_label: "這個月的目標",
+    goal_display: "amount",
+    wall_enabled: 1,
+  };
+  seedConfig(disk, stored); seedConfig(exec.raw, stored);
+
+  const a = await asyncMod.adminSupportConfigAsync({ ...PG, exec });
+  assert.deepEqual(a, support.adminSupportConfig(disk));
+  assert.equal(a.flags.enabled, true, "必須真的讀到存的 flags");
+  assert.equal(a.goal_amount, 5000);
+  assert.equal(a.draft.intro, "草稿說明");
+  assert.equal(a.draft.show_goal, false, "draft 的 show_goal=false 必須保留（不是被預設值蓋掉）");
+  assert.equal(a.wall_enabled, true);
+  disk.close();
+});
+
+test("getSupportFlagsAsync：與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  seedConfig(disk, { flags_json: JSON.stringify({ enabled: true }) });
+  seedConfig(exec.raw, { flags_json: JSON.stringify({ enabled: true }) });
+  const a = await asyncMod.getSupportFlagsAsync({ ...PG, exec });
+  assert.deepEqual(a, support.getSupportFlags(disk));
+  assert.equal(a.enabled, true);
+  disk.close();
+});
+
+test("saveSupportConfigAsync：落地的 config 列必須逐欄相同（含 draft 合併語意）", async () => {
+  const [disk, exec] = resetBoth();
+  seedConfig(disk, { draft_json: JSON.stringify({ intro: "舊說明", show_cost: false }) });
+  seedConfig(exec.raw, { draft_json: JSON.stringify({ intro: "舊說明", show_cost: false }) });
+  // ⚠️ copy 的鍵必須在 `DEFAULT_PAGE_COPY` 白名單內（normalizePageCopy 只留那些鍵）——
+  // 第一版我用 `title`，它不在白名單裡，於是被丟掉、斷言失敗。用真實的鍵才有鑑別力。
+  const partial = { flags: { enabled: true }, copy: { cta_label: "新標籤" }, goal_amount: 8000, wall_enabled: 1 };
+
+  const s = support.saveSupportConfig(disk, partial, NOW);
+  const a = await asyncMod.saveSupportConfigAsync(partial, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s, "回傳值必須相同");
+  assert.deepEqual(tableOf(exec.raw, "support_page_config"), tableOf(disk, "support_page_config"),
+    "落地的 config 列必須逐欄相同");
+  const landed = tableOf(disk, "support_page_config")[0];
+  assert.match(landed.draft_json, /舊說明/, "沒給的 draft 欄位要沿用現值");
+  assert.match(landed.draft_json, /新標籤/, "給的 copy 要合併進去");
+  disk.close();
+});
+
+test("publishSupportConfigAsync：published_json 要等於 draft，且落地的 published_at 相同", async () => {
+  const [disk, exec] = resetBoth();
+  seedConfig(disk, { draft_json: JSON.stringify({ intro: "要發佈的" }) });
+  seedConfig(exec.raw, { draft_json: JSON.stringify({ intro: "要發佈的" }) });
+
+  const s = support.publishSupportConfig(disk, NOW);
+  const a = await asyncMod.publishSupportConfigAsync({ ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_page_config"), tableOf(disk, "support_page_config"));
+  const landed = tableOf(disk, "support_page_config")[0];
+  assert.equal(landed.published_at, NOW.toISOString(), "published_at 要用傳入的 now");
+  // 注意：`published_json` 存的是「正規化後的 draft 檢視」（adminSupportConfig 的 draft），
+  // 不是 DB 裡那個原始的 draft_json——原始的可能缺欄位。第一版我拿兩者直接比，當然不同。
+  assert.deepEqual(JSON.parse(landed.published_json), support.adminSupportConfig(disk).draft,
+    "發佈的內容必須等於當下的 draft 檢視");
+  disk.close();
+});
+
+test("recordSupportEventAsync：合法 kind 要寫入、meta 只留白名單欄位", async () => {
+  const [disk, exec] = resetBoth();
+  const meta = { ruleId: 7, tierId: 3, sponsorId: 0, days: 5, 不該留下的欄位: "x", userId: 999 };
+  const s = support.recordSupportEvent(disk, "support_cta_shown", { userId: 42, guestKey: "g1", meta, now: NOW });
+  const a = await asyncMod.recordSupportEventAsync("support_cta_shown", { userId: 42, guestKey: "g1", meta, now: NOW, ...PG, exec });
+  assert.deepEqual(a, s);
+  assert.deepEqual(a, { ok: true });
+  const rows = tableOf(exec.raw, "support_event");
+  assert.deepEqual(rows, tableOf(disk, "support_event"), "落地的事件列必須逐欄相同");
+  assert.equal(rows.length, 1, "必須真的寫入一筆");
+  assert.deepEqual(JSON.parse(rows[0].meta_json), { ruleId: 7, tierId: 3, days: 5 },
+    "meta 只留白名單欄位（0 的不寫、其他欄位不得外洩）");
+  disk.close();
+});
+
+test("recordSupportEventAsync：不合法的 kind 回 {ok:false} 且不寫入", async () => {
+  const [disk, exec] = resetBoth();
+  const s = support.recordSupportEvent(disk, "not_a_kind", { now: NOW });
+  const a = await asyncMod.recordSupportEventAsync("not_a_kind", { now: NOW, ...PG, exec });
+  assert.deepEqual(a, s);
+  assert.deepEqual(a, { ok: false });
+  assert.equal(tableOf(exec.raw, "support_event").length, 0, "不合法時不得寫入");
   disk.close();
 });
 
