@@ -34,6 +34,13 @@ import { setWishOfferHydrate } from "./wishOffers.js";
 import { setRentalNotifyHydrate } from "./rentalNotify.js";
 import { normalizeRentalMarketplaceFlags, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import {
+  DEFAULT_WISH_CONDITIONS,
+  mergeWishConditions,
+  normalizeWishConditionItems,
+  publicWishConditions,
+  setWishConditionCatalog,
+} from "./wishConditions.js";
+import {
   applyTemplateDraft,
   assertCatalogSafe,
   catalogDiff,
@@ -301,4 +308,38 @@ export async function deleteRentalCatalogTemplateAsync(id, options = {}) {
       items: next.map((row) => ({ id: row.id, label: row.label, system: isSystemCatalogTemplate(row.id) })),
     };
   }, async () => (await syncDb()).deleteRentalCatalogTemplate(id));
+}
+
+// ---- 許願條件（wish conditions）----
+//
+// 對應 `db.js:1418 getWishConditions()` 與 `db.js:1682 saveWishConditions()`。
+// 形狀與租屋目錄**完全一樣**（settings 的 JSON blob ＋ 行程內快取），所以重用同一個
+// `hydrateCaches()`：少了它，同一台節點的同步路徑會繼續用舊的許願條件目錄。
+//
+// ⚠️ 落地格式是 `{ items: [...] }`（不是裸陣列），而且 `reset` 時要寫**正規化過的預設值**。
+const WISH_KEY = "wishConditions";
+
+async function readWishItemsPg(options) {
+  const stored = await readPg(WISH_KEY, options);
+  return stored == null ? DEFAULT_WISH_CONDITIONS : mergeWishConditions(stored);
+}
+
+export async function getWishConditionsAsync(options = {}) {
+  if (!isPg(options)) return (await syncDb()).getWishConditions();
+  return withFallback(options, { read: true }, async () => {
+    const items = await readWishItemsPg(options);
+    setWishConditionCatalog(items);
+    await readStatePg(options); // hydrate 六個快取（與同步版的 hydrateRentalMarketplace 同義）
+    return publicWishConditions(items);
+  }, async () => (await syncDb()).getWishConditions());
+}
+
+export async function saveWishConditionsAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return (await syncDb()).saveWishConditions(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = { items: normalizeWishConditionItems(src.reset === true ? DEFAULT_WISH_CONDITIONS : src.items) };
+  return withFallback(options, {}, async () => {
+    await writePg(WISH_KEY, next, options);
+    return getWishConditionsAsync(options);
+  }, async () => (await syncDb()).saveWishConditions(partial));
 }

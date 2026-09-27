@@ -414,3 +414,53 @@ test("夾具本身要真的拒絕 IFNULL／COLLATE NOCASE（否則方言守衛�
   await assert.rejects(() => exec("SELECT key FROM settings ORDER BY key COLLATE NOCASE"), /collation "nocase"/);
   await assert.doesNotReject(() => exec("SELECT key FROM settings"), "普通查詢要放行");
 });
+
+// ---- 許願條件 ----
+//
+// 形狀與租屋目錄一樣（settings blob ＋ 行程內快取），所以重用同一個 `hydrateCaches()`。
+// 落地格式是 `{ items: [...] }`，不是裸陣列。
+
+test("許願條件：沒有存值時回預設清單，且與同步版逐欄相同", async () => {
+  const exec = resetBoth();
+  db.prepare("DELETE FROM settings WHERE key='wishConditions'").run();
+  exec.raw.prepare("DELETE FROM settings WHERE key='wishConditions'").run();
+  const pg = await asyncMod.getWishConditionsAsync({ ...PG, exec });
+  const lite = syncDb.getWishConditions();
+  assert.deepEqual(pg, lite, "整包必須相同");
+  // `publicWishConditions()` 回的是 `{ items, active }`，不是裸陣列。
+  assert.ok(Array.isArray(pg.items) && pg.items.length > 0, "預設許願條件不得是空的（否則比對沒有鑑別力）");
+  assert.ok(pg.active.length > 0, "active 摘要也不得是空的");
+});
+
+test("許願條件：有存值時要用存的那一份，而且行程內快取要跟著換", async () => {
+  const exec = resetBoth();
+  const stored = { items: [{ id: "wish_custom", label: "自訂條件", enabled: true }] };
+  for (const h of [db, exec.raw]) {
+    h.prepare("INSERT INTO settings(key, value) VALUES('wishConditions', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(JSON.stringify(stored));
+  }
+  const pg = await asyncMod.getWishConditionsAsync({ ...PG, exec });
+  const lite = syncDb.getWishConditions();
+  assert.deepEqual(pg, lite);
+  // 快取（`setWishConditionCatalog`）必須被換成 PG 那一份——同步路徑讀的就是它。
+  const wish = await import("../src/wishConditions.js");
+  const cached = wish.allWishConditions();
+  assert.ok(cached.some((row) => row.id === "wish_custom"),
+    `行程內快取必須含 PG 的自訂條件，實際 ${JSON.stringify(cached.map((r) => r.id).slice(0, 5))}`);
+});
+
+test("許願條件：儲存時落地成 { items: [...] }，reset 要寫正規化過的預設值", async () => {
+  const exec = resetBoth();
+  const input = { items: [{ id: "wish_custom2", label: "再一個", enabled: true }] };
+  const pg = await asyncMod.saveWishConditionsAsync(input, { ...PG, exec });
+  const lite = syncDb.saveWishConditions(input);
+  assert.deepEqual(pg, lite, "回傳值必須相同");
+  const landed = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='wishConditions'").get().value);
+  assert.ok(Array.isArray(landed.items), '落地格式必須是 { items: [...] }，不是裸陣列');
+  assert.ok(landed.items.some((row) => row.id === "wish_custom2"));
+
+  const reset = await asyncMod.saveWishConditionsAsync({ reset: true }, { ...PG, exec });
+  assert.deepEqual(reset, syncDb.saveWishConditions({ reset: true }));
+  const after = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='wishConditions'").get().value);
+  assert.ok(after.items.length > 1, "reset 要寫入完整的預設清單（不是空陣列）");
+});

@@ -301,6 +301,7 @@ import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
+import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
 import {
   applyRentalCatalogTemplateAsync,
@@ -2101,13 +2102,13 @@ app.put("/api/admin/help-qa", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/wish-conditions", requireAdminApi, (_req, res) => {
-  res.json(getWishConditions());
+app.get("/api/admin/wish-conditions", requireAdminApi, async (_req, res) => {
+  res.json(await getWishConditionsAsync());
 });
 
-app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
+app.put("/api/admin/wish-conditions", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveWishConditions(req.body || {}));
+    res.json(await saveWishConditionsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

@@ -626,6 +626,20 @@ const RENTALCAT_MUTATIONS = [
     expect: "找不到範本時",
   },
   {
+    name: "許願條件讀取不查 PG（永遠回預設清單）",
+    file: RC_SRC,
+    from: "  return stored == null ? DEFAULT_WISH_CONDITIONS : mergeWishConditions(stored);",
+    to: "  return DEFAULT_WISH_CONDITIONS;",
+    expect: "許願條件：有存值時",
+  },
+  {
+    name: "許願條件落地成裸陣列（不是 { items: [...] }）",
+    file: RC_SRC,
+    from: "  const next = { items: normalizeWishConditionItems(src.reset === true ? DEFAULT_WISH_CONDITIONS : src.items) };",
+    to: "  const next = normalizeWishConditionItems(src.reset === true ? DEFAULT_WISH_CONDITIONS : src.items);",
+    expect: "落地成 { items:",
+  },
+  {
     name: "開關讀取不查 PG（永遠回預設值）",
     file: RC_SRC,
     from: "  return normalizeRentalMarketplaceFlags((await readPg(KEYS.flags, options)) || {});",
