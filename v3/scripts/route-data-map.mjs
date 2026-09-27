@@ -258,7 +258,26 @@ for (const [rel, mod] of mods) {
 }
 
 const memo = new Map();
-let resolving = new Set();
+let resolving = new Map();
+
+// 2026-09-27（Owner 方案 A）：session 不再必然讀節點本機 SQLite。
+//
+// 背景：`readSession()` → `findUserByEmail()` → `v3.db` 是步驟 3 最大的單一卡點，
+// 137 條路由因此被判成 SQLite／MIXED。修法是 `server.js` 在**第一條路由之前**掛
+// `app.use(resolveSession())`：那個中介層用 `readSessionAsync()` 向 PG 取身分、把結果
+// 快取在 req 上，`readSession()` 只是讀快取（113 個呼叫點不必改）。
+//
+// ⚠️ 這裡是**實際去 server.js 檢查那個掛載點**，不是假設它存在：只有
+//   (1) 找得到 `app.use(resolveSession(`
+//   (2) 它出現在第一條 `app.<method>(` 之前
+// 兩個條件都成立，`auth.js::readSession` 才不計入 SQLite 缺口。把中介層移走、改名、
+// 或排到路由後面，判定就會自己退回 SQLite——這條規則可以被否證，不是信任宣告。
+const SERVER_TEXT = mods.get("server.js").text;
+const sessionMountIndex = SERVER_TEXT.search(/app\.use\(\s*resolveSession\s*\(/);
+const firstRouteIndex = SERVER_TEXT.search(/app\.(get|post|put|delete|patch)\(\s*"/);
+const sessionResolvedByPg = sessionMountIndex !== -1
+  && (firstRouteIndex === -1 || sessionMountIndex < firstRouteIndex);
+
 function resolveNode(rel, name) {
   const key = `${rel}::${name}`;
   if (memo.has(key)) return memo.get(key);
@@ -266,12 +285,24 @@ function resolveNode(rel, name) {
   // 但那是**同一個函式的替代分支**，不是呼叫端在用 SQLite。展開它會把每條
   // 已移植的路由都誤判成 MIXED（實測：/api/member-mail 就是這樣被誤判）。
   if (rel.endsWith("Async.js")) { const e = { sqlite: new Set(), pg: new Set() }; memo.set(key, e); return e; }
+  // 已由 PG 解析的 session：殘留的同步 `findUserByEmail` 是「中介層沒跑到」的備援分支，
+  // 與上面 *Async.js 的 sqlite 分支同理，不算這條路由在用 SQLite。
+  if (sessionResolvedByPg && rel === "auth.js" && name === "readSession") {
+    const e = { sqlite: new Set(), pg: new Set(["readSessionAsync"]) };
+    memo.set(key, e);
+    return e;
+  }
   const mod = mods.get(rel);
   const body = mod?.fns.get(name);
   const out = { sqlite: new Set(), pg: new Set() };
   if (!body) return out;
-  if (resolving.has(key)) return out;
-  resolving.add(key);
+  // 循環：回傳**目前累積的部分結果**，而不是一個全新的空集合。
+  // 舊版回空集合會讓「先被走到的節點」靜靜吃掉循環另一端的函式——加邊竟然會讓
+  // 別的節點的 sqlite 集合**變小**（單調性被破壞）。這裡先把 out 掛進 inProgress，
+  // 讓重新進入的那一輪至少看得到已累積的部分。
+  const inFlight = resolving.get(key);
+  if (inFlight) return inFlight;
+  resolving.set(key, out);
   for (const [local, target] of mod.imports) {
     if (!callsIn(body, local)) continue;
     if (sqliteNodes.has(nodeKey(target.to, target.orig))) out.sqlite.add(target.orig);
@@ -297,10 +328,19 @@ function resolveNode(rel, name) {
   memo.set(key, out);
   return out;
 }
-for (let r = 0; r < 5; r += 1) {
+// 迭代到**不再變動**為止（上限 20 輪）：固定跑 5 輪在有循環時可能還沒收斂，
+// 而沒收斂的結果會隨走訪順序改變——同一個輸入卻因不相干的編輯而得到不同判定。
+// 每次重算前清掉 memo，讓部分結果能被更完整的結果取代。
+let tallyKey = "";
+for (let r = 0; r < 20; r += 1) {
   memo.clear();
-  resolving = new Set();
+  resolving = new Map();
   for (const [rel, mod] of mods) for (const name of mod.fns.keys()) resolveNode(rel, name);
+  const snapshot = [...memo.entries()]
+    .map(([k, v]) => `${k}|${[...v.sqlite].sort().join(",")}|${[...v.pg].sort().join(",")}`)
+    .sort().join("\n");
+  if (snapshot === tallyKey) break;
+  tallyKey = snapshot;
 }
 
 const TABLE_RE = /\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)/gi;
@@ -343,6 +383,37 @@ function tablesFor(names) {
   return out;
 }
 
+// 🚨 缺陷 (6)（2026-09-27 發現並修正）：**傳參考**的函式在路由本文裡看不到。
+//
+// `callsIn()` 要求名字後面接 `(`，所以 `buildDemoState({ listUserIds, getSettings,
+// defaultUserId, listListings, stats })` 這種**把函式當參數傳**的寫法一條邊都建不起來
+// ——`listUserIds`…`stats` 全是 db.js 的 SQLite 讀取，`/api/demo` 卻被判成 PG。
+//
+// 這個低估一直被掩蓋著：`/api/demo` 本文有 `readSession(req)`，而那條邊會拉到
+// `findUserByEmail`，於是它「剛好」顯示成 SQLite。2026-09-27 session 改成 PG 解析之後，
+// 掩蓋消失，`/api/demo` 立刻變成 `PG` 且 `sqlite=[]`——**低估是真的，不是新壞的**。
+// 這一條同時是 route-data-map.test.js 的 ground truth（人工核對過 /api/demo 讀 SQLite），
+// 不修的話那條守衛會變成永遠失敗、失去鑑別力。
+//
+// 保守度：只在**路由本文**這一層放寬（函式本文仍用 `callsIn`），而且排除
+// `const/let/var/function <name>` 這種「同名區域變數宣告」——否則 `const stats = …`
+// 會被誤認成引用到 db.js 的 `stats()`。
+const mentionsIn = (body, name) => {
+  const n = name.replace(/\$/g, "\\$");
+  // 有「呼叫」就一定算引用——這一條優先於下面的同名守衛。
+  // 🚨 這裡踩過一次：第一版先套同名守衛，於是 `const getSystemCrawl = …` 這種
+  // 「區域變數與匯入同名」的 handler 連**原本看得到的呼叫邊**都被吃掉，
+  // 4 條路由的 sqlite 集合反而**變小**（單調性被破壞）。順序反過來就單調了。
+  if (callsIn(body, name)) return true;
+  // `(?!\\s*:)`：**物件字面量的鍵**不算引用。實測踩到——reject-match 的
+  // `res.json({ stats: await listingStatsAsync(…) })` 因為鍵叫 `stats`，把 db.js 的
+  // `stats()` 整條鏈（countWatched／loadFlagMap／sqlExcludeFixtureRows…）拉了進來，
+  // 7 個 SQLite 函式全部誤報。`{ stats }` 這種 shorthand 沒有冒號，仍然算值。
+  if (!new RegExp(`(?<![\\w$.])${n}(?![\\w$])(?!\\s*:)`).test(body)) return false;
+  // 只有「裸提及」才需要排除同名區域變數宣告（否則 `const stats = …` 會被誤認成 db.js 的 stats()）。
+  return !new RegExp(`\\b(?:const|let|var|function|class)\\s+${n}\\b`).test(body);
+};
+
 const server = mods.get("server.js");
 const routeRe = /app\.(get|post|put|delete|patch)\(\s*"([^"]+)"\s*,/g;
 const rows = [];
@@ -355,7 +426,7 @@ for (const m of server.text.matchAll(routeRe)) {
   const sqlite = new Set();
   const pg = new Set();
   for (const [local, target] of server.imports) {
-    if (!callsIn(body, local)) continue;
+    if (!mentionsIn(body, local)) continue;
     if (sqliteNodes.has(nodeKey(target.to, target.orig))) sqlite.add(target.orig);
     if (target.to.endsWith("Async.js") && pgFns.has(target.orig)) pg.add(target.orig);
     const next = resolveNode(target.to, target.orig);
@@ -363,7 +434,7 @@ for (const m of server.text.matchAll(routeRe)) {
     for (const n of next.pg) pg.add(n);
   }
   for (const other of server.fns.keys()) {
-    if (!callsIn(body, other)) continue;
+    if (!mentionsIn(body, other)) continue;
     const next = resolveNode("server.js", other);
     for (const n of next.sqlite) sqlite.add(n);
     for (const n of next.pg) pg.add(n);

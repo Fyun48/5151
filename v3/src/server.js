@@ -293,7 +293,7 @@ import {
   updateCampaign,
 } from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
-import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
+import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin } from "./auth.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
@@ -486,6 +486,11 @@ app.use(express.json({
     }
   },
 }));
+
+// Session 解析必須在**任何**路由之前（本檔第一條路由在下面幾行就註冊了），
+// 而且要在 requireAuth 之前，讓 `readSession()` 一率讀到已解析的快取。
+// 這一條同時解掉「187 條路由的 session 讀的是節點本機 SQLite」這個步驟 3 的卡點。
+app.use(resolveSession());
 
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {

@@ -427,6 +427,85 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// Session 改成 PG 解析的變異集（v3/test/session-async.test.js）。
+//
+// 這一組每一條都對應一個「壞掉會怎樣」：快取失效（每請求 N 次查詢／退回本機）、
+// 驗簽失效（過期或竄改的 token 放行）、刪除判斷失效（已刪除使用者仍登入）、
+// fail-open 失效（PG 一抖就全站登出）、靜態跳過失效（每個圖檔都查一次 users）。
+const AUTH_SRC = "v3/src/auth.js";
+const SESSION_MUTATIONS = [
+  {
+    name: "readSession 不讀快取（退回同步路徑 ⇒ 又變成讀節點本機 SQLite）",
+    file: AUTH_SRC,
+    from: "  if (req && Object.prototype.hasOwnProperty.call(req, SESSION_SLOT)) return req[SESSION_SLOT];\n",
+    to: "",
+    expect: "同一請求內讀快取",
+  },
+  {
+    name: "中介層解析完不寫進快取（做白工，身分還是來自本機）",
+    file: AUTH_SRC,
+    from: "      req[SESSION_SLOT] = await readSessionAsync(req, options);",
+    to: "      await readSessionAsync(req, options);",
+    expect: "核心：PG 有、節點本機沒有的使用者",
+  },
+  {
+    name: "PG 分支改成一律走 SQLite（改動等於沒做）",
+    file: AUTH_SRC,
+    from: '  if (driver !== "postgres") return sessionFromUser(findUserByEmail(claim.email));',
+    to: '  if (true) return sessionFromUser(findUserByEmail(claim.email));',
+    expect: "核心：PG 有、節點本機沒有的使用者",
+  },
+  {
+    name: "sessionFromUser 不檢查 deleted_at（已刪除的使用者照樣登入）",
+    file: AUTH_SRC,
+    from: '  if (!user || String(user.deleted_at || "").trim()) return null;',
+    to: "  if (!user) return null;",
+    expect: "已刪除的使用者",
+  },
+  {
+    name: "sessionClaim 不檢查到期（過期 token 永遠有效）",
+    file: AUTH_SRC,
+    from: "    if (!data?.exp || Date.now() > Number(data.exp)) return null;",
+    to: "    if (!data?.exp) return null;",
+    expect: "過期的 token",
+  },
+  {
+    name: "sessionClaim 不比對 MAC（簽章形同虛設）",
+    file: AUTH_SRC,
+    from: "  if (!payload || !mac || !safeEqual(sign(payload), mac)) return null;",
+    to: "  if (!payload || !mac) return null;",
+    expect: "MAC 被竄改",
+  },
+  {
+    name: "fail-open 拿掉（PG 讀不到就等於全站登出）",
+    file: AUTH_SRC,
+    from: "    if (!sqliteFallbackAllowed(options)) throw error;\n",
+    to: "",
+    expect: "fail-open",
+  },
+  {
+    name: "靜態資產不再跳過（帶 cookie 載入 30 個圖檔 = 30 次 users 查詢）",
+    file: AUTH_SRC,
+    from: "    if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {",
+    to: "    if (!cookie.includes(`${COOKIE}=`)) {",
+    expect: "靜態資產即使帶 cookie",
+  },
+  {
+    name: "isStaticAssetPath 不比對副檔名（/media/self 這種動態路徑被當成靜態）",
+    file: AUTH_SRC,
+    from: "  if (!STATIC_EXT.test(p)) return false;\n",
+    to: "",
+    expect: "isStaticAssetPath：動態路由不得被誤判成靜態",
+  },
+  {
+    name: "身分欄位漏掉 plan（形狀與舊版不一致）",
+    file: AUTH_SRC,
+    from: '  return { email: user.email, userId: Number(user.id), role: user.role || "member", plan: user.plan || "free" };',
+    to: '  return { email: user.email, userId: Number(user.id), role: user.role || "member" };',
+    expect: "PG 與本機兩條路的 session 形狀逐欄相同",
+  },
+];
+
 // 後台設定 PG 分支的變異集（v3/test/admin-settings-async.test.js）。
 // 這一組的 port 都很短，所以每一條都要證明「拿掉就失敗」，不能靠「看起來一樣」。
 const ADMSET_MUTATIONS = [
@@ -478,15 +557,22 @@ const ADMSET_MUTATIONS = [
 const MAP_SRC = "v3/scripts/route-data-map.mjs";
 
 // 進度量尺的變異集（v3/test/route-data-map.test.js）。
-// 這一組要證明的是「兩個缺陷真的被鎖住了」——把修正還原，對應的路由就必須被判錯。
+// 這一組要證明的是「每個缺陷真的被鎖住了」——把修正還原，對應的路由就必須被判錯。
+//
+// ⚠️ 2026-09-27：舊的 `expect` 值**整批換過**，因為它們指向的路由已經移植掉了
+// （`/api/support/public` 變 PG），拿「還沒移植」當殺手的變異會變成永遠殺不掉。
+// 現在一律改挑「**這個缺陷本身才會造成的可觀察差異**」，與該路由是否已移植無關。
 const MAP_MUTATIONS = [
   {
     name: "還原缺陷 (1)：函式本文切到下一個 function 宣告（會吞掉整段路由）",
     file: MAP_SRC,
     from: "  for (const hit of text.matchAll(re)) fns.set(hit[1], sliceFunctionBody(text, hit.index));",
     to: "  const hits = [...text.matchAll(re)];\n  for (let i = 0; i < hits.length; i += 1) fns.set(hits[i][1], text.slice(hits[i].index, i + 1 < hits.length ? hits[i + 1].index : text.length));",
-    // 注意：殺手是 support/public 而不是 demo——缺陷 (2) 的修正對 demo 有重疊覆蓋。
+    // 殺手刻意挑**被污染到的路由**，不是污染源自己：實測缺陷 (1) 對 `/api/demo`
+    // 完全沒有影響（它的本文本來就在被吞的範圍裡），但 `/api/support/public`
+    // 會從 `PG / sqlite=[]` 變成 `MIXED / sqlite=132 個`。
     expect: "/api/support/public",
+
   },
   {
     name: "還原缺陷 (1) 的錯誤修法：從簽名後第一個 { 起算（被 destructured default 截斷）",
@@ -506,14 +592,18 @@ const MAP_MUTATIONS = [
   const open = text.indexOf("{", i);`,
     to: `  let i = start;
   const open = text.indexOf("{", i);`,
-    expect: "/api/admin/members",
+    expect: "函式本文被截斷的守衛",
   },
   {
     name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
     file: MAP_SRC,
     from: "    if (sqliteNodes.has(nodeKey(target.to, target.orig))) sqlite.add(target.orig);",
     to: "    if (target.to === \"db.js\" && touches.has(target.orig)) sqlite.add(target.orig);",
-    expect: "/api/support/public",
+    // 這一條的歷史殺手就是「被低估的那一批」：`listCampaignsAdmin` 住在 comms.js、
+    // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
+    // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
+    // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
+    expect: "被低估的那一批",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -522,11 +612,43 @@ const MAP_MUTATIONS = [
     to: 'function stripComments(text) {\n  return text.replace(/\\/\\*[\\s\\S]*?\\*\\//g, " ").replace(/(^|[^:])\\/\\/[^\\n]*/g, "$1");\n  let out = "";',
     expect: "normalizeLineUrl",
   },
+  {
+    name: "還原缺陷 (6)：傳參考的函式／中介層看不到（只認 `name(`）",
+    file: MAP_SRC,
+    from: "    if (!mentionsIn(body, local)) continue;",
+    to: "    if (!callsIn(body, local)) continue;",
+    // 這一個變異同時會殺掉「傳參考的中介層」那一條（requireAdminApi 也是 import），
+    // 取比較具體的「傳參考的函式」當指名殺手。
+    expect: "傳參考的函式必須被看見",
+  },
+  {
+    name: "還原缺陷 (6) 的物件鍵誤判：`stats:` 被當成 db.js 的 stats()",
+    file: MAP_SRC,
+    from: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])(?!\\\\s*:)`).test(body)) return false;",
+    to: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])`).test(body)) return false;",
+    // reject-match 的 `res.json({ stats: await listingStatsAsync(…) })` 會把 db.js 的
+    // `stats()` 整條鏈拉進來（countWatched／loadFlagMap／sqlExcludeFixtureRows…）。
+    expect: "已完全移植的路由必須是 PG",
+  },
+  {
+    name: "session 已由 PG 解析這條規則失效（把掛載點判成在路由之後）",
+    file: MAP_SRC,
+    from: "const sessionResolvedByPg = sessionMountIndex !== -1\n  && (firstRouteIndex === -1 || sessionMountIndex < firstRouteIndex);",
+    to: "const sessionResolvedByPg = sessionMountIndex !== -1\n  && (firstRouteIndex === -1 || sessionMountIndex > firstRouteIndex);",
+    // 這一條測的是「那個掛載點真的被檢查了」：條件一反轉，readSession 就回到 SQLite，
+    // findUserByEmail 立刻回來。把 `app.use(resolveSession())` 真的移走也會有一樣的效果。
+    expect: "session 改由 PG 解析",
+  },
   // 刻意**沒有**「接收者改成萬用字元」這一條：實測它是**等價變異**。
   // 改成 `\w+\.(prepare|exec|…)` 確實多算了 52 個命中（1178 vs 1126，全是 re.exec() 之類），
   // 但 288 條的判定**完全沒變**（189/47/26/26）——那些 parser 函式從路由不可達。
   // 所以白名單是**防禦性**的（保護 sqliteNodes 的正確性），不是靠測試守住的；
   // 留一條永遠 SURVIVED 的變異只會讓報告失去意義。
+  //
+  // 也刻意**沒有**「還原循環處理（resolving 回空集合）」這一條：實測在**現有輸入**下
+  // 是等價變異（舊版 5 輪也會收斂到同一組判定，0 條差異）。循環修正是**穩健性**修正
+  // ——它保證「加邊只會增加、不會減少」（拿掉之後，加一條邊曾讓 4 條路由的 sqlite
+  // 集合反而變小）——但沒有可重跑的失敗可以指名，所以不假裝它被測試守住。
 ];
 
 const REJECT_MUTATIONS = [
@@ -652,7 +774,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+const MUTATIONS = /session-async/.test(testFile) ? SESSION_MUTATIONS
+  : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
           : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
