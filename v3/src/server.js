@@ -371,7 +371,9 @@ import {
 } from "./adminSettingsAsync.js";
 // Support 後台列表（卡點全在 handler 內的那一群）。
 import {
+  createManualTransactionAsync,
   createSupportCostAsync,
+  createSupportSponsorAsync,
   createSupportTierAsync,
   listCtaRulesAsync,
   listSupportCostsAsync,
@@ -379,9 +381,12 @@ import {
   listSupportSponsorsAsync,
   listSupportTiersAsync,
   listSupportTransactionsAsync,
+  updateCtaRuleAsync,
   updateSupportCostAsync,
   updateSupportProviderAsync,
+  updateSupportSponsorAsync,
   updateSupportTierAsync,
+  updateSupportTransactionAsync,
 } from "./supportAsync.js";
 // 站內刊登讀取（含過期清理）。同步版被 listingImport.js／listingTools.js 深層呼叫的部分仍未移植。
 import { getSelfListingAsync } from "./selfListingsAsync.js";
@@ -1925,9 +1930,9 @@ app.get("/api/admin/support/transactions", requireAdminApi, async (req, res) => 
   });
 });
 
-app.post("/api/admin/support/transactions/manual", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/transactions/manual", requireAdminApi, async (req, res) => {
   try {
-    const row = createManualTransaction(db, req.body || {});
+    const row = await createManualTransactionAsync(req.body || {});
     auditReq(req, "support.transaction.manual", `support_transaction:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1935,10 +1940,10 @@ app.post("/api/admin/support/transactions/manual", requireAdminApi, (req, res) =
   }
 });
 
-app.put("/api/admin/support/transactions/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/transactions/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportTransactions(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportTransaction(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportTransactionsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportTransactionAsync(Number(req.params.id), req.body || {});
     const action = row.status === "refunded" ? "support.transaction.refund" : "support.transaction.update";
     auditReq(req, action, `support_transaction:${row.id}`, before, row);
     res.json(row);
@@ -1951,9 +1956,9 @@ app.get("/api/admin/support/sponsors", requireAdminApi, async (_req, res) => {
   res.json({ items: await listSupportSponsorsAsync() });
 });
 
-app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/sponsors", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportSponsor(db, req.body || {});
+    const row = await createSupportSponsorAsync(req.body || {});
     auditReq(req, "support.sponsor.create", `support_sponsor:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1961,10 +1966,10 @@ app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/sponsors/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/sponsors/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportSponsors(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportSponsor(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportSponsorsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportSponsorAsync(Number(req.params.id), req.body || {});
     const action = ["active", "disabled"].includes(row.status) ? "support.sponsor.publish" : "support.sponsor.update";
     auditReq(req, action, `support_sponsor:${row.id}`, before, row);
     res.json(row);
@@ -1977,10 +1982,10 @@ app.get("/api/admin/support/cta-rules", requireAdminApi, async (_req, res) => {
   res.json({ items: await listCtaRulesAsync() });
 });
 
-app.put("/api/admin/support/cta-rules/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/cta-rules/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listCtaRules(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateCtaRule(db, Number(req.params.id), req.body || {});
+    const before = (await listCtaRulesAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateCtaRuleAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.cta.update", `support_cta_rule:${row.id}`, before, row);
     res.json(row);
   } catch (error) {

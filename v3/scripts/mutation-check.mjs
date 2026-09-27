@@ -6,8 +6,11 @@
 // 用法：node v3/scripts/mutation-check.mjs <測試檔> [--json]
 //   mutation 清單寫在 MUTATIONS，每條都要指名「預期被殺掉的測試」。
 //   `from` 必須在檔案中**恰好出現一次**（避免改錯地方，見 AGENT-RULES §七.2）。
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const SRC = "v3/src/sameHouseAsync.js";
 const USER_SRC = "v3/src/userSameHouseAsync.js";
@@ -105,6 +108,41 @@ const SUPPORT_WRITE_MUTATIONS = [
     from: "    src.is_active != null ? bool01(src.is_active, 1) : current.is_active ? 1 : 0,\n    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,\n    iso(now),\n    Number(id) || 0,\n  ]);\n  return adminProviderView(",
     to: "    src.is_active != null ? bool01(src.is_active, 1) : 0,\n    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,\n    iso(now),\n    Number(id) || 0,\n  ]);\n  return adminProviderView(",
     expect: "只有一個預設收款方式",
+  },
+  {
+    name: "🚨 transactions：拿掉去重查詢（同一組 provider+交易號會寫進第二筆）",
+    file: SUPPORT_WRITE_SRC,
+    from: "  if (providerTx && transactionDedupeKey(provider, providerTx)) {",
+    to: "  if (false) {",
+    expect: "去重要生效",
+  },
+  {
+    name: "transactions：net_amount 不重算（沿用舊值）",
+    file: SUPPORT_WRITE_SRC,
+    from: "    fee,\n    moneyAmount(amount - fee),\n    src.anonymous != null ? bool01(src.anonymous, 1) : current.anonymous ? 1 : 0,",
+    to: "    fee,\n    current.net_amount,\n    src.anonymous != null ? bool01(src.anonymous, 1) : current.anonymous ? 1 : 0,",
+    expect: "net_amount 要跟著",
+  },
+  {
+    name: "sponsors：amount 的空字串寫成 0（少了 `=== \"\"` 的判斷）",
+    file: SUPPORT_WRITE_SRC,
+    from: "    src.amount == null || src.amount === \"\" ? null : moneyAmount(src.amount),",
+    to: "    moneyAmount(src.amount),",
+    expect: "空字串要寫 null",
+  },
+  {
+    name: "sponsors：update 的 website_url 不做 sanitize",
+    file: SUPPORT_WRITE_SRC,
+    from: "    src.website_url !== undefined ? sanitizeHttpUrl(src.website_url) : current.website_url,",
+    to: "    src.website_url !== undefined ? src.website_url : current.website_url,",
+    expect: "沒給的欄位沿用現值",
+  },
+  {
+    name: "cta-rules：threshold 的下限 Math.max(1,…) 拿掉（可以寫進負數）",
+    file: SUPPORT_WRITE_SRC,
+    from: "    src.threshold != null ? Math.max(1, Number(src.threshold) || 1) : current.threshold,",
+    to: "    src.threshold != null ? Number(src.threshold) || 1 : current.threshold,",
+    expect: "下限",
   },
   {
     name: "providers：page_url 不做 sanitize",
@@ -482,16 +520,47 @@ function restoreAll() {
     try { writeFileSync(file, text); } catch { /* 盡力而為 */ }
   }
 }
-for (const file of new Set(MUTATIONS.map((m) => m.file))) PRISTINE.set(file, readFileSync(file, "utf8"));
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(signal, () => { restoreAll(); process.exit(130); });
+// 🚨 自我修復（2026-09-27 第二次踩到才加）：被 SIGTERM 中斷時，原始碼可能停在「已變異」狀態。
+// 第一版只有記憶體裡的 PRISTINE + 訊號處理常式，但實測仍會留下變異過的檔案
+// （工具被殺時處理常式不一定跑得到）。現在額外在 **tmpdir** 留一份備份：
+//   * 啟動時若發現殘留備份 ⇒ 先還原，再開始（上一次被中斷也救得回來）
+//   * 正常結束時刪掉備份
+// 備份放 tmpdir 而不是 repo，避免污染 git status；也避免「備份自己也被提交」。
+const backupPath = (file) => path.join(tmpdir(), `dsh-mutation-backup-${createHash("sha1").update(path.resolve(file)).digest("hex").slice(0, 12)}`);
+const BACKUPS = new Map();
+for (const file of new Set(MUTATIONS.map((m) => m.file))) {
+  const bak = backupPath(file);
+  if (existsSync(bak)) {
+    // 上一次被中斷：先還原再說，避免把變異過的原始碼當成 baseline。
+    writeFileSync(file, readFileSync(bak, "utf8"));
+    console.error(`[mutation] 偵測到上一次中斷留下的備份，已還原 ${file}`);
+  }
+  const text = readFileSync(file, "utf8");
+  PRISTINE.set(file, text);
+  writeFileSync(bak, text);
+  BACKUPS.set(file, bak);
 }
-process.on("uncaughtException", (error) => { restoreAll(); console.error(error); process.exit(1); });
-process.on("exit", restoreAll);
+let cleanedUp = false;
+function removeBackups() {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  for (const bak of BACKUPS.values()) { try { unlinkSync(bak); } catch { /* 盡力而為 */ } }
+}
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => { restoreAll(); removeBackups(); process.exit(130); });
+}
+process.on("uncaughtException", (error) => { restoreAll(); removeBackups(); console.error(error); process.exit(1); });
+// 正常／提前結束都要清掉 tmpdir 的備份，否則會留下垃圾（而且下次啟動會誤判為「上次被中斷」）。
+process.on("exit", () => { restoreAll(); removeBackups(); });
 
 function runTests() {
   try {
-    const out = execFileSync(process.execPath, ["--test", testFile], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    // ⚠️ maxBuffer 一定要放大：預設 1 MiB，而這個測試檔的 deepEqual 差異很大，
+    // 一旦超過就會**截斷輸出**，後面失敗的 `not ok` 行整批消失 ⇒ 變異被誤判成 SURVIVED。
+    // （實測：tier 的變異明明有兩條測試失敗，工具卻回報「沒有失敗」。）
+    const out = execFileSync(process.execPath, ["--test", testFile], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 256 * 1024 * 1024,
+    });
     return { out, failed: false };
   } catch (error) {
     return { out: `${error.stdout || ""}${error.stderr || ""}`, failed: true };
@@ -500,6 +569,31 @@ function runTests() {
 
 function failingNames(out) {
   return out.split("\n").filter((l) => l.startsWith("not ok ")).map((l) => l.replace(/^not ok \d+ - /, "").trim());
+}
+
+// 🚨 前置檢查（2026-09-27 加了自我修復之後仍然踩到才補的）：
+// **所有 from 字串都必須存在**。以前少了只會把那一條標成 SKIP，看起來像「這條不用測」；
+// 實際上「錨點不見了」幾乎都代表**原始碼被改過或停在半變異狀態**——
+// 我因此有一次在「原始碼已經被弄壞」的狀態下繼續跑完整輪，
+// 而且拿來對照的備份也繼承了同一個損壞，導致完整性檢查形同虛設。
+// 現在直接中止（不套用任何變異），把問題大聲講出來。
+{
+  const missing = [];
+  for (const m of MUTATIONS) {
+    if (ONLY && !m.name.includes(ONLY)) continue;
+    const text = readFileSync(m.file, "utf8");
+    for (const step of [{ from: m.from, to: m.to }, ...(m.also || [])]) {
+      const hits = text.split(step.from).length - 1;
+      if (hits !== 1) missing.push(`  ${m.name}\n    ${m.file}: 錨點出現 ${hits} 次（必須恰好 1 次）\n    ${JSON.stringify(step.from.slice(0, 90))}`);
+    }
+  }
+  if (missing.length) {
+    console.error(`[mutation] 前置檢查失敗：${missing.length} 個錨點找不到（原始碼可能已被改動或停在半變異狀態）`);
+    console.error(missing.join("\n"));
+    console.error("\n[mutation] 未套用任何變異就中止。請先確認原始碼是乾淨的（例如 git diff）。");
+    removeBackups();
+    process.exit(2);
+  }
 }
 
 const results = [];

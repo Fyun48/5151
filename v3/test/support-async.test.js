@@ -287,6 +287,110 @@ test("updateSupportProviderAsync：落地列相同，且只有一個預設收款
   disk.close();
 });
 
+// ---------------------------------------------------------------------------
+// 第二群寫入：贊助商／支持紀錄／CTA 規則
+
+test("createSupportSponsorAsync：落地列相同，且 amount 的空字串要寫 null（不是 0）", async () => {
+  const [disk, exec] = resetBoth();
+  const body = { name: "新贊助商", logo: "https://cdn.example/x.png", amount: "", status: "active", sort_order: 3 };
+  const s = support.createSupportSponsor(disk, body, NOW);
+  const a = await asyncMod.createSupportSponsorAsync(body, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  const rows = tableOf(exec.raw, "support_sponsor");
+  assert.deepEqual(rows, tableOf(disk, "support_sponsor"), "落地列必須逐欄相同");
+  assert.equal(rows.length, 1, "必須真的寫入一列");
+  assert.equal(rows[0].amount, null, "空字串的金額必須寫 null，不是 0");
+  disk.close();
+});
+
+test("updateSupportSponsorAsync：沒給的欄位沿用現值；給 undefined vs 給空字串的差別", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const sp = tableOf(disk, "support_sponsor")[0];
+
+  // (a) 只改名稱
+  const s1 = support.updateSupportSponsor(disk, sp.id, { name: "改名" }, NOW);
+  const a1 = await asyncMod.updateSupportSponsorAsync(sp.id, { name: "改名" }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a1, s1);
+  assert.deepEqual(tableOf(exec.raw, "support_sponsor"), tableOf(disk, "support_sponsor"));
+  assert.equal(a1.website_url, s1.website_url, "沒給的欄位要沿用現值");
+
+  // (b) logo 給空字串 ⇒ sanitize("") = ""（清掉），與 undefined（沿用）不同
+  const s2 = support.updateSupportSponsor(disk, sp.id, { logo: "" }, NOW);
+  const a2 = await asyncMod.updateSupportSponsorAsync(sp.id, { logo: "" }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a2, s2);
+  assert.deepEqual(tableOf(exec.raw, "support_sponsor"), tableOf(disk, "support_sponsor"));
+  assert.equal(a2.logo, "", "給空字串要把 logo 清掉");
+
+  // (c) 不合法網址必須被 sanitize 成空字串（沒有 sanitize 的版本會原樣寫進去）
+  const s3 = support.updateSupportSponsor(disk, sp.id, { website_url: "not-a-url" }, NOW);
+  const a3 = await asyncMod.updateSupportSponsorAsync(sp.id, { website_url: "not-a-url" }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a3, s3);
+  assert.deepEqual(tableOf(exec.raw, "support_sponsor"), tableOf(disk, "support_sponsor"));
+  assert.equal(a3.website_url, "", "不合法的網址必須被 sanitize 成空字串");
+  disk.close();
+});
+
+test("🚨 createManualTransactionAsync：去重要生效（同一組 provider+交易號第二次要 409）", async () => {
+  const [disk, exec] = resetBoth();
+  const body = { amount: 500, fee: 25, provider_transaction_id: "TX-1", anonymous: false, supporter_name: "小明" };
+  const s = support.createManualTransaction(disk, body, NOW);
+  const a = await asyncMod.createManualTransactionAsync(body, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_transaction"), tableOf(disk, "support_transaction"));
+  assert.equal(a.net_amount, 475, "net = amount - fee 必須算對");
+
+  // 第二次：兩邊都要丟 409 DUPLICATE_TRANSACTION（去重是**先查再寫**，少了查詢就會寫進第二筆）
+  let syncErr = null, asyncErr = null;
+  try { support.createManualTransaction(disk, body, NOW); } catch (e) { syncErr = e; }
+  try { await asyncMod.createManualTransactionAsync(body, { ...PG, exec, now: NOW }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr, "同步版應該擋下重複");
+  assert.equal(asyncErr?.status, syncErr?.status, "status 必須相同");
+  assert.equal(asyncErr?.code, syncErr?.code, "code 必須相同（DUPLICATE_TRANSACTION）");
+  assert.equal(tableOf(exec.raw, "support_transaction").length, 1, "重複的那筆不得寫入");
+  disk.close();
+});
+
+test("createManualTransactionAsync：金額 <= 0 要擋下來（兩邊形狀相同）", async () => {
+  const [disk, exec] = resetBoth();
+  let syncErr = null, asyncErr = null;
+  try { support.createManualTransaction(disk, { amount: 0 }, NOW); } catch (e) { syncErr = e; }
+  try { await asyncMod.createManualTransactionAsync({ amount: 0 }, { ...PG, exec, now: NOW }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr && asyncErr);
+  assert.equal(asyncErr.message, syncErr.message);
+  assert.equal(tableOf(exec.raw, "support_transaction").length, 0, "被擋下時不得寫入");
+  disk.close();
+});
+
+test("updateSupportTransactionAsync：net_amount 要跟著 amount／fee 重算", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const tx = tableOf(disk, "support_transaction")[0];
+  const s = support.updateSupportTransaction(disk, tx.id, { amount: 1000, fee: 40, status: "refunded" }, NOW);
+  const a = await asyncMod.updateSupportTransactionAsync(tx.id, { amount: 1000, fee: 40, status: "refunded" }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_transaction"), tableOf(disk, "support_transaction"));
+  assert.equal(a.net_amount, 960, "net 必須重算");
+  assert.equal(a.status, "refunded");
+  disk.close();
+});
+
+test("updateCtaRuleAsync：threshold／cooldown_days 的下限（Math.max(1,…)）必須一致", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const rule = tableOf(disk, "support_cta_rule")[0];
+  // 故意給**負數**：`Math.max(1, X || 預設)` 在 X=0 時與「少了 Math.max」的版本結果相同
+  // （`0 || 1` 就是 1），所以 0 測不出來；-5 才驗得到那個下限。
+  const s = support.updateCtaRule(disk, rule.id, { threshold: -5, cooldown_days: -5, priority: 0 }, NOW);
+  const a = await asyncMod.updateCtaRuleAsync(rule.id, { threshold: -5, cooldown_days: -5, priority: 0 }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_cta_rule"), tableOf(disk, "support_cta_rule"));
+  assert.equal(a.threshold, s.threshold);
+  assert.ok(Number(a.threshold) >= 1, "threshold 不得被寫成 0");
+  assert.ok(Number(a.cooldown_days) >= 1, "cooldown_days 不得被寫成 0");
+  disk.close();
+});
+
 test("非 postgres 必須回退同步路徑（讀磁碟，不是讀傳入的 exec）", async () => {
   const disk = new DatabaseSync(diskPath());
   for (const t of [...TABLES].reverse()) disk.prepare(`DELETE FROM ${t}`).run();

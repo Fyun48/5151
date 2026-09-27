@@ -17,11 +17,15 @@ import { adminProviderView } from "./supportProviders.js";
 import {
   BILLING_CYCLES,
   COST_CATEGORIES,
+  CTA_RULE_TYPES,
+  SPONSOR_STATUSES,
   SUPPORT_PROVIDER_KINDS,
+  TRANSACTION_STATUSES,
   httpError,
   iso,
   moneyAmount,
   sortSupportTiers,
+  transactionDedupeKey,
 } from "./supportDomain.js";
 import { sanitizeHttpUrl } from "./sponsorLinks.js";
 // SQLite 分支需要 handle：`support.js` 的函式是吃 `(db, ...)` 參數的（不像 db.js 用模組全域），
@@ -30,7 +34,9 @@ import { sqliteHandle } from "./db.js";
 import {
   bool01,
   cleanText,
+  createManualTransaction as createManualTransactionSync,
   createSupportCost as createSupportCostSync,
+  createSupportSponsor as createSupportSponsorSync,
   createSupportTier as createSupportTierSync,
   ctaRow,
   costRow,
@@ -43,9 +49,12 @@ import {
   sponsorRow,
   tierRow,
   txRow,
+  updateCtaRule as updateCtaRuleSync,
   updateSupportCost as updateSupportCostSync,
   updateSupportProvider as updateSupportProviderSync,
+  updateSupportSponsor as updateSupportSponsorSync,
   updateSupportTier as updateSupportTierSync,
+  updateSupportTransaction as updateSupportTransactionSync,
 } from "./support.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
@@ -247,6 +256,168 @@ export async function updateSupportProviderAsync(id, body = {}, { now = new Date
     Number(id) || 0,
   ]);
   return adminProviderView((await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+// ---- 贊助商／支持紀錄／CTA 規則的寫入（第二群）----
+//
+// 同樣逐條對應同步版。幾個容易漏的邊界，都在這裡照抄：
+//   - sponsor 的 `logo`／`website_url` 是 `body.X ? sanitizeHttpUrl(X) : ""`（create）
+//     與 `body.X !== undefined ? sanitizeHttpUrl(X) : current.X`（update）——**兩者不同**。
+//   - sponsor 的 `amount`：`== null || === ""` 才寫 null（空字串不算 0）。
+//   - CTA 規則的 `threshold`／`cooldown_days` 都有 `Math.max(1, … || 預設)` 的下限。
+//   - 交易建立有**去重**：provider＋provider_transaction_id 已存在就 409。
+const INSERT_SPONSOR_SQL = `INSERT INTO support_sponsor(name, logo, website_url, description, start_at, end_at, amount, show_amount, status, display_location, sort_order, disclosure_text, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPDATE_SPONSOR_SQL = `UPDATE support_sponsor
+   SET name=?, logo=?, website_url=?, description=?, start_at=?, end_at=?, amount=?, show_amount=?, status=?, display_location=?, sort_order=?, disclosure_text=?, updated_at=?
+   WHERE id=?`;
+const SPONSOR_BY_ID_SQL = "SELECT * FROM support_sponsor WHERE id=?";
+const SPONSOR_LAST_SQL = "SELECT * FROM support_sponsor ORDER BY id DESC LIMIT 1";
+
+const INSERT_TX_SQL = `INSERT INTO support_transaction(
+     provider, provider_transaction_id, supporter_user_id, supporter_name, supporter_email,
+     amount, fee, net_amount, currency, status, anonymous, message, channel, received_at, raw_reference, created_at, updated_at
+   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPDATE_TX_SQL = `UPDATE support_transaction
+   SET status=?, amount=?, fee=?, net_amount=?, anonymous=?, message=?, updated_at=?
+   WHERE id=?`;
+const TX_BY_ID_SQL = "SELECT * FROM support_transaction WHERE id=?";
+const TX_LAST_SQL = "SELECT * FROM support_transaction ORDER BY id DESC LIMIT 1";
+const TX_DUPLICATE_SQL =
+  "SELECT id FROM support_transaction WHERE provider=? AND provider_transaction_id=?";
+
+const UPDATE_CTA_RULE_SQL = `UPDATE support_cta_rule
+   SET rule_type=?, threshold=?, message=?, cooldown_days=?, enabled=?, priority=?, updated_at=?
+   WHERE id=?`;
+const CTA_RULE_BY_ID_SQL = "SELECT * FROM support_cta_rule WHERE id=?";
+
+export async function createSupportSponsorAsync(body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return createSupportSponsorSync(sqliteHandle(), body, now);
+  const exec = await pgExec(options);
+  const src = body && typeof body === "object" ? body : {};
+  const name = cleanText(src.name, 60);
+  if (!name) throw httpError("請填贊助商名稱");
+  const stamp = iso(now);
+  await exec(INSERT_SPONSOR_SQL, [
+    name,
+    src.logo ? sanitizeHttpUrl(src.logo) : "",
+    src.website_url ? sanitizeHttpUrl(src.website_url) : "",
+    cleanText(src.description, 200),
+    src.start_at || null,
+    src.end_at || null,
+    src.amount == null || src.amount === "" ? null : moneyAmount(src.amount),
+    bool01(src.show_amount, 0),
+    SPONSOR_STATUSES.includes(src.status) ? src.status : "draft",
+    cleanText(src.display_location || "support_page", 40) || "support_page",
+    Number(src.sort_order) || 0,
+    cleanText(src.disclosure_text || "贊助", 20) || "贊助",
+    stamp,
+    stamp,
+  ]);
+  return sponsorRow((await exec(SPONSOR_LAST_SQL, []))[0], now);
+}
+
+export async function updateSupportSponsorAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateSupportSponsorSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = sponsorRow((await exec(SPONSOR_BY_ID_SQL, [Number(id) || 0]))[0], now);
+  if (!current) throw httpError("找不到企業贊助", 404);
+  const src = body && typeof body === "object" ? body : {};
+  await exec(UPDATE_SPONSOR_SQL, [
+    src.name != null ? cleanText(src.name, 60) : current.name,
+    src.logo !== undefined ? sanitizeHttpUrl(src.logo) : current.logo,
+    src.website_url !== undefined ? sanitizeHttpUrl(src.website_url) : current.website_url,
+    src.description != null ? cleanText(src.description, 200) : current.description,
+    src.start_at !== undefined ? src.start_at || null : current.start_at || null,
+    src.end_at !== undefined ? src.end_at || null : current.end_at || null,
+    src.amount !== undefined ? (src.amount === "" || src.amount == null ? null : moneyAmount(src.amount)) : current.amount,
+    src.show_amount != null ? bool01(src.show_amount, 0) : current.show_amount ? 1 : 0,
+    src.status && SPONSOR_STATUSES.includes(src.status) ? src.status : current.status,
+    src.display_location != null ? cleanText(src.display_location, 40) : current.display_location,
+    src.sort_order != null ? Number(src.sort_order) || 0 : current.sort_order,
+    src.disclosure_text != null ? cleanText(src.disclosure_text, 20) : current.disclosure_text,
+    iso(now),
+    Number(id) || 0,
+  ]);
+  return sponsorRow((await exec(SPONSOR_BY_ID_SQL, [Number(id) || 0]))[0], now);
+}
+
+export async function createManualTransactionAsync(body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return createManualTransactionSync(sqliteHandle(), body, now);
+  const exec = await pgExec(options);
+  const src = body && typeof body === "object" ? body : {};
+  const amount = moneyAmount(src.amount);
+  if (amount <= 0) throw httpError("請填支持金額");
+  const fee = moneyAmount(src.fee);
+  const provider = cleanText(src.provider || "buy_me_a_coffee", 40) || "buy_me_a_coffee";
+  const providerTx = src.provider_transaction_id ? cleanText(src.provider_transaction_id, 80) : null;
+  if (providerTx && transactionDedupeKey(provider, providerTx)) {
+    const exists = (await exec(TX_DUPLICATE_SQL, [provider, providerTx]))[0];
+    if (exists) throw httpError("這筆支持紀錄已存在", 409, "DUPLICATE_TRANSACTION");
+  }
+  const stamp = iso(now);
+  const received = src.received_at ? iso(src.received_at) : stamp;
+  await exec(INSERT_TX_SQL, [
+    provider,
+    providerTx,
+    src.supporter_user_id ? Number(src.supporter_user_id) : null,
+    src.anonymous ? null : cleanText(src.supporter_name, 40) || null,
+    null,
+    amount,
+    fee,
+    moneyAmount(amount - fee),
+    cleanText(src.currency || "TWD", 8) || "TWD",
+    TRANSACTION_STATUSES.includes(src.status) ? src.status : "manual",
+    bool01(src.anonymous ?? true, 1),
+    src.message ? cleanText(src.message, 160) : null,
+    src.channel === "corporate" ? "corporate" : "personal",
+    received,
+    src.raw_reference ? cleanText(JSON.stringify({ note: String(src.raw_reference).slice(0, 200) }), 400) : null,
+    stamp,
+    stamp,
+  ]);
+  return txRow((await exec(TX_LAST_SQL, []))[0]);
+}
+
+export async function updateSupportTransactionAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateSupportTransactionSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = txRow((await exec(TX_BY_ID_SQL, [Number(id) || 0]))[0]);
+  if (!current) throw httpError("找不到支持紀錄", 404);
+  const src = body && typeof body === "object" ? body : {};
+  const status = src.status && TRANSACTION_STATUSES.includes(src.status) ? src.status : current.status;
+  const amount = src.amount != null ? moneyAmount(src.amount) : current.amount;
+  const fee = src.fee != null ? moneyAmount(src.fee) : current.fee;
+  await exec(UPDATE_TX_SQL, [
+    status,
+    amount,
+    fee,
+    moneyAmount(amount - fee),
+    src.anonymous != null ? bool01(src.anonymous, 1) : current.anonymous ? 1 : 0,
+    src.message !== undefined ? (src.message ? cleanText(src.message, 160) : null) : current.message || null,
+    iso(now),
+    Number(id) || 0,
+  ]);
+  return txRow((await exec(TX_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+export async function updateCtaRuleAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateCtaRuleSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = ctaRow((await exec(CTA_RULE_BY_ID_SQL, [Number(id) || 0]))[0]);
+  if (!current) throw httpError("找不到顯示規則", 404);
+  const src = body && typeof body === "object" ? body : {};
+  await exec(UPDATE_CTA_RULE_SQL, [
+    src.rule_type && CTA_RULE_TYPES.includes(src.rule_type) ? src.rule_type : current.rule_type,
+    src.threshold != null ? Math.max(1, Number(src.threshold) || 1) : current.threshold,
+    src.message != null ? cleanText(src.message, 280) : current.message,
+    src.cooldown_days != null ? Math.max(1, Number(src.cooldown_days) || 7) : current.cooldown_days,
+    src.enabled != null ? bool01(src.enabled, 0) : current.enabled ? 1 : 0,
+    src.priority != null ? Number(src.priority) || 100 : current.priority,
+    iso(now),
+    Number(id) || 0,
+  ]);
+  return ctaRow((await exec(CTA_RULE_BY_ID_SQL, [Number(id) || 0]))[0]);
 }
 
 // 逐字對應 db.js 版：`from`／`to` 是**選擇性**條件，順序與同步版相同

@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺 | 新尺 | 第三批 | 第四批 | 第五批 | 第六批 | **第七批** |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | **169** |
-| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | **45** |
-| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | 40 | 42 | 43 | **48** |
-| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** |
+| 判定 | 舊尺 | 新尺 | 第三批 | 第四批 | 第五批 | 第六批 | 第七批 | **第八批** |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | **169** |
+| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | **40** |
+| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | **53** |
+| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -387,6 +387,62 @@ node -e 'import("./v3/src/supportAsync.js").then(m=>console.log(Object.keys(m)))
 這裡用「`ORDER BY id DESC LIMIT 1`」取回，語意相同且不依賴 `RETURNING`。
 第一版我用 `SQL.replace("WHERE id=?", "ORDER BY id DESC LIMIT 1")` 這種字串操作凑出來，
 **已改掉**——那種寫法一旦原字串改了就會靜默取錯資料。
+
+### 第八批（2026-09-27）：support.js 第二群（贊助商／支持紀錄／CTA 規則 ＋ 變異工具兩個 bug）
+
+#### 8.1 內容
+
+`supportAsync.js` 再補 5 個寫入函式：`createSupportSponsorAsync`、`updateSupportSponsorAsync`、
+`createManualTransactionAsync`、`updateSupportTransactionAsync`、`updateCtaRuleAsync`。
+5 個 handler 的 before 快照改用既有的 async 列表版本。
+
+**5 條路由轉 PG**：`POST/PUT /api/admin/support/sponsors`、
+`POST /api/admin/support/transactions/manual`、`PUT /api/admin/support/transactions/:id`、
+`PUT /api/admin/support/cta-rules/:id`。
+
+**量尺**：MIXED 45→**40**、PG 48→**53**、缺口 214→**209**。
+
+照抄到位、由測試抓出來的細節：`createManualTransaction` 的**去重**（provider＋交易號重複要 409）、
+`net_amount` 要隨 amount／fee 重算、`updateCtaRule` 的 `Math.max(1, …)` 下限、
+sponsor 的 `amount` 空字串要寫 `null`（不是 0）。
+
+#### 8.2 🚨 變異工具本身有兩個 bug，其中一個一直在騙我
+
+**Bug A：`execFileSync` 的預設 `maxBuffer` 是 1 MiB ⇒ 輸出被截斷 ⇒ 失敗的 `not ok` 行消失 ⇒ 變異被誤判成 SURVIVED。**
+這個測試檔的 `deepEqual` 差異很大，一超過就整批後面的失敗行不見。
+實測：tier 的兩個變異明明各有兩條測試失敗，工具卻回報「沒有失敗」。
+已把 `maxBuffer` 拉到 256 MiB。**這一項很可能也影響過前面幾輪的判讀。**
+
+**Bug B：錨點找不到時只標 SKIP，看起來像「這條不用測」，其實是原始碼被改過。**
+已改成**前置檢查**：任何 `from` 找不到就列出並**中止（不套用任何變異）**。
+
+#### 8.3 ⚠️ 我一度在「原始碼已經被弄壞」的狀態下繼續工作（誠實記錄）
+
+中斷的變異 run 讓 `supportAsync.js` 停在半變異狀態（`Math.max` 被拿掉），
+而我當時的完整性檢查是**跟備份 diff**——那份備份是在損壞之後才拍的，**所以也繼承了同一個損壞**，
+檢查於是形同虛設（顯示 INTACT，實際上那行是壞的）。
+
+**往後的做法（已寫進工具）**：
+1. 完整性用 **sha1** 比對，不要只用備份 diff（備份本身可能是壞的）。
+2. 修任何東西時，**以同步版實作為唯一事實來源**（`support.js` 的 `Math.max(1, …)`），
+   不要以「上一個備份」為準。
+3. 變異工具加了前置檢查與自我修復備份（放 tmpdir、正常結束會刪）。
+
+> 這個 bug 也解釋了為什麼「同一條變異上一輪 KILLED、這一輪 SURVIVED」——
+> **不是原始碼變好了，是工具漏看了失敗**。看到不合理的變異結果時，先懷疑工具。
+
+#### 8.4 全部變異集重新驗過（因為工具改了）
+
+| 測試檔 | 變異數 | 結果 |
+|---|---:|---|
+| `reject-match-async` | 16 | 全 KILLED |
+| `support-async` | 11 | 全 KILLED |
+| `admin-audit-visibility` | 6 | 全 KILLED |
+| `admin-settings-async` | 5 | 全 KILLED |
+| `self-listings-async` | 5 | 全 KILLED |
+| `route-data-map` | 4 | 全 KILLED |
+| `housing-refresh-async` | 4 | 全 KILLED |
+| **合計** | **51** | **0 SURVIVED、0 SKIP** |
 
 ## 三、做法（照這個做，不要發明新的）
 
