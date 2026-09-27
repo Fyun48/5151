@@ -25,6 +25,7 @@ import {
   sponsorCatalog,
 } from "./sponsorLinks.js";
 import { normalizeMailTemplates, normalizeSmtp, publicSmtp, smtpFromEnv } from "./siteMail.js";
+import { BRAND_SLOTS } from "./brandMascot.js";
 import { adminSiteAdsView, normalizeSiteAds } from "./siteAds.js";
 import { adminBroadcastsView, normalizeBroadcasts } from "./broadcasts.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
@@ -171,4 +172,27 @@ export async function getAdminAdsSettingsAsync(options = {}) {
 export async function getAdminBroadcastsSettingsAsync(options = {}) {
   if (!isPg(options)) return getAdminBroadcastsSettingsSync();
   return adminBroadcastsView(normalizeBroadcasts(await getSiteSettingAsync("broadcasts", options)));
+}
+
+// 對應 `db.js:1364 applyBrandUpload()`：把上傳好的檔案套到指定的品牌位置。
+// 它只用到 `getBrandMascot()`／`saveBrandMascot()`——兩個都已經有 async 版——
+// 所以這裡沒有任何新邏輯，只是把同一段組合改成 await 版（原檔案的註解也照抄語意）。
+export async function applyBrandUploadAsync(slot, upload, options = {}) {
+  const key = String(slot || "").trim();
+  if (!BRAND_SLOTS.includes(key)) {
+    const err = new Error("請選擇要套用的位置");
+    err.status = 400;
+    throw err;
+  }
+  const current = await getBrandMascotAsync(options);
+  if (key === "mark") {
+    return saveBrandMascotAsync({ ...current, markUrl: upload.url }, options);
+  }
+  return saveBrandMascotAsync({
+    ...current,
+    clips: {
+      ...current.clips,
+      [key]: { ...current.clips[key], url: upload.url, kind: upload.kind },
+    },
+  }, options);
 }

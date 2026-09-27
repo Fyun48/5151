@@ -1200,6 +1200,20 @@ const SESSION_MUTATIONS = [
 // 這一組的 port 都很短，所以每一條都要證明「拿掉就失敗」，不能靠「看起來一樣」。
 const ADMSET_MUTATIONS = [
   {
+    name: "品牌上傳不驗位置（任何 slot 都會被接受）",
+    file: ADMSET_SRC,
+    from: '  if (!BRAND_SLOTS.includes(key)) {\n    const err = new Error("請選擇要套用的位置");\n    err.status = 400;\n    throw err;\n  }\n',
+    to: "",
+    expect: "不合法／空白的位置要擋下",
+  },
+  {
+    name: "品牌上傳一律走 clips（mark 位置改不動 markUrl）",
+    file: ADMSET_SRC,
+    from: '  if (key === "mark") {\n    return saveBrandMascotAsync({ ...current, markUrl: upload.url }, options);\n  }\n',
+    to: "",
+    expect: "mark 位置寫 markUrl",
+  },
+  {
     name: "廣告設定不查 PG（永遠回預設值）",
     file: ADMSET_SRC,
     from: '  return adminSiteAdsView(normalizeSiteAds(await getSiteSettingAsync("siteAds", options)));',

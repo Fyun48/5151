@@ -299,7 +299,7 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
-import { getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -1650,11 +1650,11 @@ app.put("/api/admin/brand", requireAdminApi, async (req, res) => {
   }
 });
 
-app.post("/api/admin/brand/file", requireAdminApi, express.raw({ type: () => true, limit: BRAND_UPLOAD_MAX_BYTES }), (req, res) => {
+app.post("/api/admin/brand/file", requireAdminApi, express.raw({ type: () => true, limit: BRAND_UPLOAD_MAX_BYTES }), async (req, res) => {
   try {
     const upload = saveBrandUpload(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
     const slot = String(req.query.slot || req.headers["x-brand-slot"] || "").trim();
-    res.json({ ...upload, brand: applyBrandUpload(slot, upload) });
+    res.json({ ...upload, brand: await applyBrandUploadAsync(slot, upload) });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

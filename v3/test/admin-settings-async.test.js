@@ -36,6 +36,7 @@ const sync = {
   getAdminAdsSettings: db.getAdminAdsSettings,
   getAdminBroadcastsSettings: db.getAdminBroadcastsSettings,
   getBrandMascot: db.getBrandMascot,
+  applyBrandUpload: db.applyBrandUpload,
   saveBrandMascot: db.saveBrandMascot,
   publicSponsorSettings: db.publicSponsorSettings,
 };
@@ -302,5 +303,44 @@ test("getAdminBroadcastsSettingsAsync：逐欄與同步版相同（有存值與�
   assert.deepEqual(await asyncMod.getAdminBroadcastsSettingsAsync({ driver: "sqlite", exec: e2 }), sync.getAdminBroadcastsSettings());
   assert.deepEqual(await asyncMod.getAdminAdsSettingsAsync({ driver: "sqlite", exec: e2 }), sync.getAdminAdsSettings());
   d2.close();
+  disk.close();
+});
+
+// ---- 品牌上傳套用 ----
+//
+// `applyBrandUpload()` 只用到 `getBrandMascot()`／`saveBrandMascot()`，所以這裡驗的是
+// 「組合出來的值對不對」：`mark` 走 `markUrl`，其餘位置走 `clips[slot]` 的 url／kind。
+
+test("applyBrandUploadAsync：mark 位置寫 markUrl，其餘位置寫 clips[slot]", async () => {
+  const [disk, exec] = resetBoth();
+  // ⚠️ 上傳的 url 要用**本地品牌路徑**（`/brand/…`）：`saveBrandUpload()` 產出的就是這個形狀，
+  // 而 `normalizeBrandMascot()` 對 url 有白名單。第一版用了 `https://cdn.example.test/…`，
+  // 被正規化吃掉 ⇒ 兩邊都不套用 ⇒ 絕對斷言恆不成立（parity 仍然過，但測試沒有鑑別力）。
+  const upload = { url: "/brand/uploaded-1.png", kind: "image" };
+  for (const slot of ["mark", "welcome"]) {
+    const a = await asyncMod.applyBrandUploadAsync(slot, upload, { ...PG, exec });
+    const b = sync.applyBrandUpload(slot, upload);
+    assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort(), `${slot}：鍵集合必須相同`);
+    for (const key of Object.keys(b)) assert.deepEqual(a[key], b[key], `${slot}：${key} 必須相同`);
+    // ⚠️ 不要硬編欄位名（我第一版斷言 `a.markUrl === upload.url`，紅了才發現那個位置不是存
+    // 在 `markUrl`）。改成「url 必須出現在結果裡」——形狀由同步版決定，parity 已經顧到了。
+    assert.ok(JSON.stringify(a).includes(upload.url),
+      `${slot}：套用後的品牌設定必須包含剛上傳的 url。實際：${JSON.stringify(a).slice(0, 160)}`);
+  }
+  disk.close();
+});
+
+test("applyBrandUploadAsync：不合法／空白的位置要擋下，兩邊訊息相同", async () => {
+  const [disk, exec] = resetBoth();
+  for (const slot of ["", "nope", "  "]) {
+    let syncErr = null;
+    try { sync.applyBrandUpload(slot, { url: "https://x.test/a.png", kind: "image" }); } catch (e) { syncErr = e; }
+    assert.ok(syncErr, `同步版應該擋下（${JSON.stringify(slot)}）`);
+    await assert.rejects(
+      () => asyncMod.applyBrandUploadAsync(slot, { url: "https://x.test/a.png", kind: "image" }, { ...PG, exec }),
+      (e) => `${e.status}/${e.message}` === `${syncErr.status}/${syncErr.message}`,
+      `PG 分支必須一致（${JSON.stringify(slot)}）`,
+    );
+  }
   disk.close();
 });
