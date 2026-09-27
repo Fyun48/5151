@@ -1227,9 +1227,9 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
 3. **`getLegalCopy`（3 條）**——**先讀第十九批**，那裡有我弄錯的心智模型與沒查到底的 `version` 疑點。
 4. **`POST /api/media`（上傳）**——`saveMemberMedia()` 的交易橫跨影像處理與 R2 上傳，
    需要重新設計交易邊界，是獨立一批。
-5. **`/api/demand/aggregate`、`/api/demand/exposure`、`/api/public/wish-room/:id`、
+6. **`/api/demand/aggregate`、`/api/demand/exposure`、`/api/public/wish-room/:id`、
    `POST /api/public/unsubscribe/:token`** 屬於 demand.js 那一群。
-6. **剩下的登入／註冊／OAuth 六條**（`/api/login`、`/api/register`、`/verify-email`、
+7. **剩下的登入／註冊／OAuth 六條**（`/api/login`、`/api/register`、`/verify-email`、
    `/auth/:provider`、`/auth/:provider/callback`、`/api/forgot-password`）——
    這一批**風險最高**（動到登入），而且與 §13 的 session 解析高度耦合，
    建議等前面的都清完、而且 Owner 有時間盯的時候再做。
@@ -1259,7 +1259,13 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    它呼叫 `normalizeWishInput(db, uid, input)`——**吃 handle 且會查許願目錄**，
    所以要先移植那一支。同一條路由的另一個卡點 `saveWishExampleFor` 只是 db.js 的包裝。
    已移植的是同表的 `getWishExample`／`deleteWishExample`（第二十八批）。
-4. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
+4. **`hideSelfListing`（`POST /api/admin/self-listings/:id/hide`）的障礙已查明**（2026-09-27 嘗試後回退）：
+   它除了把刊登標成 hidden，還要**停權刊登者**（`banSelfPublisher` → `UPDATE users SET self_ban_until=?`）。
+   我原本以為可以抽一個純時間函式共用，**但 `selfListings.js` 已經有 `selfBanUntil(db, userId)`**
+   ——**吃 db、簽章不同**，不是純函式。所以要嘛匯出 `SELF_BAN_DAYS` ＋ `nowMs` 自己算，
+   要嘛把 `banSelfPublisher` 做成 driver-aware。**不要照「抽純函式」那條路走**（會撞名）。
+   同一個模組的 `closeSelfListing` 已在第二十九批完成，可以照它的形狀（含 hook 仍用本機 handle 的處置）。
+5. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
    會自己補預設值，所以 settings 那段是很少走到的備援）與一個沒查到底的 `version` 疑點。
 
    **第二次嘗試（2026-09-27）仍然回退，但縮小了範圍。** 照第十九批的規格重寫後，
