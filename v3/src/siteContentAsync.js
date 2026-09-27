@@ -11,16 +11,24 @@
 import { resolveDbDriver } from "./dbDriver.js";
 import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
+import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
+import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources } from "./crawlSources.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
 import {
+  getCrawlSources as getCrawlSourcesSync,
+  getHelpQa as getHelpQaSync,
   getHousingData as getHousingDataSync,
   getSpirit as getSpiritSync,
+  saveCrawlSources as saveCrawlSourcesSync,
+  saveHelpQa as saveHelpQaSync,
   saveHousingData as saveHousingDataSync,
   saveSpirit as saveSpiritSync,
 } from "./db.js";
 
 const HOUSING_KEY = "housingData";
 const SPIRIT_KEY = "spirit";
+const HELP_QA_KEY = "helpQa";
+const CRAWL_SOURCES_KEY = "crawlSources";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
@@ -61,4 +69,58 @@ export async function saveSpiritAsync(partial = {}, options = {}) {
     await setSiteSettingAsync(SPIRIT_KEY, normalizeSpirit({ ...(await getSpiritAsync(options)), ...src }), options);
   }
   return getSpiritAsync(options);
+}
+
+// ---- 說明問答（helpQa）----
+//
+// 同步版：get 讀 key → 沒有就用預設 → mergeMissingDefaultHelpQa（補上新增的預設題）→ public。
+// 這裡逐條照抄，包含 stored 可能是 { items: [...] } 或直接是陣列兩種歷史格式。
+
+export async function getHelpQaAsync(options = {}) {
+  if (!isPg(options)) return getHelpQaSync();
+  const stored = await getSiteSettingAsync(HELP_QA_KEY, options);
+  const items = stored == null ? defaultHelpQaItems() : mergeMissingDefaultHelpQa(stored.items ?? stored);
+  return publicHelpQa(items);
+}
+
+export async function saveHelpQaAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveHelpQaSync(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = src.reset === true
+    ? { items: defaultHelpQaItems() }
+    : { items: normalizeHelpQaItems(src.items) };
+  await setSiteSettingAsync(HELP_QA_KEY, next, options);
+  return getHelpQaAsync(options);
+}
+
+// ---- 爬取來源開關（crawlSources）----
+//
+// 同步版的 save 是「以現有清單為底，只套用 incoming 的 enabled」——不是整包覆蓋。
+// 這一點必須照抄，否則後台只切一個開關會把其他來源的設定洗掉。
+
+export async function getCrawlSourcesAsync(options = {}) {
+  if (!isPg(options)) return getCrawlSourcesSync();
+  const stored = await getSiteSettingAsync(CRAWL_SOURCES_KEY, options);
+  return publicCrawlSources(stored ?? defaultCrawlSources());
+}
+
+export async function saveCrawlSourcesAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveCrawlSourcesSync(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const incoming = src.items ?? src;
+  const incomingMap = Array.isArray(incoming)
+    ? Object.fromEntries(incoming.map((row) => [String(row?.id || ""), row]))
+    : incoming && typeof incoming === "object"
+      ? incoming
+      : {};
+  const current = (await getCrawlSourcesAsync(options)).items || [];
+  const merged = current.map((row) => {
+    if (!Object.prototype.hasOwnProperty.call(incomingMap, row.id)) return row;
+    const cell = incomingMap[row.id];
+    const enabledRaw = cell && typeof cell === "object" ? cell.enabled : cell;
+    if (enabledRaw === undefined || enabledRaw === null) return row;
+    return { ...row, enabled: Boolean(enabledRaw) };
+  });
+  await setSiteSettingAsync(CRAWL_SOURCES_KEY, normalizeCrawlSources(merged), options);
+  return getCrawlSourcesAsync(options);
 }

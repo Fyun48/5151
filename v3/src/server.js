@@ -312,7 +312,10 @@ import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
-import { getHousingDataAsync, getSpiritAsync, saveHousingDataAsync, saveSpiritAsync } from "./siteContentAsync.js";
+import {
+  getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
+} from "./siteContentAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -809,8 +812,8 @@ app.get("/api/consents/:id/document", (req, res) => {
   res.json({ ...doc, html: renderSafeContent(doc.body, doc.format) });
 });
 
-app.get("/api/help-qa", (_req, res) => {
-  res.json(getHelpQa());
+app.get("/api/help-qa", async (_req, res) => {
+  res.json(await getHelpQaAsync());
 });
 
 function wishListQuery(req) {
@@ -1925,13 +1928,13 @@ app.put("/api/admin/support/cta-rules/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/help-qa", requireAdminApi, (_req, res) => {
-  res.json(getHelpQa());
+app.get("/api/admin/help-qa", requireAdminApi, async (_req, res) => {
+  res.json(await getHelpQaAsync());
 });
 
-app.put("/api/admin/help-qa", requireAdminApi, (req, res) => {
+app.put("/api/admin/help-qa", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveHelpQa(req.body || {}));
+    res.json(await saveHelpQaAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2381,18 +2384,18 @@ app.put("/api/admin/maps", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/crawl-sources", requireAdminApi, (_req, res) => {
-  const base = getCrawlSources();
+app.get("/api/admin/crawl-sources", requireAdminApi, async (_req, res) => {
+  const base = await getCrawlSourcesAsync();
   const health = Object.fromEntries(crawlSourceHealth().map((row) => [row.id, row]));
   res.json({
     items: (base.items || []).map((row) => ({ ...health[row.id], ...row, label: row.label })),
   });
 });
 
-app.put("/api/admin/crawl-sources", requireAdminApi, (req, res) => {
+app.put("/api/admin/crawl-sources", requireAdminApi, async (req, res) => {
   try {
-    const before = getCrawlSources();
-    const saved = saveCrawlSources(req.body || {});
+    const before = await getCrawlSourcesAsync();
+    const saved = await saveCrawlSourcesAsync(req.body || {});
     auditReq(req, "crawl_sources_save", "crawl-sources", before.items, saved.items);
     res.json(saved);
   } catch (error) {
