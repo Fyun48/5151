@@ -354,7 +354,8 @@ import {
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
-import { appendAdminAuditAsync, auditFailureStats, listAdminAuditAsync } from "./adminAuditAsync.js";
+import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
+import { auditFailureStats } from "./adminAuditHealth.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,

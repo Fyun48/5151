@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 const SRC = "v3/src/sameHouseAsync.js";
 const USER_SRC = "v3/src/userSameHouseAsync.js";
 const AUDIT_SRC = "v3/src/adminAuditAsync.js";
+const AUDIT_HEALTH_SRC = "v3/src/adminAuditHealth.js";
 
 // 稽核失敗可視性的變異集（v3/test/admin-audit-visibility.test.js）。
 // 這一組要證明的是「痕跡真的會留下」——因為「沒有痕跡」正是原本壞掉的東西。
@@ -32,15 +33,15 @@ const AUDIT_MUTATIONS = [
   },
   {
     name: "計數器不遞增（有 log 但數字永遠 0）",
-    file: AUDIT_SRC,
-    from: "  auditFailures += 1;",
-    to: "  auditFailures += 0;",
+    file: AUDIT_HEALTH_SRC,
+    from: "  failures += 1;",
+    to: "  failures += 0;",
     expect: "必須記數",
   },
   {
     name: "每次都印 log（洗版）",
-    file: AUDIT_SRC,
-    from: "  if (auditFailureLogs === 1 || auditFailureLogs % AUDIT_FAILURE_LOG_EVERY === 0) {",
+    file: AUDIT_HEALTH_SRC,
+    from: "  if (logCount === 1 || logCount % LOG_EVERY === 0) {",
     to: "  if (true) {",
     expect: "不得洗版",
   },
@@ -48,10 +49,10 @@ const AUDIT_MUTATIONS = [
     // 複合變異：單獨把條件改回耦合版是「等價變異」（計數器正常時行為相同），殺不掉。
     // 必須與「計數器壞掉」同時發生，才顯現出耦合的代價——那正是解耦要防的情況。
     name: "（複合）計數器壞掉＋日誌節奏耦合失敗計數 → 會洗版",
-    file: AUDIT_SRC,
-    from: "  if (auditFailureLogs === 1 || auditFailureLogs % AUDIT_FAILURE_LOG_EVERY === 0) {",
-    to: "  if (auditFailures === 1 || auditFailures % AUDIT_FAILURE_LOG_EVERY === 0) {",
-    also: [{ from: "  auditFailures += 1;", to: "  auditFailures += 0;" }],
+    file: AUDIT_HEALTH_SRC,
+    from: "  if (logCount === 1 || logCount % LOG_EVERY === 0) {",
+    to: "  if (failures === 1 || failures % LOG_EVERY === 0) {",
+    also: [{ from: "  failures += 1;", to: "  failures += 0;" }],
     expect: "洗版",
   },
   {

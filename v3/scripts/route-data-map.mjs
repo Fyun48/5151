@@ -22,6 +22,27 @@
 //   - 動態組字串的 SQL、`db["x"]` 這類取用抓不到。
 //   - 同名遮蔽、匿名回呼內的呼叫不追。
 //   - 路由本文以「到下一個行首 });」近似。
+//
+// 🚨 2026-09-27 實測到**兩個方向相反的缺陷**，動手改這支之前務必先讀：
+//
+//   (1) 過度回報 —— 頂層函式的「本文」是「切到下一個 `function` 宣告」，
+//       那假設頂層函式相鄰。server.js 不是：`yieldEventLoop()`（約行 431）後面接著
+//       **51 個路由註冊**，下一個 `function` 宣告在很後面。於是它吞掉整段，
+//       任何呼叫它的路由都繼承那一整段裡所有路由的函式引用。
+//       實測後果：`GET /api/demo` 被判成 PG，只因為同一段裡的 `/api/health` 引用了
+//       一個從 `*Async.js` 匯出的函式——而 /api/demo 根本沒碰它。
+//
+//   (2) 低估 —— `touches`（只走 SQLite 的函式集合）**只從 db.js 計算**。
+//       但有一整類 helper 把 SQLite handle 當**參數**傳（`publicSupportConfig(db)`、
+//       `listAnnouncementsAdmin(db)`…），它們住在自己的模組裡、**沒有 import db.js**，
+//       因此永遠不進 `touches`。這些路由會被判成「無直接DB」，即使它們確實在寫 SQLite。
+//       實測：`GET /api/support/public` 舊版 MIXED（一長串 sqlite 函式）、
+//       把 (1) 修好之後變「無直接DB」——但它明明呼叫 `publicSupportConfig(db)`。
+//
+//   兩者都會讓判定失真，而且方向相反 ⇒ **不能只修一個就重新基準化**。
+//   文件上的進度數字（SQLite 80／MIXED 36／PG 55）是用**現在這版**量的；
+//   要換尺之前請先知會 Owner，並且兩個缺陷一起修、重跑一次完整基準。
+//   詳見 docs/handoffs/PG-ISLAND-MIGRATION-PLAN-20260927.md。
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 

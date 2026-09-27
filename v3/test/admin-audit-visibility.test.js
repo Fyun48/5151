@@ -11,11 +11,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const {
-  appendAdminAuditAsync,
-  auditFailureStats,
-  resetAuditFailureStats,
-} = await import("../src/adminAuditAsync.js");
+const { appendAdminAuditAsync } = await import("../src/adminAuditAsync.js");
+const { auditFailureStats, resetAuditFailureStats } = await import("../src/adminAuditHealth.js");
 
 const PG = { driver: "postgres" };
 const ENTRY = { actorId: 1, actorEmail: "a@example.com", action: "test_action", target: "t" };
