@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | **新尺（第三批之後）** |
-|---|---:|---:|---:|
-| SQLite | 80 | 189 | **179** |
-| MIXED | 36 | 47 | **49** |
-| 無直接DB | 117 | 26 | **26** |
-| PG | 55 | 26 | **34** |
-| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** |
+| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | 第三批後 | **第四批後** |
+|---|---:|---:|---:|---:|
+| SQLite | 80 | 189 | 179 | **173** |
+| MIXED | 36 | 47 | 49 | **49** |
+| 無直接DB | 117 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | **40** |
+| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** | **222** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -187,6 +187,68 @@ session 讀取與 stage-1 fixture 鷹架之後，這幾個函式各卡 1～2 條
    `if (!isPg(options)) return sync()` 是防禦性的——委派的 `getSiteSettingAsync()` 自己就會判斷
    driver 並回退，所以拿掉 guard 行為不變。**回退行為有測試（兩邊種不同的值），
    但殺不掉這個冗餘 guard**；我把它從變異集移除並註明原因，不留一條永遠 SURVIVED 的項目。
+
+### 第四批（2026-09-27）：Support 後台列表 ＋ 量尺缺陷 (3)
+
+#### 4.1 先做了「表面 vs 深層」的分類，才挑批
+
+前三批學到的教訓是：**「卡住幾條路由」不等於「要花多少工」**。同一個函式，
+若被 handler 直接呼叫就可以直接改；若被深層同步模組呼叫，就得先移植整個模組。
+所以我把 207 條有真卡點的缺口路由分成三類（量測腳本在對話紀錄，方法寫在這裡）：
+
+| 分類 | 條數 | 意義 |
+|---|---:|---|
+| 卡點**全部在 handler 內** | **77** | 直接改 handler 就能完成 |
+| 部分在 handler、部分在深模組 | 66 | 要兩邊都做 |
+| 卡點**全部在深模組** | 64 | 必須先移植模組 |
+
+`support.js` 的後台列表是「全部在 handler 內」那一群裡最大的（9 個函式、約 10 條路由）。
+
+#### 4.2 本批內容
+
+新增 `v3/src/supportAsync.js`：`listSupportCostsAsync`、`listSupportTiersAsync`、
+`listSupportProvidersAsync`、`listSupportSponsorsAsync`、`listCtaRulesAsync`、
+`listSupportTransactionsAsync`。
+
+為了讓兩個 driver 共用同一份純對應邏輯，把 `support.js` 的
+`costRow`／`tierRow`／`sponsorRow`／`ctaRow`／`txRow` **加上 `export`**（只加 export，行為不變），
+而不是在 PG 這邊複製一份——複製就會漂移。
+
+SQLite 分支用 `sqliteHandle()`（`support.js` 的函式吃 `(db, ...)` 參數，不像 db.js 用模組全域），
+這與 `listingGroupsAsync.js` 是同一個既有模式。
+
+**5 條路由轉成 PG**：`GET /api/admin/support/{costs,tiers,providers,transactions,sponsors}`；
+`GET /api/admin/support/cta-rules` 變成「無直接DB」（它本來只被這一個函式卡住）。
+
+**量尺**：SQLite 179→**173**、PG 34→**40**、缺口 228→**222**。
+
+#### 4.3 🚨 量尺缺陷 (3)：剝註解會弄壞正規表達式字面量
+
+追查「`normalizeLineUrl` 是**純函式**卻出現在 18 條路由的 SQLite 欄」時找到的：
+
+`stripComments` 原本用 regexp 移除 `//` 到行尾，**不辨識字串與正規表達式**。
+`/^https:\/\/(line\.me|lin\.ee)\//i` 這種「跳脫斜線 ＋ 結尾斜線」會形成 `//`，
+而它前面是 `\` 不是 `:`，所以 `(^|[^:])` 的保護沒生效 ⇒ **整行被刪掉**。
+被刪的那段含 `))` ⇒ 括號配對失衡 ⇒ `sliceFunctionBody` 往後吞掉下一個函式 ⇒
+誤判成 SQLite，再沿同模組呼叫擴散。**同樣的形狀全站有 16 處、散在 13 個檔案。**
+
+修法：逐字元走訪，字串與正規表達式字面量整段照抄。**修好之後沒有任何判定改變**
+（tally 仍是 173/49/26/40）——那 18 條路由本來就有其他真卡點，所以這次不需要換基準，
+只有 19 條路由的卡點清單變得更誠實。守衛與變異測試都已補（4/4 KILLED）。
+
+#### 4.4 ⚠️ 量尺**驗不出**「接到不存在的 export」
+
+本批我把匯出命名為 `listSupportCtaRulesAsync`，卻在 `server.js` 匯入 `listCtaRulesAsync`。
+`node --check` 只驗語法、**分析器只比對名字**（它看到 `*Async.js` 有這個名字就算 PG），
+兩者都沒抓到——是**跑測試**時才炸出 `is not a function`。
+
+**教訓：新增／改名 `*Async.js` 的匯出之後，要用執行期檢查確認「server.js 匯入的名字真的存在」**：
+
+```bash
+node -e 'import("./v3/src/supportAsync.js").then(m=>console.log(Object.keys(m)))'
+```
+
+這一項已列為新島嶼的收尾步驟。
 
 ## 三、做法（照這個做，不要發明新的）
 

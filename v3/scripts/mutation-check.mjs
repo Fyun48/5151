@@ -64,6 +64,47 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const SUPPORT_SRC = "v3/src/supportAsync.js";
+
+// Support 後台列表的變異集（v3/test/support-async.test.js）。
+const SUPPORT_MUTATIONS = [
+  {
+    name: "transactions 的 from 條件寫成 <=（篩選悄悄失效）",
+    file: SUPPORT_SRC,
+    from: '    sql += " AND received_at>=?";',
+    to: '    sql += " AND received_at<=?";',
+    expect: "from／to 篩選",
+  },
+  {
+    name: "tiers 不做 activeOnly 過濾（停用的也回傳）",
+    file: SUPPORT_SRC,
+    from: '  return sortSupportTiers(activeOnly ? rows.filter((row) => row.is_active) : rows);',
+    to: '  return sortSupportTiers(rows);',
+    expect: "activeOnly",
+  },
+  {
+    name: "sponsors 忘了把 now 傳進 sponsorRow（會用系統時鐘）",
+    file: SUPPORT_SRC,
+    from: '  return (await exec(SPONSORS_SQL, [])).map((row) => sponsorRow(row, now));',
+    to: '  return (await exec(SPONSORS_SQL, [])).map((row) => sponsorRow(row));',
+    expect: "now",
+  },
+  {
+    name: "costs 不套列對應（回傳原始資料列）",
+    file: SUPPORT_SRC,
+    from: '  return (await exec(COSTS_SQL, [])).map(costRow);',
+    to: '  return await exec(COSTS_SQL, []);',
+    expect: "listSupportCostsAsync",
+  },
+  {
+    name: "非 postgres 不回退（sqlite 站會去讀傳入的 exec）",
+    file: SUPPORT_SRC,
+    from: '  if (!isPg(options)) return listCtaRulesSync(sqliteHandle());',
+    to: '  if (false) return listCtaRulesSync(sqliteHandle());',
+    expect: "非 postgres",
+  },
+];
+
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
 // 後台設定 PG 分支的變異集（v3/test/admin-settings-async.test.js）。
@@ -294,6 +335,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
+      : /support-async/.test(testFile) ? SUPPORT_MUTATIONS
       : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。

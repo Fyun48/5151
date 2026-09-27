@@ -278,7 +278,7 @@ export function publishSupportConfig(db, now = new Date()) {
   return adminSupportConfig(db);
 }
 
-function costRow(row) {
+export function costRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -379,7 +379,7 @@ export function updateSupportCost(db, id, body = {}, now = new Date()) {
   return costRow(db.prepare("SELECT * FROM support_operating_cost WHERE id=?").get(id));
 }
 
-function tierRow(row) {
+export function tierRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -492,7 +492,7 @@ function activeCheckoutProvider(db) {
     || db.prepare("SELECT * FROM support_provider WHERE is_active=1 ORDER BY is_default DESC, id ASC LIMIT 1").get();
 }
 
-function txRow(row) {
+export function txRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -603,7 +603,7 @@ export function updateSupportTransaction(db, id, body = {}, now = new Date()) {
   return txRow(db.prepare("SELECT * FROM support_transaction WHERE id=?").get(id));
 }
 
-function sponsorRow(row, now = new Date()) {
+export function sponsorRow(row, now = new Date()) {
   if (!row) return null;
   const resolved = resolveSponsorStatus(row, now);
   return {
@@ -698,7 +698,7 @@ export function publicActiveSponsors(db, now = new Date()) {
     }));
 }
 
-function ctaRow(row) {
+export function ctaRow(row) {
   if (!row) return null;
   return {
     id: row.id,

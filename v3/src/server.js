@@ -367,6 +367,15 @@ import {
   saveAdminSponsorSettingsAsync,
   saveBrandMascotAsync,
 } from "./adminSettingsAsync.js";
+// Support 後台列表（卡點全在 handler 內的那一群）。
+import {
+  listCtaRulesAsync,
+  listSupportCostsAsync,
+  listSupportProvidersAsync,
+  listSupportSponsorsAsync,
+  listSupportTiersAsync,
+  listSupportTransactionsAsync,
+} from "./supportAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -1836,8 +1845,8 @@ app.post("/api/admin/support/config/publish", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/costs", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportCosts(db) });
+app.get("/api/admin/support/costs", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportCostsAsync() });
 });
 
 app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
@@ -1861,8 +1870,8 @@ app.put("/api/admin/support/costs/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/tiers", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportTiers(db) });
+app.get("/api/admin/support/tiers", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportTiersAsync() });
 });
 
 app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
@@ -1886,8 +1895,8 @@ app.put("/api/admin/support/tiers/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/providers", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportProviders(db) });
+app.get("/api/admin/support/providers", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportProvidersAsync() });
 });
 
 app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
@@ -1901,9 +1910,9 @@ app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/transactions", requireAdminApi, (req, res) => {
+app.get("/api/admin/support/transactions", requireAdminApi, async (req, res) => {
   res.json({
-    items: listSupportTransactions(db, { from: req.query.from, to: req.query.to }),
+    items: await listSupportTransactionsAsync({ from: req.query.from, to: req.query.to }),
   });
 });
 
@@ -1929,8 +1938,8 @@ app.put("/api/admin/support/transactions/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/sponsors", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportSponsors(db) });
+app.get("/api/admin/support/sponsors", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportSponsorsAsync() });
 });
 
 app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
@@ -1955,8 +1964,8 @@ app.put("/api/admin/support/sponsors/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/cta-rules", requireAdminApi, (_req, res) => {
-  res.json({ items: listCtaRules(db) });
+app.get("/api/admin/support/cta-rules", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listCtaRulesAsync() });
 });
 
 app.put("/api/admin/support/cta-rules/:id", requireAdminApi, (req, res) => {
