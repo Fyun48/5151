@@ -28,6 +28,9 @@ import { sqlExcludeFixtureRows } from "./stage1FixtureIsolation.js";
 export const RECONCILE_BATCH = 50;
 export const RECONCILE_CANDIDATE_LIMIT = 80;
 export const BACKFILL_SETTING_KEY = "sameHouseBackfillCursor";
+// 同屋判定的地理容差（度）。原本寫成 ABS(lat - ?) < GEO_TOLERANCE，改寫為嚴格不等式以便走索引，
+// 數值必須保持 0.002 不得變動，否則塊配對結果會改變。
+export const GEO_TOLERANCE = 0.002;
 
 export function listingNeedsReconcile(db, listing) {
   if (!listing || !Number(listing.post_id)) return false;
@@ -108,8 +111,12 @@ export function blockMatchCandidatesQuery(sqliteDb, incoming, { limit = RECONCIL
     params.push(community.replace(/\s+/g, ""));
   }
   if (hasGeo) {
-    blocks.push("(lat IS NOT NULL AND lng IS NOT NULL AND ABS(lat - ?) < 0.002 AND ABS(lng - ?) < 0.002)");
-    params.push(lat, lng);
+    // 2026-09-26: `ABS(lat - ?) < 0.002` 是對欄位做運算，PostgreSQL 無法用 btree 索引，
+    // 整個 OR 因此退化成 127k 筆全表掃描（實測 ~300ms/次），把 crawler 週期卡死。
+    // 改寫成等價的嚴格不等式後可走 (lat, lng) 索引。
+    // 等價性：ABS(lat - L) < T  ⟺  L - T < lat < L + T（兩邊皆嚴格，邊界行為一致）。
+    blocks.push("(lat IS NOT NULL AND lng IS NOT NULL AND lat > ? AND lat < ? AND lng > ? AND lng < ?)");
+    params.push(lat - GEO_TOLERANCE, lat + GEO_TOLERANCE, lng - GEO_TOLERANCE, lng + GEO_TOLERANCE);
   }
   clauses.push(`(${blocks.join(" OR ")})`);
   const isolation = fixtureColumn === undefined
