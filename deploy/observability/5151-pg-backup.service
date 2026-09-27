@@ -1,0 +1,12 @@
+[Unit]
+Description=5151 PostgreSQL scheduled backup (daily, from standby)
+Documentation=repo:deploy/observability/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/5151-scripts/pg-backup.sh
+TimeoutStartSec=1800
+Nice=10
+IOSchedulingClass=idle
