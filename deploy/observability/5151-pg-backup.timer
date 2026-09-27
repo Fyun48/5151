@@ -1,0 +1,13 @@
+[Unit]
+Description=5151 PostgreSQL scheduled backup timer (daily 20:30 UTC)
+
+[Timer]
+# 只用 OnCalendar + Persistent：這是每日備份的標準形狀，NEXT 也會明確顯示下一次時間。
+# （先前加了 OnBootSec 會讓 list-timers 的 NEXT 顯示為 "-"，對要依靠的備份排程來說太模糊。）
+OnCalendar=*-*-* 20:30:00
+AccuracySec=5min
+Persistent=true
+Unit=5151-pg-backup.service
+
+[Install]
+WantedBy=timers.target
