@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | 第三批後 | **第四批後** |
-|---|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | **173** |
-| MIXED | 36 | 47 | 49 | **49** |
-| 無直接DB | 117 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | **40** |
-| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** | **222** |
+| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | 第三批後 | 第四批後 | **第五批後** |
+|---|---:|---:|---:|---:|---:|
+| SQLite | 80 | 189 | 179 | 173 | **170** |
+| MIXED | 36 | 47 | 49 | 49 | **50** |
+| 無直接DB | 117 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | **42** |
+| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** | **222** | **220** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -249,6 +249,37 @@ node -e 'import("./v3/src/supportAsync.js").then(m=>console.log(Object.keys(m)))
 ```
 
 這一項已列為新島嶼的收尾步驟。
+
+### 第五批（2026-09-27）：站內刊登讀取（`getSelfListing`）
+
+挑它的理由：在「唯一卡點」名單裡它是**最大的單一函式**（3 條路由），而且同時是另外
+約 6 條 self-listings／listing-imports 路由的卡點之一——帳面投報率比看起來高。
+它需要四個依賴，其中三個是**純函式可直接重用**：`decorateSelfListing`、
+`listingVisibleOnSurface`／`LISTING_SURFACE`（`stage1FixtureIsolation.js`）、
+`httpError`（為此把 `selfListings.js` 的區域版本加上 `export`，只加 export、行為不變）。
+
+新增 `v3/src/selfListingsAsync.js`：`expireOpenSelfListingsAsync`、`getSelfRowAsync`、
+`getSelfListingAsync`。**3 條路由**：`GET /api/self-listings/:id`（→MIXED，只剩 session 讀取）、
+`GET /api/public/self-listing/:id` 與 `GET /media/lib/:file`（→**PG**）。
+
+**量尺**：SQLite 173→**170**、PG 40→**42**、缺口 222→**220**。
+
+> 註：`getSelfListing` 也被 `listingImport.js`／`listingTools.js` **深層呼叫**，
+> 那些路徑仍未移植——所以 listing-imports 家族還在缺口裡。這是刻意只做 handler 層的結果。
+
+#### 這批的三個發現（都由變異測試逼出來）
+
+1. **`IFNULL` 陷阱再現**：過期清理的 UPDATE 同步版用 `IFNULL(self_expires_at, '')`，
+   PG 不接受。而且它在 `try/catch` 裡**被吞掉**——寫錯方言的症狀是「過期清理永遠無聲失效」，
+   不是拋錯。測試因此**比對落地的 `self_status`**，不是只比回傳值。
+2. **🚨 我的測試資料沒踩到差異**（交接文件列過的坑，這次是我自己犯）：
+   「拿掉 `COALESCE(self_expires_at,'') != ''` 這個判斷」的變異**活了下來**。
+   原因是我用 `NULL` 當測試資料，而 `NULL <= '2020-…'` 在 SQLite／PG 都是 NULL（不成立），
+   本來就不會被更新——**這個判斷真正擋的是空字串**（`'' <= '2020-…'` 是 TRUE）。
+   實測：沒有 guard 改 1 列、有 guard 改 0 列。改用空字串當資料之後變異就被殺了。
+3. **又一個等價變異**：把外層的「非 postgres 回退」guard 拿掉，行為不變——因為內層的
+   `getSelfRowAsync()` 自己也有 `isPg()` 判斷並回退（與 `adminSettingsAsync` 那批同一類）。
+   回退**行為**有測試，但殺不掉這個冗餘的 guard，所以從變異集移除並註明。
 
 ## 三、做法（照這個做，不要發明新的）
 

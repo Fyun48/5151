@@ -376,6 +376,8 @@ import {
   listSupportTiersAsync,
   listSupportTransactionsAsync,
 } from "./supportAsync.js";
+// 站內刊登讀取（含過期清理）。同步版被 listingImport.js／listingTools.js 深層呼叫的部分仍未移植。
+import { getSelfListingAsync } from "./selfListingsAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -2989,14 +2991,14 @@ app.post("/api/wish-offers/:offerRef/report", (req, res) => {
   }
 });
 
-app.get("/api/self-listings/:id", (req, res) => {
+app.get("/api/self-listings/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(getSelfListing(req.params.id, { viewerId: session.userId }));
+    res.json(await getSelfListingAsync(req.params.id, { viewerId: session.userId }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3126,9 +3128,9 @@ app.delete("/api/media/:id", (req, res) => {
 app.get("/media/lib/:file", servePublicMemberMedia);
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
-app.get("/api/public/self-listing/:id", (req, res) => {
+app.get("/api/public/self-listing/:id", async (req, res) => {
   try {
-    const listing = getSelfListing(req.params.id, { viewerId: 0 });
+    const listing = await getSelfListingAsync(req.params.id, { viewerId: 0 });
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json(publicListingView(listing, req.params.id));
   } catch (error) {

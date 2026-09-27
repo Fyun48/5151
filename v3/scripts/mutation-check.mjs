@@ -64,6 +64,51 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const SELFLIST_SRC = "v3/src/selfListingsAsync.js";
+
+// 站內刊登讀取的變異集（v3/test/self-listings-async.test.js）。
+const SELFLIST_MUTATIONS = [
+  {
+    name: "過期清理用 IFNULL（PostgreSQL 直接拋錯，且被 catch 吞掉 ⇒ 永遠清不掉）",
+    file: SELFLIST_SRC,
+    from: "     AND COALESCE(self_expires_at, '') != ''",
+    to: "     AND IFNULL(self_expires_at, '') != ''",
+    expect: "過期的要變 expired",
+  },
+  {
+    name: "拿掉 self_expires_at 的非空判斷（空字串到期日會被當成已過期）",
+    file: SELFLIST_SRC,
+    from: "     AND COALESCE(self_expires_at, '') != ''",
+    to: "     AND 1=1",
+    expect: "空字串",
+  },
+  {
+    name: "拿掉到期日比較（未到期的也會被標成 expired）",
+    file: SELFLIST_SRC,
+    from: "     AND self_expires_at <= ?",
+    to: "     AND 1=1",
+    expect: "未到期的不得動",
+  },
+  {
+    name: "拿掉「已關閉且非本人」的 404（別人的已關閉刊登會外洩）",
+    file: SELFLIST_SRC,
+    from: '  if (status !== "open" && !mine) throw httpError("這則刊登已關閉或隱藏", 404);\n',
+    to: "",
+    expect: "已關閉且非本人",
+  },
+  {
+    name: "找不到時不回 404 而是回 null",
+    file: SELFLIST_SRC,
+    from: '  if (!row) throw httpError("找不到這則站內刊登", 404);',
+    to: "  if (!row) return null;",
+    expect: "找不到",
+  },
+  // 刻意**沒有**「非 postgres 不回退」這一條：實測它是**等價變異**。
+  // 把外層 guard 拿掉之後，內層的 `getSelfRowAsync()` **自己也有** `isPg()` 判斷並回退，
+  // 所以 sqlite 模式照樣讀磁碟、行為不變（與 adminSettingsAsync 那批同一類）。
+  // 回退**行為**有測試（第 7 項，兩邊刻意種不同的值），只是殺不掉這個冗餘的 guard。
+];
+
 const SUPPORT_SRC = "v3/src/supportAsync.js";
 
 // Support 後台列表的變異集（v3/test/support-async.test.js）。
@@ -336,6 +381,7 @@ const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
       : /support-async/.test(testFile) ? SUPPORT_MUTATIONS
+        : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
       : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。
