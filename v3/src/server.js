@@ -310,6 +310,7 @@ import { IMAGE_MAX_UPLOAD_BYTES } from "./imageProcess.js";
 import { servePublicMemberMedia } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
+import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -3646,11 +3647,11 @@ app.get("/api/settings", async (req, res) => {
   }
 });
 
-app.get("/api/member-mail", (req, res) => {
+app.get("/api/member-mail", async (req, res) => {
   try {
     const session = requireMember(req, res);
     if (!session) return;
-    res.json(getMemberMailSettings(session.userId));
+    res.json(await getMemberMailSettingsAsync(session.userId));
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "讀取郵件設定失敗" });
   }
@@ -3672,11 +3673,11 @@ app.post("/api/change-password", (req, res) => {
   }
 });
 
-app.post("/api/member-mail", (req, res) => {
+app.post("/api/member-mail", async (req, res) => {
   try {
     const session = requireMember(req, res);
     if (!session) return;
-    res.json(saveMemberMailSettings(session.userId, req.body || {}));
+    res.json(await saveMemberMailSettingsAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || "儲存郵件設定失敗" });
   }
@@ -3690,9 +3691,9 @@ app.post("/api/member-mail/test", async (req, res) => {
     const to = String(req.body?.to || session?.email || "").trim();
     if (!to) throw Object.assign(new Error("請先登入並確認信箱"), { status: 400 });
     if (req.body?.smtp && typeof req.body.smtp === "object") {
-      saveMemberMailSettings(uid, { smtp: req.body.smtp });
+      await saveMemberMailSettingsAsync(uid, { smtp: req.body.smtp });
     }
-    const smtp = getMemberSmtp(uid);
+    const smtp = (await getMemberMailBundleAsync(uid)).smtp || {};
     if (!mailConfigured(smtp)) {
       throw Object.assign(new Error("請先填 SMTP 主機、帳號與寄件 Email"), { status: 400 });
     }

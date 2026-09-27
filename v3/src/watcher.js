@@ -8,7 +8,6 @@ import {
   getSystemCrawl,
   getUserById,
   getMailTemplates,
-  getMemberMailBundle,
   listingCount,
   listingCountForSearch,
   listMatchCandidates,
@@ -114,6 +113,7 @@ import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawler
 // 配對與同屋重評估：站上讀 PG 的 listing_group_members，寫入也必須進 PG
 // （見 listingMatchAsync.js 的說明）。
 import { reconcileListingByIdAsync, setListingMatchAsync } from "./listingMatchAsync.js";
+import { getMemberMailBundleAsync } from "./memberMailAsync.js";
 
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
@@ -396,7 +396,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const userSettings = userId ? getSettings(userId) : settings;
     const listing = await listingForWatchAsync(event.post_id, userId || undefined);
     const mailTo = String(getUserById(userId)?.email || "").trim();
-    const mailBundle = userId ? getMemberMailBundle(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
     const mailReady = Boolean(mailBundle.configured);
     if (!listing) {
       await updateEventNotifyAsync(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 });
@@ -487,7 +487,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     ));
     const mail = mailByUser.get(userId) || [];
     const push = pushByUser.get(userId) || [];
-    const mailBundle = userId ? getMemberMailBundle(userId) : { smtp: null, templates: getMailTemplates() };
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { smtp: null, templates: getMailTemplates() };
     let result = { webhook: { job_state: "skipped" }, mail: { job_state: "skipped", shown_ids: [] } };
     if (!silent && (dock.length || hook.length || mail.length)) {
       result = await notify(getSettings(userId), dock, {
