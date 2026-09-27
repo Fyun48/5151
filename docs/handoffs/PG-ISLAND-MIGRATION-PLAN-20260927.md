@@ -1308,6 +1308,18 @@ await saveAdminSiteBudget({ monthly_limit_twd: 1234 }, { driver: "postgres", exe
 那是**破壞了正確的歸屬**，不是修正。所以**該實驗已回退**，尺規維持原狀。
 要修的話得先分清楚「方法呼叫」與「同名匯入」在每個現場是哪一種，不能只加 lookbehind。
 
+**⚠️ 只有這一條是偽陽性——上一輪實驗顯示的另外兩條是「真卡點」（2026-09-27 逐條查證）**：
+
+| 路由 | 卡點 | 判定 |
+|---|---|---|
+| `PUT /api/admin/providers/site-budget` | `saveSiteBudget` | **偽陽性**（走 `budgetStore()` → `saveSiteBudgetAsync`，已用注入式 exec 證實） |
+| `GET /api/admin/same-house/reconcile` | `sameHouseBackfillStatus` | **真卡點**——`db.js:7851` 用 `settingKey(...)` 讀**本機 SQLite** 的兩個鍵，沒有任何 driver 判斷 |
+| `POST /api/admin/ops-delivery/compact-outbox` | `compactOpsSentOutboxPayloads` | **真卡點**——`db.js:2041 compactOpsOutbox()` = `compactLocalOutbox(db, opts)`，吃 handle |
+
+也就是說：**缺口 120 只被高報 1 條**，不是 3 條。上一輪那個 lookbehind 實驗「讓 3 條判定改變」被誤讀成
+「可能都是偽陽性」——實際上另外兩條的卡點真的存在，只是被 lookbehind 錯誤地吃掉了
+（這也再一次佐證那個實驗是破壞而非修正）。
+
 **下一次要碰這裡時**：先確認是不是同一個偽陽性類型（**凡是經過 `budgetStore()` 的都先查**），
 要嘛把 `saveAdminSiteBudget` 這種「只委派給 driver-aware facade」的函式補進尺規規則
 （並依既有紀律留下新舊基準與單調性證據），要嘛就承認那條路由不需要移植。
