@@ -311,6 +311,7 @@ import { servePublicMemberMedia } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
+import { hideManyAsync } from "./personalFlagsAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -3817,7 +3818,7 @@ app.get("/api/listings", async (req, res) => {
   }
 });
 
-app.post("/api/listings/hide-many", (req, res) => {
+app.post("/api/listings/hide-many", async (req, res) => {
   const session = requireMember(req, res);
   if (!session) return;
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -3825,7 +3826,11 @@ app.post("/api/listings/hide-many", (req, res) => {
     res.status(400).json({ error: "請先勾選物件" });
     return;
   }
-  res.json(hideMany(ids, session.userId));
+  try {
+    res.json(await hideManyAsync(ids, session.userId));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "批次隱藏失敗" });
+  }
 });
 
 app.post("/api/reset-listings", (req, res) => {
