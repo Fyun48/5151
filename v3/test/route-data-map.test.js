@@ -151,19 +151,24 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("吃 handle 參數的 helper 必須被看見：/api/wish-rooms/example 的 getWishExample", () => {
-  // 📌 這條**已經換過三次標的**，換的原因值得記下來：
-  //   1. 原本用 `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植成 PG ⇒ 失效。
-  //   2. 改用 `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 同一批的下一步又移植掉 ⇒ 失效。
-  //   3. 改用 `/api/media`（`listMemberMedia(db)`）→ 第十四批（memberMedia.js）移植掉 ⇒ 失效。
+test("吃 handle 參數的 helper 必須被看見：/api/admin/listings/search 的 searchAdminListings", () => {
+  // 📌 這條**已經換過五次標的**，換的原因值得記下來：
+  //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
+  //   2. `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 下一步又移植掉 ⇒ 失效。
+  //   3. `/api/media`（`listMemberMedia(db)`）→ 第十四批移植掉 ⇒ 失效。
+  //   4. `/api/admin/campaigns`（`listCampaignsAdmin(db)`）→ 第十七批移植掉 ⇒ 失效。
+  //   5. `/api/wish-rooms/example`（`getWishExample(db, …)`）→ 第二十七批移植掉 ⇒ 失效。
   // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效。**
-  // 這次挑 `demand.js`（1698 行、**沒有 import db.js**、約 20 個吃 handle 的函式）的
-  // `getWishExample(db, userId)`——它是剩下最大的模組之一，短期內不會動。
-  // ⚠️ 移植 demand.js 時，這一條要再換標的，**不要刪掉斷言**。
-  const r = route("GET /api/wish-rooms/example");
+  //
+  // 這一次的挑法是照紀律做**實測**（不再憑感覺）：把缺陷 (2) 套回去跑一次尺規，
+  // 288 條裡只有兩條判定會變——`GET /api/admin/listings/search`（`searchAdminListings`，
+  // adminOverview.js）與 `GET /api/events/revision`（`changesSince`／`currentRevision`，
+  // dataRevision.js）。這裡用前者。
+  // ⚠️ 移植它們時，這一條要再換標的，**不要刪掉斷言**。
+  const r = route("GET /api/admin/listings/search");
   assert.equal(r.verdict, "MIXED", `缺陷 (2) 會讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("getWishExample"),
-    `必須看得到 getWishExample(db, userId)。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.ok(r.sqlite.includes("searchAdminListings"),
+    `必須看得到 searchAdminListings（住在 adminOverview.js、吃 handle）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
 test("跨模組的 handle helper 是可替換的守衛（單一標的移植掉時整條不會失效）", () => {
