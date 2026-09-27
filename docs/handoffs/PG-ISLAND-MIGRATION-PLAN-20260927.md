@@ -1258,6 +1258,16 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
 3. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
    會自己補預設值，所以 settings 那段是很少走到的備援）與一個沒查到底的 `version` 疑點。
 
+   **第二次嘗試（2026-09-27）仍然回退，但縮小了範圍。** 照第十九批的規格重寫後，
+   parity 在「兩份文件都到齊」這一條就紅了，而且**差異是 PG 側多了一段**
+   （`'文件版免責\n\n超過約兩個月沒有登入，系統會暫停主動向外抓取與通知…'`），
+   同步側只有 `'文件版免責'`。那段文字看起來是 `ensureIdleLegalClauses()` 補上的
+   ——但**「為什麼只有 PG 這條路補」還沒查清**。
+   → 下一次要碰這個函式時，**先把兩邊的 `disclaimer` 值完整印出來比對來源**
+   （`legalCopyFromDocuments()` 的 `terms.body`、`defaultLegalCopy().disclaimer`、
+   `seedDefaultDocuments()` 的 `ensureIdleLegalClauses()` 三者誰先誰後），
+   不要再一次從「照規格重寫」開始。
+
 ### 交接紀律（這一輪累積下來的，全部都有實例）
 
 1. **動手前先確認 PG 有沒有那個約束。** `CREATE TABLE` 裡的 `UNIQUE(...)`（表約束）與欄位
