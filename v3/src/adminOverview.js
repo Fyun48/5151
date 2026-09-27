@@ -28,13 +28,13 @@ function countSql(sql, ...params) {
   }
 }
 
-function todayStartIso(now = new Date()) {
+export function todayStartIso(now = new Date()) {
   const d = new Date(now);
   d.setHours(0, 0, 0, 0);
   return d.toISOString();
 }
 
-function sourceHealthFromRow(row, stats = {}) {
+export function sourceHealthFromRow(row, stats = {}) {
   const enabled = row.enabled === true;
   const lastSuccess = stats.lastSeen || "";
   const todayNew = Number(stats.todayNew) || 0;
@@ -73,7 +73,7 @@ function sourceHealthFromRow(row, stats = {}) {
   };
 }
 
-function sourceListingStats() {
+export function sourceListingStats() {
   const today = todayStartIso();
   const lastSeen = new Map();
   const todayNew = new Map();
