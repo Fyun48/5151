@@ -1,0 +1,116 @@
+// 個人同房源合併的 driver-aware 入口（PG 島嶼，2026-09-27）。
+//
+// 為什麼優先做這個：`mergeSameHouseForUser()`（db.js）→ `mergePersonalSameHouse()` 是
+// `/api/listings/:id/{reject,confirm}-match` 與 `/api/listings/merge-same-house` 的後端，
+// 而這條路徑**現在還在寫節點本機 SQLite**——實測 2026-09-27 02:04 產生的新群組
+// `lg_bd21f312958ba02f1cf5` 只存在於 CasaOS 的檔案，PG 沒有。
+//
+// ⚠️ 一個必須自己處理的方言差異：同步版的 upsert 用了
+//      system_agrees = MIN(user_same_house_members.system_agrees, excluded.system_agrees)
+//    SQLite 的 `MIN(a, b)` 是**純量**函式；PostgreSQL 的 `MIN()` 是**聚合函式**，
+//    在這種位置會直接報錯。PG 要用 `LEAST(a, b)`。`toPostgresSql` 不會轉譯這個
+//    （它只處理 IFNULL／GROUP_CONCAT／instr 與參數佔位），所以這裡必須寫對的方言。
+import { sharedPgDriver } from "./pgSharedDriver.js";
+import { toPostgresSql } from "./sqlDialect.js";
+import {
+  judgeMergeSet,
+  newGroupKey,
+  normalizeMergeIds,
+} from "./userSameHouse.js";
+
+const GROUP_KEY_BY_POST_SQL =
+  "SELECT group_key FROM user_same_house_members WHERE user_id = ? AND post_id = ?";
+const POSTS_BY_GROUP_SQL =
+  "SELECT post_id FROM user_same_house_members WHERE user_id = ? AND group_key = ?";
+const MOVE_GROUP_SQL =
+  "UPDATE user_same_house_members SET group_key = ? WHERE user_id = ? AND group_key = ?";
+// PG 的 ON CONFLICT 目標 (user_id, post_id) 對應 PG 上的主鍵，已查證存在。
+// MIN → LEAST 是**必要**的方言轉換，不是風格選擇。
+const UPSERT_SQL = `INSERT INTO user_same_house_members (user_id, group_key, post_id, system_agrees, created_at)
+   VALUES (?, ?, ?, ?, ?)
+   ON CONFLICT(user_id, post_id) DO UPDATE SET
+     group_key = excluded.group_key,
+     system_agrees = LEAST(user_same_house_members.system_agrees, excluded.system_agrees),
+     created_at = user_same_house_members.created_at`;
+
+async function pgExec(options = {}) {
+  if (options.exec) return options.exec;
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
+}
+
+async function runInTransaction(options, fn) {
+  if (options.exec) return fn(options.exec);
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  return pgDriver.withTransaction(async (client) => {
+    const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);
+    return fn(tx);
+  });
+}
+
+// userSameHouse.js personalGroupKeyFor() 的 PG 分支（同步版把例外吞掉回空字串，這裡照抄）。
+async function personalGroupKeyForAsync(exec, uid, postId) {
+  if (!uid || !postId) return "";
+  try {
+    const rows = await exec(GROUP_KEY_BY_POST_SQL, [uid, postId]);
+    return String(rows[0]?.group_key || "");
+  } catch {
+    return "";
+  }
+}
+
+// userSameHouse.js mergePersonalSameHouse() 的 PG 分支。步驟與同步版逐條對應，
+// 回傳形狀與訊息文字完全相同。
+export async function mergePersonalSameHouse(userId, listings, { now = new Date(), ...options } = {}) {
+  const uid = Number(userId) || 0;
+  const rows = (listings || []).filter((row) => Number(row?.post_id) > 0);
+  const ids = normalizeMergeIds(rows.map((row) => row.post_id));
+  if (!uid) {
+    return { ok: false, code: "guest", error: "請先登入才能併入同房源", systemAgrees: false };
+  }
+  if (ids.length < 2) {
+    return { ok: false, code: "need_two", error: "請至少選 2 筆才能併入同房源", systemAgrees: false };
+  }
+  const judge = judgeMergeSet(rows);
+  const stamp = now instanceof Date ? now.toISOString() : String(now);
+  const exec = await pgExec(options);
+  const keys = [...new Set((await Promise.all(ids.map((id) => personalGroupKeyForAsync(exec, uid, id)))).filter(Boolean))];
+  const groupKey = keys[0] || newGroupKey(now instanceof Date ? now : new Date(stamp));
+  const extraIds = [];
+  for (const key of keys) {
+    const found = await exec(POSTS_BY_GROUP_SQL, [uid, key]);
+    extraIds.push(...found.map((row) => Number(row.post_id)));
+  }
+  const allIds = normalizeMergeIds([...ids, ...extraIds]);
+  const agrees = judge.systemAgrees ? 1 : 0;
+  await runInTransaction(options, async (tx) => {
+    // keys.slice(1) 併入 keys[0]：與同步版相同，把其他群組的成員搬到第一個群組。
+    for (const key of keys.slice(1)) {
+      await tx(MOVE_GROUP_SQL, [groupKey, uid, key]);
+    }
+    for (const id of allIds) {
+      await tx(UPSERT_SQL, [uid, groupKey, id, agrees, stamp]);
+    }
+  });
+  return {
+    ok: true,
+    personal: true,
+    shared: false,
+    post_ids: allIds,
+    group_key: groupKey,
+    systemAgrees: judge.systemAgrees,
+    message: judge.systemAgrees
+      ? `已為你併入 ${allIds.length} 筆同房源（只改你的列表）`
+      : `已為你併入 ${allIds.length} 筆同房源。系統判定不是同屋源，此筆記錄只留在你的帳號，不會分享給其他使用者。`,
+  };
+}
+
+// ⚠️ 這裡**刻意沒有** driver-aware 的 `...Async` 入口。
+// 同步版 `mergePersonalSameHouse(db, ...)` 需要 SQLite handle，而那個 handle 在呼叫端
+// （`db.js` 的 `mergeSameHouseForUser`）手上——從這個模組拿不到，硬寫一個「非 postgres 就回退」
+// 的包裝只會拿到 undefined。driver-aware 的包裝要放在 `db.js`，這一步還沒做（見下方待辦）。
+//
+// 待辦：在 db.js 加 `mergeSameHouseForUserAsync()`：
+//   - 非 postgres → 現有同步路徑（行為不變）
+//   - postgres + 會員 → `mergePersonalSameHouse()`（本檔，已測）
+//   - postgres + 管理員 → 仍走 `confirmSameHouseAsAdmin()`（目前是 SQLite，尚未移植）
