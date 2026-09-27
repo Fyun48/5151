@@ -111,6 +111,13 @@ function resolveNode(rel, name) {
     for (const n of next.sqlite) out.sqlite.add(n);
     for (const n of next.pg) out.pg.add(n);
   }
+  // 2026-09-27：**driver-aware 的函式不計入 SQLite 缺口**。
+  // 例：server.js 的 `auditReq()` 保留同步 `appendAdminAudit` 給非 PG 分支用，
+  // 但 `DB_DRIVER=postgres` 時走的是 `appendAdminAuditAsync`（PG）。分析器是靜態的，
+  // 若不套這條規則，已轉換的路由會一直顯示 MIXED——我先前記錄過三次的那個過度回報。
+  // ⚠️ 這是**保守度換取可用度**的取捨：若某個 driver-aware 函式在兩個分支都呼叫了
+  // 只走 SQLite 的 helper，這裡會低估。判定本來就標「機械判定」，據此動手前仍須人工確認。
+  if (/resolveDbDriver\s*\(/.test(body)) out.sqlite.clear();
   resolving.delete(key);
   memo.set(key, out);
   return out;
