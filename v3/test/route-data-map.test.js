@@ -73,13 +73,17 @@ test("/api/demo 必須看得到 findUserByEmail（經 buildDemoState 落到 SQLi
     `缺陷 (1)（函式本文吞掉整段路由）修好前後差在這裡。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
-test("吃 handle 參數的 helper 必須被看見：/api/support/public", () => {
-  const r = rows.get("GET /api/support/public");
-  assert.ok(r, "找不到 /api/support/public");
+test("吃 handle 參數的 helper 必須被看見：/api/admin/support/dashboard", () => {
+  // 📌 這條原本用 `/api/support/public`（靠 `publicSupportConfig(db)` 驗同一個性質），
+  // 但那個路由在第十一批**被移植成 PG 了**，於是守衛失效（變成在斷言一個已不成立的舊事實）。
+  // 改挑一條**仍然只被 `(db, …)` helper 卡住**的路由：`supportDashboard(db)` 在 support.js，
+  // 是典型的「把 handle 當參數傳」的函式。移植它之後，這條要再換一條。
+  const r = rows.get("GET /api/admin/support/dashboard");
+  assert.ok(r, "找不到 /api/admin/support/dashboard");
   assert.equal(r.verdict, "SQLite",
-    `缺陷 (2) 讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("publicSupportConfig"),
-    `必須看得到 publicSupportConfig(db)。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+    `缺陷 (2) 會讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
+  assert.ok(r.sqlite.includes("supportDashboard"),
+    `必須看得到 supportDashboard(db)。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
 test("被低估的那一批：/api/admin/campaigns 必須看得到 listCampaignsAdmin", () => {

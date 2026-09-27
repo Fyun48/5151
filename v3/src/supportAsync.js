@@ -29,8 +29,10 @@ import {
   SUPPORT_PROVIDER_KINDS,
   TRANSACTION_STATUSES,
   httpError,
+  dashboardTotals,
   dismissUntilFromDays,
   emptyUsage,
+  goalProgress,
   iso,
   mergeCtaState,
   moneyAmount,
@@ -38,11 +40,14 @@ import {
   normalizePageCopy,
   normalizeSupportFlags,
   pickEligibleCtaRule,
+  publicProviderView,
+  resolveSponsorStatus,
   sanitizeUsage,
   sortSupportTiers,
+  sponsorWindowActive,
   transactionDedupeKey,
 } from "./supportDomain.js";
-import { sanitizeHttpUrl } from "./sponsorLinks.js";
+import { publicSponsorLinks, sanitizeHttpUrl } from "./sponsorLinks.js";
 // SQLite 分支需要 handle：`support.js` 的函式是吃 `(db, ...)` 參數的（不像 db.js 用模組全域），
 // 所以拿 `sqliteHandle()`——與 `listingGroupsAsync.js` 同一個既有模式，不必讓呼叫端多傳一個參數。
 import { sqliteHandle } from "./db.js";
@@ -54,6 +59,7 @@ import {
   dismissSupportCta as dismissSupportCtaSync,
   evaluateSupportCta as evaluateSupportCtaSync,
   createManualTransaction as createManualTransactionSync,
+  costActiveInMonth,
   createSupportCheckout as createSupportCheckoutSync,
   createSupportCost as createSupportCostSync,
   createSupportSponsor as createSupportSponsorSync,
@@ -66,10 +72,15 @@ import {
   listSupportSponsors as listSupportSponsorsSync,
   listSupportTiers as listSupportTiersSync,
   getSupportFlags as getSupportFlagsSync,
+  monthBounds,
   handleSupportCtaRequest as handleSupportCtaRequestSync,
   markSupportCtaShown as markSupportCtaShownSync,
   listSupportTransactions as listSupportTransactionsSync,
   parseJson,
+  periodBounds,
+  previewSupportConfig as previewSupportConfigSync,
+  publicSupportConfig as publicSupportConfigSync,
+  publicThanksRow,
   publishSupportConfig as publishSupportConfigSync,
   recordSupportEvent as recordSupportEventSync,
   saveSupportConfig as saveSupportConfigSync,
@@ -98,17 +109,21 @@ const PROVIDERS_SQL = "SELECT * FROM support_provider ORDER BY is_default DESC, 
 const SPONSORS_SQL = "SELECT * FROM support_sponsor ORDER BY sort_order ASC, id DESC";
 const CTA_RULES_SQL = "SELECT * FROM support_cta_rule ORDER BY priority ASC, id ASC";
 
+const listSupportCostsPg = async (exec) => (await exec(COSTS_SQL, [])).map(costRow);
+
 export async function listSupportCostsAsync(options = {}) {
   if (!isPg(options)) return listSupportCostsSync(sqliteHandle());
-  const exec = await pgExec(options);
-  return (await exec(COSTS_SQL, [])).map(costRow);
+  return listSupportCostsPg(await pgExec(options));
 }
+
+const listSupportTiersPg = async (exec, { activeOnly = false } = {}) => {
+  const rows = (await exec(TIERS_SQL, [])).map(tierRow);
+  return sortSupportTiers(activeOnly ? rows.filter((row) => row.is_active) : rows);
+};
 
 export async function listSupportTiersAsync({ activeOnly = false } = {}, options = {}) {
   if (!isPg(options)) return listSupportTiersSync(sqliteHandle(), { activeOnly });
-  const exec = await pgExec(options);
-  const rows = (await exec(TIERS_SQL, [])).map(tierRow);
-  return sortSupportTiers(activeOnly ? rows.filter((row) => row.is_active) : rows);
+  return listSupportTiersPg(await pgExec(options), { activeOnly });
 }
 
 export async function listSupportProvidersAsync(options = {}) {
@@ -117,10 +132,11 @@ export async function listSupportProvidersAsync(options = {}) {
   return (await exec(PROVIDERS_SQL, [])).map(adminProviderView);
 }
 
+const listSupportSponsorsPg = async (exec, now) => (await exec(SPONSORS_SQL, [])).map((row) => sponsorRow(row, now));
+
 export async function listSupportSponsorsAsync({ now = new Date() } = {}, options = {}) {
   if (!isPg(options)) return listSupportSponsorsSync(sqliteHandle(), now);
-  const exec = await pgExec(options);
-  return (await exec(SPONSORS_SQL, [])).map((row) => sponsorRow(row, now));
+  return listSupportSponsorsPg(await pgExec(options), now);
 }
 
 // exec 版的 CTA 規則讀取：對外入口與 CTA 狀態機共用同一份（避免兩份漂移）。
@@ -285,6 +301,139 @@ export async function updateSupportProviderAsync(id, body = {}, { now = new Date
     Number(id) || 0,
   ]);
   return adminProviderView((await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+// ---------------------------------------------------------------------------
+// 公開支持頁（publicPagePayload 那條鏈）
+//
+// `publicSupportConfig`／`previewSupportConfig` 都走 `publicPagePayload()`，而它會拉起
+// `adminSupportConfig`（已完成）、`dashboardTotals`、`listSupportTransactions`（已完成）、
+// `monthlyOperatingTotal`、`publicMonthlyCosts`、`activeCheckoutProvider`、
+// `listSupportTiers`（已完成）、`publicActiveSponsors`、`publicSupportThanks`、`publicSponsorWays`。
+// 這裡把「會碰 DB 的」都補上；純彙總（`dashboardTotals`／`goalProgress`／`publicProviderView`／
+// `sponsorWindowActive`／`publicSponsorLinks`）照樣留在原模組共用。
+//
+// `publicSponsorWays` 讀的是**單一 settings 鍵**（`sponsorLinks`），與 support 網域是否開啟無關
+// ——後台填了贊助連結就要讓公開頁看得到，不要變成死路。
+const SPONSOR_LINKS_SETTING_SQL = "SELECT value FROM settings WHERE key = 'sponsorLinks'";
+const PUBLIC_THANKS_SQL = `SELECT supporter_name, anonymous, message, amount, status
+     FROM support_transaction
+     WHERE status IN ('completed', 'manual')
+     ORDER BY received_at DESC
+     LIMIT 24`;
+
+const publicSponsorWaysAsync = async (exec) => {
+  try {
+    const row = (await exec(SPONSOR_LINKS_SETTING_SQL, []))[0];
+    return publicSponsorLinks(parseJson(row?.value, {}));
+  } catch {
+    return [];
+  }
+};
+
+const monthlyOperatingTotalAsync = async (exec, now, { publicOnly = false } = {}) => {
+  const { start, end } = monthBounds(now);
+  return (await listSupportCostsPg(exec))
+    .filter((row) => (!publicOnly || row.is_public) && costActiveInMonth(row, start, end))
+    .reduce((acc, row) => acc + row.monthly_amount, 0);
+};
+
+const publicMonthlyCostsAsync = async (exec, now) => {
+  const { start, end } = monthBounds(now);
+  return (await listSupportCostsPg(exec))
+    .filter((row) => row.is_public && costActiveInMonth(row, start, end))
+    .map((row) => ({ category: row.category, name: row.name, monthly_amount: row.monthly_amount }));
+};
+
+const activeCheckoutProviderAsync = async (exec) =>
+  (await exec(CHECKOUT_PROVIDER_WITH_URL_SQL, []))[0] || (await exec(CHECKOUT_PROVIDER_ANY_SQL, []))[0];
+
+const publicActiveSponsorsAsync = async (exec, now) =>
+  (await listSupportSponsorsPg(exec, now))
+    .filter((row) => sponsorWindowActive({ ...row, status: row.status === "scheduled" ? resolveSponsorStatus(row, now) : row.status }, now) || resolveSponsorStatus(row, now) === "active")
+    .filter((row) => resolveSponsorStatus(row, now) === "active")
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      logo: row.logo,
+      website_url: row.website_url,
+      description: row.description,
+      disclosure_text: row.disclosure_text || "贊助",
+      display_location: row.display_location,
+      amount: row.show_amount ? row.amount : null,
+    }));
+
+const publicSupportThanksAsync = async (exec) =>
+  (await exec(PUBLIC_THANKS_SQL, [])).map(publicThanksRow);
+
+// `publicPagePayload()` 的 PG 分支。逐條對應同步版，順序與條件都照抄。
+const publicPagePayloadAsync = async (exec, page, flags, now) => {
+  const config = await adminSupportConfigAsync({ driver: "postgres", exec });
+  const totals = dashboardTotals((await listSupportTransactionsPg(exec, periodBounds("month", now))));
+  const cost = await monthlyOperatingTotalAsync(exec, now, { publicOnly: true });
+  const target = config.goal_amount || cost;
+  const progress = goalProgress(totals.net || totals.gross, target);
+  const provider = await activeCheckoutProviderAsync(exec);
+  return {
+    enabled: flags.enabled,
+    flags,
+    copy: page.copy,
+    free_statement: page.copy.free_statement,
+    show_goal: page.show_goal && config.goal_display !== "hidden",
+    show_cost: page.show_cost && flags.public_cost_enabled,
+    show_supporters: page.show_supporters && config.wall_enabled,
+    show_sponsors: page.show_sponsors && flags.sponsor_enabled,
+    goal: {
+      label: config.goal_label || "本月維運目標",
+      display: config.goal_display,
+      ...progress,
+      cost,
+    },
+    costs: flags.public_cost_enabled && page.show_cost ? await publicMonthlyCostsAsync(exec, now) : [],
+    tiers: (await listSupportTiersPg(exec, { activeOnly: true })).map((row) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      amount: row.amount,
+      currency: row.currency,
+      icon: row.icon,
+      is_default: row.is_default,
+    })),
+    provider: publicProviderView(provider),
+    checkout_available: Boolean(provider && provider.page_url && Number(provider.is_active) === 1),
+    fallback_message: "目前支持付款服務暫時無法使用，稍後再試即可。",
+    sponsors: flags.sponsor_enabled && page.show_sponsors ? await publicActiveSponsorsAsync(exec, now) : [],
+    thanks: config.wall_enabled && page.show_supporters ? await publicSupportThanksAsync(exec) : [],
+    sponsor_links: await publicSponsorWaysAsync(exec),
+    entry: {
+      show: flags.enabled,
+      label: page.copy.cta_label || "支持本站",
+      href: "/support.html",
+    },
+  };
+};
+
+export async function publicSupportConfigAsync({ now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return publicSupportConfigSync(sqliteHandle(), now);
+  const exec = await pgExec(options);
+  const flags = await readFlagsAsync(exec);
+  if (!flags.enabled) {
+    return {
+      enabled: false,
+      flags,
+      entry: { show: false, label: "支持本站", href: "/support.html" },
+      cta: { enabled: false },
+      sponsor_links: await publicSponsorWaysAsync(exec),
+    };
+  }
+  return publicPagePayloadAsync(exec, await readPublishedAsync(exec), flags, now);
+}
+
+export async function previewSupportConfigAsync({ now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return previewSupportConfigSync(sqliteHandle(), now);
+  const exec = await pgExec(options);
+  const flags = { ...(await readFlagsAsync(exec)), enabled: true };
+  return publicPagePayloadAsync(exec, await readDraftAsync(exec), flags, now);
 }
 
 // ---------------------------------------------------------------------------
@@ -718,9 +867,7 @@ export async function updateCtaRuleAsync(id, body = {}, { now = new Date(), ...o
 
 // 逐字對應 db.js 版：`from`／`to` 是**選擇性**條件，順序與同步版相同
 // （先 from 再 to，最後才是 ORDER BY）——參數順序寫錯會讓篩選悄悄失效。
-export async function listSupportTransactionsAsync({ from, to } = {}, options = {}) {
-  if (!isPg(options)) return listSupportTransactionsSync(sqliteHandle(), { from, to });
-  const exec = await pgExec(options);
+const listSupportTransactionsPg = async (exec, { from, to } = {}) => {
   let sql = "SELECT * FROM support_transaction WHERE 1=1";
   const params = [];
   if (from) {
@@ -733,4 +880,9 @@ export async function listSupportTransactionsAsync({ from, to } = {}, options = 
   }
   sql += " ORDER BY received_at DESC, id DESC";
   return (await exec(sql, params)).map(txRow);
+};
+
+export async function listSupportTransactionsAsync({ from, to } = {}, options = {}) {
+  if (!isPg(options)) return listSupportTransactionsSync(sqliteHandle(), { from, to });
+  return listSupportTransactionsPg(await pgExec(options), { from, to });
 }

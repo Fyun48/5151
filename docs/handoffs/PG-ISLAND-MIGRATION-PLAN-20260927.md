@@ -22,11 +22,11 @@ node v3/scripts/route-data-map.mjs
 
 | 判定 | 舊尺 | 新尺 | 五批前 | 第四批 | 第五批 | 第六批 | 第七批 | 第八批 | **第九批** |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | 169 | 165 | **164** |
-| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | 40 | 41 | **42** |
-| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
-| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | 53 | 56 | **56** |
-| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** | **206** | **206** |
+| SQLite | 80 | 189 | 179 | 173 | 170 | 169 | 169 | 169 | 165 | 164 | **161** |
+| MIXED | 36 | 47 | 49 | 49 | 50 | 50 | 45 | 40 | 41 | 42 | **42** |
+| 無直接DB | 117 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | 26 | **26** |
+| PG | 55 | 26 | 34 | 40 | 42 | 43 | 48 | 53 | 56 | 56 | **59** |
+| **缺口合計** | **116** | **236** | **228** | **222** | **220** | **219** | **214** | **209** | **206** | **206** | **203** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -527,6 +527,59 @@ POST /api/support/checkout     MIXED  sqlite=[findUserByEmail]
 #### 10.4 變異測試
 
 `support-async` 的變異集擴到 **22 條，全部 KILLED**。跑完用 sha1 確認模組沒停在變異狀態。
+
+### 第十一批（2026-09-27）：公開支持頁（`publicPagePayload` 那條鏈）
+
+#### 11.1 內容
+
+`supportAsync.js` 新增 `publicSupportConfigAsync`、`previewSupportConfigAsync`，
+以及它們背後的整條鏈：`publicSponsorWays`／`monthlyOperatingTotal`／`publicMonthlyCosts`／
+`activeCheckoutProvider`／`publicActiveSponsors`／`publicSupportThanks`。
+同時把四個列表函式重構成「exec 版 ＋ 對外入口」兩層（`listSupportCostsPg` 等），
+讓公開頁那條鏈與對外入口**共用同一份**，不是各寫一次。
+
+**3 條路由轉 PG**：`GET /api/support/public`、`GET /api/support/tiers`、`GET /api/admin/support/preview`。
+另外 `publicSupportFallback()`（`/api/support/public` 的 catch 分支）也改用 driver-aware 的 flags
+——**catch 分支最容易被漏掉**，漏了就會在錯誤路徑上退回讀節點本機檔案。
+
+**量尺**：SQLite 164→**161**、PG 56→**59**、缺口 206→**203**。
+
+#### 11.2 這批**又**是「測試資料沒踩到差異」×3（全部由單獨斷言抓到）
+
+值得注意的是：**整包 `deepEqual(a, s)` 三次都過**，因為兩邊都拿到同樣的「空」結果。
+抓到的都是我自己額外加的單獨斷言：
+
+1. **贊助商檔期**：這個測試檔的 `NOW` 是 **2027-06-01**（第七批為了驗 `resolved_status` 改的），
+   而我沿用了 2026 的檔期 ⇒ 到 NOW 時已過期 ⇒ `sponsors` 是空的。
+   （`seedAll` 那一份**必須保留 2026**，因為另一條測試靠它驗「已過期」——所以只能改
+   `seedPublicPage` 那一份，兩行字面完全相同。）
+2. **`copy` 的鍵要在 `DEFAULT_PAGE_COPY` 白名單內**：我用 `intro` ⇒ 被 `normalizePageCopy` 丟掉
+   ⇒ 兩邊都是 `undefined`。改用 `cta_label`。**這與第九批是同一個坑，隔兩批又犯一次。**
+3. **`providers: {}` 會讓 `publicSponsorLinks()` 回空陣列** ⇒「未開啟時不提供 sponsor_links」
+   的變異產生相同結果（等價變異）。必須真的啟用一組（id 是 opay／ezpay／oen／kofi／paypal／bmc／github）。
+
+> **教訓（第三次記錄）**：`deepEqual` 兩個空集合也會過。
+> **凡是「整包比對」的測試，都必須為關鍵欄位另外加單獨斷言，而且那些欄位要有非空的值。**
+
+#### 11.3 變異測試
+
+`support-async` 的變異集擴到 **28 條，全部 KILLED**。跑完用 sha1 確認模組沒停在變異狀態。
+
+#### 11.4 ⚠️ 守衛測試會**過期**：移植完成之後，它斷言的就是舊事實
+
+量尺的守衛測試裡有一條用 `/api/support/public` 當 ground truth（驗「吃 handle 參數的 helper
+要被看見」）。本批把那個路由移植成 PG 之後，**守衛立刻失敗**——因為它還在斷言「這條是 SQLite」。
+
+這不是壞事（紅燈代表它確實在守東西），但要注意：
+**凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成的那一刻失效。**
+已改挑一條**仍然只被 `(db, …)` helper 卡住**的路由（`/api/admin/support/dashboard` ←
+`supportDashboard(db)`），並在測試裡註明「移植它之後要再換一條」。
+**不要為了讓它變綠就把斷言刪掉**——那等於失去這個性質的守衛。
+
+#### 11.5 support.js 的進度
+
+`support.js` 原本可完成 21 條路由，本批之後**只剩 `supportDashboard`（1 條）**尚未移植
+——也就是上面的守衛測試正在用的那一條。
 
 ## 三、做法（照這個做，不要發明新的）
 

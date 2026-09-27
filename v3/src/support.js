@@ -296,7 +296,7 @@ export function costRow(row) {
   };
 }
 
-function costActiveInMonth(row, monthStart, monthEnd) {
+export function costActiveInMonth(row, monthStart, monthEnd) {
   const start = row.start_date || row.start_at || "";
   const end = row.end_date || row.end_at || "";
   if (start && start > monthEnd) return false;
@@ -487,7 +487,7 @@ export function updateSupportProvider(db, id, body = {}, now = new Date()) {
   return adminProviderView(db.prepare("SELECT * FROM support_provider WHERE id=?").get(id));
 }
 
-function activeCheckoutProvider(db) {
+export function activeCheckoutProvider(db) {
   return db.prepare("SELECT * FROM support_provider WHERE is_active=1 AND page_url!='' ORDER BY is_default DESC, id ASC LIMIT 1").get()
     || db.prepare("SELECT * FROM support_provider WHERE is_active=1 ORDER BY is_default DESC, id ASC LIMIT 1").get();
 }
@@ -515,7 +515,7 @@ export function txRow(row) {
   };
 }
 
-function publicThanksRow(row) {
+export function publicThanksRow(row) {
   if (!row || Number(row.anonymous) === 1) {
     return { name: "匿名支持者", amount: null, message: "" };
   }
@@ -878,7 +878,7 @@ function eventCounts(db, from, to) {
   return out;
 }
 
-function periodBounds(period, now = new Date(), custom = {}) {
+export function periodBounds(period, now = new Date(), custom = {}) {
   const ts = new Date(now).getTime();
   if (period === "7d") return { from: iso(new Date(ts - 7 * 86400000)), to: iso(now) };
   if (period === "30d") return { from: iso(new Date(ts - 30 * 86400000)), to: iso(now) };

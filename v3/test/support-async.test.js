@@ -44,7 +44,7 @@ const TABLES = [
 // 但 `users` **不能列入清空**——磁碟那邊的 handle 開了 `PRAGMA foreign_keys`（db.js:503），
 // 而 `user_settings`／`user_events` 等表還留著指向它的資料列，刪了會 FOREIGN KEY constraint failed。
 // 所以只鏡射 DDL、不動資料。
-const MIRROR = [...TABLES, "users"];
+const MIRROR = [...TABLES, "users", "settings"];
 
 const PG_ILLEGAL = [
   [/LIMIT\s+-1\b/i, "LIMIT must not be negative"],
@@ -97,6 +97,9 @@ function resetBoth() {
     try {
       h.prepare(`DELETE FROM sqlite_sequence WHERE name IN (${TABLES.map(() => "?").join(",")})`).run(...TABLES);
     } catch { /* 沒有 AUTOINCREMENT 表時 sqlite_sequence 不存在 */ }
+    // `settings` 只鏡射 DDL、不清整表（磁碟那邊有 db.js 自己的設定），
+    // 但 `sponsorLinks` 這個鍵會被公開頁讀到 ⇒ **兩邊都要清**，否則磁碟的殘留會讓兩邊不一致。
+    h.prepare("DELETE FROM settings WHERE key = 'sponsorLinks'").run();
   }
   return [disk, exec];
 }
@@ -668,6 +671,96 @@ test("createSupportCheckoutAsync：成功路徑（外部收款頁）必須與同
   assert.deepEqual(a, s);
   assert.equal(a.available, true, "應該可以結帳");
   assert.match(a.url, /buymeacoffee\.com/, "checkout URL 必須是收款頁");
+  disk.close();
+});
+
+// ---------------------------------------------------------------------------
+// 公開支持頁（publicSupportConfig／previewSupportConfig）
+//
+// `publicPagePayload()` 是很大的複合物件（目標進度、成本、方案、收款方式、贊助商、感謝牆、
+// 贊助連結），所以整包 deepEqual 比對＋幾個關鍵欄位單獨斷言，避免「兩邊都空」也算過。
+
+// 公開頁要用的完整底料：開啟 flags、有方案／收款方式／成本／贊助商／交易。
+function seedPublicPage(h, overrides = {}) {
+  seedConfig(h, {
+    flags_json: JSON.stringify({
+      enabled: true, cta_enabled: true, public_cost_enabled: true,
+      sponsor_enabled: true, wall_enabled: true, ...(overrides.flags || {}),
+    }),
+    draft_json: JSON.stringify({ intro: "草稿", ...(overrides.draft || {}) }),
+    published_json: JSON.stringify({ intro: "已發佈", ...(overrides.published || {}) }),
+    goal_amount: overrides.goal_amount ?? 10000,
+    goal_label: "本月目標",
+    goal_display: "exact",
+    wall_enabled: 1,
+    updated_at: "2026-09-01T00:00:00.000Z",
+  });
+  seed(h, "support_tier", { title: "小額", amount: 100, sort_order: 1, is_active: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
+  seed(h, "support_provider", {
+    kind: "buy_me_a_coffee", display_name: "咖啡", page_url: "https://buymeacoffee.com/x",
+    is_active: 1, is_default: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z",
+  });
+  seed(h, "support_operating_cost", { category: "hosting", name: "主機", amount: 1200, billing_cycle: "monthly", is_public: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
+  // ⚠️ 檔期要涵蓋這個檔案的 `NOW`（**2027-06-01**）。第一版沿用 2026 檔期 ⇒ 到 NOW 已過期
+  // ⇒ sponsors 是空的（整包 deepEqual 仍然過，因為兩邊都空，只有單獨斷言才抓得到）。
+  seed(h, "support_sponsor", { name: "贊助商甲", status: "active", sort_order: 1, start_at: "2027-01-01T00:00:00.000Z", end_at: "2027-12-31T00:00:00.000Z", created_at: "2027-01-01T00:00:00.000Z", updated_at: "2027-01-01T00:00:00.000Z" });
+  seed(h, "support_transaction", { provider: "buy_me_a_coffee", amount: 300, fee: 15, net_amount: 285, currency: "TWD", status: "completed", anonymous: 0, supporter_name: "小明", channel: "web", received_at: "2026-09-10T00:00:00.000Z", created_at: "2026-09-10T00:00:00.000Z", updated_at: "2026-09-10T00:00:00.000Z" });
+}
+
+test("publicSupportConfigAsync：未開啟時的形狀（含 sponsor_links 的例外）必須相同", async () => {
+  const [disk, exec] = resetBoth();
+  for (const h of [disk, exec.raw]) {
+    seedConfig(h, { flags_json: JSON.stringify({ enabled: false }), draft_json: "{}" });
+    // 「Support domain 關閉 ≠ 沒有支持方式」：後台填了贊助連結就要列出來。
+    // ⚠️ `providers: {}` 會讓 `publicSponsorLinks()` 回**空陣列**，於是「不提供 sponsor_links」
+    // 的變異產生相同結果 ⇒ 等價變異。必須真的啟用一組（providers 的 id 是
+    // opay／ezpay／oen／kofi／paypal／bmc／github），才驗得到「有沒有把連結帶出來」。
+    h.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES ('sponsorLinks', ?)")
+      .run(JSON.stringify({
+        intro: "支持我們",
+        providers: { bmc: { enabled: true, url: "https://buymeacoffee.com/x", label: "請我喝咖啡" } },
+      }));
+  }
+  const a = await asyncMod.publicSupportConfigAsync({ ...PG, exec, now: NOW });
+  const s = support.publicSupportConfig(disk, NOW);
+  assert.deepEqual(a, s);
+  assert.equal(a.enabled, false);
+  assert.equal(a.sponsor_links.length, 1, "關閉時仍然要把後台填的贊助連結列出來");
+  assert.equal(a.sponsor_links[0].url, "https://buymeacoffee.com/x");
+  disk.close();
+});
+
+test("🚨 publicSupportConfigAsync：開啟時的整包 payload 必須與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  seedPublicPage(disk); seedPublicPage(exec.raw);
+  const a = await asyncMod.publicSupportConfigAsync({ ...PG, exec, now: NOW });
+  const s = support.publicSupportConfig(disk, NOW);
+  assert.deepEqual(a, s, "整包 payload 必須相同");
+  // 單獨斷言幾個關鍵欄位，避免「兩邊都空」也算過。
+  assert.equal(a.enabled, true);
+  assert.equal(a.tiers.length, 1, "要列出啟用的方案");
+  assert.equal(a.tiers[0].title, "小額");
+  assert.equal(a.costs.length, 1, "要列出公開成本");
+  assert.equal(a.goal.cost, 1200, "月成本要算對");
+  assert.equal(a.sponsors.length, 1, "要列出進行中的贊助商");
+  assert.equal(a.thanks.length, 1, "要列出感謝牆");
+  assert.equal(a.checkout_available, true);
+  assert.equal(a.entry.show, true);
+  disk.close();
+});
+
+test("🚨 previewSupportConfigAsync：用 draft（不是 published），且強制 enabled", async () => {
+  const [disk, exec] = resetBoth();
+  // `normalizePageCopy` 只留 `DEFAULT_PAGE_COPY` 白名單內的鍵 ⇒ 用 `cta_label` 才有鑑別力
+  //（第一版用 `intro`，被丟掉 ⇒ 兩邊都是 undefined ⇒ 斷言失敗）。
+  seedPublicPage(disk, { draft: { copy: { cta_label: "草稿按鈕" } }, published: { copy: { cta_label: "已發佈按鈕" } }, flags: { enabled: false } });
+  seedPublicPage(exec.raw, { draft: { copy: { cta_label: "草稿按鈕" } }, published: { copy: { cta_label: "已發佈按鈕" } }, flags: { enabled: false } });
+  const a = await asyncMod.previewSupportConfigAsync({ ...PG, exec, now: NOW });
+  const s = support.previewSupportConfig(disk, NOW);
+  assert.deepEqual(a, s);
+  // 預覽的兩個關鍵語意：即使站台未開啟也要能預覽、而且看的是**草稿**。
+  assert.equal(a.enabled, true, "預覽必須強制 enabled=true");
+  assert.equal(a.copy.cta_label, "草稿按鈕", "預覽要看 draft，不是 published");
   disk.close();
 });
 

@@ -373,6 +373,9 @@ import {
 import {
   adminSupportConfigAsync,
   createManualTransactionAsync,
+  getSupportFlagsAsync,
+  previewSupportConfigAsync,
+  publicSupportConfigAsync,
   createSupportCheckoutAsync,
   dismissSupportCtaAsync,
   handleSupportCtaRequestAsync,
@@ -1722,26 +1725,26 @@ function sendSupportError(res, error) {
   res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
 }
 
-function publicSupportFallback() {
+async function publicSupportFallback() {
   return {
     enabled: false,
-    flags: getSupportFlags(db),
+    flags: await getSupportFlagsAsync(),
     entry: { show: false, label: "支持本站", href: "/support.html" },
     cta: { enabled: false },
   };
 }
 
-app.get("/api/support/public", (_req, res) => {
+app.get("/api/support/public", async (_req, res) => {
   try {
-    res.json(publicSupportConfig(db));
+    res.json(await publicSupportConfigAsync());
   } catch {
-    res.json(publicSupportFallback());
+    res.json(await publicSupportFallback());
   }
 });
 
-app.get("/api/support/tiers", (_req, res) => {
+app.get("/api/support/tiers", async (_req, res) => {
   try {
-    const pub = publicSupportConfig(db);
+    const pub = await publicSupportConfigAsync();
     res.json({ items: pub.tiers || [] });
   } catch {
     res.json({ items: [] });
@@ -1840,8 +1843,8 @@ app.get("/api/admin/support/config", requireAdminApi, async (_req, res) => {
   res.json(await adminSupportConfigAsync());
 });
 
-app.get("/api/admin/support/preview", requireAdminApi, (_req, res) => {
-  res.json(previewSupportConfig(db));
+app.get("/api/admin/support/preview", requireAdminApi, async (_req, res) => {
+  res.json(await previewSupportConfigAsync());
 });
 
 app.put("/api/admin/support/config", requireAdminApi, async (req, res) => {
