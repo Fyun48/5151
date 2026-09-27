@@ -23,7 +23,8 @@ after(() => { try { rmSync(dataDir, { recursive: true, force: true }); } catch {
 
 const db = await import("../src/db.js");
 const {
-  getHousingDataAsync, saveHousingDataAsync, getSpiritAsync, saveSpiritAsync,
+  getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } = await import("../src/siteContentAsync.js");
 
 const PG = { driver: "postgres" };
@@ -51,6 +52,15 @@ function stripIds(value) {
 
 // 測試共用同一個 DATA_DIR 的 SQLite，前面的測試會把值寫進去；
 // 要驗「沒有值時回預設」就必須先把鍵清掉，否則同步版讀到的是前一個測試留下的值。
+// 把 SQLite 某個鍵的實際位元組搬進 PG 夾具（讀取 parity 用）。
+function mirrorSqliteKey(exec, key) {
+  const value = storedInSqlite(key);
+  if (value === undefined) return;
+  exec.raw.prepare("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(key, value);
+}
+
+const asItems = (v) => (Array.isArray(v) ? v : (v?.items || []));
+
 function clearSqliteKey(key) {
   const disk = new DatabaseSync(path.join(dataDir, "v3.db"));
   disk.prepare("DELETE FROM settings WHERE key = ?").run(key);
@@ -130,4 +140,53 @@ test("非 postgres driver 走同步分支，不得動用注入的 PG exec", asyn
   await getSpiritAsync({ driver: "sqlite", exec });
   await saveHousingDataAsync({ reset: true }, { driver: "sqlite", exec });
   assert.equal(used, 0, "driver=sqlite 時不得碰 PG exec");
+});
+
+test("helpQa：寫入的位元組必須與同步版相同（含 item 正規化）", async () => {
+  const exec = pgFixture();
+  const patch = { items: [{ id: "q1", q: "問題？", a: "答案。" }] };
+  db.saveHelpQa(patch);
+  await saveHelpQaAsync(patch, { ...PG, exec });
+  assert.equal(storedInPg(exec, "helpQa"), storedInSqlite("helpQa"));
+});
+
+test("helpQa：reset 後兩邊結構相同（id 可能由時間產生）", async () => {
+  const exec = pgFixture();
+  db.saveHelpQa({ reset: true });
+  await saveHelpQaAsync({ reset: true }, { ...PG, exec });
+  const a = JSON.parse(storedInSqlite("helpQa"));
+  const b = JSON.parse(storedInPg(exec, "helpQa"));
+  assert.equal(b.items.length, a.items.length, "預設題數必須相同");
+});
+
+test("crawlSources：只切換 enabled 時，不得洗掉其他欄位（同步版的合併語意）", async () => {
+  const exec = pgFixture();
+  // 先讓兩邊都有完整清單
+  db.saveCrawlSources({ items: [] });
+  await saveCrawlSourcesAsync({ items: [] }, { ...PG, exec });
+  // 注意：saveCrawlSources 存進 settings 的是**陣列**（normalizeCrawlSources 的回傳），
+  // 不是 { items }；{ items } 是 publicCrawlSources 對外的包裝。測試要兩種都容許。
+  const beforeItems = asItems(JSON.parse(storedInSqlite("crawlSources")));
+  const firstId = beforeItems[0]?.id;
+  assert.ok(firstId, "預設清單應該有來源");
+
+  // 只送「某一個 id 的 enabled」——這是後台切開關的形狀
+  const patch = { items: [{ id: firstId, enabled: false }] };
+  db.saveCrawlSources(patch);
+  await saveCrawlSourcesAsync(patch, { ...PG, exec });
+  assert.equal(storedInPg(exec, "crawlSources"), storedInSqlite("crawlSources"), "位元組必須相同");
+
+  const afterItems = asItems(JSON.parse(storedInSqlite("crawlSources")));
+  const row = afterItems.find((r) => r.id === firstId);
+  assert.equal(row.enabled, false, "被指定的來源要關掉");
+  assert.equal(afterItems.length, beforeItems.length, "其他來源不得被洗掉");
+});
+
+test("crawlSources：把 SQLite 的位元組鏡射進 PG 後，讀取結果必須相同", async () => {
+  // ⚠️ 不能用「全新的 PG 夾具」比——SQLite 已經被前面的測試改過，
+  // 兩邊起點不同，比出來一定不同（第一版就是這樣誤判）。
+  // 正確做法：把 SQLite 實際存的位元組搬進 PG，再比讀取。
+  const exec = pgFixture();
+  mirrorSqliteKey(exec, "crawlSources");
+  assert.deepEqual(await getCrawlSourcesAsync({ ...PG, exec }), db.getCrawlSources());
 });
