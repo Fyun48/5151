@@ -294,6 +294,22 @@ import {
 } from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin } from "./auth.js";
+// 刊登生產力工具（說明範本／聯絡人）的 PG 島嶼入口。
+// `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
+// 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
+import { listingToolsMeta } from "./listingTools.js";
+import {
+  createContactProfileAsync,
+  createDescriptionTemplateAsync,
+  deleteContactProfileAsync,
+  deleteDescriptionTemplateAsync,
+  getOwnedContactProfileAsync,
+  getOwnedDescriptionTemplateAsync,
+  listContactProfilesAsync,
+  listDescriptionTemplatesAsync,
+  updateContactProfileAsync,
+  updateDescriptionTemplateAsync,
+} from "./listingToolsAsync.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
@@ -3258,74 +3274,80 @@ app.post("/api/self-listings/:id/publish", (req, res) => {
     res.json(publishOwnedDraftFor(session.userId, req.params.id, body));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.get("/api/listing-description-templates", (req, res) => {
+app.get("/api/listing-description-templates", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listDescriptionTemplatesFor(session.userId), limit: listingToolsInfo(session.userId).description_template_limit });
+    res.json({
+      items: await listDescriptionTemplatesAsync(session.userId),
+      limit: listingToolsMeta(session).description_template_limit,
+    });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/listing-description-templates", (req, res) => {
+app.post("/api/listing-description-templates", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createDescriptionTemplateFor(session.userId, req.body || {}));
+    res.json(await createDescriptionTemplateAsync(session.userId, req.body || {}, { plan: session.plan, role: session.role }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-description-templates/:id", (req, res) => {
+app.get("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getOwnedDescriptionTemplateFor(session.userId, req.params.id));
+    res.json(await getOwnedDescriptionTemplateAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.patch("/api/listing-description-templates/:id", (req, res) => {
+app.patch("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(updateDescriptionTemplateFor(session.userId, req.params.id, req.body || {}));
+    res.json(await updateDescriptionTemplateAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.delete("/api/listing-description-templates/:id", (req, res) => {
+app.delete("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteDescriptionTemplateFor(session.userId, req.params.id));
+    res.json(await deleteDescriptionTemplateAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.get("/api/listing-contact-profiles", (req, res) => {
+app.get("/api/listing-contact-profiles", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listContactProfilesFor(session.userId), limit: listingToolsInfo().contact_profile_limit });
+    res.json({
+      items: await listContactProfilesAsync(session.userId),
+      limit: listingToolsMeta().contact_profile_limit,
+    });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/listing-contact-profiles", (req, res) => {
+app.post("/api/listing-contact-profiles", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createContactProfileFor(session.userId, req.body || {}));
+    res.json(await createContactProfileAsync(session.userId, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-contact-profiles/:id", (req, res) => {
+app.get("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getOwnedContactProfileFor(session.userId, req.params.id));
+    res.json(await getOwnedContactProfileAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.patch("/api/listing-contact-profiles/:id", (req, res) => {
+app.patch("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(updateContactProfileFor(session.userId, req.params.id, req.body || {}));
+    res.json(await updateContactProfileAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.delete("/api/listing-contact-profiles/:id", (req, res) => {
+app.delete("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteContactProfileFor(session.userId, req.params.id));
+    res.json(await deleteContactProfileAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 app.post("/api/self-listings/:id/close", (req, res) => {

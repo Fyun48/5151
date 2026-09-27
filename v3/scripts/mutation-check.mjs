@@ -427,6 +427,104 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 刊登生產力工具（說明範本／聯絡人）PG 分支的變異集
+// （v3/test/listing-tools-async.test.js）。這一組每一條都對應一個「壞掉會怎樣」。
+const LT_SRC = "v3/src/listingToolsAsync.js";
+const LT_SYNC_SRC = "v3/src/listingTools.js";
+const LISTINGTOOLS_MUTATIONS = [
+  {
+    name: "把 COALESCE 寫回 IFNULL（PG 不接受 IFNULL，且注入式 exec 不經轉譯）",
+    file: LT_SRC,
+    from: '  "SELECT * FROM listing_contact_profile WHERE user_id=? ORDER BY COALESCE(is_account,0) DESC, id";',
+    to: '  "SELECT * FROM listing_contact_profile WHERE user_id=? ORDER BY IFNULL(is_account,0) DESC, id";',
+    expect: "PG 分支的語句不得出現 IFNULL",
+  },
+  {
+    name: "拿掉說明範本的上限判斷（免費使用者可以建無限多則）",
+    file: LT_SRC,
+    from: '    if (n >= limit) throw httpError(`說明範本最多 ${limit} 則`, 409, "template_limit");\n',
+    to: "",
+    expect: "免費上限 2 則",
+  },
+  {
+    name: "同名不再合併（每次建立都新增一列）",
+    file: LT_SRC,
+    from: "    const same = firstRow(await exec(TEMPLATE_BY_NAME_SQL, [uid, name]));",
+    to: "    const same = null;",
+    expect: "同名是「更新既有那一筆」",
+  },
+  {
+    name: "拿掉範本的擁有權檢查（別人的範本也能讀到）",
+    file: LT_SRC,
+    from: '  if (Number(row.user_id) !== Number(uid)) throw httpError("只能使用自己的說明範本", 403);\n',
+    to: "",
+    expect: "擁有權",
+  },
+  {
+    name: "更新時不沿用舊值（只改內文會把名稱清空）",
+    file: LT_SRC,
+    from: "    const { name, body } = templateFields(rawInput, row); // 沒帶的欄位沿用舊值（同步版同義）",
+    to: "    const { name, body } = templateFields(rawInput);",
+    expect: "只帶 body 時名稱要沿用舊值",
+  },
+  {
+    name: "拿掉聯絡人的上限判斷（可以建無限多個手動聯絡人）",
+    file: LT_SRC,
+    from: '    if (n >= CONTACT_PROFILE_LIMIT) {\n      throw httpError(`聯絡人最多 ${CONTACT_PROFILE_LIMIT} 則`, 409, "contact_limit");\n    }\n',
+    to: "",
+    expect: "手動聯絡人",
+  },
+  {
+    name: "帳號聯絡人改成可以修改（鎖定失效）",
+    file: LT_SRC,
+    from: '    if (Number(row.is_account) === 1) {\n      throw httpError("此帳號聯絡人會跟著個人資料更新，不能改這裡", 403, "account_contact_locked");\n    }\n',
+    to: "",
+    expect: "不可改、不可刪",
+  },
+  {
+    name: "帳號聯絡人改成可以刪除（鎖定失效）",
+    file: LT_SRC,
+    from: '    if (Number(row.is_account) === 1) throw httpError("此帳號聯絡人不能刪除", 403, "account_contact_locked");\n',
+    to: "",
+    expect: "不可改、不可刪",
+  },
+  {
+    name: "聯絡人輸入不驗證（電話太短、缺 label 都放行）",
+    file: LT_SRC,
+    from: "  const fields = sanitizeContactInput(rawInput); // 純驗證，兩邊共用同一份",
+    to: "  const fields = { label: rawInput.label, contact_name: rawInput.contact_name || '', phone: rawInput.phone || '', line_url: rawInput.line_url || '' };",
+    expect: "聯絡人驗證",
+  },
+  {
+    name: "帳號聯絡人欄位不再從 users 推導（contact_name 永遠是空的）",
+    file: LT_SYNC_SRC,
+    from: "    contact_name: name.slice(0, SELF_CONTACT_MAX),",
+    to: '    contact_name: "",',
+    expect: "帳號聯絡人：第一次列出時自動建立",
+  },
+  {
+    name: "先建唯一索引才清重複（有重複資料時 CREATE UNIQUE INDEX 直接失敗）",
+    file: LT_SRC,
+    from: "    await dedupeAccountContacts(pgDriver);\n    await pgDriver.exec(PG_CREATE_ACCOUNT_INDEX_SQL);",
+    to: "    await pgDriver.exec(PG_CREATE_ACCOUNT_INDEX_SQL);\n    await dedupeAccountContacts(pgDriver);",
+    expect: "先清重複、才建部分唯一索引",
+  },
+  {
+    name: "schema bootstrap 不快取（每次呼叫都重建一次）",
+    file: LT_SRC,
+    from: "  if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);\n",
+    to: "",
+    expect: "只做一次",
+  },
+  {
+    name: "寫入不再 fail-closed（PG 寫失敗就無聲寫進沒人讀的 SQLite）",
+    file: LT_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    return runSqlite();",
+    to: "    return runSqlite();",
+    expect: "strict：PG 寫入失敗時必須往上丟",
+  },
+];
+
 // Session 改成 PG 解析的變異集（v3/test/session-async.test.js）。
 //
 // 這一組每一條都對應一個「壞掉會怎樣」：快取失效（每請求 N 次查詢／退回本機）、
@@ -783,7 +881,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /session-async/.test(testFile) ? SESSION_MUTATIONS
+const MUTATIONS = /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
+  : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
