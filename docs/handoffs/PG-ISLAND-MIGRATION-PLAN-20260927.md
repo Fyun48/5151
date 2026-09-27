@@ -1300,6 +1300,14 @@ await saveAdminSiteBudget({ monthly_limit_twd: 1234 }, { driver: "postgres", exe
 // ⇒ PG 分支確實被走到（沒有回退 SQLite）。
 ```
 
+**根因（2026-09-27 實驗確認）**：尺規的 `callsIn` 是 `\bname\s*\(`，所以
+`budgetStore({...}).saveSiteBudget(partial)` 裡的 **`.saveSiteBudget(` 被當成「呼叫了匯入的
+`saveSiteBudget`」**。加上 lookbehind（名字前面不能接 `.`）可以修掉這一條，但**實測會讓 12 條
+路由失去 sqlite 條目**（例如 `POST /api/admin/same-house/reconcile` 一次掉 12 個函式，
+`collectCommuteSettings`、`getRentalNotifyPrefs`、`getSystemCrawl`… 都被吃掉）——
+那是**破壞了正確的歸屬**，不是修正。所以**該實驗已回退**，尺規維持原狀。
+要修的話得先分清楚「方法呼叫」與「同名匯入」在每個現場是哪一種，不能只加 lookbehind。
+
 **下一次要碰這裡時**：先確認是不是同一個偽陽性類型（**凡是經過 `budgetStore()` 的都先查**），
 要嘛把 `saveAdminSiteBudget` 這種「只委派給 driver-aware facade」的函式補進尺規規則
 （並依既有紀律留下新舊基準與單調性證據），要嘛就承認那條路由不需要移植。
