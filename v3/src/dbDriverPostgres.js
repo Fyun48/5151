@@ -119,9 +119,42 @@ export async function createPostgresDriver({
   const poolErrors = [];
   pool.on("error", (err) => {
     candidateContent.clear();
-    poolErrors.push({ message: err?.message || String(err), at: new Date().toISOString() });
+    const message = err?.message || String(err);
+    poolErrors.push({ message, at: new Date().toISOString() });
     if (poolErrors.length > 20) poolErrors.shift();
+    // 2026-09-27：以前這裡只把錯誤收進陣列、不寫日誌，所以「閒置連線被切斷」這件事
+    // 在正式站完全看不到。這是診斷逾時問題的關鍵線索之一。
+    console.warn(`[pg] idle pool connection error: ${message}`);
   });
+
+  // 2026-09-27 診斷用：App 經由 HAProxy（timeout client／server 各 30s）連 PG，
+  // 而「查詢跑太久」與「拿到已被切斷的閒置連線」都會表現成同一句
+  // `Connection terminated unexpectedly`。唯一能分辨兩者的方法，就是記下失敗前跑了多久：
+  //   跑滿 ~30 秒  → 查詢本身超過 HAProxy 的 timeout server
+  //   幾乎瞬間失敗 → 拿到的是已被切斷的閒置連線（timeout client）
+  const slowQueryMs = Number(env.PG_SLOW_QUERY_MS) > 0 ? Number(env.PG_SLOW_QUERY_MS) : 5000;
+
+  function sqlLabel(text) {
+    const raw = typeof text === "string" ? text : (text?.text || "");
+    return raw.replace(/\s+/g, " ").trim().slice(0, 220);
+  }
+
+  // 純觀察，不改變任何行為：成功且超過門檻就記一筆，失敗一定記（含耗時與 SQL）。
+  async function timed(label, text, run) {
+    const started = Date.now();
+    try {
+      const result = await run();
+      const ms = Date.now() - started;
+      if (slowQueryMs > 0 && ms >= slowQueryMs) {
+        console.warn(`[pg] slow ${label} ${ms}ms :: ${sqlLabel(text)}`);
+      }
+      return result;
+    } catch (error) {
+      const ms = Date.now() - started;
+      console.warn(`[pg] failed ${label} after ${ms}ms :: ${error?.message || error} :: ${sqlLabel(text)}`);
+      throw error;
+    }
+  }
 
   function assertCrawlerActive() {
     throwIfCrawlCancelled();
@@ -141,13 +174,13 @@ export async function createPostgresDriver({
   async function transactOn(client, fn, release) {
     try {
       assertCrawlerActive();
-      await client.query("BEGIN");
+      await timed("begin", "BEGIN", () => client.query("BEGIN"));
       const guarded = (currentCrawlExecution() || currentCrawlOwner()) ? new Proxy(client, {
         get(target, key) {
           if (key === "query") return async (sql, ...args) => {
             const rollback = isCrawlRollback(typeof sql === "string" ? sql : sql?.text);
             if (!rollback) assertCrawlerActive();
-            const result = await target.query(sql, ...args);
+            const result = await timed("stmt", sql, () => target.query(sql, ...args));
             if (!rollback) assertCrawlerActive();
             return result;
           };
@@ -157,10 +190,10 @@ export async function createPostgresDriver({
       }) : client;
       const result = await fn(guarded);
       assertCrawlerActive();
-      await client.query("COMMIT");
+      await timed("commit", "COMMIT", () => client.query("COMMIT"));
       return result;
     } catch (err) {
-      try { await client.query("ROLLBACK"); } catch { /* preserve the original error */ }
+      try { await timed("rollback", "ROLLBACK", () => client.query("ROLLBACK")); } catch { /* preserve the original error */ }
       throw err;
     } finally {
       if (release) client.release();
@@ -171,8 +204,10 @@ export async function createPostgresDriver({
     // Only crawler-scoped calls need the extra transaction. An in-flight
     // statement can finish after abort, but must roll back before COMMIT.
     // A COMMIT already submitted before abort cannot be retroactively undone.
-    if (currentCrawlExecution() || currentCrawlOwner()) return transact(client => client.query(text, params));
-    return pool.query(text, params);
+    if (currentCrawlExecution() || currentCrawlOwner()) {
+      return transact(client => timed("query", text, () => client.query(text, params)));
+    }
+    return timed("query", text, () => pool.query(text, params));
   }
 
   return {
@@ -203,7 +238,7 @@ export async function createPostgresDriver({
       return transact(fn);
     },
     async healthCheck() {
-      const res = await pool.query("SELECT 1 AS ok, pg_is_in_recovery() AS in_recovery");
+      const res = await timed("healthCheck", "SELECT 1 AS ok, pg_is_in_recovery() AS in_recovery", () => pool.query("SELECT 1 AS ok, pg_is_in_recovery() AS in_recovery"));
       return { ok: Number(res.rows[0]?.ok) === 1, inRecovery: res.rows[0]?.in_recovery === true };
     },
     // Convenience for callers holding SQLite-flavoured SQL: translate then run.

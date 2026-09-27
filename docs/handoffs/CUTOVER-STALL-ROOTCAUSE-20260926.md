@@ -70,6 +70,232 @@ timer = setInterval(() => { tick("schedule").catch(() => {}); }, 60 * 1000);
 任何日誌——這正是上一次能夠安靜地死 5 小時、而我在日誌裡只看到一行啟動失敗的原因。
 `startStartupWork()`（`server.js:4302`）也是一次性嘗試，失敗只 `console.warn`，不重試。
 
+## 零之二、隔離重現：**確認是「閒置連線被切斷」，不是「查詢跑太久」**（2026-09-27 00:55Z）
+
+依 Owner 指示**不動正式站**，改在隔離環境忠實重現。結論已確定。
+
+### 重現環境（與正式站對齊的部分）
+
+| 項目 | 正式站 | 隔離重現 |
+|---|---|---|
+| HAProxy | `haproxy:2.9-alpine`（2.9.15） | 同一個映像（Synology 上的 `haproxy:2.9-alpine`） |
+| 逾時 | `connect 5s`／`client 30s`／`server 30s`、`retries 2` | **逐字相同** |
+| 資料 | 生產 PG | 生產 `pg_dump -Fc`（61,165,190 bytes）還原，**126,994 筆 listings、38 筆 crawl_covers** |
+| 程式 | — | `fix/crawl-observability`（含 reconcile 修正＋新埋點） |
+| 路徑 | App → HAProxy → PG primary | App → `192.168.0.220:25435`（repro HAProxy）→ repro PG |
+
+外部站台在重現環境**又通又快**（591 回應 0.11 秒），所以後面的閒置不是卡在對外網路。
+
+### 證據一：沒有任何查詢跑超過 30 秒
+
+對 repro PG 連續取樣 `pg_stat_activity`（每 3 秒、共 55 次），`state='active'` 的
+`max(now() - query_start)` **從頭到尾都在 1 秒以下**（最大約 0.35 秒）。
+真有查詢跑滿 30 秒會被大量取樣抓到——沒有。
+
+### 證據二：出現遠超過 30 秒的「閒置連線」視窗
+
+```
+00:53:45–00:54:08   0 條連線
+00:54:11–00:54:47   恰好 1 條 idle、0 條 active 查詢（約 39 秒）
+00:54:50 之後       大量查詢開始
+```
+
+### 證據三（決定性）：HAProxy 終止代碼是 `cD`，不是 `sD`
+
+repro HAProxy 加上 `option tcplog` 後，逾時切斷連線會印出終止原因：
+
+```
+172.24.0.1:56578 [27/Sep/2026:00:57:49.418] pg_rw pg_primary/pg-repro 1/0/70748 6112551 cD 5/5/4/4/0 0/0
+```
+
+- **`cD` = client timeout**：**應用端（client）** 30 秒沒有送出任何資料，HAProxy 才切斷。
+- 該連線存活 70,748ms、已讀 6.1MB → 它先正常工作過，之後閒置超過 30 秒才被切斷。
+- 全部日誌中**沒有任何 `sD`**（server timeout）。
+- 對照：`172.24.0.2:40892 … 653 -- 1/1/0/0/0` 是正常關閉（health check）。
+
+### 因此
+
+| 假設 | 狀態 |
+|---|---|
+| (a) 單一查詢跑超過 `timeout server 30s` | **推翻**。取樣中沒有長查詢，且無 `sD`。 |
+| (b) 連線閒置超過 `timeout client 30s` 被切斷，之後才拿同一條連線使用 | **成立**。`cD` 直接證明。 |
+
+**機制**：App 先正常查詢（讀了 6.1MB），接著 **30 秒以上完全不碰 DB**，HAProxy 依
+`timeout client 30s` 關掉連線；App 之後再拿這條「自認為還活著」的連線使用時，
+node-postgres 就丟出 `Connection terminated unexpectedly`。
+`pool.on("error")` 是 node-postgres 對「閒置中被切斷」的訊號，而它原本**不寫日誌**。
+
+### 順帶量到的另一個問題（5.3 秒的查詢）
+
+新埋點第一次上場就抓到：
+
+```
+[pg] slow query 5281ms :: SELECT post_id, community_id, source_key, lat, lng, geo_source
+  FROM listings WHERE COALESCE(hidden,0)=0 AND COALESCE(offline,0)=0 AND COALESCE(source,'591')='591'
+  ORDER BY CASE WHEN EXISTS (SELECT 1 FROM user_l ... )
+```
+
+`COALESCE(hidden,0)`／`COALESCE(offline,0)`／`COALESCE(source,'591')` 都是對欄位做運算，
+btree 用不上——與 reconcile 候選查詢是**同一類**問題。它只有 5.3 秒、不是本次停擺的原因，
+但值得排進後續工作。
+
+### 尚未解出：那 30 秒 App 到底在做什麼
+
+已排除對外網路（591 回應 0.11 秒）、DB 查詢、tick 預算（`TICK_BUDGET_MS = 15 分鐘`）。
+
+## 零之三、**已定位：`runWatch` 的抓取階段，以及真正的最終根因**（2026-09-27 01:05Z）
+
+### 步驟一：30 秒全部在 `runWatch` 裡面
+
+加上 `CRAWL_TRACE=1` 的階段計時後，重現日誌：
+
+```
+[trace] expireStaleVerifyTokens 3ms
+[trace] pauseIdleMembers        2ms
+[trace] isSystemCoveringDue     4ms
+[trace] reserveCoveringPlan    32ms
+[trace] runWatch 失敗 30014ms :: Connection terminated unexpectedly
+排程抓取失敗（30064ms）： Connection terminated unexpectedly
+```
+
+**`runWatch` 之前的所有 DB 階段都在 32ms 以内**，30 秒完全落在 `runWatch`（真正的抓取）裡。
+
+### 步驟二：最終根因 —— advisory lock 連線橫跨整個抓取階段
+
+`v3/src/crawlOwnership.js:13`：
+
+```js
+export async function withPgCrawlOwner(driver, work, { signal } = {}) {
+  const client = await driver.pool.connect();          // 借出一條專用連線
+  ...
+  const result = await client.query('SELECT pg_try_advisory_lock($1,$2) AS acquired', CRAWL_LOCK_KEYS);
+  ...
+  const running = ownership.run(owner, async () => ... work() ...);   // 整個 crawl 都在裡面
+  ...
+  finally { ... client.release(broken); }             // 直到 crawl 結束才還
+}
+```
+
+為了在多節點之間持有 advisory lock，它**在整個 crawl 期間獨佔一條 PG 連線**。
+而 crawl 的前段是**純網路抓取、完全不碰 DB**——那條連線就閒置。
+
+關鍵：它是「**已借出**」而非「池中閒置」，所以 node-postgres 的 `idleTimeoutMillis`
+**不會**回收它。HAProxy 的 `timeout client 30s` 一到就把連線切斷；
+之後 crawl 第一次寫入走 `owner.transact()` → 同一條已死的連線 →
+`Connection terminated unexpectedly`。**每一輪都一樣，所以 crawler 永遠跑不完。**
+
+### 步驟三：為什麼舊版沒事 —— 這是 PR #497 新引進的
+
+| 檢查 | 結果 |
+|---|---|
+| `9c6b7b04`（回滾版）有 `v3/src/crawlOwnership.js` 嗎 | **不存在** |
+| `9c6b7b04` 的 `server.js` 出現 `withPgCrawlOwner` 次數 | **0** |
+| `crawlOwnership.js` 是何時加入的 | `4967fff` = **PR #497**（就是搞垮正式站的那個 release） |
+
+舊版從來沒有「橫跨抓取階段持有連線」這個行為，所以不會踩到 HAProxy 的閒置逾時。
+**這解釋了為什麼回滾就恢復、而新版每次都失敗。**
+
+### 完整因果鏈
+
+1. PR #497 為了多節點安全，加入 `withPgCrawlOwner()` 以持有 PG advisory lock。
+2. 它用 `driver.pool.connect()` 借出**一條專用連線並持有整個 crawl 期間**。
+3. crawl 前段的網路抓取**超過 30 秒不碰 DB**（實測 `runWatch` 30014ms；前段 39 秒視窗內
+   恰有 1 條 idle 連線、0 條 active 查詢）。
+4. 該連線是「已借出」，`idleTimeoutMillis` 管不到。
+5. HAProxy `timeout client 30s` 切斷它 —— 由終止代碼 **`cD`** 證明，且全場無 `sD`。
+6. crawl 之後第一次寫入用同一條已死連線 → `Connection terminated unexpectedly`。
+7. 每一輪重複 → crawler 永遠跑不完 → 09-26 停擺約 5 小時。
+
+### 這也解釋了先前的困惑
+
+- reconcile 的 127k 全表掃描**確實是真的問題、也已經修好**，但它**不是**停擺的原因
+  ——修好之後首次檢查照樣在 30 秒失敗（見第零節）。
+- 錯誤訊息之所以難解，是因為「閒置被切斷」與「查詢超時」共用同一句話；
+  `cD` / `sD` 才分得開。
+
+### 修法（尚未實作）
+
+| 選項 | 說明 | 評估 |
+|---|---|---|
+| **A. 對持有的連線加心跳** | 每 ~10 秒（< 30 秒）在 `owner.tail` 佇列上送一次 `SELECT 1`，讓 HAProxy 永遠不會因閒置切斷 | **建議**。最小、最針對已證實的機制，保留 advisory lock 設計 |
+| B. 不要橫跨網路階段持連線 | 改成每段 DB 工作各自取連線；但 advisory lock 是 session 級，需要改用 `pg_advisory_xact_lock` 或租約式鎖 | 改動較大，需重新設計鎖 |
+| C. 調高 HAProxy `timeout client` | 動共用基礎設施，且只是把視窗放大 | 不建議單獨使用 |
+| D. 失敗重試 | 遇到 `Connection terminated unexpectedly` 就重連重試 | 可與 A 並用當保險 |
+
+**無論選哪一個，都必須補一項「對真 PG 跑完整一個 crawl 週期」的整合測試**，
+就是這個缺口感讓本次停擺上線。
+
+## 零之四、心跳修正的驗證（2026-09-27 03:10Z）
+
+修正：`crawlOwnership.js` 每 `CRAWL_HEARTBEAT_MS`（預設 10000ms）在既有的 `owner.tail`
+序列化佇列上送一次 `SELECT 1`，因此不可能插進交易中間。
+
+### 證據一：持有連線的閒置時間每 ~10 秒被重置
+
+暫時為兩種「長時間持有」的連線標上 `application_name`，在重現環境取樣
+`pg_stat_activity`（每 3 秒）。`dbg-crawl-owner`（pid 5052）的閒置時間呈固定循環：
+
+```
+idle 00:00:01 → 00:00:04 → 00:00:07 → 回到 00:00:01
+idle 00:00:01 → 00:00:04 → 00:00:07 → 回到 00:00:01
+```
+
+**永遠碰不到 HAProxy 的 30 秒。** 且整場取樣中，除了這條被心跳保護的連線之外，
+**沒有任何連線閒置超過 15 秒**；`dbg-read-snapshot` 完全沒有出現。
+
+### 證據二：HAProxy 的 `cD` 歸零
+
+同一次執行（03:09–03:13）的 HAProxy 終止記錄，**6 筆全部是 `--`（正常關閉）**：
+
+```
+172.24.0.1:59498 [03:10:12.959] pg_rw pg_primary/pg-repro 1/0/51355 15690452 -- 5/5/4/4/0 0/0
+172.24.0.1:59270 [03:09:55.202] pg_rw pg_primary/pg-repro 1/0/104506 49710359 -- 5/5/4/4/0 0/0
+...（共 6 筆，皆為 --）
+```
+
+**`cD` 為零**；修正前的執行都有 `cD`。
+
+### 證據三：應用程式不再回報錯誤
+
+修正前：`[trace] runWatch 失敗 30014ms :: Connection terminated unexpectedly`（固定重現）。
+修正後：跑滿 170 秒沒有出現 `Connection terminated unexpectedly`。
+
+### 尚未完成（不得宣稱已修好）
+
+1. **尚未證明「完整一個 crawl 週期跑完」**——170 秒時 crawl 仍在進行中。
+   這是真正該有的驗收條件，也是目前唯一還缺的一項。
+2. `withPgReadSnapshot`（`pgReadSnapshot.js:9`，同樣為整個讀取快照持有連線）在這一次
+   執行中**完全沒出現**，所以本次證據**不足以**判定它需要同樣的處理。
+   它是否會在其他情境（例如大型搜尋讀取）閒置超過 30 秒，**尚未驗證**。
+3. 那兩筆先前觀察到的 `cD`（01:16、01:17）已不再出現，但我沒有逐一追溯到它們原本屬於
+   哪條連線。
+
+## 零之五、驗收：完整一個 crawl 週期跑完，且 40 分鐘全程零 `cD`（2026-09-27 03:13–03:53Z）
+
+在隔離重現環境連續執行 **40 分鐘**（`timeout 2400`，逾時前自行結束，exit=0）：
+
+| 項目 | 結果 |
+|---|---|
+| HAProxy `cD` 計數 | 執行前 3 → 執行後 **3**（**期間新增 0**） |
+| 完整 crawl 週期 | **完成**：`[trace] runWatch 565852ms` → `排程抓取完成（565974ms）` |
+| 之後的排程 | `排程抓取完成（0ms）` 連續多輪，crawler 正常循環 |
+| `[pg] failed` / `Connection terminated` | **完全沒有** |
+
+`runWatch` 565,852ms ≈ 9.4 分鐘；修正前是固定 30014ms 失敗。
+
+### 一個順帶量到、但與本次 bug 無關的觀察
+
+**第一次**（baseline）crawl 被應用程式**自己的** tick 預算中止：
+
+```
+排程抓取失敗（900003ms）： 這輪抓取超過 15 分鐘沒結束，已自動放棄
+[trace] runWatch 失敗 899999ms :: 這輪抓取超過 15 分鐘沒結束，已自動放棄
+```
+
+這是 `TICK_BUDGET_MS = 15 分鐘`（`crawlWatchdog.js:5`），**不是 HAProxy 的逾時**，
+兩者性質不同。首次 baseline crawl 較重而超過 15 分鐘，之後的週期正常完成
+（`runWatch 565852ms`，未觸及預算）。這是既有行為，非本次修正的範圍，但值得後續注意。
+
 ## 一、結論（先講）
 
 失敗版本（PR #497 + #501，image digest `sha256:913da82c…`）上線後，crawler 的
