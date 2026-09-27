@@ -296,6 +296,58 @@ idle 00:00:01 → 00:00:04 → 00:00:07 → 回到 00:00:01
 兩者性質不同。首次 baseline crawl 較重而超過 15 分鐘，之後的週期正常完成
 （`runWatch 565852ms`，未觸及預算）。這是既有行為，非本次修正的範圍，但值得後續注意。
 
+## 零之六、第 4 項查證：`pgReadSnapshot` 不需要心跳，但有一個崩潰級的防護缺口（2026-09-27 04:40Z）
+
+Owner 要我確認「`withPgReadSnapshot` 是否需要跟 crawl owner 一樣的心跳」。答案分兩部分。
+
+### 一、不需要心跳：實測餘裕約 700 倍
+
+直接用該函式對隔離 PG（走真正的 repro HAProxy，`timeout client/server` 各 30 秒）量測：
+
+| 模式 | 結果 |
+|---|---|
+| 真實情境（9 次查詢、8 批各 2000 列） | `ok=1 total_ms=330 max_gap_ms=43` |
+| 再測一次（暖快取差異） | `ok=1 total_ms=942 max_gap_ms=243` |
+
+HAProxy 的逾時是**閒置**逾時，而快照內兩次 DB 呼叫的最大間隔只有 **43–243ms**，
+距離 30 秒有兩個數量級以上的餘裕。結構上的原因：讀取快照只持有**單一請求**的時間，
+期間 DECLARE→FETCH 反覆進行；而 crawl owner 是**設計上**就橫跨一段完全不碰 DB 的多分鐘階段。
+兩者形狀不同，所以不需要同樣的心跳。
+
+### 二、但發現一個崩潰級的缺口（已修）
+
+刻意在快照內閒置 35 秒（超過 HAProxy 的 30 秒）時，錯誤**不是**以可捕捉的 rejection 出現：
+
+```
+throw er; // Unhandled 'error' event
+    at Client._handleErrorEvent (node_modules/pg/lib/client.js:422:10)
+exit code 1
+```
+
+**行程直接死亡。** 原因：pg 的 `Client` 是 EventEmitter，沒有監聽者的 `'error'` 事件會直接拋出。
+`crawlOwnership.js` 早就有 `client.on('error', …)` 的同款防護，`pgReadSnapshot.js` 漏了。
+
+修法：在 `withPgReadSnapshot` 掛上 `error` 監聽（`finally` 移除），並讓 `client.release()`
+帶上該錯誤，使這條已死的連線被**銷毀**而不是還給連線池（否則下一個使用者會拿到死連線）。
+
+修正前後對照（同一個 35 秒閒置情境）：
+
+| | exit code | 錯誤形式 |
+|---|---|---|
+| 修正前 | **1（崩潰）** | `Unhandled 'error' event` |
+| 修正後 | **0** | `Client has encountered a connection error and is not queryable`（可正常捕捉） |
+
+迴歸鎖：`v3/test/pg-read-snapshot-error.test.js`（6 項，毋需真 PG），已用變異測試確認**非空**——
+移除修正後第 1、5 項失敗，其中第 5 項是子行程驗證「非同步 error 不得讓行程死亡」。
+
+### 三、我必須記錄的一個錯誤（測試的空洞）
+
+這個測試的**第一版是空的**：假 client 在 `run` 回呼裡「同步」發出 `'error'`，
+那個 throw 會沿著 promise 鏈被 `.catch` 接住；把修正移除後 5 項**全部照樣通過**。
+真實的崩潰是**非同步**從 socket 發出、沒有任何 promise 包住它。
+我是在做變異測試時才發現的，改用子行程驗證後才真的有鑑別力。
+教訓：**沒有做變異測試的迴歸測試，不能宣稱它守得住。**
+
 ## 一、結論（先講）
 
 失敗版本（PR #497 + #501，image digest `sha256:913da82c…`）上線後，crawler 的
