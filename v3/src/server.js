@@ -300,6 +300,7 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+import { importMetaAsync } from "./listingImportAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -3257,11 +3258,11 @@ app.get("/w/:id", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/wish.html"));
 });
 
-app.get("/api/listing-imports/meta", (req, res) => {
+app.get("/api/listing-imports/meta", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(listingImportMeta({ plan: session.plan || "free" }));
+    res.json(await importMetaAsync({ plan: session.plan || "free" }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.get("/api/listing-imports", (req, res) => {

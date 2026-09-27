@@ -427,6 +427,32 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 匯入功能說明 PG 分支的變異集（v3/test/listing-import-async.test.js）。
+const LI_SRC = "v3/src/listingImportAsync.js";
+const LISTINGIMPORT_MUTATIONS = [
+  {
+    // ⚠️ 第一版寫成「加一句 `void doc;`」——那是**無效變異**（完全沒改變行為），
+    // 殺不死是必然的、不是測試的錯。改成真的會改行為的：把草稿也當成生效版本。
+    name: "草稿也被當成生效版本",
+    file: LI_SRC,
+    from: '  const doc = await getEffectiveDocumentAsync(IMPORT_DECLARATION_TYPE, { now, ...options });',
+    to: '  const doc = (await getEffectiveDocumentAsync(IMPORT_DECLARATION_TYPE, { now, ...options }))\n    || (await getDocumentByIdAsync((await listDocumentsAsync({ type: IMPORT_DECLARATION_TYPE, includeDrafts: true }, options))[0]?.id, options));',
+    expect: "草稿不算數",
+  },
+  {
+    name: "plan 沒有傳進組裝（sponsor 與 free 的 quota 會一樣）",
+    file: LI_SRC,
+    from: "  return importMetaShape(doc, { plan });",
+    to: '  return importMetaShape(doc, { plan: "free" });',
+    expect: "有已發布的聲明",
+  },
+  // 刻意**沒有**「拿掉 `if (!isPg(options)) return listingImportMeta(...)`」這一條：
+  // 實測是**等價變異**——`getEffectiveDocumentAsync()` 自己就是 driver-aware 的
+  // （內部有同樣的 `if (!isPg(options))` 回同步版），所以拿掉這一層的 early return，
+  // SQLite 站仍然拿到磁碟那一份。那個 early return 是短路不是正確性守衛。
+  // 留一條永遠 SURVIVED 的變異只會讓報告失去意義（本檔案前面已有同樣的前例）。
+];
+
 // 遠端客服開關 PG 分支的變異集（v3/test/site-command-async.test.js）。
 const SC_SRC = "v3/src/siteCommandAsync.js";
 const SITECOMMAND_MUTATIONS = [
@@ -1492,7 +1518,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
+const MUTATIONS = /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS
+  : /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
   : /web-push-async/.test(testFile) ? PUSH_MUTATIONS
   : /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
   : /comms-async/.test(testFile) ? COMMS_MUTATIONS
