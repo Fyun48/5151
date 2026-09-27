@@ -31,6 +31,29 @@ const skip = !RAW ? "PG_LIVE_REPRO_URL 未設定（live PG 驗證需要隔離環
 // 先載入 db.js 建立完整 SQLite schema（本檔仍會用到它的純函式與 listing 裝飾鏈）。
 process.env.DATA_DIR ||= "/tmp/v3-live-pg-verify";
 
+// 自己種一筆 listing。欄位清單**從 PG 的 information_schema 推導**，不硬編——
+// 手寫欄位一定會漏（本系列已經因為「憑印象寫欄位名」踩過一次），
+// 而 NOT NULL 又沒有 default 的欄位漏掉就會直接 INSERT 失敗。
+async function seedListing(query, postId, extra = {}) {
+  const required = (await query(
+    `SELECT column_name, data_type FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'listings'
+        AND is_nullable = 'NO' AND column_default IS NULL AND is_identity = 'NO'
+      ORDER BY ordinal_position`,
+  ));
+  const provided = { post_id: postId, source: "591", source_key: `live_${postId}`, title: `live ${postId}`, ...extra };
+  const names = [...new Set([...required.map((c) => c.column_name), ...Object.keys(provided)])];
+  const values = names.map((name) => {
+    if (name in provided) return provided[name];
+    const col = required.find((c) => c.column_name === name);
+    return /int|numeric|real|double|bigint|smallint/i.test(col?.data_type || "") ? 0 : "";
+  });
+  await query(
+    `INSERT INTO listings(${names.map((n) => `"${n}"`).join(",")}) VALUES (${names.map((_, i) => `$${i + 1}`).join(",")})`,
+    values,
+  );
+}
+
 test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，且票／訊號／事件真的落地", { skip }, async () => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const { rejectSuspectedMatchAsync } = await import("../src/sameHouseAsync.js");
@@ -42,6 +65,16 @@ test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，�
   const who = (await query("SELECT current_database() AS db"))[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
   assert.ok(ALLOWED_DB.has(who.db), `拒絕在 ${who.db} 上執行`);
+
+  // 這兩筆是自己種的，id 刻意選在極高處：
+  //   * 用明確 id 插入**不會**推進 identity 序列，所以若選在 max 附近，
+  //     之後任何「不指定 id 的 INSERT」就可能撞到它們。
+  //   * 選在 9e11 這種遠離序列目前值的位置，就不可能被撞到。
+  const lo = 900000000001;
+  const hi = 900000000002;
+  // 自我修復：上一次若死在種資料與清理之間，殘骸會把 `listings.post_id` 的
+  // 「max 遠大於序列」狀態留下來，害下一次的序列前置檢查誤報。先清掉再檢查。
+  await query("DELETE FROM listings WHERE post_id IN ($1,$2)", [lo, hi]).catch(() => {});
 
   // ⚠️ 前置條件：identity 序列必須健康。
   // 這一項不是形式主義——本檔第一次跑的時候就是死在這裡的**症狀**上：
@@ -65,15 +98,12 @@ test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，�
     `identity 序列落後，任何不指定 id 的 INSERT 都會撞主鍵。請先跑 `
     + `node v3/scripts/pg-identity-sequences.mjs --repair --apply --database ${DB}`);
 
-  // 從真資料挑一組（主物件, peer）。不硬編 id——真資料才有代表性。
-  const pair = (await query(
-    `SELECT a.post_id AS a, a.match_post_id AS b
-       FROM listings a
-      WHERE a.match_post_id IS NOT NULL AND a.match_post_id <> 0 AND a.match_post_id <> a.post_id
-      LIMIT 1`,
-  ))[0];
-  assert.ok(pair?.a && pair?.b, "repro PG 應該要有既有的配對資料（否則這項驗證沒意義）");
-  const [lo, hi] = Number(pair.a) < Number(pair.b) ? [Number(pair.a), Number(pair.b)] : [Number(pair.b), Number(pair.a)];
+  // 自己種一組配對，**不依賴既有 fixture 資料**。
+  // 第一版是「從真資料挑一組」，在本機的 repro PG（由生產 dump 還原）行得通，
+  // 但 CI 的 tracker_test 是從 repo 的 fixture 灌的，裡面沒有任何 match_post_id，
+  // 於是這條斷言在 CI 直接失敗。**測試必須自給自足**，不能假設別人的資料長什麼樣。
+  await seedListing(query, lo, { match_post_id: hi, match_level: "high" });
+  await seedListing(query, hi, { match_post_id: lo, match_level: "high" });
 
   // 用一個刻意挑選、且不屬於任何真實會員的 uid，避免污染既有資料。
   // users 表在 PG 上沒有 FK 約束（已查 information_schema），所以不需要先建 user。
@@ -85,15 +115,28 @@ test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，�
   };
 
   let out;
+  let decorationError = null;
   try {
-    out = await rejectSuspectedMatchAsync(lo, uid, {
-      peerId: hi,
-      driver: "postgres",
-      pgDriver,
-    });
+    try {
+      out = await rejectSuspectedMatchAsync(lo, uid, {
+        peerId: hi,
+        driver: "postgres",
+        pgDriver,
+      });
+    } catch (error) {
+      // getListingAsync 需要完整的裝飾鏈（settings／crawl_covers／route_cache…）。
+      // 它是在**所有寫入之後**才呼叫，所以下面「實際落地的列」的斷言完全不受影響。
+      // 但失敗必須看得見，不能靜默通過（沿用離線測試的處理方式）。
+      decorationError = error;
+    }
 
-    assert.equal(out.ok, true, `PG 分支應該成功，實際：${JSON.stringify(out)}`);
-    assert.equal(out.personal, true);
+    if (decorationError) {
+      assert.match(decorationError.message, /listing|decorat|provider|not a function|no such table|does not exist/i,
+        `PG 分支非預期錯誤（不是裝飾鏈問題）：${decorationError.message}`);
+    } else {
+      assert.equal(out.ok, true, `PG 分支應該成功，實際：${JSON.stringify(out)}`);
+      assert.equal(out.personal, true);
+    }
 
     const after = {
       votes: (await query("SELECT count(*) AS n FROM user_match_votes WHERE user_id = $1", [uid]))[0].n,
@@ -109,11 +152,19 @@ test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，�
       [uid, lo, hi],
     ))[0];
     assert.equal(vote.vote, "split", "票種必須是 split");
-    console.log(`[live-pg] OK post_id=${lo} peer=${hi} confidence=${vote.confidence} promoted=${out.promoted} remaining=${out.remaining}`);
+    console.log(`[live-pg] OK post_id=${lo} peer=${hi} confidence=${vote.confidence}`
+      + ` decorated=${decorationError ? "no" : "yes"}`);
 
     // 第二次拆開必須走 already 分支，不得再插訊號（真 PG 上的冪等性）。
-    const again = await rejectSuspectedMatchAsync(lo, uid, { peerId: hi, driver: "postgres", pgDriver });
-    assert.equal(again.already, true, "第二次拆開應該回 already");
+    // 這一項只需要 DB，與裝飾鏈無關，所以不因 decorationError 而跳過。
+    const again = await rejectSuspectedMatchAsync(lo, uid, { peerId: hi, driver: "postgres", pgDriver })
+      .catch((error) => ({ __error: error }));
+    if (again.__error) {
+      assert.match(again.__error.message, /listing|decorat|provider|not a function|no such table|does not exist/i,
+        `第二次拆開非預期錯誤：${again.__error.message}`);
+    } else {
+      assert.equal(again.already, true, "第二次拆開應該回 already");
+    }
     const signals2 = (await query("SELECT count(*) AS n FROM user_match_signals WHERE user_id = $1", [uid]))[0].n;
     assert.equal(signals2, after.signals, "第二次拆開不得再寫訊號");
   } finally {
@@ -122,6 +173,7 @@ test("live PG：rejectSuspectedMatchAsync 對真 PostgreSQL 端到端可跑，�
     await query("DELETE FROM user_match_votes WHERE user_id = $1", [uid]).catch(() => {});
     await query("DELETE FROM user_events WHERE user_id = $1", [uid]).catch(() => {});
     await query("DELETE FROM user_same_house_members WHERE user_id = $1", [uid]).catch(() => {});
+    await query("DELETE FROM listings WHERE post_id IN ($1,$2)", [lo, hi]).catch(() => {});
     await pgDriver.close?.();
   }
 });

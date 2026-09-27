@@ -184,10 +184,14 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
 
 ## 五、未決事項（**已由 Owner 於 2026-09-27 決定**）
 
-1. **`auditReq` 的稽核遺失政策** → **Owner 決定：維持 fire-and-forget，暫不改。**
+1. **`auditReq` 的稽核遺失政策** → **Owner 決定：維持 fire-and-forget 的契約，但讓失敗看得見。**
    實測是 **19 處**呼叫點（不是先前寫的 20），其中 16 處在同步 handler 內、3 處已是 async。
-   Owner 的取捨：不動 16 個同步 handler（含 delete／publish 等高風險路徑）以換零回歸風險；
-   稽核本來就不是交易資料。**若之後要改成不可遺失，就是把那 16 處改 async + await。**
+   Owner 的取捨：不動 16 個同步 handler（含 delete／publish 等高風險路徑）以換零回歸風險。
+   **但「吞掉錯誤」本身被推翻了**——因為它讓一個全損故障隱形了 12 天（見上方紅框）。
+   已實作：`appendAdminAuditAsync()` 記數 + 寫 log（第 1 次、之後每 100 次），
+   `/api/health` 新增 `audit_failures`（`ok` 不變）。
+   測試 `v3/test/admin-audit-visibility.test.js`（4 項），變異測試 6/6 KILLED。
+   **若之後要改成稽核不可遺失，就是把那 16 處改 async + await。**
 2. **步驟 4 的 10 筆分歧資料** → **Owner 決定：分表裁決。**
    - `user_listing_flags`（2 筆）→ **以節點 SQLite 為準**（補進 PG）。理由：那是使用者直接意圖
      （例如 user 2 在 05:17 隱藏 `22075980`），不補會讓隱藏失效、通知照發。
