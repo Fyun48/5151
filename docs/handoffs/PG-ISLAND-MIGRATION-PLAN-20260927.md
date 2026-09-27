@@ -11,11 +11,32 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 條數 |
 |---|---:|
 | 無直接DB | 117 |
-| **SQLite（缺口）** | **83** |
-| MIXED | 53 |
-| PG | 35 |
+| **SQLite（缺口）** | **81** |
+| MIXED | 39 |
+| **PG** | **51** |
 
 起點是 SQLite 95 / PG 22（2026-09-27 盤點時）。
+
+### 2026-09-27 修正：分析器加上 driver-aware 規則
+
+先前的 tally **過度回報缺口**：driver-aware 的 helper（例如 `auditReq` 保留同步
+`appendAdminAudit` 給非 PG 分支用）會讓已轉換的路由一直顯示 MIXED。這個限制我記錄過三次。
+
+現在規則改為：**函式本文含 `resolveDbDriver` 者，其 SQLite 分支不計入缺口**（因為
+`DB_DRIVER=postgres` 時不會走那條）。效果：**MIXED 55 → 39、PG 35 → 51，而 SQLite 維持 81 不變**
+——只重新分類了確實有 PG 路徑的路由。
+
+抽驗確認（修正後）：
+
+| 路由 | 判定 | 為什麼正確 |
+|---|---|---|
+| `GET/PUT /api/admin/crawl-sources` | **PG** | 先前只因 `auditReq` 而顯示 MIXED |
+| `POST /api/admin/same-house/confirm` | **PG** | 管理員分支已於 2026-09-27 移植 |
+| `GET/PUT /api/admin/legal-copy` | SQLite | 真的還沒轉換 |
+| `POST /api/listings/:id/reject-match` | SQLite | 真的還沒轉換 |
+
+> ⚠️ **取捨**：這是用保守度換可用度。若某個 driver-aware 函式在**兩個分支都**呼叫了只走
+> SQLite 的 helper，這裡會低估。判定仍標「機械判定」，據此動手前須人工確認。
 
 > ⚠️ **這個 tally 不是精確的進度表。** 分析器是**靜態**追蹤引用，判定「函式**可達**」而不是
 > 「在 `DB_DRIVER=postgres` 下會執行」。所以 driver-aware 的 helper（例如 `auditReq` 保留
