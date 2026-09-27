@@ -33,7 +33,7 @@ const UPSERT_SQL = `INSERT INTO user_same_house_members (user_id, group_key, pos
      system_agrees = LEAST(user_same_house_members.system_agrees, excluded.system_agrees),
      created_at = user_same_house_members.created_at`;
 
-async function pgExec(options = {}) {
+export async function pgExec(options = {}) {
   if (options.exec) return options.exec;
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
@@ -114,3 +114,17 @@ export async function mergePersonalSameHouse(userId, listings, { now = new Date(
 //   - 非 postgres → 現有同步路徑（行為不變）
 //   - postgres + 會員 → `mergePersonalSameHouse()`（本檔，已測）
 //   - postgres + 管理員 → 仍走 `confirmSameHouseAsAdmin()`（目前是 SQLite，尚未移植）
+
+// 同步版用 `db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id)` 取原始資料列
+// （不是裝飾後的 listing），再交給 judgeMergeSet。這裡照抄同一個查詢與順序。
+const RAW_LISTING_SQL = "SELECT * FROM listings WHERE post_id = ?";
+
+export async function loadRawListingsAsync(ids, options = {}) {
+  const exec = await pgExec(options);
+  const out = [];
+  for (const id of ids || []) {
+    const rows = await exec(RAW_LISTING_SQL, [Number(id) || 0]);
+    if (rows[0]) out.push(rows[0]);
+  }
+  return out;
+}
