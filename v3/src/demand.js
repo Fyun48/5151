@@ -513,7 +513,7 @@ function classifyWishPublishState(row) {
   throw httpError("只有草稿可以刊登", 400, "wish_not_draft");
 }
 
-function httpError(message, status = 400, code = "") {
+export function httpError(message, status = 400, code = "") {
   const err = new Error(message);
   err.status = status;
   if (code) err.code = code;

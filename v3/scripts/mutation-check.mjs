@@ -427,6 +427,39 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 許願房範例 PG 分支的變異集（v3/test/wish-example-async.test.js）。
+const WEX_SRC = "v3/src/wishExampleAsync.js";
+const WISHEXAMPLE_MUTATIONS = [
+  {
+    name: "payload 壞掉時直接丟錯（端點會 500）",
+    file: WEX_SRC,
+    from: '  try {\n    return { ...JSON.parse(row.payload || "{}"), updated_at: row.updated_at };\n  } catch {\n    return { updated_at: row.updated_at };\n  }',
+    to: '  return { ...JSON.parse(row.payload || "{}"), updated_at: row.updated_at };',
+    expect: "payload 壞掉",
+  },
+  {
+    name: "刪除不帶 user_id（會刪到別人的範例）",
+    file: WEX_SRC,
+    from: 'export const WISH_EXAMPLE_DELETE_SQL = "DELETE FROM wish_room_example WHERE user_id = ?";',
+    to: 'export const WISH_EXAMPLE_DELETE_SQL = "DELETE FROM wish_room_example WHERE ? IS NOT NULL";',
+    expect: "只刪自己那一列",
+  },
+  {
+    name: "讀取不查 PG（永遠回 null）",
+    file: WEX_SRC,
+    from: "    const rows = await exec(WISH_EXAMPLE_SELECT_SQL, [uid]);\n    return exampleFromRow(rows?.[0] || null);",
+    to: "    return null;",
+    expect: "有範例",
+  },
+  {
+    name: "未登入也放行（應該 401）",
+    file: WEX_SRC,
+    from: '  if (!uid) throw httpError("請先登入", 401);\n',
+    to: "",
+    expect: "未登入丟 401",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -1577,7 +1610,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
+const MUTATIONS = /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
+  : /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
   : /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS
   : /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS
   : /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS

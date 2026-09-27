@@ -303,6 +303,7 @@ import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSett
 import { importMetaAsync } from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
+import { deleteWishExampleAsync, getWishExampleAsync } from "./wishExampleAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -1058,14 +1059,14 @@ app.get("/api/wish-rooms/mine", (req, res) => {
   }
 });
 
-app.get("/api/wish-rooms/example", (req, res) => {
+app.get("/api/wish-rooms/example", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json({ example: getWishExampleFor(session.userId) });
+    res.json({ example: await getWishExampleAsync(session.userId) });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1084,14 +1085,14 @@ app.put("/api/wish-rooms/example", (req, res) => {
   }
 });
 
-app.delete("/api/wish-rooms/example", (req, res) => {
+app.delete("/api/wish-rooms/example", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(deleteWishExampleFor(session.userId));
+    res.json(await deleteWishExampleAsync(session.userId));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
