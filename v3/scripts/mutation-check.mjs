@@ -427,6 +427,32 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
+const CRMMOD_SRC = "v3/src/crmAsync.js";
+const CRMMOD_MUTATIONS = [
+  {
+    name: '落地改成 JSON 字串（isCrmEnabled 永遠 true ⇒ 開關失效）',
+    file: CRMMOD_SRC,
+    from: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "1" : "0"]);',
+    to: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, JSON.stringify(enabled ? "1" : "0")]);',
+    expect: "落地必須是原始字串",
+  },
+  {
+    name: "開關值反了（true 寫 0）",
+    file: CRMMOD_SRC,
+    from: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "1" : "0"]);',
+    to: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "0" : "1"]);',
+    expect: "關閉",
+  },
+  {
+    name: "寫入後不回讀（回傳舊狀態）",
+    file: CRMMOD_SRC,
+    from: "    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? \"1\" : \"0\"]);\n    return crmModuleAsync(options);",
+    to: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "1" : "0"]);\n    return crmModuleSync(sqliteFor(options));',
+    expect: "關閉",
+  },
+];
+
 // reconciliation 進度狀態 PG 分支的變異集（v3/test/same-house-backfill-status.test.js）。
 const SHB_SRC = "v3/src/sameHouseAsync.js";
 const BACKFILL_MUTATIONS = [
@@ -1551,7 +1577,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS
+const MUTATIONS = /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
+  : /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS
   : /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS
   : /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
   : /web-push-async/.test(testFile) ? PUSH_MUTATIONS

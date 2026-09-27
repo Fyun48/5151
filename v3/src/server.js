@@ -302,6 +302,7 @@ import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPus
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import { importMetaAsync } from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
+import { setCrmEnabledAsync } from "./crmAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -2261,7 +2262,7 @@ app.get("/api/admin/crm", requireAdminApi, async (req, res) => {
 
 app.put("/api/admin/crm/module", requireAdminApi, async (req, res) => {
   const enabled = !(req.body?.enabled === false || req.body?.enabled === 0 || req.body?.enabled === "0");
-  res.json({ module: await setCrmModuleEnabled(enabled), sync: await getCrmDeliveryControl() });
+  res.json({ module: await setCrmEnabledAsync(enabled), sync: await getCrmDeliveryControl() });
 });
 
 app.put("/api/admin/crm/sync", requireAdminApi, async (req, res) => {
