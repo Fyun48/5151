@@ -197,7 +197,7 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
 
 | 優先 | 標的 | 卡住的路由 | 為什麼 |
 |---|---|---:|---|
-| **1** | **`readSession()` → `findUserByEmail()`** | **137／236** | 每一條已登入路由都在讀節點本機 SQLite 解析 session。**這是活的正确性問題**（role／plan／deleted_at 兩台可能不同）。修一條解鎖 **58%** 的缺口 |
+| **1** | **`readSession()` → `findUserByEmail()`** | **237／288（82%）** | 每一條已登入路由都在讀節點本機 SQLite 解析 session。**這是活的正确性問題**（role／plan／deleted_at 兩台可能不同）。**這是步驟 3 的前置條件，不是另一個待辦**——不修它，繼續移植單條路由的效益趨近於零 |
 | 2 | `getListing` → `getListingAsync`（已存在） | 8 | 便宜，但順位在 session 之後 |
 | 3 | `getSettings` → `getSettingsAsync`（已存在） | 8 | 同上 |
 | 4 | `getCommsConfig` → `getCommsConfigAsync`（已存在） | 10 | **注意：這不是 2 個函式就能解決的**——背後的 `comms.js` 是 812 行、約 20 個吃 handle 的函式（第 7.2 節的實例） |
@@ -229,8 +229,10 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
    - `listing_groups`（1 筆）／`listing_group_members`（5+2 筆）→ **以 PG 為準**（不補）。
      理由：那是機器推導的聚合，PG 的 reconcile 在轉換後已重算；硬補會與 `lg_b9cf4fc4…` 的歸組衝突。
    - 順序不變：**先轉換（步驟 3）→ 再對帳（步驟 4）**，因為節點 SQLite 仍在被寫入。
-3. **【新，需 Owner 決定】session 解析要不要改成不讀節點 SQLite。**
-   新尺顯示 `readSession() → findUserByEmail()` 卡住 **137／236** 條缺口路由（第 7.4 節）。
+3. **【新，需 Owner 決定、且是步驟 3 的前置條件】session 解析要不要改成不讀節點 SQLite。**
+   實測 **237／288 條（82%）** 的路由每一次請求都會經由 `readSession() → findUserByEmail()`
+   讀**節點本機 SQLite** 來解析 session（第 7.4 節）。
+   **不修這一項，繼續移植單條路由對指標與實際正確性的貢獻都趨近於零。**
    三條路，取捨不同：
 
    | 選項 | 做法 | 好處 | 代價 |
@@ -320,6 +322,40 @@ SQLite 各有一份，`role`／`plan`／`deleted_at` 都從本機檔案讀。公
 輪流 ⇒ 同一個人在兩台可能拿到不同的 role／plan，**停權或刪帳號也可能只在一台生效**。
 
 **修法有三條路，各有取捨，需要 Owner 決定**（見第五節第 3 點）。
+
+#### 7.4.1 實際影響是 **237／288 條（82%）**，分析器只數到 137
+
+分析器數到 137 條，但那是**低估**——它還有一個殘留盲點：
+`requireAdminApi`／`requireMember`／`requireAuth` 常以**中介層參考**傳入，
+不帶括號，所以 `callsIn()`（要求 `NAME\s*\(`）抓不到：
+
+```js
+app.get("/api/admin/crm", requireAdminApi, (req, res) => { ... });   // ← requireAdminApi 沒有括號
+```
+
+而 `requireAdminApi` → `actorIsAdmin` → `readSession` → `findUserByEmail` → **節點本機 SQLite**。
+
+**直接掃 server.js 獨立量測**（不經分析器）：
+
+| 項目 | 條數 |
+|---|---:|
+| 路由總數 | 288 |
+| 以 middleware 參考傳入 `require*` | **122** |
+| handler 內直接呼叫 `readSession`／`requireMember` | **121** |
+| **至少讀一次節點 SQLite 解析 session 的** | **237（82%）** |
+
+**這件事改變了整個遷移的策略結論**：
+
+> **在 session 解析修好之前，繼續一條一條移植路由，對指標與實際正確性的貢獻都趨近於零。**
+> 一個已登入路由就算把每一段 SQL 都搬到 PG，它**每一次請求**仍然會讀節點本機檔案來認人；
+> 兩台節點的 `role`／`plan`／`deleted_at` 不同時，行為就會不同。
+
+所以第五節第 3 點那三條路**不是「另一個待辦」，而是整個步驟 3 的前置條件**。
+
+> ⚠️ **殘留限制（尚未修）**：分析器不會追「以參考傳遞的中介層」。
+> 我**沒有**再動分析器——本輪已經換過一次基準，而修這一項不會改變上面的策略結論
+> （決定權在 Owner）。要修的話是在路由迴圈裡多掃 handler 之前的中介層識別字並解析它。
+> **在那之前，請以「237 條」為準，不要用分析器的 137。**
 
 > 次要但同樣是「一整類」的：`getUserById`（27 條）、`tableColumns`（23）、
 > `sqlExcludeFixtureRows`（23）、`isFixtureMaturityAuthorized`（21）、`ensureUser`（20）。
