@@ -13,12 +13,15 @@ import { defaultHousingData, normalizeHousingData, publicHousingData } from "./h
 import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
 import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources } from "./crawlSources.js";
+import { emptyCommsConfig, normalizeCommsConfig } from "./comms.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
 import {
+  getCommsConfig as getCommsConfigSync,
   getCrawlSources as getCrawlSourcesSync,
   getHelpQa as getHelpQaSync,
   getHousingData as getHousingDataSync,
   getSpirit as getSpiritSync,
+  saveCommsConfig as saveCommsConfigSync,
   saveCrawlSources as saveCrawlSourcesSync,
   saveHelpQa as saveHelpQaSync,
   saveHousingData as saveHousingDataSync,
@@ -123,4 +126,27 @@ export async function saveCrawlSourcesAsync(partial = {}, options = {}) {
   });
   await setSiteSettingAsync(CRAWL_SOURCES_KEY, normalizeCrawlSources(merged), options);
   return getCrawlSourcesAsync(options);
+}
+
+// ---- 通訊設定（commsConfig）----
+//
+// 這個是乾淨的單鍵形狀：讀 = normalize(key || empty)，寫 = normalize({ ...現值, ...變更 })。
+// 沒有記憶體快取、沒有額外表、不寫 auth.env——所以可以直接照抄。
+// （其餘 settings 類多半不是這樣：有的要同步記憶體狀態，有的寫 auth.env，有的跑資料搬遷。）
+
+const COMMS_KEY = "commsConfig";
+
+export async function getCommsConfigAsync(options = {}) {
+  if (!isPg(options)) return getCommsConfigSync();
+  const stored = await getSiteSettingAsync(COMMS_KEY, options);
+  return normalizeCommsConfig(stored || emptyCommsConfig());
+}
+
+export async function saveCommsConfigAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveCommsConfigSync(partial);
+  const current = await getCommsConfigAsync(options);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const next = normalizeCommsConfig({ ...current, ...src });
+  await setSiteSettingAsync(COMMS_KEY, next, options);
+  return next;
 }

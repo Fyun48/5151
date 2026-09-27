@@ -313,8 +313,8 @@ import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
 import {
-  getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
-  saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
+  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
 import { queueAccountMail } from "./systemMail.js";
@@ -1595,13 +1595,13 @@ app.patch("/api/admin/campaigns/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/comms-config", requireAdminApi, (_req, res) => {
-  res.json({ config: getCommsConfig(), meta: commsMeta() });
+app.get("/api/admin/comms-config", requireAdminApi, async (_req, res) => {
+  res.json({ config: await getCommsConfigAsync(), meta: commsMeta() });
 });
 
-app.put("/api/admin/comms-config", requireAdminApi, (req, res) => {
+app.put("/api/admin/comms-config", requireAdminApi, async (req, res) => {
   try {
-    res.json({ config: saveCommsConfig(req.body || {}), meta: commsMeta() });
+    res.json({ config: await saveCommsConfigAsync(req.body || {}), meta: commsMeta() });
   } catch (error) {
     sendCommsError(res, error);
   }

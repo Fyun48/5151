@@ -23,8 +23,8 @@ after(() => { try { rmSync(dataDir, { recursive: true, force: true }); } catch {
 
 const db = await import("../src/db.js");
 const {
-  getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
-  saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
+  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } = await import("../src/siteContentAsync.js");
 
 const PG = { driver: "postgres" };
@@ -189,4 +189,31 @@ test("crawlSources：把 SQLite 的位元組鏡射進 PG 後，讀取結果必�
   const exec = pgFixture();
   mirrorSqliteKey(exec, "crawlSources");
   assert.deepEqual(await getCrawlSourcesAsync({ ...PG, exec }), db.getCrawlSources());
+});
+
+test("commsConfig：區域更新後兩邊位元組必須相同（儲存語意是與現值合併）", async () => {
+  const exec = pgFixture();
+  // ⚠️ 必須用**真實欄位名**。第一版用了 sponsor.intro／sponsor.outro——那兩個不是欄位，
+  // normalizeCommsConfig() 會把它們丢掉、兩邊都變回預設值，於是「合併 vs 不合併」比不出差異（空測試）。
+  // 真實欄位見 emptyCommsConfig()：support_copy、support_card_enabled 等。
+  const seed = { support_copy: "這段是自訂的贊助說明（非預設）" };
+  db.saveCommsConfig(seed);
+  await saveCommsConfigAsync(seed, { ...PG, exec });
+  assert.equal(storedInPg(exec, "commsConfig"), storedInSqlite("commsConfig"), "seed 後必須一致");
+
+  const patch = { support_card_enabled: true };
+  db.saveCommsConfig(patch);
+  await saveCommsConfigAsync(patch, { ...PG, exec });
+  assert.equal(storedInPg(exec, "commsConfig"), storedInSqlite("commsConfig"), "區域更新後必須一致");
+  assert.equal(
+    JSON.parse(storedInSqlite("commsConfig")).support_copy,
+    "這段是自訂的贊助說明（非預設）",
+    "patch 沒提到的欄位必須保留——若 PG 分支沒有先合併現值，這裡會抓到",
+  );
+});
+
+test("commsConfig：PG 沒有這個鍵時要回預設（與同步版一致）", async () => {
+  clearSqliteKey("commsConfig");
+  const exec = pgFixture();
+  assert.deepEqual(await getCommsConfigAsync({ ...PG, exec }), db.getCommsConfig());
 });
