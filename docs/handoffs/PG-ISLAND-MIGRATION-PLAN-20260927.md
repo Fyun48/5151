@@ -1255,7 +1255,11 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    「設定應該只有一份」直接衝突——這是政策問題，不是技術問題：
    (a) 只寫 PG、`auth.env` 改成啟動時從 PG 產生？(b) 兩個都寫（節點間仍可能不一致）？
    (c) 這兩個端點維持同步、明確標成「節點本機設定」？
-3. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
+3. **`saveWishExample`（`PUT /api/wish-rooms/example`）不是廉價目標**（2026-09-27 查證）：
+   它呼叫 `normalizeWishInput(db, uid, input)`——**吃 handle 且會查許願目錄**，
+   所以要先移植那一支。同一條路由的另一個卡點 `saveWishExampleFor` 只是 db.js 的包裝。
+   已移植的是同表的 `getWishExample`／`deleteWishExample`（第二十八批）。
+4. **`getLegalCopy`（3 條）先讀第十九批**：那裡有我弄錯的心智模型（`legalCopyFromDocuments`
    會自己補預設值，所以 settings 那段是很少走到的備援）與一個沒查到底的 `version` 疑點。
 
    **第二次嘗試（2026-09-27）仍然回退，但縮小了範圍。** 照第十九批的規格重寫後，
@@ -1354,7 +1358,11 @@ await saveAdminSiteBudget({ monthly_limit_twd: 1234 }, { driver: "postgres", exe
     （`siteCommandApply.js` 的 `isRemoteCsStopped`）是直接比對**原始文字**，
     所以會變成「開關永遠失效且沒有任何錯誤」。要動某個 settings 鍵之前，
     **先確認有誰用原生 SQL 讀它**。
-12. **parity 可以過，而絕對斷言才是鑑別力所在。** `applyBrandUpload` 那批我兩個絕對斷言
+12. **fallback 會掩蓋錯誤。** 測「失敗路徑」（壞資料、例外）時一定要用 `strict: true`：
+    預設的讀取是 fail-open，例外會被接住並**回退到另一份資料**，若那份資料剛好算出同一個
+    結果，變異就永遠殺不死。實例：許願房範例的「payload 壞掉直接丟錯」變異，
+    因為回退到磁碟上同一筆資料而存活；補上 strict 斷言後才被殺掉。
+13. **parity 可以過，而絕對斷言才是鑑別力所在。** `applyBrandUpload` 那批我兩個絕對斷言
     都寫錯（url 要用本地 `/brand/…` 才過白名單、`mark` 不存在 `markUrl` 欄位），
     但 parity 全程是綠的——因為錯的是**我的期望值**，不是程式。
     兩種斷言都要留：parity 抓移植漂移，絕對值抓「兩邊一起錯」。
