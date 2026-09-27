@@ -1242,6 +1242,14 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    `POST /api/admin/similarity/:id/review`）是**經過別的模組**呼叫的。
    **動它之前要先追出呼叫端**（`grep -rn "ensureUser" v3/src/*.js` 是起點），
    否則會改了函式卻沒接到路由、尺規不動。
+
+   **已追到的線索（2026-09-27）**：三條路由都只差 `ensureUser` 這一個卡點，而
+   `POST /api/admin/crm/contacts` 的 handler 只做
+   `await createCrmContact(...)` → `db.js:1967` → `createContactAsync()`（`crmAsync.js`）。
+   但 **`crmAsync.js` 裡完全沒有 `ensureUser` 這個字**——所以那是**再下一層**的
+   （`createContactAsync` 呼叫的某個共用模組，或 `db.js` 自己的 `ensureUser`）。
+   也就是說要往 `createContactAsync` 的呼叫鏈再追一層才會看到實際呼叫點；
+   這是為什麼上一輪沒有直接動它。
 2. **`saveAdminMailSettings`／`saveAdminOauthSettings` 需要 Owner 決定。** 它們除了寫
    settings，還會寫**節點本機的 `auth.env`**。PG 之後「每個節點都有自己的檔案」與
    「設定應該只有一份」直接衝突——這是政策問題，不是技術問題：
