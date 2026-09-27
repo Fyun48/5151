@@ -87,7 +87,7 @@ function publicSponsorWays(db) {
   }
 }
 
-function cleanText(value, max) {
+export function cleanText(value, max) {
   const text = sanitizeDocumentText(value, max);
   if (containsUnsafeMarkup(text)) {
     throw httpError("內容含有不安全標記");
@@ -95,7 +95,7 @@ function cleanText(value, max) {
   return text;
 }
 
-function bool01(value, fallback = 0) {
+export function bool01(value, fallback = 0) {
   if (value === true || value === 1 || value === "1") return 1;
   if (value === false || value === 0 || value === "0") return 0;
   return fallback;

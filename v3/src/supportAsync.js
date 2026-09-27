@@ -14,11 +14,24 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { adminProviderView } from "./supportProviders.js";
-import { sortSupportTiers } from "./supportDomain.js";
+import {
+  BILLING_CYCLES,
+  COST_CATEGORIES,
+  SUPPORT_PROVIDER_KINDS,
+  httpError,
+  iso,
+  moneyAmount,
+  sortSupportTiers,
+} from "./supportDomain.js";
+import { sanitizeHttpUrl } from "./sponsorLinks.js";
 // SQLite 分支需要 handle：`support.js` 的函式是吃 `(db, ...)` 參數的（不像 db.js 用模組全域），
 // 所以拿 `sqliteHandle()`——與 `listingGroupsAsync.js` 同一個既有模式，不必讓呼叫端多傳一個參數。
 import { sqliteHandle } from "./db.js";
 import {
+  bool01,
+  cleanText,
+  createSupportCost as createSupportCostSync,
+  createSupportTier as createSupportTierSync,
   ctaRow,
   costRow,
   listCtaRules as listCtaRulesSync,
@@ -30,6 +43,9 @@ import {
   sponsorRow,
   tierRow,
   txRow,
+  updateSupportCost as updateSupportCostSync,
+  updateSupportProvider as updateSupportProviderSync,
+  updateSupportTier as updateSupportTierSync,
 } from "./support.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
@@ -75,6 +91,162 @@ export async function listCtaRulesAsync(options = {}) {
   if (!isPg(options)) return listCtaRulesSync(sqliteHandle());
   const exec = await pgExec(options);
   return (await exec(CTA_RULES_SQL, [])).map(ctaRow);
+}
+
+// ---------------------------------------------------------------------------
+// 寫入（把「卡點全在 support.js」的那 21 條路由補完；本批先做 costs／tiers／providers）
+//
+// 每個都逐條對應同步版：取現值（沒有就 404）→ 算出 next → 寫入 → 回傳套過列對應的結果。
+// 純的判斷（cleanText／moneyAmount／bool01／sanitizeHttpUrl）留在原模組共用，這裡只換「跑語句的人」。
+// `is_default` 的**全表歸零**（`UPDATE support_tier SET is_default=0`）順序必須與同步版一致：
+// 它发生在 INSERT／UPDATE **之前**，寫成之後會把剛設好的預設值又清掉。
+const INSERT_COST_SQL = `INSERT INTO support_operating_cost(category, name, amount, billing_cycle, start_date, end_date, is_public, note, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPDATE_COST_SQL = `UPDATE support_operating_cost
+   SET category=?, name=?, amount=?, billing_cycle=?, start_date=?, end_date=?, is_public=?, note=?, updated_at=?
+   WHERE id=?`;
+const INSERT_TIER_SQL = `INSERT INTO support_tier(title, description, amount, currency, icon, sort_order, is_active, is_default, provider_product_id, created_at, updated_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const UPDATE_TIER_SQL = `UPDATE support_tier
+   SET title=?, description=?, amount=?, currency=?, icon=?, sort_order=?, is_active=?, is_default=?, provider_product_id=?, updated_at=?
+   WHERE id=?`;
+const CLEAR_TIER_DEFAULT_SQL = "UPDATE support_tier SET is_default=0";
+const UPDATE_PROVIDER_SQL = `UPDATE support_provider
+   SET display_name=?, page_url=?, widget_url=?, secret_ref=?, is_active=?, is_default=?, updated_at=?
+   WHERE id=?`;
+const CLEAR_PROVIDER_DEFAULT_SQL = "UPDATE support_provider SET is_default=0";
+
+// INSERT／UPDATE 之後要取回「那筆」——用 `SELECT *` 再套同一個純列對應，
+// 與同步版 `costRow(db.prepare("SELECT * …").get(id))` 完全相同。
+const COST_BY_ID_SQL = "SELECT * FROM support_operating_cost WHERE id=?";
+// INSERT 之後要取回剛寫入的那一筆（同步版用 `lastInsertRowid`）。這裡用「id 最大的那一筆」，
+// 語意相同且不依賴 RETURNING（注入式夾具與 PG 都吃得下）。
+const COST_LAST_SQL = "SELECT * FROM support_operating_cost ORDER BY id DESC LIMIT 1";
+const TIER_LAST_SQL = "SELECT * FROM support_tier ORDER BY id DESC LIMIT 1";
+const TIER_BY_ID_SQL = "SELECT * FROM support_tier WHERE id=?";
+const PROVIDER_BY_ID_SQL = "SELECT * FROM support_provider WHERE id=?";
+
+export async function createSupportCostAsync(body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return createSupportCostSync(sqliteHandle(), body, now);
+  const exec = await pgExec(options);
+  const src = body && typeof body === "object" ? body : {};
+  const category = COST_CATEGORIES.includes(src.category) ? src.category : "Other";
+  const name = cleanText(src.name, 80);
+  if (!name) throw httpError("請填成本名稱");
+  const stamp = iso(now);
+  await exec(INSERT_COST_SQL, [
+    category,
+    name,
+    moneyAmount(src.amount),
+    BILLING_CYCLES.includes(src.billing_cycle) ? src.billing_cycle : "monthly",
+    cleanText(src.start_date, 20) || stamp.slice(0, 10),
+    src.end_date ? cleanText(src.end_date, 20) : null,
+    bool01(src.is_public, 0),
+    cleanText(src.note, 240),
+    stamp,
+    stamp,
+  ]);
+  return costRow((await exec(COST_LAST_SQL, []))[0]);
+}
+
+export async function updateSupportCostAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateSupportCostSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = costRow((await exec(COST_BY_ID_SQL, [Number(id) || 0]))[0]);
+  if (!current) throw httpError("找不到這筆成本", 404);
+  const src = body && typeof body === "object" ? body : {};
+  const next = {
+    category: COST_CATEGORIES.includes(src.category) ? src.category : current.category,
+    name: src.name != null ? cleanText(src.name, 80) : current.name,
+    amount: src.amount != null ? moneyAmount(src.amount) : current.amount,
+    billing_cycle: BILLING_CYCLES.includes(src.billing_cycle) ? src.billing_cycle : current.billing_cycle,
+    start_date: src.start_date != null ? cleanText(src.start_date, 20) : current.start_date,
+    end_date: src.end_date !== undefined ? (src.end_date ? cleanText(src.end_date, 20) : null) : current.end_date || null,
+    is_public: src.is_public != null ? bool01(src.is_public, 0) : current.is_public ? 1 : 0,
+    note: src.note != null ? cleanText(src.note, 240) : current.note,
+  };
+  await exec(UPDATE_COST_SQL, [
+    next.category, next.name, next.amount, next.billing_cycle, next.start_date,
+    next.end_date, next.is_public, next.note, iso(now), Number(id) || 0,
+  ]);
+  return costRow((await exec(COST_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+export async function createSupportTierAsync(body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return createSupportTierSync(sqliteHandle(), body, now);
+  const exec = await pgExec(options);
+  const src = body && typeof body === "object" ? body : {};
+  const title = cleanText(src.title, 40);
+  if (!title) throw httpError("請填方案名稱");
+  const stamp = iso(now);
+  // 順序照抄同步版：先把其他方案的 is_default 清掉，再插入。
+  if (bool01(src.is_default, 0)) await exec(CLEAR_TIER_DEFAULT_SQL, []);
+  await exec(INSERT_TIER_SQL, [
+    title,
+    cleanText(src.description, 160),
+    moneyAmount(src.amount),
+    cleanText(src.currency || "TWD", 8) || "TWD",
+    cleanText(src.icon, 16),
+    Number(src.sort_order) || 0,
+    bool01(src.is_active, 1),
+    bool01(src.is_default, 0),
+    // 逐字對應同步版：max 是 **80**，且 falsy 時寫 null（不是空字串）。
+    src.provider_product_id ? cleanText(src.provider_product_id, 80) : null,
+    stamp,
+    stamp,
+  ]);
+  return tierRow((await exec(TIER_LAST_SQL, []))[0]);
+}
+
+export async function updateSupportTierAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateSupportTierSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = tierRow((await exec(TIER_BY_ID_SQL, [Number(id) || 0]))[0]);
+  if (!current) throw httpError("找不到支持方案", 404);
+  const src = body && typeof body === "object" ? body : {};
+  if (src.is_default === true || src.is_default === 1) await exec(CLEAR_TIER_DEFAULT_SQL, []);
+  await exec(UPDATE_TIER_SQL, [
+    src.title != null ? cleanText(src.title, 40) : current.title,
+    src.description != null ? cleanText(src.description, 160) : current.description,
+    src.amount != null ? moneyAmount(src.amount) : current.amount,
+    src.currency != null ? cleanText(src.currency, 8) : current.currency,
+    src.icon != null ? cleanText(src.icon, 16) : current.icon,
+    src.sort_order != null ? Number(src.sort_order) || 0 : current.sort_order,
+    src.is_active != null ? bool01(src.is_active, 1) : current.is_active ? 1 : 0,
+    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,
+    src.provider_product_id !== undefined
+      ? (src.provider_product_id ? cleanText(src.provider_product_id, 80) : null)
+      : current.provider_product_id || null,
+    iso(now),
+    Number(id) || 0,
+  ]);
+  return tierRow((await exec(TIER_BY_ID_SQL, [Number(id) || 0]))[0]);
+}
+
+export async function updateSupportProviderAsync(id, body = {}, { now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return updateSupportProviderSync(sqliteHandle(), id, body, now);
+  const exec = await pgExec(options);
+  const current = (await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0];
+  if (!current) throw httpError("找不到收款設定", 404);
+  const src = body && typeof body === "object" ? body : {};
+  if (!SUPPORT_PROVIDER_KINDS.includes(current.kind) && src.kind && !SUPPORT_PROVIDER_KINDS.includes(src.kind)) {
+    throw httpError("未知的收款方式");
+  }
+  if (src.is_default === true || src.is_default === 1) await exec(CLEAR_PROVIDER_DEFAULT_SQL, []);
+  const pageUrl = src.page_url !== undefined ? sanitizeHttpUrl(src.page_url) : current.page_url;
+  const widgetUrl = src.widget_url !== undefined ? sanitizeHttpUrl(src.widget_url) : current.widget_url;
+  const secret = src.secret_ref !== undefined ? String(src.secret_ref || "") : current.secret_ref;
+  await exec(UPDATE_PROVIDER_SQL, [
+    src.display_name != null ? cleanText(src.display_name, 60) : current.display_name,
+    pageUrl,
+    widgetUrl,
+    secret,
+    src.is_active != null ? bool01(src.is_active, 1) : current.is_active ? 1 : 0,
+    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,
+    iso(now),
+    Number(id) || 0,
+  ]);
+  return adminProviderView((await exec(PROVIDER_BY_ID_SQL, [Number(id) || 0]))[0]);
 }
 
 // 逐字對應 db.js 版：`from`／`to` 是**選擇性**條件，順序與同步版相同

@@ -64,6 +64,57 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const SUPPORT_WRITE_SRC = "v3/src/supportAsync.js";
+
+// Support 後台「寫入」的變異集（v3/test/support-async.test.js 的寫入段）。
+const SUPPORT_WRITE_MUTATIONS = [
+  {
+    name: "tiers：完全不把其他方案的 is_default 歸零（會出現兩個預設）",
+    file: SUPPORT_WRITE_SRC,
+    from: "  if (bool01(src.is_default, 0)) await exec(CLEAR_TIER_DEFAULT_SQL, []);\n",
+    to: "",
+    expect: "先歸零再寫入",
+  },
+  {
+    // 複合變異：把「先歸零」搬到 INSERT **之後**。單獨拿掉歸零只會測到「有沒有做」，
+    // 這個才測到**順序**——順序顛倒會把剛建立的預設方案又清掉，而回傳值看起來仍然是對的。
+    name: "（複合）tiers：把 is_default 歸零搬到 INSERT 之後（順序顛倒）",
+    file: SUPPORT_WRITE_SRC,
+    from: "  if (bool01(src.is_default, 0)) await exec(CLEAR_TIER_DEFAULT_SQL, []);\n",
+    to: "",
+    also: [{ from: "  return tierRow((await exec(TIER_LAST_SQL, []))[0]);", to: "  await exec(CLEAR_TIER_DEFAULT_SQL, []);\n  return tierRow((await exec(TIER_LAST_SQL, []))[0]);" }],
+    expect: "先歸零再寫入",
+  },
+  {
+    name: "costs：end_date 的 `!== undefined` 改成 `!= null`（傳 null 就清不掉了）",
+    file: SUPPORT_WRITE_SRC,
+    from: "    end_date: src.end_date !== undefined ? (src.end_date ? cleanText(src.end_date, 20) : null) : current.end_date || null,",
+    to: "    end_date: src.end_date != null ? (src.end_date ? cleanText(src.end_date, 20) : null) : current.end_date || null,",
+    expect: "end_date 傳 null",
+  },
+  {
+    name: "costs：start_date 少了預設成今天的邏輯",
+    file: SUPPORT_WRITE_SRC,
+    from: "    cleanText(src.start_date, 20) || stamp.slice(0, 10),",
+    to: "    cleanText(src.start_date, 20),",
+    expect: "含日期預設",
+  },
+  {
+    name: "providers：is_active 的預設值寫成 0",
+    file: SUPPORT_WRITE_SRC,
+    from: "    src.is_active != null ? bool01(src.is_active, 1) : current.is_active ? 1 : 0,\n    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,\n    iso(now),\n    Number(id) || 0,\n  ]);\n  return adminProviderView(",
+    to: "    src.is_active != null ? bool01(src.is_active, 1) : 0,\n    src.is_default != null ? bool01(src.is_default, 0) : current.is_default ? 1 : 0,\n    iso(now),\n    Number(id) || 0,\n  ]);\n  return adminProviderView(",
+    expect: "只有一個預設收款方式",
+  },
+  {
+    name: "providers：page_url 不做 sanitize",
+    file: SUPPORT_WRITE_SRC,
+    from: "  const pageUrl = src.page_url !== undefined ? sanitizeHttpUrl(src.page_url) : current.page_url;",
+    to: "  const pageUrl = src.page_url !== undefined ? src.page_url : current.page_url;",
+    expect: "只有一個預設收款方式",
+  },
+];
+
 const HOUSING_SRC = "v3/src/siteContentAsync.js";
 const HOUSING_FETCH_SRC = "v3/src/housingFetch.js";
 
@@ -419,9 +470,9 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
-      : /support-async/.test(testFile) ? SUPPORT_MUTATIONS
-        : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
+          : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
           : /housing-refresh-async/.test(testFile) ? HOUSING_MUTATIONS
+            : /support-async/.test(testFile) ? SUPPORT_WRITE_MUTATIONS
       : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。

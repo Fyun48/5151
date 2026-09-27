@@ -371,12 +371,17 @@ import {
 } from "./adminSettingsAsync.js";
 // Support 後台列表（卡點全在 handler 內的那一群）。
 import {
+  createSupportCostAsync,
+  createSupportTierAsync,
   listCtaRulesAsync,
   listSupportCostsAsync,
   listSupportProvidersAsync,
   listSupportSponsorsAsync,
   listSupportTiersAsync,
   listSupportTransactionsAsync,
+  updateSupportCostAsync,
+  updateSupportProviderAsync,
+  updateSupportTierAsync,
 } from "./supportAsync.js";
 // 站內刊登讀取（含過期清理）。同步版被 listingImport.js／listingTools.js 深層呼叫的部分仍未移植。
 import { getSelfListingAsync } from "./selfListingsAsync.js";
@@ -1853,9 +1858,9 @@ app.get("/api/admin/support/costs", requireAdminApi, async (_req, res) => {
   res.json({ items: await listSupportCostsAsync() });
 });
 
-app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/costs", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportCost(db, req.body || {});
+    const row = await createSupportCostAsync(req.body || {});
     auditReq(req, "support.cost.create", `support_operating_cost:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1863,10 +1868,10 @@ app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/costs/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/costs/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportCosts(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportCost(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportCostsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportCostAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.cost.update", `support_operating_cost:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1878,9 +1883,9 @@ app.get("/api/admin/support/tiers", requireAdminApi, async (_req, res) => {
   res.json({ items: await listSupportTiersAsync() });
 });
 
-app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/tiers", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportTier(db, req.body || {});
+    const row = await createSupportTierAsync(req.body || {});
     auditReq(req, "support.tier.create", `support_tier:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1888,10 +1893,10 @@ app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/tiers/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/tiers/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportTiers(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportTier(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportTiersAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportTierAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.tier.update", `support_tier:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1903,10 +1908,10 @@ app.get("/api/admin/support/providers", requireAdminApi, async (_req, res) => {
   res.json({ items: await listSupportProvidersAsync() });
 });
 
-app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/providers/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportProviders(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportProvider(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportProvidersAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportProviderAsync(Number(req.params.id), req.body || {});
     auditReq(req, before?.page_url !== row.page_url ? "support.checkout_url.update" : "support.provider.update", `support_provider:${row.id}`, before, row);
     res.json(row);
   } catch (error) {

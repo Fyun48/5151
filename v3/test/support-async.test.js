@@ -93,9 +93,13 @@ function resetBoth() {
 }
 
 function seedAll(h) {
-  seed(h, "support_operating_cost", { category: "hosting", name: "主機", amount: 1200, billing_cycle: "monthly", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
+  // end_date 刻意**有值**：這樣「把 end_date 設成 null 是否真的清掉」才測得出來
+  // （第一版留空 ⇒ 正確版與變異版都會得到 NULL，變異就活了下來）。
+  seed(h, "support_operating_cost", { category: "hosting", name: "主機", amount: 1200, billing_cycle: "monthly", end_date: "2026-12-31", created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
   seed(h, "support_operating_cost", { category: "domain", name: "網域", amount: 400, billing_cycle: "yearly", created_at: "2026-09-02T00:00:00.000Z", updated_at: "2026-09-02T00:00:00.000Z" });
-  seed(h, "support_tier", { title: "小額", amount: 100, sort_order: 2, is_active: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
+  // is_default 刻意設 1：這樣「建立新預設時有沒有把舊的歸零」才測得出來
+  // （第一版全部是 0 ⇒ 不歸零也只會有一個預設，變異就活了下來）。
+  seed(h, "support_tier", { title: "小額", amount: 100, sort_order: 2, is_active: 1, is_default: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
   seed(h, "support_tier", { title: "停用中", amount: 200, sort_order: 1, is_active: 0, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
   seed(h, "support_provider", { kind: "buy_me_a_coffee", display_name: "咖啡", is_default: 1, is_active: 1, created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z" });
   seed(h, "support_transaction", { provider: "buy_me_a_coffee", amount: 300, fee: 15, net_amount: 285, currency: "TWD", status: "succeeded", anonymous: 0, channel: "web", received_at: "2026-09-10T00:00:00.000Z", created_at: "2026-09-10T00:00:00.000Z", updated_at: "2026-09-10T00:00:00.000Z" });
@@ -179,6 +183,107 @@ test("listSupportTransactionsAsync：from／to 篩選必須真的生效且與同
   assert.equal(all.length, 2);
   assert.equal(onlyFirst.length, 1, "to 篩選必須把 09-20 那筆排除掉");
   assert.equal(onlyFirst[0].received_at, "2026-09-10T00:00:00.000Z");
+  disk.close();
+});
+
+// ---------------------------------------------------------------------------
+// 寫入：比對**實際落地的資料列**
+//
+// 這幾條的重點在「順序」與「只改有給的欄位」：
+//   - `is_default` 會先把同表其他列的 is_default 歸零，**再**寫入。順序顛倒會把剛設好的預設值清掉。
+//   - `updateSupportCost` 的 `end_date !== undefined`：傳 `null` 是「清掉」，不傳是「保留」。
+// 這些用回傳值比對不一定看得出來，所以一律比對落地列。
+
+const tableOf = (h, t) => h.prepare(`SELECT * FROM ${t} ORDER BY id`).all();
+
+test("createSupportCostAsync：落地的資料列必須與同步版相同（含日期預設）", async () => {
+  const [disk, exec] = resetBoth();
+  const body = { category: "hosting", name: "新主機", amount: 1500, billing_cycle: "monthly", is_public: 1, note: "備註" };
+  const s = support.createSupportCost(disk, body, NOW);
+  const a = await asyncMod.createSupportCostAsync(body, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s, "回傳值必須相同");
+  assert.deepEqual(tableOf(exec.raw, "support_operating_cost"), tableOf(disk, "support_operating_cost"),
+    "落地的資料列必須逐欄相同");
+  assert.equal(tableOf(disk, "support_operating_cost").length, 1, "必須真的寫入一列");
+  disk.close();
+});
+
+test("updateSupportCostAsync：只改有給的欄位；end_date 傳 null 是清掉、不傳是保留", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const first = tableOf(disk, "support_operating_cost")[0];
+
+  // (a) 只改名稱
+  const s1 = support.updateSupportCost(disk, first.id, { name: "改過的名字" }, NOW);
+  const a1 = await asyncMod.updateSupportCostAsync(first.id, { name: "改過的名字" }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a1, s1);
+  assert.deepEqual(tableOf(exec.raw, "support_operating_cost"), tableOf(disk, "support_operating_cost"));
+  assert.equal(a1.amount, s1.amount, "沒給的欄位要沿用現值");
+
+  // (b) end_date 明確傳 null ⇒ 清掉
+  const s2 = support.updateSupportCost(disk, first.id, { end_date: null }, NOW);
+  const a2 = await asyncMod.updateSupportCostAsync(first.id, { end_date: null }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a2, s2);
+  // `costRow` 會把 null 映射成空字串（見 support.js:291），所以回傳值的 end_date 是 `""`；
+  // 真正該斷言的是**底層欄位**被清成 NULL——那才是「清掉」的意思。
+  assert.equal(a2.end_date, "", "costRow 會把 null 映射成空字串");
+  assert.equal(tableOf(disk, "support_operating_cost").find((r) => r.id === first.id).end_date, null,
+    "同步版：底層欄位必須是 NULL");
+  assert.equal(tableOf(exec.raw, "support_operating_cost").find((r) => r.id === first.id).end_date, null,
+    "PG 分支：底層欄位必須是 NULL");
+  assert.deepEqual(tableOf(exec.raw, "support_operating_cost"), tableOf(disk, "support_operating_cost"));
+
+  // (c) 找不到 ⇒ 404
+  let syncErr = null, asyncErr = null;
+  try { support.updateSupportCost(disk, 99999, {}, NOW); } catch (e) { syncErr = e; }
+  try { await asyncMod.updateSupportCostAsync(99999, {}, { ...PG, exec, now: NOW }); } catch (e) { asyncErr = e; }
+  assert.equal(asyncErr?.status, syncErr?.status, "404 的 status 必須相同");
+  disk.close();
+});
+
+test("🚨 createSupportTierAsync：is_default 的『先歸零再寫入』順序必須正確", async () => {
+  // 順序顛倒（先 INSERT 再歸零）會把剛設好的預設值清掉，而且**回傳值看起來還是對的**，
+  // 所以一定要比對落地列。
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const body = { title: "新的預設方案", amount: 300, is_default: 1, is_active: 1 };
+  const s = support.createSupportTier(disk, body, NOW);
+  const a = await asyncMod.createSupportTierAsync(body, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_tier"), tableOf(disk, "support_tier"), "落地列必須完全相同");
+  const defaults = tableOf(disk, "support_tier").filter((r) => Number(r.is_default) === 1);
+  assert.equal(defaults.length, 1, "全表只能有一個預設方案");
+  assert.equal(defaults[0].title, "新的預設方案", "預設必須是剛建立的那一個（順序錯的話會變成沒有預設）");
+  disk.close();
+});
+
+test("updateSupportTierAsync：設為預設時要把其他列歸零，落地列必須相同", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const tiers = tableOf(disk, "support_tier");
+  const target = tiers.find((r) => r.title === "停用中");
+  const s = support.updateSupportTier(disk, target.id, { is_default: true, is_active: 1 }, NOW);
+  const a = await asyncMod.updateSupportTierAsync(target.id, { is_default: true, is_active: 1 }, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_tier"), tableOf(disk, "support_tier"));
+  assert.equal(tableOf(disk, "support_tier").filter((r) => Number(r.is_default) === 1).length, 1);
+  disk.close();
+});
+
+test("updateSupportProviderAsync：落地列相同，且只有一個預設收款方式", async () => {
+  const [disk, exec] = resetBoth();
+  seedAll(disk); seedAll(exec.raw);
+  const prov = tableOf(disk, "support_provider")[0];
+  // page_url 刻意給一個**不合法**的值：`sanitizeHttpUrl` 會把它變成空字串，
+  // 沒做 sanitize 的版本會原樣寫進去（第一版沒給 page_url，兩邊都沿用現值 ⇒ 變異活了下來）。
+  const body = { display_name: "改過的收款", is_default: 1, page_url: "not-a-url" };
+  const s = support.updateSupportProvider(disk, prov.id, body, NOW);
+  const a = await asyncMod.updateSupportProviderAsync(prov.id, body, { ...PG, exec, now: NOW });
+  assert.deepEqual(a, s);
+  assert.deepEqual(tableOf(exec.raw, "support_provider"), tableOf(disk, "support_provider"));
+  assert.equal(tableOf(disk, "support_provider").filter((r) => Number(r.is_default) === 1).length, 1);
+  assert.equal(tableOf(disk, "support_provider")[0].page_url, "", "不合法的 URL 必須被 sanitize 成空字串");
+  assert.equal(a.page_url, "", "回傳值也必須是 sanitize 過的");
   disk.close();
 });
 
