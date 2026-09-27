@@ -41,7 +41,6 @@ import {
   countOpenSelfListings,
   issueVerifyToken,
   confirmVerifyToken,
-  rejectSuspectedMatch,
   confirmSuspectedMatch,
   listPublicListings,
   listPublicListingsFast,
@@ -317,7 +316,14 @@ import {
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
-import { confirmSuspectedMatchAsync, mergeSameHouseForUserAsync } from "./sameHouseAsync.js";
+import {
+  confirmSuspectedMatchAsync,
+  mergeSameHouseForUserAsync,
+  rejectSuspectedMatchAsync,
+} from "./sameHouseAsync.js";
+// 後台總覽的統計在 PG 模式下必須走 listingStatsAsync（已是既有的 PG 路徑，
+// 內部會 resolveDbDriver 並在有快照的情況下回同一組計數）。
+import { listingStatsAsync } from "./listingStatsAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -4073,13 +4079,13 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
   }
 });
 
-app.post("/api/listings/:id/reject-match", (req, res) => {
+app.post("/api/listings/:id/reject-match", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入才能拆開同屋源" });
     return;
   }
-  const result = rejectSuspectedMatch(Number(req.params.id), session.userId, {
+  const result = await rejectSuspectedMatchAsync(Number(req.params.id), session.userId, {
     peerId: req.body?.peer_id,
     admin: session.role === "admin",
   });
@@ -4090,7 +4096,7 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   }
   res.json({
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
     personal: true,
     promoted: result.promoted,
     remaining: result.remaining,
@@ -4112,7 +4118,7 @@ app.post("/api/listings/:id/confirm-match", async (req, res) => {
   }
   res.json({
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
     personal: result.personal !== false && !result.admin_confirmed,
     shared: result.shared === true,
     admin_confirmed: result.admin_confirmed === true,
@@ -4145,7 +4151,7 @@ app.post("/api/listings/merge-same-house", async (req, res) => {
     post_ids: result.post_ids,
     group_id: result.group_id || "",
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
   });
 });
 
@@ -4270,7 +4276,7 @@ app.post("/api/watch", async (req, res) => {
     const uid = session.userId;
     const result = await tick(req.body?.force === true ? "force" : "manual");
     const events = (result.events || []).filter((event) => !event.user_id || event.user_id === uid);
-    res.json({ result: { ...result, events }, stats: stats(undefined, uid) });
+    res.json({ result: { ...result, events }, stats: await listingStatsAsync({ userId: uid }) });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

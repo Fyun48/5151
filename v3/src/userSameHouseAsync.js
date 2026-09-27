@@ -22,6 +22,13 @@ const GROUP_KEY_BY_POST_SQL =
   "SELECT group_key FROM user_same_house_members WHERE user_id = ? AND post_id = ?";
 const POSTS_BY_GROUP_SQL =
   "SELECT post_id FROM user_same_house_members WHERE user_id = ? AND group_key = ?";
+// splitPersonalSameHouse() 的三句（與 userSameHouse.js 逐字相同）。
+const DELETE_PAIR_SQL =
+  "DELETE FROM user_same_house_members WHERE user_id = ? AND post_id IN (?, ?)";
+const DELETE_ONE_SQL =
+  "DELETE FROM user_same_house_members WHERE user_id = ? AND post_id = ?";
+const REGROUP_ONE_SQL =
+  "UPDATE user_same_house_members SET group_key = ?, created_at = ? WHERE user_id = ? AND post_id = ?";
 const MOVE_GROUP_SQL =
   "UPDATE user_same_house_members SET group_key = ? WHERE user_id = ? AND group_key = ?";
 // PG 的 ON CONFLICT 目標 (user_id, post_id) 對應 PG 上的主鍵，已查證存在。
@@ -57,6 +64,32 @@ async function personalGroupKeyForAsync(exec, uid, postId) {
   } catch {
     return "";
   }
+}
+
+// userSameHouse.js splitPersonalSameHouse() 的 PG 分支。
+// 語句與同步版逐字對應；這裡沒有任何需要轉方言的運算（沒有純量 MIN(a,b)、沒有 LIMIT -1）。
+// 刻意**不**包交易：同步版也沒有 BEGIN，每一句各自 autocommit，這裡照抄同樣的原子性。
+export async function splitPersonalSameHouseAsync(exec, userId, postId, peerId) {
+  const uid = Number(userId) || 0;
+  const a = Number(postId) || 0;
+  const b = Number(peerId) || 0;
+  if (!uid || !a || !b) return false;
+  const keyA = await personalGroupKeyForAsync(exec, uid, a);
+  const keyB = await personalGroupKeyForAsync(exec, uid, b);
+  if (!keyA || keyA !== keyB) return false;
+  const now = new Date().toISOString();
+  const members = (await exec(POSTS_BY_GROUP_SQL, [uid, keyA])).map((row) => Number(row.post_id));
+  await exec(DELETE_PAIR_SQL, [uid, a, b]);
+  const remain = members.filter((id) => id !== a && id !== b);
+  if (remain.length === 1) {
+    await exec(DELETE_ONE_SQL, [uid, remain[0]]);
+  } else if (remain.length > 1) {
+    const next = newGroupKey();
+    for (const id of remain) {
+      await exec(REGROUP_ONE_SQL, [next, now, uid, id]);
+    }
+  }
+  return true;
 }
 
 // userSameHouse.js mergePersonalSameHouse() 的 PG 分支。步驟與同步版逐條對應，
@@ -105,15 +138,12 @@ export async function mergePersonalSameHouse(userId, listings, { now = new Date(
   };
 }
 
-// ⚠️ 這裡**刻意沒有** driver-aware 的 `...Async` 入口。
-// 同步版 `mergePersonalSameHouse(db, ...)` 需要 SQLite handle，而那個 handle 在呼叫端
-// （`db.js` 的 `mergeSameHouseForUser`）手上——從這個模組拿不到，硬寫一個「非 postgres 就回退」
-// 的包裝只會拿到 undefined。driver-aware 的包裝要放在 `db.js`，這一步還沒做（見下方待辦）。
-//
-// 待辦：在 db.js 加 `mergeSameHouseForUserAsync()`：
-//   - 非 postgres → 現有同步路徑（行為不變）
-//   - postgres + 會員 → `mergePersonalSameHouse()`（本檔，已測）
-//   - postgres + 管理員 → 仍走 `confirmSameHouseAsAdmin()`（目前是 SQLite，尚未移植）
+// 註（2026-09-27 更新）：driver-aware 的包裝最後放在 **sameHouseAsync.js**，不是 db.js——
+// 它需要 `getListingAsync`（listingDetailAsync.js），而 listingDetailAsync.js 會匯入 db.js，
+// 放進 db.js 會形成循環匯入。模組分工：
+//   - 本檔：`mergePersonalSameHouse()`／`splitPersonalSameHouseAsync()` 的 PG 語句層
+//   - sameHouseAsync.js：`mergeSameHouseForUserAsync()`／`confirmSuspectedMatchAsync()`／
+//     `rejectSuspectedMatchAsync()` 的 driver-aware 入口（非 postgres 一律回退同步路徑）
 
 // 同步版用 `db.prepare("SELECT * FROM listings WHERE post_id = ?").get(id)` 取原始資料列
 // （不是裝飾後的 listing），再交給 judgeMergeSet。這裡照抄同一個查詢與順序。
