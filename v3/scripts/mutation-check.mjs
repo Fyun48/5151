@@ -427,6 +427,35 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 關閉站內刊登 PG 分支的變異集（v3/test/close-self-listing-async.test.js）。
+const CLOSE_SELF_SRC = "v3/src/selfListingsAsync.js";
+const CLOSESELF_MUTATIONS = [
+  {
+    name: "不驗擁有權（別人的刊登也能關）",
+    file: CLOSE_SELF_SRC,
+    from: '  if (!admin && Number(row.listed_by_user_id) !== Number(userId)) {\n    throw httpError("只能關閉自己的刊登", 403);\n  }\n',
+    to: "",
+    expect: "別人的刊登",
+  },
+  {
+    name: "找不到時不擋（會去 UPDATE 不存在的列）",
+    file: CLOSE_SELF_SRC,
+    // ⚠️ 錨點要含下一行：`if (!row) throw httpError("找不到這則站內刊登", 404);` 在
+    // `selfListingsAsync.js` 裡出現**兩次**（`getSelfListingAsync` 也有），
+    // 工具的前置檢查會擋下來（正確行為：寧可中止也不要改錯地方）。
+    from: '  if (!row) throw httpError("找不到這則站內刊登", 404);\n  if (!admin && Number(row.listed_by_user_id) !== Number(userId)) {',
+    to: "  if (!admin && Number(row.listed_by_user_id) !== Number(userId)) {",
+    expect: "找不到刊登",
+  },
+  {
+    name: "狀態寫錯（closed 寫成 hidden）",
+    file: CLOSE_SELF_SRC,
+    from: '  "UPDATE listings SET self_status = \'closed\', last_event = \'offline\', last_seen_at = ? WHERE post_id = ?";',
+    to: '  "UPDATE listings SET self_status = \'hidden\', last_event = \'offline\', last_seen_at = ? WHERE post_id = ?";',
+    expect: "關閉自己的刊登",
+  },
+];
+
 // 許願房範例 PG 分支的變異集（v3/test/wish-example-async.test.js）。
 const WEX_SRC = "v3/src/wishExampleAsync.js";
 const WISHEXAMPLE_MUTATIONS = [
@@ -1610,7 +1639,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
+const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
   : /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
   : /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS
   : /listing-import-async/.test(testFile) ? LISTINGIMPORT_MUTATIONS

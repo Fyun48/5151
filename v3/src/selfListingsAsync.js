@@ -24,6 +24,7 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import {
   decorateSelfListing,
+  getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
   getSelfListing as getSelfListingSync,
   getSelfRow as getSelfRowSync,
@@ -90,4 +91,35 @@ export async function getSelfListingAsync(postId, { viewerId = 0, now = new Date
   const status = String(row.self_status || "open");
   if (status !== "open" && !mine) throw httpError("這則刊登已關閉或隱藏", 404);
   return decorateSelfListing(row, { viewerId });
+}
+
+// ---- 關閉自己的站內刊登 ----
+//
+// 對應 `selfListings.js:1219 closeSelfListing()`。步驟逐條照抄：
+//   取列（沒有 → 404）→ 擁有權（非本人且非 admin → 403）→ UPDATE → 通知 hook → 回傳裝飾後的列
+//
+// ⚠️ `listingOfferHook`（由 `wishOffers.js` 註冊的 `handleWishOfferLifecycle`）**仍用本機
+// SQLite handle 呼叫**：那個 hook 做的是「許願出價的清掃」，而 `wishOffers.js` 還沒移植
+// （它的函式全都吃 handle）。用 PG 的 exec 呼叫它會直接壞掉；維持原樣是本批唯一的選擇，
+// 而且同步版也是 try/catch 包住（清掃失敗不得擋住關閉）。等 wishOffers 移植時再一起改。
+export const CLOSE_SELF_LISTING_SQL =
+  "UPDATE listings SET self_status = 'closed', last_event = 'offline', last_seen_at = ? WHERE post_id = ?"; // selfListings.js:1226
+export const HIDE_SELF_LISTING_SQL =
+  "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?"; // selfListings.js:1236
+
+export async function closeSelfListingAsync(userId, postId, { admin = false, now = new Date(), ...options } = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    const { closeSelfListing } = await import("./db.js");
+    return closeSelfListing(userId, postId, { admin });
+  }
+  const exec = await pgExec(options);
+  const row = await getSelfRowAsync(postId, { ...options, exec });
+  if (!row) throw httpError("找不到這則站內刊登", 404);
+  if (!admin && Number(row.listed_by_user_id) !== Number(userId)) {
+    throw httpError("只能關閉自己的刊登", 403);
+  }
+  const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
+  await exec(CLOSE_SELF_LISTING_SQL, [stamp, row.post_id]);
+  try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住關閉 */ }
+  return getSelfListingAsync(row.post_id, { viewerId: userId, ...options, exec });
 }

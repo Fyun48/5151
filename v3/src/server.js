@@ -304,6 +304,7 @@ import { importMetaAsync } from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync } from "./wishExampleAsync.js";
+import { closeSelfListingAsync } from "./selfListingsAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -3419,14 +3420,14 @@ app.delete("/api/listing-contact-profiles/:id", async (req, res) => {
     res.json(await deleteContactProfileAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/self-listings/:id/close", (req, res) => {
+app.post("/api/self-listings/:id/close", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(closeSelfListing(session.userId, req.params.id, { admin: session.role === "admin" }));
+    res.json(await closeSelfListingAsync(session.userId, req.params.id, { admin: session.role === "admin" }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

@@ -39,6 +39,12 @@ let listingCatalog = null;
 let listingFlags = {};
 let listingOfferHook = null;
 
+// 讀取目前註冊的 hook。PG 分支（selfListingsAsync.js）需要「用本機 handle 呼叫同一個 hook」，
+// 所以要有 getter（原本只有 setter）。只加匯出，行為不變。
+export function getListingOfferHook() {
+  return listingOfferHook;
+}
+
 export function setListingOfferHook(fn) {
   listingOfferHook = typeof fn === "function" ? fn : null;
 }
