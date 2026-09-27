@@ -391,6 +391,7 @@ import {
   publishSupportConfigAsync,
   recordSupportEventAsync,
   saveSupportConfigAsync,
+  supportDashboardAsync,
   updateCtaRuleAsync,
   updateSupportCostAsync,
   updateSupportProviderAsync,
@@ -1827,9 +1828,9 @@ app.post("/api/support/webhook/:provider", async (req, res) => {
   }
 });
 
-app.get("/api/admin/support/dashboard", requireAdminApi, (req, res) => {
+app.get("/api/admin/support/dashboard", requireAdminApi, async (req, res) => {
   try {
-    res.json(supportDashboard(db, {
+    res.json(await supportDashboardAsync({
       period: String(req.query.period || "month"),
       from: req.query.from,
       to: req.query.to,

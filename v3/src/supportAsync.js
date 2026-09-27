@@ -46,6 +46,7 @@ import {
   sortSupportTiers,
   sponsorWindowActive,
   transactionDedupeKey,
+  conversionFunnel,
 } from "./supportDomain.js";
 import { publicSponsorLinks, sanitizeHttpUrl } from "./sponsorLinks.js";
 // SQLite 分支需要 handle：`support.js` 的函式是吃 `(db, ...)` 參數的（不像 db.js 用模組全域），
@@ -60,6 +61,7 @@ import {
   evaluateSupportCta as evaluateSupportCtaSync,
   createManualTransaction as createManualTransactionSync,
   costActiveInMonth,
+  dailyBars,
   createSupportCheckout as createSupportCheckoutSync,
   createSupportCost as createSupportCostSync,
   createSupportSponsor as createSupportSponsorSync,
@@ -85,6 +87,7 @@ import {
   recordSupportEvent as recordSupportEventSync,
   saveSupportConfig as saveSupportConfigSync,
   sponsorRow,
+  supportDashboard as supportDashboardSync,
   tierRow,
   txRow,
   updateCtaRule as updateCtaRuleSync,
@@ -412,6 +415,52 @@ const publicPagePayloadAsync = async (exec, page, flags, now) => {
     },
   };
 };
+
+// `supportDashboard()` 的 PG 分支。除了 `eventCounts` 以外都是已經移植好的積木
+// （`periodBounds`／`listSupportTransactions`／`dashboardTotals`／`monthlyOperatingTotal`／
+// `adminSupportConfig`／`goalProgress`／`conversionFunnel`／`dailyBars`）。
+const EVENT_COUNTS_SQL = `SELECT kind, COUNT(*) AS n
+     FROM support_event
+     WHERE created_at>=? AND created_at<=?
+     GROUP BY kind`;
+
+const eventCountsAsync = async (exec, from, to) => {
+  const rows = await exec(EVENT_COUNTS_SQL, [from, to]);
+  const out = {};
+  for (const row of rows) out[row.kind] = Number(row.n) || 0;
+  return out;
+};
+
+export async function supportDashboardAsync({ period = "month", from, to, now = new Date(), ...options } = {}) {
+  if (!isPg(options)) return supportDashboardSync(sqliteHandle(), { period, from, to, now });
+  const exec = await pgExec(options);
+  const bounds = periodBounds(period, now, { from, to });
+  const txs = await listSupportTransactionsPg(exec, bounds);
+  const totals = dashboardTotals(txs);
+  const cost = await monthlyOperatingTotalAsync(exec, now);
+  const publicCost = await monthlyOperatingTotalAsync(exec, now, { publicOnly: true });
+  const goal = await adminSupportConfigAsync({ ...options, exec });
+  const progress = goalProgress(totals.net || totals.gross, goal.goal_amount || cost);
+  const counts = await eventCountsAsync(exec, bounds.from, bounds.to);
+  const webhookReady = false;
+  return {
+    period,
+    from: bounds.from,
+    to: bounds.to,
+    totals,
+    operating_cost: cost,
+    public_operating_cost: publicCost,
+    coverage: progress,
+    goal: {
+      amount: goal.goal_amount,
+      label: goal.goal_label,
+      display: goal.goal_display,
+    },
+    funnel: conversionFunnel({ ...counts, completed: totals.count }, webhookReady),
+    recent: txs.slice(0, 12),
+    daily: dailyBars(txs, bounds.from, bounds.to),
+  };
+}
 
 export async function publicSupportConfigAsync({ now = new Date(), ...options } = {}) {
   if (!isPg(options)) return publicSupportConfigSync(sqliteHandle(), now);

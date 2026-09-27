@@ -866,7 +866,7 @@ export function recordSupportEvent(db, kind, { userId = null, guestKey = "", met
   return { ok: true };
 }
 
-function eventCounts(db, from, to) {
+export function eventCounts(db, from, to) {
   const rows = db.prepare(`
     SELECT kind, COUNT(*) AS n
     FROM support_event
@@ -924,7 +924,7 @@ export function supportDashboard(db, { period = "month", from, to, now = new Dat
   };
 }
 
-function dailyBars(txs, from, to) {
+export function dailyBars(txs, from, to) {
   const start = new Date(from);
   const end = new Date(to);
   const days = [];

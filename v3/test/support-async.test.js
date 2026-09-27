@@ -704,7 +704,9 @@ function seedPublicPage(h, overrides = {}) {
   // ⚠️ 檔期要涵蓋這個檔案的 `NOW`（**2027-06-01**）。第一版沿用 2026 檔期 ⇒ 到 NOW 已過期
   // ⇒ sponsors 是空的（整包 deepEqual 仍然過，因為兩邊都空，只有單獨斷言才抓得到）。
   seed(h, "support_sponsor", { name: "贊助商甲", status: "active", sort_order: 1, start_at: "2027-01-01T00:00:00.000Z", end_at: "2027-12-31T00:00:00.000Z", created_at: "2027-01-01T00:00:00.000Z", updated_at: "2027-01-01T00:00:00.000Z" });
-  seed(h, "support_transaction", { provider: "buy_me_a_coffee", amount: 300, fee: 15, net_amount: 285, currency: "TWD", status: "completed", anonymous: 0, supporter_name: "小明", channel: "web", received_at: "2026-09-10T00:00:00.000Z", created_at: "2026-09-10T00:00:00.000Z", updated_at: "2026-09-10T00:00:00.000Z" });
+  // ⚠️ 日期必須落在這個檔案 `NOW`（**2027-06-01**）的當月內，否則 dashboard 的
+  // `periodBounds("month", NOW)` 會把它排除（兩邊都排除 ⇒ deepEqual 照樣過，只有單獨斷言抓得到）。
+  seed(h, "support_transaction", { provider: "buy_me_a_coffee", amount: 300, fee: 15, net_amount: 285, currency: "TWD", status: "completed", anonymous: 0, supporter_name: "小明", channel: "web", received_at: "2027-06-10T00:00:00.000Z", created_at: "2027-06-10T00:00:00.000Z", updated_at: "2027-06-10T00:00:00.000Z" });
 }
 
 test("publicSupportConfigAsync：未開啟時的形狀（含 sponsor_links 的例外）必須相同", async () => {
@@ -761,6 +763,29 @@ test("🚨 previewSupportConfigAsync：用 draft（不是 published），且強�
   // 預覽的兩個關鍵語意：即使站台未開啟也要能預覽、而且看的是**草稿**。
   assert.equal(a.enabled, true, "預覽必須強制 enabled=true");
   assert.equal(a.copy.cta_label, "草稿按鈕", "預覽要看 draft，不是 published");
+  disk.close();
+});
+
+test("🚨 supportDashboardAsync：整包 dashboard（統計／成本／目標／漏斗／每日）必須相同", async () => {
+  const [disk, exec] = resetBoth();
+  seedPublicPage(disk); seedPublicPage(exec.raw);
+  for (const h of [disk, exec.raw]) {
+    seed(h, "support_operating_cost", { category: "domain", name: "網域", amount: 400, billing_cycle: "yearly", is_public: 0, created_at: "2026-09-02T00:00:00.000Z", updated_at: "2026-09-02T00:00:00.000Z" });
+    seed(h, "support_event", { kind: "support_cta_shown", user_id: 5, guest_key: "", meta_json: "{}", created_at: "2027-06-02T00:00:00.000Z" });
+    seed(h, "support_event", { kind: "support_cta_shown", user_id: 6, guest_key: "", meta_json: "{}", created_at: "2027-06-03T00:00:00.000Z" });
+  }
+  const a = await asyncMod.supportDashboardAsync({ period: "month", now: NOW, ...PG, exec });
+  const s = support.supportDashboard(disk, { period: "month", now: NOW });
+  assert.deepEqual(a, s, "整包 dashboard 必須相同");
+  // 單獨斷言關鍵欄位（整包 deepEqual 對「兩邊都空」沒有鑑別力）。
+  assert.equal(a.totals.count, 1, "要算到那筆完成的交易");
+  assert.ok(a.operating_cost > 0, "月成本必須算出來（不得為 0）");
+  assert.equal(a.operating_cost, s.operating_cost);
+  assert.ok(a.public_operating_cost > 0, "公開成本必須算出來");
+  assert.ok(a.public_operating_cost < a.operating_cost, "公開成本只算 is_public 的那筆，必須小於總成本");
+  assert.equal(a.funnel.cta_shown, 2, "漏斗要看 eventCounts（兩筆 cta_shown）");
+  assert.equal(a.recent.length, 1, "recent 要有那筆交易");
+  assert.ok(a.daily.length > 0, "每日序列不得為空");
   disk.close();
 });
 
