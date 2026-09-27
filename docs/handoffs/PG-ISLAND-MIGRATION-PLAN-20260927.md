@@ -1191,6 +1191,75 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
+
+**這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
+
+### 現況（可重跑）
+
+```
+node v3/scripts/route-data-map.mjs
+```
+
+| 判定 | 起點 | **現在** |
+|---|---:|---:|
+| SQLite | 95 | **12** |
+| MIXED | — | **117** |
+| 無直接DB | — | **20** |
+| PG | 22 | **139** |
+| **缺口（SQLite＋MIXED）** | — | **129** |
+
+PR #529（`fix/route-map-driver-aware`，34 個 commit）**CI 全綠、未部署**；
+Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部署要 Owner 明確批准（§8.2）。**
+
+### 下一步的優先順序（依「投報率 ÷ 風險」，不是依模組大小）
+
+1. **`demand.js`（約 10 條）**——剩下最大的單一群。⚠️ **尺規的兩條守衛都指向它**
+   （`GET /api/wish-rooms/example` ← `getWishExample`，以及性質清單裡的 `addDemandReply`）。
+   移植時要換標的，**換之前把缺陷套回去實測**（見下方紀律 3）。
+2. **單一卡點群**（下面這些各自都只差一個函式）：
+   `ensureUser`（3 條：`POST /api/admin/crm/contacts`、`…/contacts/:id/notes`、
+   `POST /api/admin/similarity/:id/review`）、`getWishExample`（1）、`deleteWishExample`（1）、
+   `getWishConditions`／`saveWishConditions`（2）、`getAdminAdsSettings`／`applyBrandUpload`／
+   `getAdminBroadcastsSettings`（3）、`getRentalMarketplaceFlags`（1）、`remoteCsAcceptControl`（1）、
+   `saveAdminMailSettings`／`saveAdminOauthSettings`（2，**這兩個同時寫節點本機 `auth.env`**，
+   要另外決定怎麼處理）。
+3. **`getLegalCopy`（3 條）**——**先讀第十九批**，那裡有我弄錯的心智模型與沒查到底的 `version` 疑點。
+4. **`POST /api/media`（上傳）**——`saveMemberMedia()` 的交易橫跨影像處理與 R2 上傳，
+   需要重新設計交易邊界，是獨立一批。
+5. **`/api/demand/aggregate`、`/api/demand/exposure`、`/api/public/wish-room/:id`、
+   `POST /api/public/unsubscribe/:token`** 屬於 demand.js 那一群。
+6. **剩下的登入／註冊／OAuth 六條**（`/api/login`、`/api/register`、`/verify-email`、
+   `/auth/:provider`、`/auth/:provider/callback`、`/api/forgot-password`）——
+   這一批**風險最高**（動到登入），而且與 §13 的 session 解析高度耦合，
+   建議等前面的都清完、而且 Owner 有時間盯的時候再做。
+
+### 交接紀律（這一輪累積下來的，全部都有實例）
+
+1. **動手前先確認 PG 有沒有那個約束。** `CREATE TABLE` 裡的 `UNIQUE(...)`（表約束）與欄位
+   `UNIQUE` 都是**隱式索引**，`pgSchema` 鏡射不到。已中四次：`listing_contact_profile` 的
+   帳號聯絡人、`media_tags` 的 `(user_id,name)`、comms 的複合主鍵、`push_subscriptions.endpoint`。
+   → 動 `ON CONFLICT` 之前先確認，否則就是 `42P10`。
+2. **方言陷阱（已中過的）**：`IFNULL`、`COLLATE NOCASE`、`LIMIT -1`、純量 `MIN(a,b)`、
+   SQLite 的 `TRIGGER … RAISE(ABORT)`／`IS NOT OLD.x`、**`pgDriver.query()` 不翻譯 `?`**
+   （要顯式 `toPostgresSql`）。夾具一律要**主動拒絕**這些，否則寫錯照樣過關。
+3. **換守衛標的時，把缺陷套回去實測。** 「看起來是那一類」不算數（我為此白換兩次）。
+4. **變異不要用「刪掉宣告」**：模組載入失敗會讓工具抓不到測試名 ⇒ 假 SURVIVED。
+   改成同位置的無效實作（`SELECT 1`、`return null`）。
+5. **斷言不要 `includes(某常數)`**：常數被移除時會變 `undefined`，那種斷言**恆真**。
+6. **`expect` 比對的是測試名稱**，不是斷言訊息。改測試名要同步改 `expect`（已中兩次）。
+7. **parity 測試不要把「同步版」當無害的對照組**：它自己也會做副作用（hydrate 快取、
+   寫快照），會把受測分支的缺失蓋掉。**斷言要在對照組動手之前做。**
+8. **測試資料要刻意造出「只有那條分支才會走到」的形狀**：沒有重複資料就測不到清重複、
+   只有一筆就測不到「只刪指定那一筆」、空集合的 `deepEqual` 等於沒驗。
+   **落點比對要加「兩邊都是 0 列時沒有鑑別力」的守衛**（這一輪它救我好幾次）。
+9. **live PG 測試不可省**：離線夾具證明不了「送進 PG 的語句合法／真的生效」。
+   隔離環境是 NAS 的 `prb-repro-pg`（`192.168.0.220:15434/repro`），
+   `PG_LIVE_REPRO_URL` 有允許清單，**正式庫 `5151_shadow` 一律拒絕**。
+   寫「驗 bootstrap 補建」的 live 測試時，**要自己把環境還原成「還沒補建」的狀態**（否則重跑會紅）。
+10. **量尺有缺陷就修，但要留下基準**：每一版尺規的 `--json` 輸出都留著，
+    並驗證**單調性**（加邊只能增加、不能減少）。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。
