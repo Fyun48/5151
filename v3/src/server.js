@@ -317,6 +317,7 @@ import {
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
+import { confirmSuspectedMatchAsync, mergeSameHouseForUserAsync } from "./sameHouseAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -2475,11 +2476,11 @@ app.get("/api/admin/listings/search", requireAdminApi, (req, res) => {
   res.json({ items: searchAdminListings(req.query?.q, Number(req.query?.limit) || 20) });
 });
 
-app.post("/api/admin/same-house/confirm", requireAdminApi, (req, res) => {
+app.post("/api/admin/same-house/confirm", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
     const ids = req.body?.postIds || req.body?.ids || [];
-    const result = mergeSameHouseForUser(session.userId, ids, { admin: true });
+    const result = await mergeSameHouseForUserAsync(session.userId, ids, { admin: true });
     auditReq(req, "same_house_confirm", (Array.isArray(ids) ? ids : []).join(","), null, {
       group_id: result?.group_id,
       shared: result?.shared,
@@ -4096,13 +4097,13 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   });
 });
 
-app.post("/api/listings/:id/confirm-match", (req, res) => {
+app.post("/api/listings/:id/confirm-match", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入才能併入同房源" });
     return;
   }
-  const result = confirmSuspectedMatch(Number(req.params.id), session.userId, {
+  const result = await confirmSuspectedMatchAsync(Number(req.params.id), session.userId, {
     admin: session.role === "admin",
   });
   if (!result?.ok && !result?.listing) {
@@ -4120,13 +4121,13 @@ app.post("/api/listings/:id/confirm-match", (req, res) => {
   });
 });
 
-app.post("/api/listings/merge-same-house", (req, res) => {
+app.post("/api/listings/merge-same-house", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入才能併入同房源" });
     return;
   }
-  const result = mergeSameHouseForUser(session.userId, req.body?.ids || req.body?.post_ids, {
+  const result = await mergeSameHouseForUserAsync(session.userId, req.body?.ids || req.body?.post_ids, {
     admin: session.role === "admin",
   });
   if (!result?.ok) {
