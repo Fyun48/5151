@@ -427,6 +427,118 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 內容文件 PG 分支的變異集（v3/test/content-documents-async.test.js）。
+// 這一組的重點是「不可變性」——那是用 PG trigger 實作的業務規則，不是加固。
+const CD_SRC = "v3/src/contentDocumentsAsync.js";
+const CD_SYNC_SRC = "v3/src/contentDocuments.js";
+const CONTENTDOCS_MUTATIONS = [
+  {
+    name: "PG trigger 寫回 SQLite 語法 IS NOT OLD.body（PG 直接語法錯誤）",
+    file: CD_SRC,
+    from: "       NEW.body IS DISTINCT FROM OLD.body",
+    to: "       NEW.body IS NOT OLD.body",
+    expect: "PG 的觸發器 SQL 必須用 IS DISTINCT FROM",
+  },
+  {
+    name: "PG trigger 寫回 RAISE(ABORT)（那是 SQLite 的寫法）",
+    file: CD_SRC,
+    from: "       RAISE EXCEPTION 'published_document_immutable';",
+    to: "       RAISE(ABORT, 'published_document_immutable');",
+    expect: "PG 的觸發器 SQL 必須用 IS DISTINCT FROM",
+  },
+  {
+    name: "不可變清單漏掉 content_hash（已發布文件的指紋可以被改）",
+    file: CD_SRC,
+    from: "       OR NEW.content_hash IS DISTINCT FROM OLD.content_hash\n",
+    to: "",
+    expect: "PG 的觸發器 SQL 必須用 IS DISTINCT FROM",
+  },
+  {
+    name: "bootstrap 先建 trigger 才建函式（PG 會找不到函式而失敗）",
+    file: CD_SRC,
+    from: "    await pgDriver.exec(PG_IMMUTABLE_FUNCTION_SQL);\n    await pgDriver.exec(PG_DROP_TRIGGER_SQL);\n    await pgDriver.exec(PG_CREATE_TRIGGER_SQL);",
+    to: "    await pgDriver.exec(PG_CREATE_TRIGGER_SQL);\n    await pgDriver.exec(PG_IMMUTABLE_FUNCTION_SQL);\n    await pgDriver.exec(PG_DROP_TRIGGER_SQL);",
+    expect: "PG 的觸發器 SQL 必須用 IS DISTINCT FROM",
+  },
+  {
+    name: "schema bootstrap 不快取（每次呼叫都重建一次）",
+    file: CD_SRC,
+    from: "  if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);\n",
+    to: "",
+    expect: "PG 的觸發器 SQL 必須用 IS DISTINCT FROM",
+  },
+  {
+    name: "拿掉應用層的「已發布不可改本文」檢查（只剩 DB trigger 擋，回傳變成 500）",
+    file: CD_SRC,
+    from: '      if (input.title != null || input.body != null || input.format != null || input.check_label != null) {\n        throw httpError("已發布版本不可改本文；請建立新版本", 409);\n      }\n',
+    to: "",
+    expect: "已發布的文件：改本文必須被擋",
+  },
+  {
+    name: "拿掉重複版本號的檢查（同一版可以寫兩次）",
+    file: CD_SRC,
+    from: '    if (await readByTypeVersion(exec, type, version)) throw httpError("這個版本號已存在", 409);\n',
+    to: "",
+    expect: "同一個版本號第二次要被擋",
+  },
+  {
+    name: "生效判定不看 enabled（停用的版本仍會生效）",
+    file: CD_SYNC_SRC,
+    from: '  if (!doc || doc.status !== "published" || !doc.enabled) return false;',
+    to: '  if (!doc || doc.status !== "published") return false;',
+    expect: "目前生效版本",
+  },
+  {
+    name: "生效判定不看 effective_from（未到生效日就生效）",
+    file: CD_SYNC_SRC,
+    from: "  if (doc.effective_from && String(doc.effective_from) > nowIso) return false;\n",
+    to: "",
+    expect: "目前生效版本",
+  },
+  {
+    name: "開新版本不記 supersedes_id（版本鏈斷掉）",
+    file: CD_SRC,
+    from: "    supersedes_id: doc.id,",
+    to: "    supersedes_id: null,",
+    expect: "從已發布版本開新草稿",
+  },
+  {
+    name: "重複發布不再提前回（會多寫一筆 publish 稽核）",
+    file: CD_SRC,
+    from: '    if (doc.status === "published") return doc; // 已發布 ⇒ 直接回，不重複寫稽核（同步版同義）\n',
+    to: "",
+    expect: "發布：狀態、published_at",
+  },
+  {
+    name: "旗標的三態判斷壞掉（沒帶的欄位會被重設成 0）",
+    file: CD_SRC,
+    from: "  return current ? 1 : 0;",
+    to: "  return 0;",
+    expect: "更新草稿：只改帶到的欄位",
+  },
+  {
+    name: "拿掉不安全標記的檢查（可以存進 script 標籤）",
+    file: CD_SYNC_SRC,
+    from: '  if (containsUnsafeMarkup(body) || containsUnsafeMarkup(title) || containsUnsafeMarkup(check_label)) {\n    throw httpError("內容含有不安全標記，已拒絕儲存", 400);\n  }\n',
+    to: "",
+    expect: "建立草稿：未知文件類型、空標題、不安全標記",
+  },
+  {
+    name: "稽核事件的 limit 不再夾範圍（可以一次拉整張表）",
+    file: CD_SRC,
+    from: "  const n = Math.min(200, Math.max(1, Number(limit) || 50));",
+    to: "  const n = Number(limit) || 50;",
+    expect: "稽核事件列表",
+  },
+  {
+    name: "legalCopy 不再退回預設文案（沒有文件時條款變空字串）",
+    file: CD_SRC,
+    from: "    disclaimer: terms?.body || defaults.disclaimer,",
+    to: "    disclaimer: terms?.body,",
+    expect: "註冊必要文件與 legalCopy",
+  },
+];
+
 // 會員照片素材庫 PG 分支的變異集（v3/test/member-media-async.test.js）。
 const MM_SRC = "v3/src/memberMediaAsync.js";
 const MM_SYNC_SRC = "v3/src/memberMedia.js";
@@ -1003,7 +1115,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
+const MUTATIONS = /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
+  : /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS

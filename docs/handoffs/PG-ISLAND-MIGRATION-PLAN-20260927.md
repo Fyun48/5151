@@ -917,6 +917,67 @@ bootstrap 要處理的情境），於是迴圈第一次真的執行，就炸了�
   `assertSameRows` 直接断言「兩邊都是 0 列時這個比對沒有鑑別力」。修成留一個不會被刪的標籤。
   ——這正是那條守衛存在的理由。
 
+### 第十六批（2026-09-27）：`contentDocuments.js`（條款／隱私權，9 條路由）
+
+`v3/src/contentDocumentsAsync.js`（新）＋ 9 條路由改 async。
+SQLite 17→**15**、MIXED 146→**139**、PG 105→**114**、缺口 163→**154**。
+
+#### 16.1 這批的核心：**不可變性是用 SQLite TRIGGER 實作的**
+
+同步版不是用程式碼擋「已發布文件被改本文」，而是建了一個 SQLite trigger
+（`contentDocuments.js:106`）：
+
+```sql
+BEFORE UPDATE ON content_documents
+WHEN OLD.status = 'published' AND (NEW.body IS NOT OLD.body OR …)
+BEGIN SELECT RAISE(ABORT, 'published_document_immutable'); END;
+```
+
+**PG 完全不吃這個語法**：沒有 `IS NOT OLD.x`（PG 要用 `IS DISTINCT FROM`，因為 `IS NOT`
+不能比 NULL），也沒有 `RAISE(ABORT)`。等價寫法是 plpgsql 函式 ＋
+`CREATE TRIGGER … EXECUTE FUNCTION`，而且 PG 沒有 `CREATE TRIGGER IF NOT EXISTS`，
+所以 bootstrap 的順序必須是 **建函式 → DROP TRIGGER → CREATE TRIGGER**。
+
+**這不是加固，是一條真的業務規則**：已發布的條款若能被事後改掉，使用者同意過的版本
+就會跟畫面不一致。少了它，PG 上等於沒有這個保護。
+
+離線 parity 用的是記憶體 SQLite（跑的是 SQLite 那一版 trigger），所以它**證明不了**
+PG 的 trigger 真的建得起來、真的擋得住。這正是上一批（memberMedia）的教訓，所以這次
+直接補了 `content-documents-live-pg.test.js`：在隔離的 repro PG 上發發布一份文件，
+然後**直接對 PG 下 UPDATE** 改 body／title／check_label／content_hash／version，
+逐欄確認被 `published_document_immutable` 擋下；再反向確認改旗標（enabled／
+effective_until）**不會**被誤擋。
+
+#### 16.2 變異測試逼出兩條「看起來有驗、其實沒驗」的測試
+
+第一次跑變異是 **13/15**，兩條 SURVIVED，兩條都是真的覆蓋缺口：
+
+| 變異 | 為什麼原本殺不掉 | 修法 |
+|---|---|---|
+| 拿掉 `containsUnsafeMarkup` 檢查 | 我把不安全標記放在 **body**，但 `sanitizeDocumentBody()` 會**先剝掉** `<script>…</script>`，所以那個檢查永遠不會被觸發 | 改放 **title**／check_label（走 `sanitizeDocumentText()`，只去 NUL／換行、不剝標記） |
+| 拿掉稽核事件 limit 的夾範圍 | 只比對回傳值驗不到：當時只有 3 筆事件，`limit=200` 與 `limit=999` 結果一樣 | 改成**直接驗送進 SQL 的參數**（包一層 spy 記錄 `LIMIT ?` 的實參） |
+
+順帶又抓到一次「憑印象寫期望值」：我原本斷言 `limit: 0` 會被夾成 1，實際上
+`Number(limit) \|\| 50` 讓 `0` 先變成 50（`Math.max` 之前就替換掉了，同步版一模一樣）。
+**期望值要讀程式碼，不要讀直覺。**
+
+#### 16.3 測試冪等性：live 測試重跑會失敗
+
+`member-media-live-pg` 第一次重跑就紅了：它刻意在**索引不存在**的狀態下種兩筆同名標籤，
+但上一次執行已經把唯一索引建起來了 ⇒ 種資料這一步先撞索引。
+修法是**先 `DROP INDEX IF EXISTS` 還原成正式站目前的狀態**再種。
+**live 測試會在同一台隔離 PG 上反覆執行，凡是「驗 bootstrap 補建」的測試都必須自己
+把環境還原成「還沒補建」的樣子。**
+
+#### 16.4 驗收
+
+* `v3/test/content-documents-async.test.js` **15/15**（新）。
+* 變異測試 **15/15 KILLED**（含把 trigger 寫回 SQLite 語法、漏掉不可變欄位、
+  bootstrap 順序顛倒、拿掉應用層 409 檢查、版本號重複、生效判定漏 enabled／effective_from、
+  supersedes_id、重複發布的稽核、旗標三態、不安全標記、limit 夾範圍、預設法務文案）。
+* **live PG 1/1**（隔離 repro）；既有 `content-documents.test.js` 7/7 不變；
+  尺規守衛 14/14 不變。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。

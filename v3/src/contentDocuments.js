@@ -65,13 +65,13 @@ export function documentFingerprint(input = {}) {
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
-function httpError(message, status = 400) {
+export function httpError(message, status = 400) {
   const err = new Error(message);
   err.status = status;
   return err;
 }
 
-function iso(now = new Date()) {
+export function iso(now = new Date()) {
   return (now instanceof Date ? now : new Date(now)).toISOString();
 }
 
@@ -135,14 +135,16 @@ export function ensureContentDocumentSchema(db) {
   }
 }
 
-function audit(db, { document_id, document_type, version, action, actor_id, content_hash, now }) {
-  db.prepare(
-    `INSERT INTO content_document_events(document_id, document_type, version, action, actor_id, content_hash, created_at)
-     VALUES (?,?,?,?,?,?,?)`,
-  ).run(document_id || null, document_type, version || null, action, actor_id || null, content_hash || "", iso(now));
+export function auditEventParams({ document_id, document_type, version, action, actor_id, content_hash, now }) {
+  return [document_id || null, document_type, version || null, action, actor_id || null, content_hash || "", iso(now)];
 }
 
-function rowToDoc(row) {
+function audit(db, { document_id, document_type, version, action, actor_id, content_hash, now }) {
+  db.prepare(INSERT_EVENT_SQL)
+    .run(document_id || null, document_type, version || null, action, actor_id || null, content_hash || "", iso(now));
+}
+
+export function rowToDoc(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
@@ -187,17 +189,17 @@ export function adminDocumentView(doc) {
   return doc;
 }
 
-function assertType(type) {
+export function assertType(type) {
   const id = String(type || "");
   if (!isKnownDocType(id)) throw httpError("未知的文件類型", 400);
   return id;
 }
 
-function normalizeFormat(format) {
+export function normalizeFormat(format) {
   return String(format || "plain") === "markdown" ? "markdown" : "plain";
 }
 
-function inEffect(doc, nowIso) {
+export function inEffect(doc, nowIso) {
   if (!doc || doc.status !== "published" || !doc.enabled) return false;
   if (doc.effective_from && String(doc.effective_from) > nowIso) return false;
   if (doc.effective_until && String(doc.effective_until) <= nowIso) return false;
@@ -242,12 +244,18 @@ export function assertRequiredRegistrationReady(db, { now = new Date() } = {}) {
   }
 }
 
+export const NEXT_VERSION_SQL =
+  "SELECT MAX(version) AS n FROM content_documents WHERE document_type=?"; // contentDocuments.js:246
+export const INSERT_EVENT_SQL =
+  `INSERT INTO content_document_events(document_id, document_type, version, action, actor_id, content_hash, created_at)
+   VALUES (?,?,?,?,?,?,?)`; // contentDocuments.js:139
+
 function nextVersion(db, type) {
-  const row = db.prepare("SELECT MAX(version) AS n FROM content_documents WHERE document_type=?").get(type);
+  const row = db.prepare(NEXT_VERSION_SQL).get(type);
   return (Number(row?.n) || 0) + 1;
 }
 
-function validatePayload(input = {}) {
+export function validatePayload(input = {}) {
   const title = sanitizeDocumentText(input.title, CONTENT_TITLE_MAX);
   const format = normalizeFormat(input.format);
   const body = sanitizeDocumentBody(input.body, format);

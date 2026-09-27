@@ -298,6 +298,20 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
+// 內容文件（條款／隱私權）的 PG 島嶼入口。
+// `legalCopyFromDocumentsAsync` 是很多條路由的共用卡點（/api/disclaimer、/api/me、註冊流程…）。
+import {
+  createDraftAsync as createContentDraftAsync,
+  createDraftFromPublishedAsync as newContentVersionAsync,
+  getDocumentByIdAsync as getContentDocumentAsync,
+  getEffectiveDocumentAsync,
+  getRequiredRegistrationDocumentsAsync,
+  legalCopyFromDocumentsAsync,
+  listDocumentEventsAsync as listContentEventsAsync,
+  listDocumentsAsync as listContentDocumentsAsync,
+  publishDocumentAsync as publishContentDocumentAsync,
+  updateDraftAsync as updateContentDraftAsync,
+} from "./contentDocumentsAsync.js";
 // 會員照片素材庫的 PG 島嶼入口（8 條 /api/media* 路由）。
 // ⚠️ 不含 `POST /api/media`（上傳）：`saveMemberMedia()` 的交易橫跨影像處理與 R2 上傳，
 // 那是獨立一批（見 memberMediaAsync.js 檔頭）。
@@ -838,20 +852,20 @@ app.get("/api/disclaimer", (_req, res) => {
   res.json(getLegalCopy());
 });
 
-app.get("/api/public/documents", (_req, res) => {
+app.get("/api/public/documents", async (_req, res) => {
   try {
     res.json({
       types: Object.values(DOC_TYPES).map((row) => ({ id: row.id, label: row.label, required_at: row.required_at })),
-      required: getRequiredRegistrationDocuments(),
+      required: await getRequiredRegistrationDocumentsAsync(),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/public/documents/:type", (req, res) => {
+app.get("/api/public/documents/:type", async (req, res) => {
   try {
-    const doc = getEffectiveDocument(req.params.type);
+    const doc = await getEffectiveDocumentAsync(req.params.type);
     if (!doc || doc.status !== "published" || !doc.enabled) {
       res.status(404).json({ error: "找不到目前有效的文件" });
       return;
@@ -2349,57 +2363,57 @@ app.put("/api/admin/legal-copy", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/documents", requireAdminApi, (req, res) => {
+app.get("/api/admin/documents", requireAdminApi, async (req, res) => {
   res.json({
     types: Object.values(DOC_TYPES),
-    items: listContentDocuments({ type: req.query?.type, includeDrafts: true }),
+    items: await listContentDocumentsAsync({ type: req.query?.type, includeDrafts: true }),
   });
 });
 
-app.get("/api/admin/documents/:id/events", requireAdminApi, (req, res) => {
-  res.json({ items: listContentEvents({ documentId: req.params.id }) });
+app.get("/api/admin/documents/:id/events", requireAdminApi, async (req, res) => {
+  res.json({ items: await listContentEventsAsync({ documentId: req.params.id }) });
 });
 
-app.get("/api/admin/documents/:id", requireAdminApi, (req, res) => {
-  const doc = getContentDocument(req.params.id);
+app.get("/api/admin/documents/:id", requireAdminApi, async (req, res) => {
+  const doc = await getContentDocumentAsync(req.params.id);
   if (!doc) {
     res.status(404).json({ error: "找不到文件" });
     return;
   }
-  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format), events: listContentEvents({ documentId: doc.id }) });
+  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format), events: await listContentEventsAsync({ documentId: doc.id }) });
 });
 
-app.post("/api/admin/documents", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.status(201).json(createContentDraft(req.body || {}, { actorId: session?.userId || 0 }));
+    res.status(201).json(await createContentDraftAsync(req.body || {}, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/documents/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/documents/:id", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(updateContentDraft(req.params.id, req.body || {}, { actorId: session?.userId || 0 }));
+    res.json(await updateContentDraftAsync(req.params.id, req.body || {}, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/documents/:id/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents/:id/publish", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(publishContentDocument(req.params.id, { actorId: session?.userId || 0 }));
+    res.json(await publishContentDocumentAsync(req.params.id, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents/:id/new-version", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.status(201).json(newContentVersion(req.params.id, { actorId: session?.userId || 0 }));
+    res.status(201).json(await newContentVersionAsync(req.params.id, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

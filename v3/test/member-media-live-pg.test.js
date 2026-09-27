@@ -43,6 +43,11 @@ test("live PG：兩個唯一索引真的存在，而且擋得住重複的標籤�
   };
   await cleanup();
 
+  // ⚠️ 這支測試必須**冪等**：上一次執行會把唯一索引建起來，那樣「種兩筆同名標籤」這一步
+  // 會直接撞索引而失敗（第一次重跑就是這樣紅的）。所以先把它還原成正式站目前的狀態
+  // ——索引不存在——再種重複資料，才是在驗「bootstrap 能不能補建」。
+  await query("DROP INDEX IF EXISTS media_tags_user_name_key");
+
   // 刻意先種兩筆同名標籤：bootstrap 必須先清重複才建得起唯一索引。
   const stamp = "2026-06-01T00:00:00.000Z";
   const t1 = await query("INSERT INTO media_tags(user_id,name,created_at) VALUES ($1,'重複',$2) RETURNING id", [UID, stamp]);
