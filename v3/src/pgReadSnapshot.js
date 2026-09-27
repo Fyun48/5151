@@ -22,6 +22,20 @@ export async function withPgReadSnapshot(driver, run) {
       return result;
     });
   };
+  // 2026-09-27：pg 的 Client 是 EventEmitter，而**未處理的 'error' 事件會直接讓行程崩潰**
+  // （實測：`throw er; // Unhandled 'error' event`、exit code 1），不是可 catch 的 rejection。
+  //
+  // 這條路徑真的會遇到：讀取快照為了整個請求持有這條連線，而 App 經由 HAProxy 連 PG，
+  // HAProxy 設 `timeout client 30s`；只要閒置超過 30 秒就會被切斷，屆時 pg 會在 client 上
+  // 發出 'error'。crawlOwnership.js 已經有同樣的防護（client.on('error', …)），這裡先前漏了。
+  // 掛上監聽後，同樣情況會變成「下一次查詢正常地 reject」，而不是把整個 process 帶走。
+  //
+  // 註：實測正常搜尋讀取的快照總持有約 330ms、兩次 DB 呼叫最大間隔約 43ms，
+  // 距離 30 秒有極大餘裕；這裡修的是「萬一真的超過」時的爆炸半徑。
+  let clientError = null;
+  const onClientError = (error) => { clientError = error; };
+  if (typeof client.on === 'function') client.on('error', onClientError);
+
   let broken = null;
   try {
     await query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
@@ -75,9 +89,13 @@ export async function withPgReadSnapshot(driver, run) {
         store:driver.candidateContent,sql,params,options}),
     });
   } finally {
+    // 先移除監聽再收尾，避免收尾期間的錯誤又走回同一個 handler。
+    if (typeof client.removeListener === 'function') client.removeListener('error', onClientError);
     try { await query('ROLLBACK'); }
     catch (error) { broken=error; }
-    client.release(broken || undefined);
+    // clientError 代表這條連線已經在閒置中被切斷（例如超過 HAProxy 的 timeout client）。
+    // 這種連線必須銷毀、不可還給連線池，否則下一個使用者會拿到一條已死的連線。
+    client.release(broken || clientError || undefined);
   }
 }
 
