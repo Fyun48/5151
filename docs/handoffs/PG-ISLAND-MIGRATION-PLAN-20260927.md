@@ -752,6 +752,23 @@ node v3/scripts/route-data-map.mjs
 4. 真的 SQLite schema **有 FOREIGN KEY**（PG 那三張表沒有）：測試裡 `DELETE FROM users`
    會直接 `FOREIGN KEY constraint failed`，要改成只刪自己造的那一批。
 
+#### 13.7 同一輪的收尾：靜態資產判斷漏掉 public 根目錄
+
+`isStaticAssetPath()` 第一版只認 `/vendor/`、`/icons/`、`/brand/`、`/media/` 四個前綴。
+但**最大一批靜態檔是 `express.static(v3/public)` 從 public 根目錄服務的**
+（`/app.js`、`/support-page.css`、`/admin-support.js`…），那些全部沒被跳過——
+登入者每次載入頁面都會為每個檔案各查一次 `users`，正是這個跳過機制要避免的成本。
+
+改成「**符合靜態副檔名、且不在 `/api/` 底下**」，四個前綴自然被涵蓋。
+安全前提是「沒有動態路由長得像靜態檔」；目前唯一符合的是 `GET /sw.js`
+（純 `sendFile`，用 `_req` 不讀 session）。這個前提**不再靠假設**：
+`route-data-map.test.js` 加了一條守衛盯著它，之後有人加了會讀 session 的副檔名路由，
+那一條會紅並指向 `auth.js` 的 `DYNAMIC_ASSET_PATHS`。
+
+> 📌 `session-async` 變異集隨之擴到 **11 條**（多一條「退回四個前綴」）。
+> 過程中踩到一次**假 SURVIVED**：我把測試名改了，但變異集的 `expect` 沒跟著改，
+> 結果是「有殺手卻指名不到」。**變異工具比對的是測試名稱，改測試名一定要同步改 `expect`。**
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。
