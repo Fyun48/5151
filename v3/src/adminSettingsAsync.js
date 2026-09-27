@@ -25,8 +25,12 @@ import {
   sponsorCatalog,
 } from "./sponsorLinks.js";
 import { normalizeMailTemplates, normalizeSmtp, publicSmtp, smtpFromEnv } from "./siteMail.js";
+import { adminSiteAdsView, normalizeSiteAds } from "./siteAds.js";
+import { adminBroadcastsView, normalizeBroadcasts } from "./broadcasts.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
 import {
+  getAdminAdsSettings as getAdminAdsSettingsSync,
+  getAdminBroadcastsSettings as getAdminBroadcastsSettingsSync,
   getAdminMailSettings as getAdminMailSettingsSync,
   getAdminOauthSettings as getAdminOauthSettingsSync,
   getAdminSponsorSettings as getAdminSponsorSettingsSync,
@@ -152,4 +156,19 @@ export async function saveBrandMascotAsync(partial = {}, options = {}) {
   });
   await setSiteSettingAsync(BRAND_MASCOT_KEY, next, options);
   return getBrandMascotAsync(options);
+}
+
+// ---- 站台廣告／廣播（唯讀）----
+//
+// 這兩個是**純讀取**（各自的 `save*` 是 `rejectLegacy*Mutation()`，一律拒絕舊介面），
+// 所以與郵件／OAuth 那兩個「會寫節點本機 auth.env」的情況不同，可以安全移植。
+// 邏輯只有「讀 settings 的一個鍵 → normalize → 後台視圖」，純函式完全重用。
+export async function getAdminAdsSettingsAsync(options = {}) {
+  if (!isPg(options)) return getAdminAdsSettingsSync();
+  return adminSiteAdsView(normalizeSiteAds(await getSiteSettingAsync("siteAds", options)));
+}
+
+export async function getAdminBroadcastsSettingsAsync(options = {}) {
+  if (!isPg(options)) return getAdminBroadcastsSettingsSync();
+  return adminBroadcastsView(normalizeBroadcasts(await getSiteSettingAsync("broadcasts", options)));
 }

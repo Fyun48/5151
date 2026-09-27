@@ -299,6 +299,7 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
+import { getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
 import {
   applyRentalCatalogTemplateAsync,
@@ -1615,8 +1616,8 @@ app.put("/api/admin/sponsor", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/ads", requireAdminApi, (_req, res) => {
-  res.json(getAdminAdsSettings());
+app.get("/api/admin/ads", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminAdsSettingsAsync());
 });
 
 app.put("/api/admin/ads", requireAdminApi, (req, res) => {
@@ -1668,8 +1669,8 @@ app.get("/media/brand/:file", (req, res) => {
   res.sendFile(path.resolve(full));
 });
 
-app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
-  res.json(getAdminBroadcastsSettings());
+app.get("/api/admin/broadcasts", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminBroadcastsSettingsAsync());
 });
 
 app.put("/api/admin/broadcasts", requireAdminApi, (req, res) => {

@@ -1151,6 +1151,20 @@ const SESSION_MUTATIONS = [
 // 這一組的 port 都很短，所以每一條都要證明「拿掉就失敗」，不能靠「看起來一樣」。
 const ADMSET_MUTATIONS = [
   {
+    name: "廣告設定不查 PG（永遠回預設值）",
+    file: ADMSET_SRC,
+    from: '  return adminSiteAdsView(normalizeSiteAds(await getSiteSettingAsync("siteAds", options)));',
+    to: "  return adminSiteAdsView(normalizeSiteAds(undefined));",
+    expect: "有存值時要用存的那一份",
+  },
+  {
+    name: "廣播設定不查 PG（永遠回預設值）",
+    file: ADMSET_SRC,
+    from: '  return adminBroadcastsView(normalizeBroadcasts(await getSiteSettingAsync("broadcasts", options)));',
+    to: "  return adminBroadcastsView(normalizeBroadcasts(undefined));",
+    expect: "getAdminBroadcastsSettingsAsync",
+  },
+  {
     name: "拿掉 getStoredSmtp 的環境變數 fallback（未設定 SMTP 的站台會寄不出信）",
     file: ADMSET_SRC,
     from: '  return smtpFromEnv();',

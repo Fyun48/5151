@@ -33,6 +33,8 @@ const sync = {
   getSponsorConfig: db.getSponsorConfig,
   getAdminSponsorSettings: db.getAdminSponsorSettings,
   saveAdminSponsorSettings: db.saveAdminSponsorSettings,
+  getAdminAdsSettings: db.getAdminAdsSettings,
+  getAdminBroadcastsSettings: db.getAdminBroadcastsSettings,
   getBrandMascot: db.getBrandMascot,
   saveBrandMascot: db.saveBrandMascot,
   publicSponsorSettings: db.publicSponsorSettings,
@@ -76,7 +78,7 @@ function resetKeys(h) {
 function seed(h, key, value) {
   h.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)").run(key, JSON.stringify(value));
 }
-const rowsOf = (h) => h.prepare("SELECT key, value FROM settings WHERE key IN ('smtp','mailTemplates','oauth','sponsorLinks','brandMascot') ORDER BY key").all();
+const rowsOf = (h) => h.prepare("SELECT key, value FROM settings WHERE key IN ('smtp','mailTemplates','oauth','sponsorLinks','brandMascot','siteAds','broadcasts') ORDER BY key").all();
 
 // 兩邊都放同一組底料。
 function resetBoth(seedFn) {
@@ -248,4 +250,57 @@ test("夾具本身要真的拒絕 SQLite 專屬語法（否則上面的方言守
   await assert.rejects(() => exec("SELECT 1 LIMIT -1 OFFSET 0"), /LIMIT must not be negative/);
   await assert.rejects(() => exec("SELECT IFNULL(key,'') FROM settings"), /function ifnull/);
   await assert.doesNotReject(() => exec("SELECT MIN(key) AS x FROM settings"), "單引數聚合 MIN 必須放行");
+});
+
+// ---- 站台廣告／廣播（唯讀）----
+//
+// 這兩個是「讀一個 settings 鍵 ＋ 一個純函式 ＋ 後台視圖」，形狀與前面的都一樣；
+// 風險在於 `normalizeSiteAds`／`normalizeBroadcasts` 會補一堆預設欄位——
+// 所以斷言要**逐欄**比對，不能只比「不是 null」。
+
+test("getAdminAdsSettingsAsync：沒有存值時回預設，且逐欄與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  const a = await asyncMod.getAdminAdsSettingsAsync({ ...PG, exec });
+  const b = sync.getAdminAdsSettings();
+  assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort(), "鍵集合必須相同");
+  for (const key of Object.keys(b)) assert.deepEqual(a[key], b[key], `${key} 必須相同`);
+  assert.ok(Object.keys(a).length > 0, "後台視圖不得是空物件，否則比對沒有鑑別力");
+  disk.close();
+});
+
+test("getAdminAdsSettingsAsync：有存值時要用存的那一份（不是預設）", async () => {
+  // ⚠️ seed 一定要**踩到真正的巢狀路徑**：`normalizeSiteAds` 的形狀是
+  // `{slots:{listings:{enabled,title,url,…}, …}}`，給一個頂層 `{enabled:true}` 會被忽略，
+  // 於是「有沒有查 PG」算出來一樣 ⇒ 變異殺不死（第一版就是這樣）。
+  const [disk, exec] = resetBoth((h) => seed(h, "siteAds", {
+    slots: { listings: { enabled: true, title: "版位標題", text: "說明", url: "https://ad.example.test/x" } },
+  }));
+  const a = await asyncMod.getAdminAdsSettingsAsync({ ...PG, exec });
+  const b = sync.getAdminAdsSettings();
+  for (const key of Object.keys(b)) assert.deepEqual(a[key], b[key], `${key} 必須相同`);
+  disk.close();
+});
+
+test("getAdminBroadcastsSettingsAsync：逐欄與同步版相同（有存值與沒存值都驗）", async () => {
+  const [disk, exec] = resetBoth();
+  // 同上：廣播的形狀是 `{items:{announcement:{…},news:{…},sponsor:{…}}}`。
+  const storedBroadcasts = {
+    items: { news: { enabled: true, title: "快訊標題", body: "快訊內容", url: "https://news.example.test/y", hops: 5 } },
+  };
+  // ⚠️ 分成兩段，不要寫成迴圈裡再 `resetBoth()`：那會建出**新的**夾具卻忘了重新綁定 `exec`，
+  // 斷言就變成拿舊夾具比新磁碟（第一版就是這樣紅的）。
+  for (const [label, seedFn, seedable] of [["沒有存值", null, false], ["有存值", (h) => seed(h, "broadcasts", storedBroadcasts), true]]) {
+    const [d, e] = seedable ? resetBoth(seedFn) : resetBoth();
+    const a = await asyncMod.getAdminBroadcastsSettingsAsync({ ...PG, exec: e });
+    const b = sync.getAdminBroadcastsSettings();
+    assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort(), `${label}：鍵集合必須相同`);
+    for (const key of Object.keys(b)) assert.deepEqual(a[key], b[key], `${label}：${key} 必須相同`);
+    d.close();
+  }
+  // 反向：非 postgres 模式讀磁碟那一份。
+  const [d2, e2] = resetBoth();
+  assert.deepEqual(await asyncMod.getAdminBroadcastsSettingsAsync({ driver: "sqlite", exec: e2 }), sync.getAdminBroadcastsSettings());
+  assert.deepEqual(await asyncMod.getAdminAdsSettingsAsync({ driver: "sqlite", exec: e2 }), sync.getAdminAdsSettings());
+  d2.close();
+  disk.close();
 });
