@@ -427,6 +427,110 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 租屋目錄 PG 分支的變異集（v3/test/rental-catalog-async.test.js）。
+// 這一組的重點是**行程內快取的一致性**：PG 寫完只改 DB 不改快取，同步路徑就會拿到舊目錄。
+const RC_SRC = "v3/src/rentalCatalogAsync.js";
+const RENTALCAT_MUTATIONS = [
+  {
+    name: "寫入目錄後不更新行程內快取（後台改完、前台沒變）",
+    file: RC_SRC,
+    from: "    await writePg(KEYS.draft, null, options);\n    hydrateCaches(next, await readFlagsPg(options));\n    return publicAdminCatalog(next);",
+    to: "    await writePg(KEYS.draft, null, options);\n    return publicAdminCatalog(next);",
+    expect: "寫入目錄",
+  },
+  {
+    name: "讀取目錄時不把快取收斂到 PG（節點會一直用開機時那一份）",
+    file: RC_SRC,
+    from: "  hydrateCaches(catalog, flags);\n  return { catalog, flags };",
+    to: "  return { catalog, flags };",
+    expect: "讀取：沒有 stored 值時回預設目錄",
+  },
+  {
+    name: "發布草稿後不更新快取（前台繼續用舊目錄）",
+    file: RC_SRC,
+    from: "    await writePg(KEYS.draft, null, options);\n    hydrateCaches(draft, await readFlagsPg(options));\n    return publicAdminCatalog(draft);",
+    to: "    await writePg(KEYS.draft, null, options);\n    return publicAdminCatalog(draft);",
+    expect: "草稿：儲存／讀回／發布",
+  },
+  {
+    name: "發布草稿時不清掉草稿鍵（會一直停在「有待確認草稿」）",
+    file: RC_SRC,
+    from: "    await writePg(KEYS.catalog, draft, options);\n    await writePg(KEYS.draft, null, options);",
+    to: "    await writePg(KEYS.catalog, draft, options);",
+    expect: "草稿：儲存／讀回／發布",
+  },
+  {
+    name: "沒有草稿時不擋（回傳 null 而不是 400）",
+    file: RC_SRC,
+    from: '    if (!draft) throw badRequest("沒有待確認的目錄草稿");\n',
+    to: "",
+    expect: "發布沒有草稿時",
+  },
+  {
+    name: "草稿沒有先過安全檢查就落地",
+    file: RC_SRC,
+    from: "  const next = normalizeCatalog(catalogInput);\n  assertCatalogSafe(next);\n  return withFallback(options, {}, async () => {",
+    to: "  const next = normalizeCatalog(catalogInput);\n  return withFallback(options, {}, async () => {",
+    expect: "安全檢查",
+  },
+  {
+    name: "目錄寫入沒有先過安全檢查就落地",
+    file: RC_SRC,
+    from: "  const next = normalizeCatalog(src.catalog || src);\n  assertCatalogSafe(next);\n  return withFallback(options, {}, async () => {",
+    to: "  const next = normalizeCatalog(src.catalog || src);\n  return withFallback(options, {}, async () => {",
+    expect: "安全檢查",
+  },
+  {
+    name: "mutate 不支援的動作不再擋（靜靜寫回原目錄）",
+    file: RC_SRC,
+    from: '      throw badRequest("不支援的目錄操作");\n',
+    to: "",
+    expect: "mutate：不支援的動作",
+  },
+  {
+    name: "delete_condition 不看引用數（有引用的條件被硬刪）",
+    file: RC_SRC,
+    from: "      const refs = await catalogConditionReferencesAsync(payload.id, options);\n      const result = deleteOrDisableCondition(catalog, payload.id, refs);",
+    to: "      const result = deleteOrDisableCondition(catalog, payload.id, {});",
+    expect: "mutate：upsert",
+  },
+  {
+    name: "系統範本不再受保護（可以改名／覆寫／刪除）",
+    file: RC_SRC,
+    from: '    if (isSystemCatalogTemplate(next.id) || isSystemCatalogTemplate(input.id)) {\n      throw badRequest("系統範本只能套用，不能改名或覆寫");\n    }\n',
+    to: "",
+    expect: "範本：列表、新增、改名、刪除",
+  },
+  {
+    name: "改名範本時不驗系統範本",
+    file: RC_SRC,
+    from: '    if (isSystemCatalogTemplate(id)) throw badRequest("系統範本不能改名稱");\n',
+    to: "",
+    expect: "範本：列表、新增、改名、刪除",
+  },
+  {
+    name: "刪除範本時不驗系統範本",
+    file: RC_SRC,
+    from: '    if (isSystemCatalogTemplate(id)) throw badRequest("系統範本不能刪除");\n',
+    to: "",
+    expect: "範本：列表、新增、改名、刪除",
+  },
+  {
+    name: "套用範本時找不到也不擋（回 undefined）",
+    file: RC_SRC,
+    from: '    if (!template) throw Object.assign(new Error("找不到這個範本"), { status: 404 });\n',
+    to: "",
+    expect: "找不到範本時",
+  },
+  {
+    name: "寫入不再 fail-closed（PG 失敗就無聲寫進沒人讀的 SQLite）",
+    file: RC_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write: !read })) throw error;\n    return runSqlite();",
+    to: "    return runSqlite();",
+    expect: "strict：PG 失敗時必須往上丟",
+  },
+];
+
 // comms（公告／贊助活動）PG 分支的變異集（v3/test/comms-async.test.js）。
 const COMMS_SRC = "v3/src/commsAsync.js";
 const COMMS_SYNC_SRC = "v3/src/comms.js";
@@ -1236,7 +1340,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /comms-async/.test(testFile) ? COMMS_MUTATIONS
+const MUTATIONS = /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
+  : /comms-async/.test(testFile) ? COMMS_MUTATIONS
   : /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
   : /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS

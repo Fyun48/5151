@@ -1043,6 +1043,52 @@ ON CONFLICT(announcement_id, user_id) DO UPDATE SET dismissed_at = excluded.dism
 * `v3/test/comms-async.test.js` **16/16**（新）；變異測試 **16/16 KILLED**。
 * 尺規變異 **7/7 KILLED**；既有 `comms.test.js` 8/8 不變。
 
+### 第十八批（2026-09-27）：`rentalCatalog.js`（租屋目錄，9 條路由）
+
+`v3/src/rentalCatalogAsync.js`（新）＋ 9 條路由改 async。
+SQLite 12（不變）、MIXED 128→**119**、PG 128→**137**、缺口 140→**131**。
+
+#### 18.1 這個模組幾乎沒有 SQL——儲存層是 settings 的 JSON blob
+
+目錄本體存在 `settings` 表的一個鍵裡，所以儲存層直接用已移植的 `settingsKvAsync`，
+**邏輯全部重用 `rentalCatalog.js` 的純函式**。真正的工作是**行程內快取的一致性**：
+
+db.js 的同步版除了寫 settings，還會呼叫**六個 setter** 更新行程內快取
+（`setRentalCatalogCache`／`setSelfListingCatalog`／`setRentalMatchHydrate`／
+`setWishOfferHydrate`／`setRentalNotifyHydrate`／`setRentalMarketplaceFlags`）——
+那些是 selfListings／wishOffers／rentalMatch 的**同步路徑**在讀的。
+PG 分支若只寫 DB 不更新快取，同一台節點會立刻「後台改完、前台沒變」。
+所以 `hydrateCaches()` 在**每次讀取也會跑**，節點的快取會自動收斂到 PG 的版本。
+
+#### 18.2 變異測試第一次 8/14——六個存活，根因都是「同步版把缺陷蓋掉了」
+
+最典型的一個：測試寫成「PG 寫入 → 再呼叫同步版比對 → 讀快取」，
+但**同步版本本身也會 hydrate 快取**，所以 PG 分支漏掉 hydrate 完全看不出來。
+修法是**在只走過 PG 的那個時間點就讀快取**，再跑同步版比對。
+
+其餘五個同類：讀取路徑要先直接把目錄種進 PG 夾具（不經 async 寫入）才驗得到收斂；
+系統範本要連「覆寫」一起驗（只驗改名／刪除殺不死 save 的變異）；
+`delete_condition` 要**種一筆引用**（沒有引用時硬刪與停用結果一樣）；
+草稿路徑也要單獨驗安全檢查。
+
+> **教訓**：parity 測試若把「同步版」當成對照組，要小心對照組自己會做的副作用
+> （快取、快照、hydrate）——它會把受測分支的缺失蓋掉。**斷言要在對照組動手之前做。**
+
+#### 18.3 測試資料的三個坑（都是「憑印象」）
+
+| 坑 | 症狀 | 正解 |
+|---|---|---|
+| 手寫 `{categories:[{conditions:[…]}]}` | 正規化後 conditions 是**頂層陣列**，標籤還會被對應到既有 domain ⇒ diff 永遠是空的 | 用 `defaultCatalog()` 當底再改 |
+| 以為 `normalizeTemplate` 會保留傳入的 id | 後續 rename 找不到範本 | 用**回傳的** `created.id` |
+| 以為 `saveRentalCatalog` 只寫一個鍵 | 實際寫兩列（目錄 ＋ 清成 null 的草稿） | 斷言兩個鍵 |
+
+另外 `listings` 的欄位用 PRAGMA 推導（`source_key`、`first_seen_at` 都是 NOT NULL 無 default）。
+
+#### 18.4 驗收
+
+* `v3/test/rental-catalog-async.test.js` **14/14**（新）；變異測試 **14/14 KILLED**。
+* 既有 `rental-catalog.test.js`、`rental-match.test.js` 全綠；尺規守衛 14/14 不變。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。

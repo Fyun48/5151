@@ -113,6 +113,12 @@ export function currentRentalMarketplaceFlags() {
   return marketplaceFlags;
 }
 
+// 讀取目前行程內的目錄快取。與 `currentRentalMarketplaceFlags()` 對稱——原本只有 setter
+// 沒有 getter，於是「PG 寫入後快取有沒有跟上」這件事沒辦法從外部驗證（2026-09-27 補上）。
+export function currentRentalCatalogCache() {
+  return catalogCacheV2;
+}
+
 export function setRentalCatalogCache(catalog) {
   catalogCacheV2 = catalog || null;
   return catalogCacheV2;

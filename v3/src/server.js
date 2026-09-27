@@ -298,6 +298,21 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
+// 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
+import {
+  applyRentalCatalogTemplateAsync,
+  deleteRentalCatalogTemplateAsync,
+  getRentalCatalogAsync,
+  getRentalCatalogDraftAsync,
+  getRentalCatalogTemplatesAsync,
+  getRentalMarketplaceFlagsAsync,
+  mutateRentalCatalogAsync,
+  publishRentalCatalogDraftAsync,
+  renameRentalCatalogTemplateAsync,
+  rentalMatchAdminRulesAsync,
+  saveRentalCatalogAsync,
+  saveRentalCatalogTemplateAsync,
+} from "./rentalCatalogAsync.js";
 // 站內公告與贊助活動的 PG 島嶼入口。
 import {
   announcementInboxForUserAsync,
@@ -2095,73 +2110,73 @@ app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/rental-catalog", requireAdminApi, (_req, res) => {
-  const published = getRentalCatalog();
-  const draft = getRentalCatalogDraft();
+app.get("/api/admin/rental-catalog", requireAdminApi, async (_req, res) => {
+  const published = await getRentalCatalogAsync();
+  const draft = await getRentalCatalogDraftAsync();
   res.json({
     published: publicAdminCatalog(published, { revealIds: true }),
     draft,
     diff: draft ? catalogDiff(published, draft) : null,
-    templates: getRentalCatalogTemplates().map((row) => ({
+    templates: (await getRentalCatalogTemplatesAsync()).map((row) => ({
       id: row.id,
       label: row.label,
       system: isSystemCatalogTemplate(row.id),
     })),
-    flags: publicRentalMarketplaceFlags(getRentalMarketplaceFlags()),
+    flags: publicRentalMarketplaceFlags(await getRentalMarketplaceFlagsAsync()),
   });
 });
 
-app.put("/api/admin/rental-catalog", requireAdminApi, (req, res) => {
+app.put("/api/admin/rental-catalog", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveRentalCatalog(req.body || {}));
+    res.json(await saveRentalCatalogAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/mutate", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/mutate", requireAdminApi, async (req, res) => {
   try {
-    res.json(mutateRentalCatalog(req.body?.action, req.body || {}));
+    res.json(await mutateRentalCatalogAsync(req.body?.action, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/templates", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/templates", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveRentalCatalogTemplate(req.body || {}));
+    res.json(await saveRentalCatalogTemplateAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(renameRentalCatalogTemplate(req.params.id, req.body?.label));
+    res.json(await renameRentalCatalogTemplateAsync(req.params.id, req.body?.label));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(deleteRentalCatalogTemplate(req.params.id));
+    res.json(await deleteRentalCatalogTemplateAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/templates/:id/apply", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/templates/:id/apply", requireAdminApi, async (req, res) => {
   try {
-    res.json(applyRentalCatalogTemplate(req.params.id));
+    res.json(await applyRentalCatalogTemplateAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, (_req, res) => {
+app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, async (_req, res) => {
   try {
-    res.json(publishRentalCatalogDraft());
+    res.json(await publishRentalCatalogDraftAsync());
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2179,8 +2194,8 @@ app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/rental-match-rules", requireAdminApi, (_req, res) => {
-  res.json(rentalMatchAdminRules());
+app.get("/api/admin/rental-match-rules", requireAdminApi, async (_req, res) => {
+  res.json(await rentalMatchAdminRulesAsync());
 });
 
 app.get("/api/admin/wish-offer-reports", requireAdminApi, (_req, res) => {
