@@ -11,8 +11,59 @@ import { execFileSync } from "node:child_process";
 
 const SRC = "v3/src/sameHouseAsync.js";
 const USER_SRC = "v3/src/userSameHouseAsync.js";
+const AUDIT_SRC = "v3/src/adminAuditAsync.js";
 
-const MUTATIONS = [
+// 稽核失敗可視性的變異集（v3/test/admin-audit-visibility.test.js）。
+// 這一組要證明的是「痕跡真的會留下」——因為「沒有痕跡」正是原本壞掉的東西。
+const AUDIT_MUTATIONS = [
+  {
+    name: "拿掉記數與寫 log（回到完全隱形的 catch）",
+    file: AUDIT_SRC,
+    from: "    noteAuditFailure(error);\n    throw error;",
+    to: "    throw error;",
+    expect: "必須記數",
+  },
+  {
+    name: "失敗改成靜默回傳（不再往外丟，契約被改掉）",
+    file: AUDIT_SRC,
+    from: "    noteAuditFailure(error);\n    throw error;",
+    to: "    noteAuditFailure(error);\n    return null;",
+    expect: "仍然往外丟",
+  },
+  {
+    name: "計數器不遞增（有 log 但數字永遠 0）",
+    file: AUDIT_SRC,
+    from: "  auditFailures += 1;",
+    to: "  auditFailures += 0;",
+    expect: "必須記數",
+  },
+  {
+    name: "每次都印 log（洗版）",
+    file: AUDIT_SRC,
+    from: "  if (auditFailureLogs === 1 || auditFailureLogs % AUDIT_FAILURE_LOG_EVERY === 0) {",
+    to: "  if (true) {",
+    expect: "不得洗版",
+  },
+  {
+    // 複合變異：單獨把條件改回耦合版是「等價變異」（計數器正常時行為相同），殺不掉。
+    // 必須與「計數器壞掉」同時發生，才顯現出耦合的代價——那正是解耦要防的情況。
+    name: "（複合）計數器壞掉＋日誌節奏耦合失敗計數 → 會洗版",
+    file: AUDIT_SRC,
+    from: "  if (auditFailureLogs === 1 || auditFailureLogs % AUDIT_FAILURE_LOG_EVERY === 0) {",
+    to: "  if (auditFailures === 1 || auditFailures % AUDIT_FAILURE_LOG_EVERY === 0) {",
+    also: [{ from: "  auditFailures += 1;", to: "  auditFailures += 0;" }],
+    expect: "洗版",
+  },
+  {
+    name: "成功路徑也記成失敗（把正常當故障）",
+    file: AUDIT_SRC,
+    from: "    return await writeAdminAuditPg(params, options);\n  } catch (error) {",
+    to: "    const r = await writeAdminAuditPg(params, options);\n    noteAuditFailure(new Error(\"forced\"));\n    return r;\n  } catch (error) {",
+    expect: "成功時不得計數",
+  },
+];
+
+const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
     file: SRC,
@@ -134,6 +185,9 @@ const onlyArg = process.argv.find((a) => a.startsWith("--only="));
 const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
+// 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
+const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS : REJECT_MUTATIONS;
+
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。
 const PRISTINE = new Map();
 function restoreAll() {
@@ -165,12 +219,22 @@ const results = [];
 for (const m of MUTATIONS) {
   if (ONLY && !m.name.includes(ONLY)) continue;
   const original = readFileSync(m.file, "utf8");
-  const hits = original.split(m.from).length - 1;
-  if (hits !== 1) {
-    results.push({ ...m, status: "SKIP", detail: `from 在 ${m.file} 出現 ${hits} 次（必須恰好 1 次）` });
+  // `also` 支援「複合變異」：有些修正只有在**兩個地方同時改壞**時才看得出價值
+  // （例：日誌節奏若與失敗計數耦合，只有計數器也壞掉時才會洗版）。
+  // 單獨改一處是「等價變異」，殺不掉也不該假裝殺得掉——複合起來才測得到。
+  const steps = [{ from: m.from, to: m.to }, ...(m.also || [])];
+  let mutated = original;
+  let skip = "";
+  for (const step of steps) {
+    const hits = mutated.split(step.from).length - 1;
+    if (hits !== 1) { skip = `"${step.from.slice(0, 48)}…" 在 ${m.file} 出現 ${hits} 次（必須恰好 1 次）`; break; }
+    mutated = mutated.replace(step.from, step.to);
+  }
+  if (skip) {
+    results.push({ ...m, status: "SKIP", detail: skip });
     continue;
   }
-  writeFileSync(m.file, original.replace(m.from, m.to));
+  writeFileSync(m.file, mutated);
   let r;
   try {
     r = runTests();

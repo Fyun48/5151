@@ -354,7 +354,7 @@ import {
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
-import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
+import { appendAdminAuditAsync, auditFailureStats, listAdminAuditAsync } from "./adminAuditAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -449,7 +449,12 @@ app.use((req, res, next) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, version: APP_VERSION });
+  // audit_failures：PG 稽核寫入的累計失敗數。正常應該是 0。
+  // 2026-09-27 之所以加這個欄位：稽核的 fire-and-forget 契約讓「每一筆都失敗」
+  // 完全隱形（序列落後造成，見 docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）。
+  // 契約仍然是「稽核失敗不得擋住管理操作」，所以 `ok` 不因此變成 false——
+  // 但監控可以只看這一個數字。
+  res.json({ ok: true, version: APP_VERSION, audit_failures: auditFailureStats().failures });
 });
 
 app.get("/support", (_req, res) => {
@@ -1350,11 +1355,17 @@ function auditReq(req, action, target, before, after) {
       appendAdminAudit(payload);
       return;
     }
-    // PG 是非同步，而這個函式被 **20 處**（多為同步）handler 呼叫。
-    // 原本就明訂「稽核失敗不得擋住管理操作」，所以這裡刻意 fire-and-forget 並吞掉錯誤，
-    // 與原本 try/catch 的意圖一致。
+    // PG 是非同步，而這個函式被 **19 處**（多為同步）handler 呼叫
+    // （2026-09-27 實測：19 個呼叫點，其中 16 個在同步 handler 內）。
+    // 原本就明訂「稽核失敗不得擋住管理操作」，所以這裡刻意 fire-and-forget。
     // 代價要講清楚：沒有 await，行程若在寫入完成前結束就會少一筆稽核。
-    // 若之後要求稽核不可遺失，就得把這 20 處 handler 改成 async 並 await。
+    //
+    // ⚠️ 2026-09-27 修正一個**本來會讓全損故障隱形**的設計：
+    // 這裡原本是 `.catch(() => {})`，把錯誤**完全**吞掉。配上正式站
+    // `admin_audit.id` 序列落後，結果是「每一筆稽核都失敗」長達 12 天卻沒有任何痕跡
+    // （詳見 docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）。
+    // 現在 `appendAdminAuditAsync()` 內部會自己記數並寫 log（第一次 + 每 100 次），
+    // 失敗筆數也接到 `/api/health` 的 `audit_failures`。**契約不變**：不 await、不擋管理操作。
     appendAdminAuditAsync(payload).catch(() => {});
   } catch {
     // 稽核失敗不得擋住管理操作

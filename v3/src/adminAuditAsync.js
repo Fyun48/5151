@@ -36,6 +36,47 @@ const TRIM_DELETE_SQL = "DELETE FROM admin_audit WHERE id <= ?";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
+// ---- 失敗可視性（2026-09-27 新增）--------------------------------------------
+//
+// 為什麼一定要有：`auditReq()` 的契約是「稽核失敗不得擋住管理操作」，所以它
+// fire-and-forget 並吞掉錯誤。但那個契約讓一個**全損**的故障變得完全隱形——
+// 正式站的 `admin_audit.id` identity 序列落後（`is_called=false` → nextval 回傳已存在的 1），
+// 導致 #521 之後的**每一筆**稽核寫入都撞主鍵失敗，而 12 天內沒有任何日誌或告警，
+// `admin_audit` 始終只有匯入的那一列。
+// 詳見 `docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md`。
+//
+// 契約不變：仍然**不 await、不 throw**，管理操作照常完成。
+// 改變的只有「失敗要留下痕跡」：計數器 + 日誌（第一次一定印，之後每 100 次印一次，避免洗版）。
+// 計數器由 `auditFailureStats()` 讀出，`server.js` 把它接到 `/api/health`。
+let auditFailures = 0;
+let lastAuditFailure = null;
+// 印 log 的節奏用**自己的**計數器，刻意不與 auditFailures 共用。
+// 原因：`auditFailures % 100 === 0` 在計數器壞掉（停在 0）時恆為真 ⇒ 反而每次都印、變成洗版。
+// 「算得準」與「印得省」是兩個關注點，不該互相耦合；各自的突變測試也才分得開。
+let auditFailureLogs = 0;
+const AUDIT_FAILURE_LOG_EVERY = 100;
+
+function noteAuditFailure(error) {
+  auditFailures += 1;
+  lastAuditFailure = { at: new Date().toISOString(), message: String(error?.message || error || "unknown") };
+  auditFailureLogs += 1;
+  if (auditFailureLogs === 1 || auditFailureLogs % AUDIT_FAILURE_LOG_EVERY === 0) {
+    console.error(`[audit] PG 稽核寫入失敗（累計 ${auditFailures} 筆）：${lastAuditFailure.message}`);
+  }
+}
+
+/** 給 /api/health 用的快照。刻意只回數字與最後一次的訊息，不含 actor／target。 */
+export function auditFailureStats() {
+  return { failures: auditFailures, last: lastAuditFailure };
+}
+
+/** 只給測試用：把計數器歸零，讓每個 test 從乾淨狀態開始。 */
+export function resetAuditFailureStats() {
+  auditFailures = 0;
+  lastAuditFailure = null;
+  auditFailureLogs = 0;
+}
+
 async function pgExec(options = {}) {
   if (options.exec) return options.exec;
   const pgDriver = options.pgDriver || (await sharedPgDriver());
@@ -46,6 +87,16 @@ async function pgExec(options = {}) {
 // ADMIN_AUDIT_MAX_ENTRIES 的舊資料刪掉。
 export async function appendAdminAuditAsync(params = {}, options = {}) {
   if (!isPg(options)) return appendAdminAuditSync(params);
+  try {
+    return await writeAdminAuditPg(params, options);
+  } catch (error) {
+    // 契約不變（仍然往外丟，由呼叫端決定要不要擋管理操作），但失敗一定留下痕跡。
+    noteAuditFailure(error);
+    throw error;
+  }
+}
+
+async function writeAdminAuditPg(params, options) {
   const entry = buildAuditEntry(params);
   const exec = await pgExec(options);
   await exec(INSERT_SQL, [

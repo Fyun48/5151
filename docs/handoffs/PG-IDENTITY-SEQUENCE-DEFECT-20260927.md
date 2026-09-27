@@ -129,14 +129,62 @@ PG_SEQ_URL='postgres://…' node v3/scripts/pg-identity-sequences.mjs \
    「不指定 id 的 INSERT」，就會立刻撞。`listing_search_projection`（127,842 列）
    與 `community_cache`（7,352 列）的缺口最大，值得優先確認有沒有寫入路徑。
 
-## 七、還沒做的事（需要 Owner）
+## 七、後續（Owner 已於 2026-09-27 決定並執行）
 
-1. **正式站的修復還沒套用。** 這是 production 資料變更，依 `AGENTS.md §8.2` 需 Owner 明確核准。
-   指令已在第五節，範圍只有 9 個序列、不動資料列。
-2. **沒有把這項檢查接進 CI。** CI 的 PG 是拋棄式容器（`127.0.0.1:5432/tracker_test`），
-   而 `v3/test/reject-match-live-pg.test.js` 的允許清單已包含 `tracker_test`，
-   所以只要在 `.github/workflows/test.yml` 的 PG job 加一行
-   `PG_LIVE_REPRO_URL="${PG_TEST_URL}"` 就會一起跑。**我沒有動 CI**——
-   若 `pg-integration-setup.mjs` 的序列重設有漏，CI 會因此變紅，那個要 Owner 決定。
-3. **`--check` 沒有被排進任何定期檢查。** 它很便宜（唯讀、75 個查詢），適合放進
-   predeploy 或每日巡檢；尚未接。
+| 項目 | 決定 | 狀態 |
+|---|---|---|
+| 正式站序列修復 | **核准套用** | ✅ **已套用**（見下方證據） |
+| `auditReq` 政策 | **保留 fire-and-forget，但讓錯誤看得見** | ✅ 已實作 |
+| live PG 測試接進 CI | **接** | ✅ 已接 |
+
+### 7.1 正式站修復：已套用，證據如下
+
+```
+BEFORE: [seq] 發現 9／75 個 identity 序列落後     (exit=1)
+REPAIR: 9 個全部 OK（admin_audit、community_cache、demand_match_generation、
+        feedback、feedback_outbox、listing_search_projection、
+        support_page_config、system_announcements、user_match_signals）
+AFTER:  [seq] OK：75 個 identity 欄位全部健康（next > max）   (exit=0)
+```
+
+**只動序列、沒有動任何資料列**——修復前後筆數完全相同：
+`admin_audit=1`、`listings=127844`、`user_match_signals=1`。
+
+> 尚未做的確認：沒有在正式站實際寫一筆稽核來驗證（那是 production 寫入，不在核准範圍內）。
+> 目前的證據是「狀態正確（`next > max`）」＋「同樣的缺陷與同樣的修法已在隔離環境端到端驗證過」。
+> **要到 100% 確定，最乾淨的方式是下一次真正的管理操作後看 `admin_audit` 有沒有增加**，
+> 或看 `/api/health` 的 `audit_failures` 是否停在 0。
+
+### 7.2 `auditReq` 的失敗可視性：已實作
+
+契約**不變**（不 await、不擋管理操作），只讓失敗留下痕跡：
+
+- `adminAuditAsync.js`：`appendAdminAuditAsync()` 內部 catch → 記數 → **再往外丟**
+  （呼叫端行為完全不變）。
+- 日誌：第一次一定印，之後每 100 次印一次（避免洗版）。印 log 的節奏用**獨立**計數器，
+  刻意不與失敗計數共用——耦合的話，計數器一壞掉就會變成每次都印。
+- `/api/health` 新增 `audit_failures` 欄位（正常為 0）。**`ok` 不因此變 false**，
+  以免影響既有的健康判斷與自動重啟邏輯；要監控請看這一個數字。
+
+測試：`v3/test/admin-audit-visibility.test.js`（4 項），變異測試 **6/6 KILLED**
+（含一條**複合變異**：單獨把日誌節奏改回耦合版是等價變異、殺不掉，
+必須與「計數器壞掉」同時發生才顯現代價——那正是解耦要防的情境）。
+
+```bash
+node --test v3/test/admin-audit-visibility.test.js
+node v3/scripts/mutation-check.mjs v3/test/admin-audit-visibility.test.js
+```
+
+### 7.3 live PG 測試已接進 CI
+
+`.github/workflows/test.yml` 的 PG job 多一行 `PG_LIVE_REPRO_URL="${PG_TEST_URL}"`
+（指向該 job 自己的拋棄式容器）。安全性已確認：
+
+- 該 job 自建 `postgres:16.14-alpine`，並在建構步驟**覆寫** `PG_URL`／`PG_TEST_URL`，不讀憑證庫。
+- `pg-integration-setup.mjs` → `importStore()` 的 `resyncSequences` 預設為 `true`，
+  會 `setval(seq, max+1, false)` ⇒ 序列健康，測試不會因此變紅。
+- `test/deploy-safety.test.js`（13 項）仍然全綠——新增的變數不涉及 NAS／production secret。
+
+> 未做：沒有把 `pg-identity-sequences.mjs --check` 排進任何定期檢查。
+> 它很便宜（唯讀、75 個查詢），適合放進 predeploy 或每日巡檢；留給 Owner 決定。
+
