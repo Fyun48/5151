@@ -427,6 +427,109 @@ const SUPPORT_MUTATIONS = [
 
 const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 
+// 會員照片素材庫 PG 分支的變異集（v3/test/member-media-async.test.js）。
+const MM_SRC = "v3/src/memberMediaAsync.js";
+const MM_SYNC_SRC = "v3/src/memberMedia.js";
+const MEMBERMEDIA_MUTATIONS = [
+  {
+    name: "排序寫回 COLLATE NOCASE（PG 沒有這個 collation ⇒ 語法錯誤）",
+    file: MM_SRC,
+    from: '"SELECT id, name, created_at FROM media_tags WHERE user_id=? ORDER BY lower(name)"',
+    to: '"SELECT id, name, created_at FROM media_tags WHERE user_id=? ORDER BY name COLLATE NOCASE"',
+    expect: "不得出現 COLLATE NOCASE",
+  },
+  {
+    name: "不補建 media_tags 的 UNIQUE(user_id,name)（同名標籤會重複）",
+    file: MM_SRC,
+    from: "    await pgDriver.exec(PG_CREATE_TAG_NAME_INDEX_SQL);\n  })();",
+    to: "  })();",
+    expect: "ensureMemberMediaStoreOnce",
+  },
+  {
+    name: "不補建 storage_key 的唯一索引（同一張圖可以寫兩列）",
+    file: MM_SRC,
+    from: "    await pgDriver.exec(PG_CREATE_MEDIA_KEY_INDEX_SQL);\n",
+    to: "",
+    expect: "ensureMemberMediaStoreOnce",
+  },
+  {
+    name: "先建標籤唯一索引才清重複（有重複時 CREATE UNIQUE INDEX 直接失敗）",
+    file: MM_SRC,
+    from: "    await dedupeTags(pgDriver);\n    await pgDriver.exec(PG_CREATE_TAG_NAME_INDEX_SQL);",
+    to: "    await pgDriver.exec(PG_CREATE_TAG_NAME_INDEX_SQL);\n    await dedupeTags(pgDriver);",
+    expect: "ensureMemberMediaStoreOnce",
+  },
+  {
+    name: "清重複標籤時不把對應改指到保留者（使用者的分類直接消失）",
+    file: MM_SRC,
+    from: "      await pgDriver.query(PG_REPOINT_TAG_MAP_SQL, [row.keep_id, dup.id]);\n",
+    to: "",
+    expect: "ensureMemberMediaStoreOnce",
+  },
+  {
+    name: "schema bootstrap 不快取（每次呼叫都重建一次）",
+    file: MM_SRC,
+    from: "  if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);\n",
+    to: "",
+    expect: "只做一次",
+  },
+  {
+    name: "重複判斷放寬成「什麼錯都算重複」（連線斷了會被報成 409 tag_exists）",
+    file: MM_SRC,
+    from: '  return error?.code === "23505" || /UNIQUE constraint failed|duplicate key/i.test(String(error?.message || ""));',
+    to: "  return true;",
+    expect: "非重複的錯誤不得被誤報成 409",
+  },
+  {
+    name: "used 改成過濾後的列數（配額會隨著 tag 篩選而變）",
+    file: MM_SRC,
+    from: "        used: countOf(await exec(COUNT_ACTIVE_MEDIA_SQL, [uid])),",
+    to: "        used: rows.length,",
+    expect: "列出素材：免費配額",
+  },
+  {
+    name: "tagIds 篩選失效（所有照片都會被列出來）",
+    file: MM_SRC,
+    from: "        rows = rows.filter((row) => matched.has(Number(row.id)));\n",
+    to: "",
+    expect: "列出素材：免費配額",
+  },
+  {
+    name: "設定標籤時不驗標籤擁有權（可以把別人的標籤掛到自己的照片）",
+    file: MM_SRC,
+    from: `    for (const tagId of ids) {
+      const tag = firstRow(await exec(TAG_ID_OWNED_SQL, [tagId, uid]));
+      if (!tag) throw httpError("找不到標籤或無權限", 404);
+    }
+`,
+    to: "",
+    expect: "設定照片標籤：照片或標籤不是自己的",
+  },
+  {
+    name: "刪除時不看有沒有被刊登引用（一律清檔 ⇒ 歷史頁面破圖）",
+    file: MM_SRC,
+    from: "    const referenced = Boolean(firstRow(await exec(IS_MEDIA_REFERENCED_SQL, [url, `%${url}%`])));",
+    to: "    const referenced = false;",
+    expect: "被站內刊登引用時保留實體檔",
+  },
+  {
+    name: "軟刪除改成硬刪除（列直接消失，歷史引用查不到）",
+    file: MM_SRC,
+    from: "    await exec(SOFT_DELETE_MEDIA_SQL, [ts, Number(id), uid]);",
+    to: '    await exec("DELETE FROM member_media WHERE id=? AND user_id=?", [Number(id), uid]);',
+    expect: "刪除素材：軟刪除",
+  },
+  {
+    name: "標籤名稱不去空白（前後空白會變成不同的標籤）",
+    file: MM_SYNC_SRC,
+    // 錨點刻意不含反斜線：第一版寫了 `\\s+` 這種多層跳脫，結果 Python 的 heredoc 把反斜線吃掉，
+    // 錨點變成 `.replace(/s+/g, " ")` 找不到（工具的前置檢查正確地擋下、沒有留下半變異狀態）。
+    from: '" ").trim().slice(0, 40);',
+    to: '" ").slice(0, 40);',
+    expect: "建立標籤：同名會重用既有的",
+  },
+];
+
 // 刊登生產力工具（說明範本／聯絡人）PG 分支的變異集
 // （v3/test/listing-tools-async.test.js）。這一組每一條都對應一個「壞掉會怎樣」。
 const LT_SRC = "v3/src/listingToolsAsync.js";
@@ -881,7 +984,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
+const MUTATIONS = /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
+  : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS

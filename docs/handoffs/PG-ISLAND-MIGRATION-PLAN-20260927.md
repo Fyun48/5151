@@ -835,6 +835,64 @@ node v3/scripts/route-data-map.mjs
    所以測試建滿、斷言 409 `template_limit`，再用 `plan: "sponsor"` 證明第 3 則其實放行
    ——後面那一半才是「擋下來真的是因為上限」的證據。
 
+### 第十五批（2026-09-27）：`memberMedia.js`（照片素材庫，8 條路由）
+
+`v3/src/memberMediaAsync.js`（新）＋ 8 條 `/api/media*` 路由改 async。
+SQLite 17（不變）、MIXED 154→**146**、PG 97→**105**、缺口 171→**163**。
+
+**刻意不含 `POST /api/media`（上傳）**：`saveMemberMedia()` 是「影像處理 → 交易內配額檢查 →
+寫檔 → 上傳 R2」，交易橫跨檔案 I/O 與網路。搬到 PG 要重新設計交易邊界（PG 的交易不宜橫跨
+網路 I/O：連線與鎖都會被佔住），那是獨立一批。
+
+#### 15.1 方言陷阱：`COLLATE NOCASE`
+
+同步版在標籤列表與照片的標籤 JOIN 都用 `ORDER BY name COLLATE NOCASE`。
+**`NOCASE` 是 SQLite 專屬 collation，PG 沒有**（`collation "nocase" for encoding "UTF8"
+does not exist`）。PG 分支改用 `ORDER BY lower(name)`。夾具主動拒絕 `COLLATE NOCASE`，
+另有一條測試掃過整組 `*_SQL` 常數；排序本身也有一條測試（三個標籤刻意大小寫混雜，
+把 `lower()` 拿掉就會排錯）。
+
+#### 15.2 與 budgetGuardAsync 同一類的坑：**表約束不會被 pgSchema 鏡射**
+
+`media_tags` 的 `UNIQUE(user_id, name)` 是**表約束** ⇒ 隱式索引、不在 `sqlite_master` ⇒
+`pgSchema` 看不到。實測正式站 `media_tags` **只有 pkey**，`member_media` 也只有 pkey
+（`idx_member_media_key` 的 storage_key 唯一索引同樣不存在）。後果不只是「少一個索引」：
+
+* `createMediaTag` 的「同名就重用」變成永遠不會觸發；
+* `renameMediaTag` 的 409「已有同名標籤」永遠不會發生；
+* 同一個 storage_key 可以寫進兩列。
+
+`ensureMemberMediaStoreOnce()` 明確補建兩個唯一索引。清重複標籤時**不是直接刪掉**，
+而是先把 `media_tag_map` 的對應**改指到保留者**（`INSERT … SELECT … ON CONFLICT DO NOTHING`
+再刪），否則使用者的分類會無聲消失。
+
+#### 15.3 兩個刻意的行為差異（不是「照抄同步版」）
+
+1. **只有真的是重複才轉 409。** 同步版 `renameMediaTag` 是 `catch { throw 409 tag_exists }`
+   ——連「連線斷了」都會被報成「已有同名標籤」。PG 分支只認唯一性違反（`23505` 或夾具的
+   `UNIQUE constraint failed`），其餘原樣往上丟。有一條測試專門證明非重複錯誤會往上丟。
+2. **刪檔在交易之外。** 同步版是刪完 DB 再清檔；PG 這邊刻意**等交易提交後**才清
+   （`pendingCleanup`）——在交易裡刪檔，一旦 rollback 就會「DB 還留著、檔案已經沒了」。
+
+#### 15.4 量尺守衛第三次換標的——這次改成驗「性質」
+
+`route-data-map.test.js` 的「吃 handle 參數的 helper 必須被看見」這條守衛**第三次失效**
+（`/api/support/public` → `/api/admin/support/dashboard` → `/api/media`，每一個都被移植掉）。
+這次除了換成 `demand.js` 的 `getWishExample(db, userId)`（1698 行、沒有 import db.js，
+剩下最大的模組之一），**另外加了一條不綁單一路由的性質測試**：
+六個「住在 db.js 以外、吃 handle 參數」的 helper 至少要看到 3 個——移植掉一兩個模組
+不會讓它紅，但「sqlite 歸屬只看 db.js」的退化一定會被擋下。
+
+#### 15.5 驗收
+
+* `v3/test/member-media-async.test.js` **21/21**（新）；`listing-tools` 的教訓沿用：
+  每個動作都比對**落地的列**。
+* 變異測試 **13/13 KILLED**。
+* 既有 `media-*.test.js` ＋ `member-media.test.js` **34/34**（重構後行為不變）。
+* 過程中**我自己加的守衛抓到一次空比對**：「刪除標籤」原本只種一個標籤，刪完兩邊都是 0 列，
+  `assertSameRows` 直接断言「兩邊都是 0 列時這個比對沒有鑑別力」。修成留一個不會被刪的標籤。
+  ——這正是那條守衛存在的理由。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。

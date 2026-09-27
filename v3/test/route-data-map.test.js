@@ -151,19 +151,39 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("吃 handle 參數的 helper 必須被看見：/api/media 的 listMemberMedia", () => {
-  // 📌 這條**已經換過兩次標的**，換的原因值得記下來：
+test("吃 handle 參數的 helper 必須被看見：/api/wish-rooms/example 的 getWishExample", () => {
+  // 📌 這條**已經換過三次標的**，換的原因值得記下來：
   //   1. 原本用 `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植成 PG ⇒ 失效。
   //   2. 改用 `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 同一批的下一步又移植掉 ⇒ 失效。
+  //   3. 改用 `/api/media`（`listMemberMedia(db)`）→ 第十四批（memberMedia.js）移植掉 ⇒ 失效。
   // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效。**
-  // 這次刻意挑一個**短期內不會動的模組**：`/api/media` 的 `listMemberMedia(db)`
-  // （memberMedia.js，9 條路由／15 個函式，排在後面的批次）。
-  // ⚠️ 移植 memberMedia.js 時，這一條要再換標的，**不要刪掉斷言**。
-  // 2026-09-27：判定由 `SQLite` 變 `MIXED`（session 改走 PG），斷言主體不變。
-  const r = route("GET /api/media");
+  // 這次挑 `demand.js`（1698 行、**沒有 import db.js**、約 20 個吃 handle 的函式）的
+  // `getWishExample(db, userId)`——它是剩下最大的模組之一，短期內不會動。
+  // ⚠️ 移植 demand.js 時，這一條要再換標的，**不要刪掉斷言**。
+  const r = route("GET /api/wish-rooms/example");
   assert.equal(r.verdict, "MIXED", `缺陷 (2) 會讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("listMemberMedia"),
-    `必須看得到 listMemberMedia(db)。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.ok(r.sqlite.includes("getWishExample"),
+    `必須看得到 getWishExample(db, userId)。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+});
+
+test("跨模組的 handle helper 是可替換的守衛（單一標的移植掉時整條不會失效）", () => {
+  // 上面那條是「指名一個標的」，移植掉就得人工換——已經換過三次了。
+  // 這一條改驗**性質**：缺陷 (2) 一旦回來，這些「住在 db.js 以外、吃 handle 參數」的 helper
+  // 會**同時**從整張表消失；只移植掉一兩個模組則不會讓它變紅。
+  // 門檻設 3：留替換空間，但「只認 db.js」的退化一定被擋下。
+  const NON_DB_HANDLE_HELPERS = [
+    "getWishExample",          // demand.js
+    "listDocuments",           // contentDocuments.js
+    "listCampaignsAdmin",      // comms.js
+    "addDemandReply",          // demand.js
+    "listAdminListingImports", // listingImport.js
+    "getRentalCatalog",        // rentalCatalog.js
+  ];
+  const visible = new Set();
+  for (const [, r] of rows) for (const fn of r.sqlite) visible.add(fn);
+  const found = NON_DB_HANDLE_HELPERS.filter((fn) => visible.has(fn));
+  assert.ok(found.length >= 3,
+    `缺陷 (2)（sqlite 歸屬只看 db.js）會讓這類 helper 全部隱形。只看得到 ${found.length} 個：${found.join(", ") || "（無）"}`);
 });
 
 test("被低估的那一批：/api/admin/campaigns 必須看得到 listCampaignsAdmin", () => {

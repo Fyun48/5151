@@ -298,6 +298,20 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
+// 會員照片素材庫的 PG 島嶼入口（8 條 /api/media* 路由）。
+// ⚠️ 不含 `POST /api/media`（上傳）：`saveMemberMedia()` 的交易橫跨影像處理與 R2 上傳，
+// 那是獨立一批（見 memberMediaAsync.js 檔頭）。
+import {
+  createMediaTagAsync,
+  deleteMediaTagAsync,
+  deleteMemberMediaAsync,
+  listMediaTagsAsync,
+  listMemberMediaAsync,
+  mediaUrlsForTagIdsAsync,
+  renameMediaTagAsync,
+  setMediaTagsAsync,
+} from "./memberMediaAsync.js";
+
 import {
   createContactProfileAsync,
   createDescriptionTemplateAsync,
@@ -3096,61 +3110,61 @@ app.get("/media/self/:file", (req, res) => {
 });
 
 // ── 會員照片素材庫（member media library） ──
-app.get("/api/media", (req, res) => {
+app.get("/api/media", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
-    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free", tagIds }));
+    res.json(await listMemberMediaAsync(session.userId, { plan: session.plan || "free", tagIds }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.get("/api/media/tags", (req, res) => {
+app.get("/api/media/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listMediaTagsFor(session.userId) });
+    res.json({ items: await listMediaTagsAsync(session.userId) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.post("/api/media/tags", (req, res) => {
+app.post("/api/media/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createMediaTagFor(session.userId, req.body?.name));
+    res.json(await createMediaTagAsync(session.userId, req.body?.name));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.patch("/api/media/tags/:id", (req, res) => {
+app.patch("/api/media/tags/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(renameMediaTagFor(session.userId, req.params.id, req.body?.name));
+    res.json(await renameMediaTagAsync(session.userId, req.params.id, req.body?.name));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.delete("/api/media/tags/:id", (req, res) => {
+app.delete("/api/media/tags/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteMediaTagFor(session.userId, req.params.id));
+    res.json(await deleteMediaTagAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.put("/api/media/:id/tags", (req, res) => {
+app.put("/api/media/:id/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(setMediaTagsFor(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
+    res.json(await setMediaTagsAsync(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.get("/api/media/by-tags", (req, res) => {
+app.get("/api/media/by-tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
-    res.json({ urls: mediaUrlsForTagIdsFor(session.userId, tagIds) });
+    res.json({ urls: await mediaUrlsForTagIdsAsync(session.userId, tagIds) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
@@ -3164,11 +3178,11 @@ app.post("/api/media", express.raw({ type: () => true, limit: IMAGE_MAX_UPLOAD_B
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.delete("/api/media/:id", (req, res) => {
+app.delete("/api/media/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteMemberMediaFor(session.userId, req.params.id));
+    res.json(await deleteMemberMediaAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
