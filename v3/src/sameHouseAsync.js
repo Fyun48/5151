@@ -9,11 +9,10 @@
 //   - postgres + **管理員**  → `confirmSameHouseAsAdminAsync()`（本檔），走 listingGroupsAsync
 //                              既有的 PG 積木（bindListingsToGroup／groupIdForPost／writeGroupAudit）。
 //
-// ⚠️ **測試缺口（明確標示，不假裝）**：管理員路徑 `confirmSameHouseAsAdminAsync()` 目前
-// **沒有專屬的 parity 測試**。它用的積木（bindListingsToGroup／groupIdForPost／writeGroupAudit）
-// 已被 listingMatchAsync 的路徑測過，但**這個組合本身沒有**——要測得先建 listings ＋
-// listing_groups／listing_group_members／listing_group_audits 的完整夾具。
-// 在補上之前，不要把它當成「已驗證」。
+// 測試：`v3/test/admin-same-house-async.test.js`（2026-09-27 補上）。
+// 比對兩邊實際落地的 listing_group_members、listings.match_post_id 與 listing_group_audits。
+// 已用變異測試確認非空：跳過 match_post_id 更新 → 失敗；不寫群組稽核 → 失敗
+// （第一次寫這個測試時漏了稽核那一項，是變異測試抓出來的）。
 //
 // 仍未涵蓋：`rejectSuspectedMatch()`（拆開）另外會寫 user_match_votes 與 user_match_signals，
 // 尚未移植，所以 `/api/listings/:id/reject-match` 仍是 SQLite。
