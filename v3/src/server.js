@@ -316,6 +316,7 @@ import {
   getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
   saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
+import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -2386,7 +2387,7 @@ app.put("/api/admin/maps", requireAdminApi, (req, res) => {
 
 app.get("/api/admin/crawl-sources", requireAdminApi, async (_req, res) => {
   const base = await getCrawlSourcesAsync();
-  const health = Object.fromEntries(crawlSourceHealth().map((row) => [row.id, row]));
+  const health = Object.fromEntries((await crawlSourceHealthAsync()).map((row) => [row.id, row]));
   res.json({
     items: (base.items || []).map((row) => ({ ...health[row.id], ...row, label: row.label })),
   });
