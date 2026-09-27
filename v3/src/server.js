@@ -347,6 +347,7 @@ import {
 } from "./crawlWatchdog.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
+import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -1330,14 +1331,24 @@ function requireAdminApi(req, res, next) {
 function auditReq(req, action, target, before, after) {
   try {
     const session = readSession(req);
-    appendAdminAudit({
+    const payload = {
       actorId: session?.userId,
       actorEmail: session?.email,
       action,
       target,
       before,
       after,
-    });
+    };
+    if (resolveDbDriver() !== "postgres") {
+      appendAdminAudit(payload);
+      return;
+    }
+    // PG 是非同步，而這個函式被 **20 處**（多為同步）handler 呼叫。
+    // 原本就明訂「稽核失敗不得擋住管理操作」，所以這裡刻意 fire-and-forget 並吞掉錯誤，
+    // 與原本 try/catch 的意圖一致。
+    // 代價要講清楚：沒有 await，行程若在寫入完成前結束就會少一筆稽核。
+    // 若之後要求稽核不可遺失，就得把這 20 處 handler 改成 async 並 await。
+    appendAdminAuditAsync(payload).catch(() => {});
   } catch {
     // 稽核失敗不得擋住管理操作
   }
@@ -2456,8 +2467,8 @@ app.get("/api/admin/data-health", requireAdminApi, async (_req, res) => {
   }
 });
 
-app.get("/api/admin/audit", requireAdminApi, (req, res) => {
-  res.json({ items: listAdminAudit({ limit: Number(req.query?.limit) || 80 }) });
+app.get("/api/admin/audit", requireAdminApi, async (req, res) => {
+  res.json({ items: await listAdminAuditAsync({ limit: Number(req.query?.limit) || 80 }) });
 });
 
 app.get("/api/admin/listings/search", requireAdminApi, (req, res) => {
