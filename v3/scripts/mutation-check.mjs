@@ -462,8 +462,18 @@ const MEMBERMEDIA_MUTATIONS = [
   {
     name: "清重複標籤時不把對應改指到保留者（使用者的分類直接消失）",
     file: MM_SRC,
-    from: "      await pgDriver.query(PG_REPOINT_TAG_MAP_SQL, [row.keep_id, dup.id]);\n",
+    from: "      await q(PG_REPOINT_TAG_MAP_SQL, [row.keep_id, dup.id]);\n",
     to: "",
+    expect: "ensureMemberMediaStoreOnce",
+  },
+  {
+    // 🚨 這一條是 2026-09-27 **live PG 才炸出來**的那個 bug：`pgDriver.query()` 不翻譯
+    // SQLite 方言，dedupe 忘了 `toPostgresSql` ⇒ `?` 直接送 PG ⇒ `syntax error at or near "AND"`。
+    // 離線夾具當時抓不到（沒有重複資料所以迴圈沒跑）；現在假 driver 會拒絕 `?`，離線就擋得住。
+    name: "dedupe 忘了翻譯方言（? 直接送 PG ⇒ 語法錯誤）",
+    file: MM_SRC,
+    from: "  const q = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);\n  const dupes = await q(PG_DUPLICATE_TAGS_SQL);",
+    to: "  const q = (sql, params = []) => pgDriver.query(sql, params);\n  const dupes = await q(PG_DUPLICATE_TAGS_SQL);",
     expect: "ensureMemberMediaStoreOnce",
   },
   {
@@ -610,6 +620,15 @@ const LISTINGTOOLS_MUTATIONS = [
     file: LT_SRC,
     from: "    await dedupeAccountContacts(pgDriver);\n    await pgDriver.exec(PG_CREATE_ACCOUNT_INDEX_SQL);",
     to: "    await pgDriver.exec(PG_CREATE_ACCOUNT_INDEX_SQL);\n    await dedupeAccountContacts(pgDriver);",
+    expect: "先清重複、才建部分唯一索引",
+  },
+  {
+    // 同一個 bug 的另一個現場：listingToolsAsync 的 dedupe 也曾經漏了翻譯，
+    // 而它的 live PG 測試照樣通過（正式站的帳號聯絡人沒有重複）。
+    name: "dedupe 忘了翻譯方言（? 直接送 PG ⇒ 語法錯誤）",
+    file: LT_SRC,
+    from: "  const q = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);\n  const dupes = await q(PG_DUPLICATE_ACCOUNT_SQL);",
+    to: "  const q = (sql, params = []) => pgDriver.query(sql, params);\n  const dupes = await q(PG_DUPLICATE_ACCOUNT_SQL);",
     expect: "先清重複、才建部分唯一索引",
   },
   {

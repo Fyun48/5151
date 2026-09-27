@@ -440,9 +440,15 @@ function recordingDriver({ duplicates = [] } = {}) {
     statements,
     async exec(sql) { statements.push(sql); },
     async query(sql, params = []) {
+      // 🚨 真的 `pgDriver.query()` **不翻譯** SQLite 方言 ⇒ 送進來的字串必須是 `$n`。
+      // 這一條是後補的：memberMedia 的 live PG 測試炸出「dedupe 忘了 toPostgresSql」之後，
+      // 回頭發現這裡也有同一個 bug，只是離線夾具從來沒有重複資料所以沒走到。
+      if (sql.includes("?")) {
+        throw new Error(`PG driver 收到未翻譯的 SQL（還有 ? 佔位符）：${sql.slice(0, 80)}`);
+      }
       statements.push(sql);
       if (/HAVING COUNT/.test(sql)) return { rows: duplicates };
-      if (/SELECT id FROM listing_contact_profile/.test(sql)) return { rows: [{ id: 7 }] };
+      if (/SELECT id FROM listing_contact_profile WHERE user_id=\$1/.test(sql)) return { rows: [{ id: 7 }] };
       return { rows: [] };
     },
   };

@@ -199,13 +199,18 @@ export async function ensureMemberMediaStoreOnce(pgDriver) {
 // 保留 id 最小那一筆，並把指向重複者的對應改指到保留者（不是直接丟掉使用者的分類）。
 // `ON CONFLICT DO NOTHING` 是因為 media_tag_map 的主鍵是 (media_id, tag_id)。
 async function dedupeTags(pgDriver) {
-  const dupes = await pgDriver.query(PG_DUPLICATE_TAGS_SQL);
+  // 🚨 `pgDriver.query()` **不會**翻譯 SQLite 方言（要顯式 `toPostgresSql`，或走
+  // `runSqliteSql`）。這裡第一版漏了翻譯，把 `?` 直接送到 PG ⇒ `syntax error at or near "AND"`。
+  // **離線測試沒抓到，是 live PG 測試才炸出來的**——因為只有真的有重複資料時這段才會執行，
+  // 而離線夾具從來沒有重複。現在離線夾具的假 driver 也會拒絕未翻譯的 `?`。
+  const q = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
+  const dupes = await q(PG_DUPLICATE_TAGS_SQL);
   for (const row of dupes.rows) {
-    const extra = await pgDriver.query(PG_TAGS_WITH_NAME_SQL, [row.user_id, row.name, row.keep_id]);
+    const extra = await q(PG_TAGS_WITH_NAME_SQL, [row.user_id, row.name, row.keep_id]);
     for (const dup of extra.rows) {
-      await pgDriver.query(PG_REPOINT_TAG_MAP_SQL, [row.keep_id, dup.id]);
-      await pgDriver.query(DELETE_TAG_MAP_BY_TAG_SQL, [dup.id]);
-      await pgDriver.query(PG_DELETE_DUPLICATE_TAG_SQL, [dup.id]);
+      await q(PG_REPOINT_TAG_MAP_SQL, [row.keep_id, dup.id]);
+      await q(DELETE_TAG_MAP_BY_TAG_SQL, [dup.id]);
+      await q(PG_DELETE_DUPLICATE_TAG_SQL, [dup.id]);
     }
   }
 }

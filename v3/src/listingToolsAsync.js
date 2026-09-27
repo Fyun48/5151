@@ -188,12 +188,18 @@ export async function ensureListingToolsStoreOnce(pgDriver) {
 // 對應 listingTools.js:148 `ensureOneAccountContactPerUser()`：先把重複的清掉，唯一索引才
 // 建得起來。同步版也是這個順序（保留 id 最小的那一筆）。
 async function dedupeAccountContacts(pgDriver) {
-  const dupes = await pgDriver.query(PG_DUPLICATE_ACCOUNT_SQL);
+  // 🚨 `pgDriver.query()` **不會**翻譯 SQLite 方言，要顯式 `toPostgresSql`。
+  // 這裡第一版漏了翻譯（`?` 直接送 PG ⇒ 語法錯誤）。**離線測試抓不到**，因為只有真的
+  // 有重複資料時才會走到這一段；是後來的 memberMedia live PG 測試（刻意種了重複）
+  // 才把同一個 bug 在另一個模組裡炸出來。修完兩邊，離線夾具的假 driver 也一併改成
+  // 拒絕未翻譯的 `?`，讓這個錯誤在離線就看得見。
+  const q = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
+  const dupes = await q(PG_DUPLICATE_ACCOUNT_SQL);
   for (const row of dupes.rows) {
-    const keep = await pgDriver.query(PG_KEEP_ACCOUNT_SQL, [row.user_id]);
+    const keep = await q(PG_KEEP_ACCOUNT_SQL, [row.user_id]);
     const keepId = keep.rows[0]?.id;
     if (keepId == null) continue;
-    await pgDriver.query(PG_DROP_EXTRA_ACCOUNT_SQL, [row.user_id, keepId]);
+    await q(PG_DROP_EXTRA_ACCOUNT_SQL, [row.user_id, keepId]);
   }
 }
 

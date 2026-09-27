@@ -404,9 +404,16 @@ function recordingDriver({ duplicates = [], extraTags = [] } = {}) {
     statements,
     async exec(sql) { statements.push(sql); },
     async query(sql, params = []) {
+      // 🚨 真的 `pgDriver.query()` **不翻譯** SQLite 方言，所以送進來的字串一定要是
+      // `$n`。第一版這裡只記錄不檢查，於是「忘記 toPostgresSql」的 bug 一路活到
+      // live PG 測試才炸（`syntax error at or near "AND"`）。這裡主動拒絕 `?`，
+      // 讓同一個錯誤在**離線**就看得見。
+      if (sql.includes("?")) {
+        throw new Error(`PG driver 收到未翻譯的 SQL（還有 ? 佔位符）：${sql.slice(0, 80)}`);
+      }
       statements.push(sql);
       if (/GROUP BY user_id, name\s+HAVING COUNT/.test(sql)) return { rows: duplicates };
-      if (/SELECT id FROM media_tags WHERE user_id=\? AND name=\?/.test(sql)) return { rows: extraTags };
+      if (/SELECT id FROM media_tags WHERE user_id=\$1 AND name=\$2/.test(sql)) return { rows: extraTags };
       return { rows: [] };
     },
   };
@@ -428,7 +435,8 @@ test("ensureMemberMediaStoreOnce：補建 storage_key 唯一索引與 UNIQUE(use
   // 重複的標籤不是直接丟掉：先把指向它的對應改指到保留者，再刪。
   assert.ok(first.some((s) => /INSERT INTO media_tag_map\(media_id, tag_id\) SELECT media_id/.test(s)),
     "重複標籤的對應必須改指到保留者，不能直接丟掉使用者的分類");
-  assert.ok(first.some((s) => /^DELETE FROM media_tags WHERE id=\?/.test(s)), "重複的標籤列要刪掉");
+  // 注意這裡是 `$1`：真的 pgDriver 收到的一定是翻譯過的 SQL（假 driver 也會擋 `?`）。
+  assert.ok(first.some((s) => /^DELETE FROM media_tags WHERE id=\$1/.test(s)), "重複的標籤列要刪掉");
   assert.ok(first.some((s) => /ADD COLUMN IF NOT EXISTS original_key/.test(s)));
   assert.ok(first.some((s) => /ADD COLUMN IF NOT EXISTS watermarked/.test(s)));
 

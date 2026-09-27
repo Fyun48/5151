@@ -883,6 +883,30 @@ does not exist`）。PG 分支改用 `ORDER BY lower(name)`。夾具主動拒絕
 六個「住在 db.js 以外、吃 handle 參數」的 helper 至少要看到 3 個——移植掉一兩個模組
 不會讓它紅，但「sqlite 歸屬只看 db.js」的退化一定會被擋下。
 
+#### 15.5 🚨 live PG 抓到一個**離線測試抓不到**的真 bug（這一批最重要的收穫）
+
+**症狀**：`syntax error at or near "AND"`。
+
+**根因**：`pgDriver.query()` **不翻譯** SQLite 方言——它要求呼叫端自己
+`toPostgresSql()`（或走 `driver.runSqliteSql()`）。我在兩個模組的 dedupe 輔助函式裡
+直接把帶 `?` 的語句丟給 `pgDriver.query()`。
+
+**為什麼離線測試抓不到**：那段程式只有「真的有重複資料」時才會執行，而兩支離線夾具
+種的資料從來沒有重複過 ⇒ 迴圈主體一次都沒跑。listingTools 的 live PG 測試也照樣通過
+（正式站的帳號聯絡人沒有重複）——**同一個 bug 在兩個模組裡都活著**。
+
+**怎麼被抓到的**：memberMedia 的 live PG 測試**刻意先種兩筆同名標籤**（因為那正是
+bootstrap 要處理的情境），於是迴圈第一次真的執行，就炸了。
+
+修完之後做了兩件事，讓同一個錯誤以後在離線就看得見：
+1. 兩支離線測試的**假 pgDriver 主動拒絕含 `?` 的語句**（模擬真 driver 的契約）。
+   這與「夾具主動拒絕 IFNULL／COLLATE NOCASE」是同一套紀律，只是搬到 **driver 邊界**。
+2. 假 driver 只認翻譯後的 `$n`，連斷言也一起改成比對 `$1`。
+
+> **教訓**：離線 parity 測試證明的是「兩邊算出同樣的結果」，**證明不了「送進 PG 的語句
+> 合法」**。凡是「只有特定資料形狀才會走到」的分支（清重複、補索引、回退、競態），
+> 離線夾具一定要**刻意造出那個形狀**，否則那段程式等於沒測。
+
 #### 15.5 驗收
 
 * `v3/test/member-media-async.test.js` **21/21**（新）；`listing-tools` 的教訓沿用：
