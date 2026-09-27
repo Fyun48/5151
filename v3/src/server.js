@@ -3494,6 +3494,27 @@ import { withPgCrawlOwner } from "./crawlOwnership.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { coveringPlanAsync, reserveCoveringPlan } from "./crawlScheduleAsync.js";
 
+// 2026-09-27 診斷用：`CRAWL_TRACE=1` 時把每一輪抓取拆成階段並記下耗時。
+// 背景：正式站首次檢查固定耗時 30 秒後失敗，且 HAProxy 的終止代碼是 `cD`
+// （應用端 30 秒沒送資料才被切斷），但 DB 端沒有任何查詢超過 1 秒，
+// 對外網路也正常。所以那 30 秒花在應用端某個「不碰 DB」的工作上，需要逐步定位。
+const CRAWL_TRACE = process.env.CRAWL_TRACE === "1";
+
+function traceStep(label, promise) {
+  if (!CRAWL_TRACE) return promise;
+  const started = Date.now();
+  return promise.then(
+    (value) => {
+      console.log(`[trace] ${label} ${Date.now() - started}ms`);
+      return value;
+    },
+    (error) => {
+      console.log(`[trace] ${label} 失敗 ${Date.now() - started}ms :: ${error?.message || error}`);
+      throw error;
+    },
+  );
+}
+
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
     if (!tickGate.isStale()) {
@@ -3514,18 +3535,18 @@ async function tick(reason = "schedule") {
   try {
     const execute = async () => {
       // 帳號維護必須與其他節點同源：PG 模式下只寫本機 SQLite 會讓兩台各自標記過期／暫停。
-      await expireStaleVerifyTokensAsync({
+      await traceStep("expireStaleVerifyTokens", expireStaleVerifyTokensAsync({
         onExpire: (user) => {
           if (user?.email) queueSystemMail("verify_expired", user.email);
         },
-      });
+      }));
       try {
-        await pauseIdleMembersAsync();
+        await traceStep("pauseIdleMembers", pauseIdleMembersAsync());
       } catch (error) {
         console.warn("閒置暫停失敗：", error.message);
       }
       const now = Date.now();
-      const systemDue = reason === "force" || reason === "startup" || (await isSystemCoveringDueAsync(now));
+      const systemDue = reason === "force" || reason === "startup" || (await traceStep("isSystemCoveringDue", isSystemCoveringDueAsync(now)));
       if (
         reason === "manual"
         && !systemDue
@@ -3533,7 +3554,7 @@ async function tick(reason = "schedule") {
         && !lastRun.error
         && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
       ) {
-        const duePlan = await coveringPlanAsync({ now, includeSystem: false });
+        const duePlan = await traceStep("coveringPlan(due)", coveringPlanAsync({ now, includeSystem: false }));
         if (!duePlan.jobs.length) {
           return {
             ...lastRun,
@@ -3544,7 +3565,7 @@ async function tick(reason = "schedule") {
         }
       }
       const includeSystem = reason === "force" || reason === "startup" || (reason !== "schedule" && systemDue) || (reason === "schedule" && systemDue);
-      const plan = await reserveCoveringPlan({ now, includeSystem });
+      const plan = await traceStep("reserveCoveringPlan", reserveCoveringPlan({ now, includeSystem }));
       if (!plan.jobs.length) {
         return {
           skipped: "idle",
@@ -3555,12 +3576,12 @@ async function tick(reason = "schedule") {
           events: [],
         };
       }
-      const result = await runWatch({
+      const result = await traceStep("runWatch", runWatch({
         skipHeavyGeo: true,
         jobs: plan.jobs,
         memberRequirements: plan.memberRequirements,
         includeSystem: plan.includeSystem,
-      });
+      }));
       return result;
     };
     const result = await withBudget(async signal => {
@@ -3589,7 +3610,20 @@ async function tick(reason = "schedule") {
 function schedule() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => {
-    tick("schedule").catch(() => {});
+    // 2026-09-27：這裡原本是 `.catch(() => {})`，把每一輪的失敗完全吞掉，
+    // 所以一次長達 5 小時的 crawler 停擺，在日誌裡只留下一行啟動失敗。
+    // 排程 60 秒才一輪，記下耗時與結果不會造成噪音，卻是唯一能看出「週期有沒有跑完」的地方。
+    const started = Date.now();
+    tick("schedule")
+      .then((result) => {
+        const ms = Date.now() - started;
+        if (result?.skipped) console.log(`排程抓取略過：${result.skipped}（${ms}ms）`);
+        else if (result?.error) console.warn(`排程抓取回報錯誤（${ms}ms）：${result.error}`);
+        else console.log(`排程抓取完成（${ms}ms）`);
+      })
+      .catch((error) => {
+        console.warn(`排程抓取失敗（${Date.now() - started}ms）：`, error?.message || error);
+      });
   }, 60 * 1000);
 }
 
@@ -4300,7 +4334,9 @@ function startWorkerLoops() {
 
 // 啟動後 20 秒做第一次爬取 + geo backfill（crawler 與 worker 共用）。
 function startStartupWork() {
+  const startedAt = Date.now();
   setTimeout(() => {
+    console.log("啟動後首次抓取：開始");
     ensureWorkCoords()
       .then((settings) => {
         const jobs = coveringJobsFromAllUsers({ includeSystem: true });
@@ -4315,7 +4351,14 @@ function startStartupWork() {
         if (result != null) queueGeoBackfill();
       })
       .catch((error) => {
-        console.warn("第一次檢查失敗：", error.message);
+        // 2026-09-27：這裡原本只印 error.message，看不出「跑了多久」。
+        // 正式站的 HAProxy 對 PG 有 timeout client／server 各 30 秒，跑滿 30 秒就代表
+        // 某個查詢超過了 timeout server；幾乎瞬間失敗則代表拿到已被切斷的閒置連線。
+        // 沒有這個耗時，兩種完全不同的原因在日誌裡長得一模一樣。
+        console.warn(
+          `第一次檢查失敗（啟動後 ${Date.now() - startedAt}ms）：`,
+          error?.message || error,
+        );
       });
   }, 20000);
 }
