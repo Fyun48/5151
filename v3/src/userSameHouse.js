@@ -18,7 +18,7 @@ export function ensureUserSameHouseSchema(db) {
   `);
 }
 
-function newGroupKey(now = new Date()) {
+export function newGroupKey(now = new Date()) {
   return `ush_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
