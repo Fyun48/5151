@@ -90,6 +90,19 @@ test("被低估的那一批：/api/admin/campaigns 必須看得到 listCampaigns
     `舊尺只顯示 getCommsConfig，於是這批看起來「只被 2 個函式卡住」。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
+test("純函式不得被列為 SQLite 卡點：normalizeLineUrl 必須完全不出現", () => {
+  // `normalizeLineUrl()`（selfListings.js:502）只做字串處理、一個 regex 與 `throw`，**完全不碰 DB**。
+  // 它一度出現在 **18 條**路由的 sqlite 欄裡，根因是剝註解用 regexp 而**不辨識正規表達式字面量**：
+  // `/^https:\/\/(line\.me|lin\.ee)\//i` 的「跳脫斜線 ＋ 結尾斜線」形成 `//`，
+  // 前一個字元是 `\` 不是 `:` ⇒ 整行被當註解刪掉 ⇒ 括號失衡 ⇒ 本文往後吞掉下一個函式。
+  // 這種誤報會虛增缺口，所以釘住它。
+  const bad = [...rows.entries()]
+    .filter(([, r]) => r.sqlite.includes("normalizeLineUrl"))
+    .map(([key]) => key);
+  assert.deepEqual(bad, [],
+    `normalizeLineUrl 是純函式，出現在 sqlite 欄代表剝註解又把它的本文弄壞了：${bad.join(" / ")}`);
+});
+
 test("交叉驗證：交接文件明寫「真的還沒轉換」的 /api/admin/legal-copy 必須是 SQLite", () => {
   const r = rows.get("GET /api/admin/legal-copy");
   assert.ok(r, "找不到 GET /api/admin/legal-copy");

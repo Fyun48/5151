@@ -123,9 +123,62 @@ import { readFileSync, readdirSync, existsSync } from "node:fs";
 import path from "node:path";
 
 const SRC = new URL("../src/", import.meta.url).pathname;
-const stripComments = (t) => t
-  .replace(/\/\*[\s\S]*?\*\//g, " ")
-  .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+// 🚨 缺陷 (3)（2026-09-27 發現並修正）：原本用兩個 regexp 剝註解，**不會辨識字串與正規表達式**。
+// 症狀：`/^https:\/\/(line\.me|lin\.ee)\//i` 這種「跳脫斜線後面緊接結尾斜線」會形成 `//`，
+// 而它的前一個字元是 `\` 不是 `:`，所以 `(^|[^:])` 的保護沒生效 ⇒ **整行被當成註解刪掉**。
+// 後果連鎖：刪掉的那段含 `))`，括號配對因此失衡，`sliceFunctionBody` 的本文往後吞掉
+// 下一個函式 ⇒ `normalizeLineUrl()`（**純函式**，只做字串與 regex）被誤判成 SQLite，
+// 再沿同模組呼叫擴散，一次虛報 **18 條路由**的缺口。
+// 修法：逐字元走訪，字串與正規表達式字面量整段照抄，只移除真正的註解。
+function stripComments(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const end = skipString(text, i);
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+      continue;
+    }
+    if (ch === "/") {
+      // 正規表達式字面量？前一個非空白字元不是「值」的結尾時才算（與 sliceFunctionBody 同一套判斷）。
+      let j = i - 1;
+      while (j >= 0 && /\s/.test(text[j])) j -= 1;
+      const prev = j >= 0 ? text[j] : "";
+      const prevIsValue = /[A-Za-z0-9_$)\]}"'`]/.test(prev);
+      if (!prevIsValue) {
+        let k = i + 1;
+        let inClass = false;
+        while (k < text.length) {
+          if (text[k] === "\\") { k += 2; continue; }
+          if (text[k] === "[") inClass = true;
+          else if (text[k] === "]") inClass = false;
+          else if (text[k] === "/" && !inClass) break;
+          k += 1;
+        }
+        out += text.slice(i, k + 1);
+        i = k + 1;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
 const read = (rel) => stripComments(readFileSync(path.join(SRC, rel), "utf8"));
 
 const files = [

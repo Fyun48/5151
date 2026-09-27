@@ -154,6 +154,13 @@ const MAP_MUTATIONS = [
     to: "    if (target.to === \"db.js\" && touches.has(target.orig)) sqlite.add(target.orig);",
     expect: "/api/support/public",
   },
+  {
+    name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
+    file: MAP_SRC,
+    from: 'function stripComments(text) {\n  let out = "";',
+    to: 'function stripComments(text) {\n  return text.replace(/\\/\\*[\\s\\S]*?\\*\\//g, " ").replace(/(^|[^:])\\/\\/[^\\n]*/g, "$1");\n  let out = "";',
+    expect: "normalizeLineUrl",
+  },
   // 刻意**沒有**「接收者改成萬用字元」這一條：實測它是**等價變異**。
   // 改成 `\w+\.(prepare|exec|…)` 確實多算了 52 個命中（1178 vs 1126，全是 re.exec() 之類），
   // 但 288 條的判定**完全沒變**（189/47/26/26）——那些 parser 函式從路由不可達。
