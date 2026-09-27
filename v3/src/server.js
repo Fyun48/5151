@@ -312,6 +312,7 @@ import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
+import { getHousingDataAsync, getSpiritAsync, saveHousingDataAsync, saveSpiritAsync } from "./siteContentAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -2177,21 +2178,21 @@ app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, async (req, res) =
   }
 });
 
-app.get("/api/spirit", (_req, res) => {
-  res.json(getSpirit());
+app.get("/api/spirit", async (_req, res) => {
+  res.json(await getSpiritAsync());
 });
 
-app.get("/api/housing-data", (_req, res) => {
-  res.json(getHousingData());
+app.get("/api/housing-data", async (_req, res) => {
+  res.json(await getHousingDataAsync());
 });
 
-app.get("/api/admin/housing-data", requireAdminApi, (_req, res) => {
-  res.json(getHousingData());
+app.get("/api/admin/housing-data", requireAdminApi, async (_req, res) => {
+  res.json(await getHousingDataAsync());
 });
 
-app.put("/api/admin/housing-data", requireAdminApi, (req, res) => {
+app.put("/api/admin/housing-data", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveHousingData(req.body || {}));
+    res.json(await saveHousingDataAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2206,13 +2207,13 @@ app.post("/api/admin/housing-data/refresh", requireAdminApi, async (_req, res) =
   }
 });
 
-app.get("/api/admin/spirit", requireAdminApi, (_req, res) => {
-  res.json(getSpirit());
+app.get("/api/admin/spirit", requireAdminApi, async (_req, res) => {
+  res.json(await getSpiritAsync());
 });
 
-app.put("/api/admin/spirit", requireAdminApi, (req, res) => {
+app.put("/api/admin/spirit", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveSpirit(req.body || {}));
+    res.json(await saveSpiritAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
