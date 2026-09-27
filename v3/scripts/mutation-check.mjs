@@ -64,6 +64,56 @@ const AUDIT_MUTATIONS = [
   },
 ];
 
+const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
+
+// 後台設定 PG 分支的變異集（v3/test/admin-settings-async.test.js）。
+// 這一組的 port 都很短，所以每一條都要證明「拿掉就失敗」，不能靠「看起來一樣」。
+const ADMSET_MUTATIONS = [
+  {
+    name: "拿掉 getStoredSmtp 的環境變數 fallback（未設定 SMTP 的站台會寄不出信）",
+    file: ADMSET_SRC,
+    from: '  return smtpFromEnv();',
+    to: '  return normalizeSmtp(stored);',
+    expect: "環境變數的 fallback",
+  },
+  {
+    // 注意：這條的殺手是**讀取**那條測試，不是「存的是公開形狀」那條。
+    // 在儲存路徑上它是等價的（normalize 會再正規化一次），是變異測試讓我去補讀取測試的。
+    name: "getBrandMascot 不套 publicBrandMascot（讀回來的形狀會少 productName）",
+    file: ADMSET_SRC,
+    from: '  return publicBrandMascot(stored || defaultBrandMascot());',
+    to: '  return stored || defaultBrandMascot();',
+    expect: "productName",
+  },
+  {
+    name: "getSponsorConfig 不做 normalize（少掉預設欄位）",
+    file: ADMSET_SRC,
+    from: '  return normalizeSponsorConfig(await getSiteSettingAsync(SPONSOR_KEY, options));',
+    to: '  return await getSiteSettingAsync(SPONSOR_KEY, options);',
+    expect: "getSponsorConfigAsync",
+  },
+  {
+    name: "configured 永遠 false（後台會顯示未設定）",
+    file: ADMSET_SRC,
+    from: '    configured: Boolean(smtp.host && (smtp.from || smtp.user)),',
+    to: '    configured: false,',
+    expect: "configured",
+  },
+  {
+    name: "saveAdminSponsorSettings 不寫入（存了等於沒存）",
+    file: ADMSET_SRC,
+    from: '  await setSiteSettingAsync(SPONSOR_KEY, next, options);\n',
+    to: '',
+    expect: "落地的 key/value",
+  },
+  // 刻意**沒有**「非 postgres 不回退」這一條：實測它是**等價變異**。
+  // 這些 wrapper 的 `if (!isPg(options)) return sync()` 是**防禦性**的——
+  // 它們委派的 `getSiteSettingAsync()`／`setSiteSettingAsync()` 自己就會判斷 driver 並回退，
+  // 所以把 wrapper 的 guard 拿掉，行為完全不變（`driver:"sqlite"` 時仍然讀磁碟）。
+  // 回退**行為**本身有測試（第 10 項，兩邊刻意種不同的值），只是殺不掉這個冗餘的 guard。
+  // 保留 guard 是為了與其他島嶼的形狀一致；留一條永遠 SURVIVED 的變異只會稀釋報告。
+];
+
 const MAP_SRC = "v3/scripts/route-data-map.mjs";
 
 // 進度量尺的變異集（v3/test/route-data-map.test.js）。
@@ -236,7 +286,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
-    : REJECT_MUTATIONS;
+    : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
+      : REJECT_MUTATIONS;
 
 // 差點把一個壞掉的修正當成完成品。任何中斷路徑都要走 restoreAll()。
 const PRISTINE = new Map();

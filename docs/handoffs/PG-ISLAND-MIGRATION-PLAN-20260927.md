@@ -20,13 +20,13 @@ node v3/scripts/route-data-map.mjs
 我先在下方保留**舊尺**的數字（那是所有舊文件引用的基準），再給**新尺**。
 換尺的原因是舊尺有兩個方向相反的缺陷，**而且它已經實際誤導過一次優先順序**（見第三節）。
 
-| 判定 | 舊尺（有缺陷） | **新尺（已修）** | 差距 |
+| 判定 | 舊尺（有缺陷） | 新尺（換尺當下） | **新尺（第三批之後）** |
 |---|---:|---:|---:|
-| SQLite | 80 | **189** | +109 |
-| MIXED | 36 | **47** | +11 |
-| 無直接DB | 117 | **26** | −91 |
-| PG | 55 | **26** | −29 |
-| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **+120** |
+| SQLite | 80 | 189 | **179** |
+| MIXED | 36 | 47 | **49** |
+| 無直接DB | 117 | 26 | **26** |
+| PG | 55 | 26 | **34** |
+| **缺口合計（SQLite＋MIXED）** | **116** | **236** | **228** |
 
 **這不是退化，是舊尺看不到。** 舊尺把 91 條「其實在讀寫 SQLite」的路由標成「無直接DB」、
 把 29 條標成「PG」。新尺的每一項修正都在下面第五節有逐一驗證過的證據。
@@ -142,6 +142,51 @@ node v3/scripts/mutation-check.mjs v3/test/reject-match-async.test.js   # 16 條
 > 補上還原機制後重跑即為 16/16。**教訓：變異測試工具自己也要能被驗證**，
 > 報告與手動重現不一致時，以手動重現為準。
 
+
+### 第三批（2026-09-27）：後台設定（郵件／OAuth／贊助／品牌）
+
+**選這批的依據**：用修好的量尺排出「只有**一個**真卡點」的 101 條路由，再排除
+session 讀取與 stage-1 fixture 鷹架之後，這幾個函式各卡 1～2 條，而且形狀幾乎一樣
+（讀一個 settings 鍵 ＋ 一個純函式）——所以 port 很短，`settingsKvAsync.js` 已經把語句收斂好了。
+
+新增 `v3/src/adminSettingsAsync.js`（11 個函式）：
+
+| 類別 | 函式 |
+|---|---|
+| 郵件 | `getMailTemplatesAsync`、`getStoredSmtpAsync`、`getAdminMailSettingsAsync` |
+| OAuth | `getStoredOauthAsync`、`getAdminOauthSettingsAsync`（唯讀） |
+| 贊助 | `getSponsorConfigAsync`、`getAdminSponsorSettingsAsync`、`saveAdminSponsorSettingsAsync`、`publicSponsorSettingsAsync` |
+| 品牌 | `getBrandMascotAsync`、`saveBrandMascotAsync` |
+
+**轉成 PG 的路由（8 條）**：`GET /api/oauth`、`GET /api/admin/mail`、`GET /api/admin/oauth`、
+`GET /api/admin/sponsor`、`PUT /api/admin/sponsor`、`GET /api/brand`、`GET /api/admin/brand`、
+`PUT /api/admin/brand`。另外 `/api/me` 與 `/api/comms` 的卡點集合也因此縮小。
+
+**量尺（新尺）**：SQLite 189→**179**、PG 26→**34**、MIXED 47→49、無直接DB 26。
+缺口合計 236→**228**。
+
+#### ⚠️ 刻意沒有移植的兩個（不是漏掉）
+
+`saveAdminMailSettings()`（db.js:1164）與 `saveAdminOauthSettings()`（db.js:1195）
+除了寫 `settings`，還會 **`persistSmtpToAuthEnv()`／`persistOauthToAuthEnv()` 寫節點本機的 `auth.env`**
+——與 `saveAdminMapsSettings` 同一類陷阱。在 PG 模式下會變成「資料進 PG、檔案設定只留在回答你那台」。
+**這需要一個刻意的決定（auth.env 在 PG 模式還要不要寫？由誰寫？），留給下一批。**
+對應的 `PUT /api/admin/mail`、`PUT /api/admin/oauth` 因此仍在缺口裡。
+
+#### 這批學到的三件事
+
+1. **資料形狀又猜錯兩次**（同一類坑第 N 次）：`mailTemplates` 的鍵是
+   `welcome／verify_expired／…`（我寫成 `verify`）、bootstrap 的 clip 欄位是 `title／body`
+   （我寫成 `text`）。兩次都是先用探針問出真實形狀才寫對——
+   **先讀真實資料，不要憑印象**。
+2. **變異測試逼出一條漏掉的測試**：「拿掉 `publicBrandMascot`」這個變異**在儲存路徑上是等價的**
+   （`normalizeBrandMascot` 會再正規化一次，落地結果不變），所以它活了下來。
+   但它會改變**讀取**路徑的回傳形狀（少 `productName`）——於是我補了
+   `getBrandMascotAsync` 的讀取測試。**活了下來不代表測試爛，有時是它指出了你沒測的那一面。**
+3. **冗餘的 guard 是等價變異，不該硬塞進變異集**：這些 wrapper 的
+   `if (!isPg(options)) return sync()` 是防禦性的——委派的 `getSiteSettingAsync()` 自己就會判斷
+   driver 並回退，所以拿掉 guard 行為不變。**回退行為有測試（兩邊種不同的值），
+   但殺不掉這個冗餘 guard**；我把它從變異集移除並註明原因，不留一條永遠 SURVIVED 的項目。
 
 ## 三、做法（照這個做，不要發明新的）
 

@@ -335,11 +335,22 @@ const esc = (s) => String(s).replace(/\|/g, "\\|");
 const tally = {};
 for (const r of rows) tally[r.verdict] = (tally[r.verdict] || 0) + 1;
 
-console.log("<!-- 由 v3/scripts/route-data-map.mjs 產生，請勿手改 -->\n");
-console.log(`共 **${rows.length}** 條入口。\n`);
-console.log("| 判定 | 條數 |\n|---|---:|\n" + Object.entries(tally).sort((a, b) => b[1] - a[1]).map(([k, v]) => `| ${k} | ${v} |`).join("\n"));
-console.log("\n| # | method | path | handler | 判定 | 證據 | SQLite 函式 | PG 函式 | 涉及表 |");
-console.log("|---:|---|---|---|---|---|---|---|---|");
-rows.forEach((r, i) => {
-  console.log(`| ${i + 1} | ${r.method} | \`${esc(r.path)}\` | ${r.isAsyncHandler ? "async" : "sync"} | **${r.verdict}** | ${r.evidence} | ${esc(r.sqlite.join(", ")) || "—"} | ${esc(r.pg.join(", ")) || "—"} | ${esc(r.tables.join(", ")) || "—"} |`);
-});
+// `--json`：給下游分析用的機器可讀輸出（**不改變預設行為、不改變基準**）。
+// 為什麼要：後續要拿這份判定排優先順序（例如「哪些卡點是真的在**寫** SQLite」），
+// 那些分析不該自己重寫一份「模組載入 ＋ 函式本文切片」的邏輯——兩份一定會漂移。
+// ⚠️ **不要在這裡用 `process.exit(0)`**：輸出被**管線**接走時 stdout 是非同步的，
+// `process.exit()` 會在 flush 之前把行程收掉 ⇒ 下游收到**被截斷的 JSON**。
+// （實測：`> file` 正常、`execFileSync()` 拿到 Invalid JSON——我就在這裡踩了一次。）
+// 用 if/else 讓行程自然結束即可。
+if (process.argv.includes("--json")) {
+  console.log(JSON.stringify({ total: rows.length, tally, rows }, null, 2));
+} else {
+  console.log("<!-- 由 v3/scripts/route-data-map.mjs 產生，請勿手改 -->\n");
+  console.log(`共 **${rows.length}** 條入口。\n`);
+  console.log("| 判定 | 條數 |\n|---|---:|\n" + Object.entries(tally).sort((a, b) => b[1] - a[1]).map(([k, v]) => `| ${k} | ${v} |`).join("\n"));
+  console.log("\n| # | method | path | handler | 判定 | 證據 | SQLite 函式 | PG 函式 | 涉及表 |");
+  console.log("|---:|---|---|---|---|---|---|---|---|");
+  rows.forEach((r, i) => {
+    console.log(`| ${i + 1} | ${r.method} | \`${esc(r.path)}\` | ${r.isAsyncHandler ? "async" : "sync"} | **${r.verdict}** | ${r.evidence} | ${esc(r.sqlite.join(", ")) || "—"} | ${esc(r.pg.join(", ")) || "—"} | ${esc(r.tables.join(", ")) || "—"} |`);
+  });
+}

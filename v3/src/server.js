@@ -356,6 +356,17 @@ import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
 import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
 import { auditFailureStats } from "./adminAuditHealth.js";
+// 後台設定（郵件／OAuth／贊助／品牌）的 driver-aware 入口。寫入的兩個
+// （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
+import {
+  getAdminMailSettingsAsync,
+  getAdminOauthSettingsAsync,
+  getAdminSponsorSettingsAsync,
+  getBrandMascotAsync,
+  publicSponsorSettingsAsync,
+  saveAdminSponsorSettingsAsync,
+  saveBrandMascotAsync,
+} from "./adminSettingsAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -700,7 +711,7 @@ app.get("/go/:id", async (req, res) => {
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
 app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxAge: "7d" }));
 
-app.get("/api/me", (req, res) => {
+app.get("/api/me", async (req, res) => {
   const session = readSession(req);
   if (session?.userId) touchLastLogin(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
   const user = session?.userId ? getUserById(session.userId) : null;
@@ -736,7 +747,7 @@ app.get("/api/me", (req, res) => {
     hint: "",
     version: APP_VERSION,
     vapidPublicKey: publicVapidKey(),
-    sponsor: session ? publicSponsorSettings(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
+    sponsor: session ? await publicSponsorSettingsAsync(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
 });
 
@@ -1185,8 +1196,8 @@ app.get("/verify-email", (req, res) => {
   }
 });
 
-app.get("/api/oauth", (_req, res) => {
-  res.json(getAdminOauthSettings());
+app.get("/api/oauth", async (_req, res) => {
+  res.json(await getAdminOauthSettingsAsync());
 });
 
 app.get("/auth/:provider", (req, res) => {
@@ -1451,8 +1462,8 @@ app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/mail", requireAdminApi, (_req, res) => {
-  res.json(getAdminMailSettings());
+app.get("/api/admin/mail", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminMailSettingsAsync());
 });
 
 app.put("/api/admin/mail", requireAdminApi, (req, res) => {
@@ -1463,8 +1474,8 @@ app.put("/api/admin/mail", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/oauth", requireAdminApi, (_req, res) => {
-  res.json(getAdminOauthSettings());
+app.get("/api/admin/oauth", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminOauthSettingsAsync());
 });
 
 app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
@@ -1475,13 +1486,13 @@ app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/sponsor", requireAdminApi, (_req, res) => {
-  res.json(getAdminSponsorSettings());
+app.get("/api/admin/sponsor", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminSponsorSettingsAsync());
 });
 
-app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
+app.put("/api/admin/sponsor", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveAdminSponsorSettings(req.body || {}));
+    res.json(await saveAdminSponsorSettingsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1503,17 +1514,17 @@ app.get("/api/ads", (_req, res) => {
   res.json(publicAdsSettings());
 });
 
-app.get("/api/brand", (_req, res) => {
-  res.json(getBrandMascot());
+app.get("/api/brand", async (_req, res) => {
+  res.json(await getBrandMascotAsync());
 });
 
-app.get("/api/admin/brand", requireAdminApi, (_req, res) => {
-  res.json(getBrandMascot());
+app.get("/api/admin/brand", requireAdminApi, async (_req, res) => {
+  res.json(await getBrandMascotAsync());
 });
 
-app.put("/api/admin/brand", requireAdminApi, (req, res) => {
+app.put("/api/admin/brand", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveBrandMascot(req.body || {}));
+    res.json(await saveBrandMascotAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1665,13 +1676,13 @@ app.post("/api/sponsored/:id/event", (req, res) => {
   }
 });
 
-app.get("/api/comms", (req, res) => {
+app.get("/api/comms", async (req, res) => {
   const session = readSession(req);
   // 支持方式（後台「贊助連結」）是公開資訊：未登入訪客也要拿得到，才不會在「支持本站」看到死路。
-  const publicSponsorOffer = publicSponsorSettings({});
+  const publicSponsorOffer = await publicSponsorSettingsAsync({});
   res.json(publicCommsBundle(db, {
     config: getCommsConfig(),
-    sponsorOffer: session ? publicSponsorSettings(session) : {},
+    sponsorOffer: session ? await publicSponsorSettingsAsync(session) : {},
     sponsorLinks: publicSponsorOffer.links,
     user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},
   }));
