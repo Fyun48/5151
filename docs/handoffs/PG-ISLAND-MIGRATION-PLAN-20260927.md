@@ -1268,6 +1268,32 @@ Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部
    `seedDefaultDocuments()` 的 `ensureIdleLegalClauses()` 三者誰先誰後），
    不要再一次從「照規格重寫」開始。
 
+### 🚨 尺規的**偽陽性**（動手前先看這一條，可以省下一整批白工）
+
+`route-data-map.mjs` 把 `PUT /api/admin/providers/site-budget` 列成「只剩 `saveSiteBudget`
+一個卡點」，但**那條路由其實已經是 PG 能力**，程式碼路徑是：
+
+```
+server.js  await saveAdminSiteBudget(req.body || {})
+  → db.js:1067  saveAdminSiteBudget() = budgetStore({ sqliteDb: db, options }).saveSiteBudget(partial)
+  → budgetStore.js:47  const driver = options.driver || resolveDbDriver();
+                       if (driver === "postgres") return postgresBudgetStore(...)
+  → budgetStore.js:47（PG 分支）  saveSiteBudget: (input) => pg.saveSiteBudgetAsync(...)
+```
+
+也就是說它走的是**與 `budgetGuardAsync.js` 同一條島嶼**，只是中間隔了 `budgetStore()`
+這一層 facade。
+
+**尺規為什麼還是報它**：`resolveNode()` 的「driver-aware 就不算 SQLite」規則是看**該函式
+自己的本文**有沒有 `resolveDbDriver(`。`saveAdminSiteBudget` 的本文只有 `budgetStore(...)`，
+`resolveDbDriver()` 在 `budgetStore` 裡面——於是那條邊照樣把同步的 `saveSiteBudget` 算進來。
+（尺規的缺陷 (4) 修過一次「`budgetStore()` 委派的函式其實已經是 driver-aware」，
+看起來沒有涵蓋 `saveAdminSiteBudget` 這一個。）
+
+**下一次要碰這裡時**：先確認是不是同一個偽陽性類型（**凡是經過 `budgetStore()` 的都先查**），
+要嘛把 `saveAdminSiteBudget` 這種「只委派給 driver-aware facade」的函式補進尺規規則
+（並依既有紀律留下新舊基準與單調性證據），要嘛就承認那條路由不需要移植。
+
 ### 交接紀律（這一輪累積下來的，全部都有實例）
 
 1. **動手前先確認 PG 有沒有那個約束。** `CREATE TABLE` 裡的 `UNIQUE(...)`（表約束）與欄位
