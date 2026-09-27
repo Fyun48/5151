@@ -862,7 +862,7 @@ export function listUsers() {
   return listUsersOn(db);
 }
 
-function settingKey(key) {
+export function settingKey(key) {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
   if (!row) return undefined;
   try {
@@ -872,7 +872,7 @@ function settingKey(key) {
   }
 }
 
-function writeSettingKey(key, value) {
+export function writeSettingKey(key, value) {
   db.prepare(
     "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
   ).run(key, JSON.stringify(value));
@@ -1226,7 +1226,7 @@ export function pauseIdleMembers({ now = Date.now() } = {}) {
 
 export { IDLE_PAUSE_MS };
 
-function userSettingKey(userId, key) {
+export function userSettingKey(userId, key) {
   const uid = Number(userId) || 0;
   if (!uid) return undefined;
   const row = db.prepare("SELECT value FROM user_settings WHERE user_id = ? AND key = ?").get(uid, key);
@@ -1238,7 +1238,7 @@ function userSettingKey(userId, key) {
   }
 }
 
-function writeUserSettingKey(userId, key, value) {
+export function writeUserSettingKey(userId, key, value) {
   const uid = Number(userId) || 0;
   if (!uid) return;
   db.prepare(
