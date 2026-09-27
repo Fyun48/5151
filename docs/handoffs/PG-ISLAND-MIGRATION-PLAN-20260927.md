@@ -1089,6 +1089,65 @@ PG 分支若只寫 DB 不更新快取，同一台節點會立刻「後台改完�
 * `v3/test/rental-catalog-async.test.js` **14/14**（新）；變異測試 **14/14 KILLED**。
 * 既有 `rental-catalog.test.js`、`rental-match.test.js` 全綠；尺規守衛 14/14 不變。
 
+### 第十九批（2026-09-27）：**嘗試 `getLegalCopy` 後回退**——但留下一個重要的行為發現
+
+這一輪挑了 `getLegalCopy()`（3 條路由的卡點）想做成一個小批次。實作很小
+（把已移植的 `legalCopyFromDocumentsAsync` 與 `settingsKvAsync` 接起來），
+**但 parity 測試一直做不出來，所以整批回退了**（`git status` 乾淨、尺規不變）。
+
+回退的理由：我對這個函式的**心智模型是錯的**，而錯的地方正好是它最重要的分支。
+
+#### 19.1 錯誤的心智模型 vs 實際行為
+
+我以為 `getLegalCopy()`（db.js:1740）是這樣：
+
+```
+有文件 → 用文件內容；文件不齊 → 用 settings；都沒有 → 用預設
+```
+
+實際上是：
+
+```js
+const fromDocs = legalCopyFromDocuments(db);
+if (fromDocs?.disclaimer && fromDocs?.privacy) return publicLegalCopy(fromDocs);
+return publicLegalCopy(settingKey("legalCopy") ?? defaultLegalCopy());
+```
+
+而 **`legalCopyFromDocuments()` 對於缺少的那一段會自己補上 `defaultLegalCopy()` 的內容**：
+
+```js
+version:    terms ? `v${terms.version}` : defaults.version,
+disclaimer: terms?.body || defaults.disclaimer,      // ← 沒有文件也有值
+privacy:    privacy?.body || defaults.privacy,       // ← 沒有文件也有值
+```
+
+所以：
+
+* **「完全沒有文件」不會走 settings**——`fromDocs` 的兩段都是預設值、都非空 ⇒
+  條件成立 ⇒ 回傳的是**預設文案**，`settings.legalCopy` 根本沒被讀到。
+* **「只發布一份文件」也不會走 settings**——缺的那段被補成預設值，兩段依然非空。
+* 真正會走到 settings 的只有兩種情況：**文件 body 是空字串**（`""` 是 falsy），
+  或 **`legalCopyFromDocuments()` 整個丟錯**。
+
+也就是說 `settings.legalCopy` 是**很少被用到的備援**，不是主要來源。
+
+#### 19.2 為什麼值得記下來
+
+1. **`getLegalCopy` 的「三段取值」不能照字面理解**：`if (a && b)` 看起來像「兩段都要有」，
+   但因為底下已經補了預設值，它實際上只擋得住「空字串」。
+   要改這一段之前必須先知道這件事，否則會寫出「以為在驗 fallback、其實在驗預設值」的測試
+   ——**我這一輪就是這樣來回卡了好幾次**。
+2. **下一個 session 若還要移植它**：先把上面那張表當成規格，測資要涵蓋
+   「body 是空字串」與「文件讀取丟錯」兩種，其餘情況兩條路徑的結果**本來就一樣**。
+3. 另外一個觀察：沒有文件時，PG 分支與同步版回傳的 `version` 欄位**不一樣**
+   （同步版走 `legalCopyFromDocuments` 的 `defaults.version`，PG 分支在我當時的實作下拿到
+   另一個值）。這一項沒有查到底就被回退掉了，**下次接手時要優先確認 `version` 的來源**
+   ——它是同意條款版本的一部分，不一致會影響「已同意哪一版」的判斷。
+
+> **做法上的教訓**：批次再小，只要**心智模型錯了**就會卡住。這一輪花了太多時間在
+> 「讓測試通過」，而不是「先確認規格」。下次遇到這種來回，**先停下來把被呼叫函式的
+> 實際回傳值印出來**（我最後才印，一印就發現兩邊都是預設值）。
+
 ## 三、做法（照這個做，不要發明新的）
 
 1. **挑標的**：從對照表挑，**優先挑被多條路由共用的同步函式或模組**（見第二節的橫向模組）。
