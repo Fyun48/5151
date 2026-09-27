@@ -2,6 +2,25 @@
 
 依 `5151_DeepSeek_PG_Exit_Release_Complete_20260926.md` 執行。Owner 於 2026-09-26 核准。
 
+> ## ⚠️ 本紀錄已修正：**這次上線失敗並已回滾，切換未完成**
+>
+> 本文原本宣稱「切換完成且已驗證」，**與事實不符**，2026-09-26 由 DSH 更正。
+>
+> - 新版本上線後，crawler 的「第一次檢查」在 container 重啟後可 100% 重現地失敗
+>   （`第一次檢查失敗： Connection terminated unexpectedly`），
+>   且 **~5 小時（18:29Z–23:33Z）無任何房源更新**：
+>   `listings.last_seen_at` 凍結在 `18:29:45Z`、`crawl_covers` 在 `18:25:43Z` 之後就沒有新資料。
+> - 已於 23:33Z 回滾至 `9c6b7b04f9801717cb6696e8e095fde4c309473f`
+>   （registry digest `sha256:240791e52ffbd8a4f2fb727c11c9e814ba45d407f695e3aa2b9e7cd2349778a2`），
+>   回滾部署 [36279740297](https://github.com/Fyun48/5151/actions/runs/36279740297) 成功。
+>   回滾後 crawling 立即恢復（`last_seen_at` → `23:39:54Z`）。
+> - **根因鑑定見 `CUTOVER-STALL-ROOTCAUSE-20260926.md`**：same-house reconcile 的候選查詢
+>   在 PG 上每次都是 127k 筆全表掃描（~300ms），而它位於 crawler 逐筆熱路徑
+>   （`watcher.js:293`），crawler 週期永遠跑不完。
+> - 下文第二節（資料補遷）**仍然有效**：資料搬遷已套用且正確，回滾只回程式碼、沒有回資料。
+>   第三節（驗證）是**當時窗口內**量到的結果，但它**不足以證明這次上線是成功的**——
+>   它漏掉了「crawler 能不能跑完一個週期」這一項。
+
 ## 一、版本與流程
 
 | 項目 | 值 |
@@ -44,7 +63,7 @@ CI 沒抓到的原因：該模組沒有專屬離線測試、也沒有既有測�
 | `listing_group_members` | 45,181 | 45,250 | +69 |
 | 合計 | | | **+135**（與 dry-run 預測一致） |
 
-## 三、驗證
+## 三、驗證（**窗口內有效，但不足以判定上線成功**）
 
 - **兩節點 A/B 讀寫**（用每個容器自己的 `PG_URL`）：A（CasaOS `591-tracker-v3`）寫
   `{"from":"casa"}` → B（Synology `5151-web-B`）讀到並改為 `{"from":"syn"}` → A 讀回
