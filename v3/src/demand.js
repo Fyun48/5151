@@ -749,33 +749,48 @@ export function userCreatedAt(db, userId) {
   }
 }
 
-export function expireOpenPosts(db, now = new Date()) {
-  const stamp = iso(now);
-  if (isWishLifecycleEnabled(marketplaceFlags) && hasWishColumn(db, "lifecycle")) {
-    const confirm = db.prepare(
-      `UPDATE demand_posts
+// 過期掃描的三句 UPDATE。抽成常數讓 PG 版（demandAsync.js）用**逐字相同的語句**，
+// 只換跑語句的人——三個 mode 的判斷與參數順序都留在下面兩支共用函式裡。
+export const EXPIRE_CONFIRM_SQL = `UPDATE demand_posts
        SET lifecycle = 'needs_confirmation', updated_at = ?
        WHERE status = 'open'
          AND (lifecycle IS NULL OR lifecycle = '' OR lifecycle = 'active')
-         AND expires_at <= ? AND expires_at < ?`,
-    ).run(stamp, stamp, WISH_FAR_EXPIRE);
-    const graceCutoff = new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
-    const paused = db.prepare(
-      `UPDATE demand_posts
+         AND expires_at <= ? AND expires_at < ?`;
+export const EXPIRE_PAUSE_SQL = `UPDATE demand_posts
        SET status = 'closed', lifecycle = 'paused', closed_at = COALESCE(closed_at, ?),
            closed_reason = 'paused', updated_at = ?
        WHERE status = 'open'
          AND lifecycle = 'needs_confirmation'
-         AND expires_at <= ? AND expires_at < ?`,
-    ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
+         AND expires_at <= ? AND expires_at < ?`;
+export const EXPIRE_LEGACY_SQL = `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
+     WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`;
+export const PRUNE_MATCH_DISTRICTS_SQL = `DELETE FROM demand_match_districts
+      WHERE wish_id NOT IN (SELECT id FROM demand_posts WHERE status = 'open')`;
+
+// 三個 mode 的參數（同步版與 PG 版共用；順序就是語句裡 `?` 的順序）。
+export const EXPIRE_CONFIRM_PARAMS = (stamp) => [stamp, stamp, WISH_FAR_EXPIRE];
+export const EXPIRE_PAUSE_PARAMS = (stamp, graceCutoff) => [stamp, stamp, graceCutoff, WISH_FAR_EXPIRE];
+export const EXPIRE_LEGACY_PARAMS = (stamp) => [stamp, stamp, WISH_FAR_EXPIRE];
+export const expireGraceCutoff = (now) =>
+  new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
+
+// 生命週期模式是否啟用（同步版另外要求 handle 上真的有 lifecycle 欄位；PG 由
+// ensurePgSchema 鏡射，一定有）。PG 版呼叫這一支，判斷只有一份。
+export function isWishLifecycleExpiryEnabled() {
+  return isWishLifecycleEnabled(marketplaceFlags);
+}
+
+export function expireOpenPosts(db, now = new Date()) {
+  const stamp = iso(now);
+  if (isWishLifecycleExpiryEnabled() && hasWishColumn(db, "lifecycle")) {
+    const confirm = db.prepare(EXPIRE_CONFIRM_SQL).run(...EXPIRE_CONFIRM_PARAMS(stamp));
+    const paused = db.prepare(EXPIRE_PAUSE_SQL)
+      .run(...EXPIRE_PAUSE_PARAMS(stamp, expireGraceCutoff(now)));
     pruneDemandMatchDistricts(db);
     notifyWishOfferLifecycle(db, { sweep: true, now });
     return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
   }
-  const result = db.prepare(
-    `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
-     WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
-  ).run(stamp, stamp, WISH_FAR_EXPIRE);
+  const result = db.prepare(EXPIRE_LEGACY_SQL).run(...EXPIRE_LEGACY_PARAMS(stamp));
   pruneDemandMatchDistricts(db);
   notifyWishOfferLifecycle(db, { sweep: true, now });
   return Number(result.changes) || 0;
@@ -1116,7 +1131,9 @@ export function publicWishRoomView(post) {
   };
 }
 
-function assertPublicFields(view) {
+// 匯出給 driver-aware 版用：這是**公開視圖的洩漏守衛**（有禁欄位就直接 500），
+// 兩個 driver 必須套用同一支，不能各寫一份。
+export function assertPublicFields(view) {
   const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin", "author", "contact", "phone", "line_url", "location_note", "destination_note", "replies"];
   for (const key of banned) {
     if (Object.prototype.hasOwnProperty.call(view, key)) {
@@ -1130,7 +1147,8 @@ function rowById(db, postId) {
   return db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(Number(postId) || 0);
 }
 
-function matchesFilters(row, filters = {}) {
+// 匯出給 driver-aware 版用（`listDemandPostsAsync` 要在 PG 取回的列上套同一組公開篩選條件）。
+export function matchesFilters(row, filters = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
   const city = String(row.city || "") || cityFromDistricts(districts);
   if (filters.city) {

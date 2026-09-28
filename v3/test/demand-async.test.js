@@ -51,7 +51,10 @@ function pgFixture() {
   const disk = new DatabaseSync(diskPath(), { readOnly: true });
   // `users` 是 `demand_posts`／`demand_replies` 的外鍵目標，PG 上真的存在，
   // 所以夾具也必須有——否則不是「PG 比較嚴格」，而是夾具根本不完整。
-  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports"]) {
+  // `demand_match_districts` 也要：讀取路徑的過期掃描會跑 `pruneDemandMatchDistricts()`，
+  // 少了它 PG 分支會丟 "no such table"（離線夾具第一次就是這樣紅的）。
+  // `user_listing_flags` 也是：屋主看自己的許願房時要讀活動訊號（同步版查同一張表）。
+  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports", "demand_match_districts", "user_listing_flags"]) {
     const rows = disk.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").all(t);
     assert.equal(rows.length, 1, `必須抓到 ${t} 的 DDL（夾具不自己寫表格定義）`);
     mem.exec(rows[0].sql);
@@ -76,10 +79,15 @@ function pgFixture() {
 
 // 只清與本批有關的表；`wish_offers` 不必清（hook 只會 UPDATE，且空集合本來就改 0 列）。
 function clearDemand(h) {
+  // 先刪子表再刪貼文（夾具開了 FK），最後清測試帳號。
   h.prepare("DELETE FROM demand_reports").run();
   h.prepare("DELETE FROM demand_replies").run();
   h.prepare("DELETE FROM demand_posts").run();
   h.prepare("DELETE FROM users WHERE email LIKE 'demand%@example.com'").run();
+  // ⚠️ user 1 是 `db.js` 開檔時建的 bootstrap 管理員，**不屬於**上面那批測試帳號，
+  // 所以它不會被刪掉——而前面幾個測試會改它的 nickname。不還原的話，後面的測試會繼承
+  // 前一個測試留下的狀態（第一版就是這樣在「作者暱稱」上紅的）。
+  h.prepare("UPDATE users SET nickname = '' WHERE id = 1").run();
 }
 
 function seedUsers(h, ids) {
@@ -90,12 +98,12 @@ function seedUsers(h, ids) {
   }
 }
 
-function seedPost(h, { id, userId, status = "open" }) {
+function seedPost(h, { id, userId, status = "open", legacyNumericShare = 1 }) {
   // `public_token` 一定要自己給：沒有值時 `publicTokenFor()` 會**產生一個隨機 token**，
   // 於是同步版與 PG 版拿到的 token 不同，`deepEqual` 會紅在一個與本批無關的欄位上。
   h.prepare(
-    "INSERT INTO demand_posts(id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run(id, userId, "[]", 0, "any", 0, "找房的內容", status, NOW, EXPIRES, `tok-${id}`);
+    "INSERT INTO demand_posts(id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token, legacy_numeric_share) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(id, userId, "[]", 0, "any", 0, "找房的內容", status, NOW, EXPIRES, `tok-${id}`, legacyNumericShare);
 }
 
 function seedReply(h, { id, postId, userId }) {
@@ -104,14 +112,18 @@ function seedReply(h, { id, postId, userId }) {
   ).run(id, postId, userId, "這是回覆", NOW);
 }
 
+function seedUserName(h, id, nickname) {
+  h.prepare("UPDATE users SET nickname = ? WHERE id = ?").run(nickname, id);
+}
+
 // 磁碟與 PG 夾具都回到同一個起點，回傳 [disk, exec]。
 function resetBoth(seedFn) {
   const disk = handle();
   clearDemand(disk);
-  seedUsers(disk, [1, 2, 3, 4]);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
   const exec = pgFixture();
   clearDemand(exec.raw);
-  seedUsers(exec.raw, [1, 2, 3, 4]);
+  seedUsers(exec.raw, [1, 2, 3, 4, 5, 6, 7, 8]);
   if (seedFn) { seedFn(disk); seedFn(exec.raw); }
   return [disk, exec];
 }
@@ -142,10 +154,10 @@ test("檢舉：第二筆達門檻要隱藏，而且落地的 status 兩邊必須
   seedUsers(disk, [1, 2, 3, 4]);
   seedPost(disk, { id: 501, userId: 1 });
 
-  const a1 = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 501, reason: "廣告" }, { ...PG, exec });
+  const a1 = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 501, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.deepEqual(a1, s1, "第一筆的回傳值必須相同");
   assert.equal(postStatus(disk, 501), "open", "PG 分支的第一筆也不該隱藏");
-  const a2 = await asyncMod.reportDemandAsync(3, { targetType: "post", targetId: 501, reason: "廣告" }, { ...PG, exec });
+  const a2 = await asyncMod.reportDemandAsync(3, { targetType: "post", targetId: 501, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.deepEqual(a2, syncSecond, "第二筆的回傳值必須相同（門檻判斷）");
   assert.equal(postStatus(disk, 501), syncStatus, "PG 分支與同步版落地的 status 必須相同");
   assert.equal(postStatus(disk, 501), "hidden", "門檻到了就必須真的隱藏（否則這條測試沒鑑別力）");
@@ -166,9 +178,9 @@ test("檢舉：同一人重複檢舉要回 already，且不得再寫入（PG 沒
   clearDemand(disk);
   seedUsers(disk, [1, 2, 3, 4]);
   seedPost(disk, { id: 502, userId: 1 });
-  const aFirst = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 502, reason: "廣告" }, { ...PG, exec });
+  const aFirst = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 502, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.deepEqual(aFirst, syncFirst, "第一筆的回傳值必須相同");
-  const aAgain = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 502, reason: "廣告" }, { ...PG, exec });
+  const aAgain = await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 502, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.deepEqual(aAgain, syncAgain, "重複檢舉的回傳值必須相同");
   assert.equal(reportRows(exec.raw).length, 1, "PG 分支不得寫入第二列");
 });
@@ -187,9 +199,9 @@ test("檢舉回覆：達門檻把 hidden 設 1，兩邊落地值相同", async (
   seedUsers(disk, [1, 2, 3, 4]);
   seedPost(disk, { id: 503, userId: 1 });
   seedReply(disk, { id: 601, postId: 503, userId: 1 });
-  await asyncMod.reportDemandAsync(2, { targetType: "reply", targetId: 601, reason: "洗版" }, { ...PG, exec });
+  await asyncMod.reportDemandAsync(2, { targetType: "reply", targetId: 601, reason: "洗版" }, { ...PG, exec, strict: true });
   assert.equal(replyHidden(disk, 601), 0, "第一筆還不該隱藏");
-  const aSecond = await asyncMod.reportDemandAsync(3, { targetType: "reply", targetId: 601, reason: "洗版" }, { ...PG, exec });
+  const aSecond = await asyncMod.reportDemandAsync(3, { targetType: "reply", targetId: 601, reason: "洗版" }, { ...PG, exec, strict: true });
   assert.deepEqual(aSecond, syncSecond, "回傳值必須相同");
   assert.equal(replyHidden(disk, 601), 1, "PG 分支必須真的把 hidden 設成 1");
   assert.equal(postStatus(disk, 503), "open", "檢舉回覆不得動到許願房本身");
@@ -207,7 +219,7 @@ test("檢舉：目標不存在／未登入的錯誤形狀必須與同步版一�
     let syncErr = null;
     try { syncMod.reportDemand(handle(), c.userId, c.input, new Date(NOW)); } catch (e) { syncErr = e; }
     let asyncErr = null;
-    try { await asyncMod.reportDemandAsync(c.userId, c.input, { ...PG, exec }); } catch (e) { asyncErr = e; }
+    try { await asyncMod.reportDemandAsync(c.userId, c.input, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
     assert.ok(syncErr, `同步版應該要丟錯（${c.why}）`);
     assert.ok(asyncErr, `PG 分支應該要丟錯（${c.why}）`);
     assert.equal(asyncErr.status, syncErr.status, `status 必須相同（${c.why}）`);
@@ -232,7 +244,7 @@ test("回覆：內容、間隔與每小時上限的判斷要與同步版一致",
   // ⚠️ 回傳封包**刻意**與同步版不同（見 demandAsync.js 的說明）：PG 分支只回最小封包，
   // 因為同步版回傳的整則許願房是 `getDemandPost()` 讀本機 handle 組出來的，在 PG 模式下
   // 會拿到「還沒寫進去的回覆」。所以要驗的是**落地狀態**，不是封包相等。
-  const aFirst = await asyncMod.addDemandReplyAsync(2, 505, "我看到一間可以參考", { ...PG, exec });
+  const aFirst = await asyncMod.addDemandReplyAsync(2, 505, "我看到一間可以參考", { ...PG, exec, strict: true });
   assert.deepEqual(aFirst, { ok: true, id: 505, replied: true });
   // ⚠️ 這裡**不能**拿磁碟當對照組：磁碟在跑 PG 分支之前已經被清回起點，
   // 而回覆是寫進 PG 夾具的。要驗的是「PG 夾具上的那一列」與「磁碟上同步版留下的那一列」
@@ -252,7 +264,7 @@ test("回覆：內容、間隔與每小時上限的判斷要與同步版一致",
   assert.equal(reportRows(disk).length + disk.prepare("SELECT COUNT(*) n FROM demand_replies").get().n, 0,
     "PG 分支不得把回覆寫回本機 SQLite（那會是無聲的分歧）");
   let asyncErr = null;
-  try { await asyncMod.addDemandReplyAsync(2, 505, "太快了吧", { ...PG, exec }); } catch (e) { asyncErr = e; }
+  try { await asyncMod.addDemandReplyAsync(2, 505, "太快了吧", { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
   assert.ok(asyncErr, "PG 分支：20 秒內第二則必須被擋");
   assert.equal(asyncErr.status, syncErr.status, "間隔限制的 status 必須相同");
   assert.equal(asyncErr.message, syncErr.message, "間隔限制的訊息必須相同");
@@ -281,7 +293,7 @@ test("回覆：未登入／貼文已關閉／內容太短的錯誤形狀必須�
     let syncErr = null;
     try { syncMod.addDemandReply(handle(), c.userId, c.postId, c.body, new Date(NOW)); } catch (e) { syncErr = e; }
     let asyncErr = null;
-    try { await asyncMod.addDemandReplyAsync(c.userId, c.postId, c.body, { ...PG, exec }); } catch (e) { asyncErr = e; }
+    try { await asyncMod.addDemandReplyAsync(c.userId, c.postId, c.body, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
     assert.ok(syncErr, `同步版應該要丟錯（${c.why}）`);
     assert.ok(asyncErr, `PG 分支應該要丟錯（${c.why}）`);
     assert.equal(asyncErr.status, syncErr.status, `status 必須相同（${c.why}）`);
@@ -306,13 +318,13 @@ test("關閉：狀態與 lifecycle 的落地結果兩邊相同，且非本人不
   let syncErr = null;
   try { syncMod.closeDemandPost(handle(), 2, 508, {}, new Date(NOW)); } catch (e) { syncErr = e; }
   let asyncErr = null;
-  try { await asyncMod.closeDemandPostAsync(2, 508, {}, { ...PG, exec }); } catch (e) { asyncErr = e; }
+  try { await asyncMod.closeDemandPostAsync(2, 508, {}, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
   assert.ok(syncErr, "同步版：非本人不得關閉");
   assert.equal(asyncErr?.status, syncErr.status, "非本人的 status 必須相同");
   assert.equal(asyncErr?.message, syncErr.message, "非本人的訊息必須相同");
   assert.equal(postStatus(disk, 508), "open", "被擋下之後不得關閉");
 
-  const aResult = await asyncMod.closeDemandPostAsync(1, 508, {}, { ...PG, exec });
+  const aResult = await asyncMod.closeDemandPostAsync(1, 508, {}, { ...PG, exec, strict: true });
   assert.equal(postStatus(disk, 508), syncStatus, "PG 分支與同步版落地的 status 必須相同");
   assert.deepEqual(
     disk.prepare("SELECT lifecycle, closed_reason FROM demand_posts WHERE id = 508").get(),
@@ -359,11 +371,11 @@ test("檢舉達門檻：PG 與本機 handle 兩邊都變成 hidden（兩個 stor
   const disk = handle();
   const [, exec] = resetBoth((h) => seedPost(h, { id: 520, userId: 1 }));
 
-  await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec });
+  await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.equal(postStatus(exec.raw, 520), "open", "PG：第一筆還不該隱藏");
   assert.equal(reportDiskStatus(520), "open", "本機：第一筆還不該隱藏");
 
-  const second = await asyncMod.reportDemandAsync(3, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec });
+  const second = await asyncMod.reportDemandAsync(3, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec, strict: true });
   assert.deepEqual(second, { ok: true, hidden: true });
   const pgRow = exec.raw.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = 520").get();
   assert.equal(pgRow.status, "hidden", "PG 側那一列必須被隱藏（那才是真的來源）");
@@ -373,6 +385,145 @@ test("檢舉達門檻：PG 與本機 handle 兩邊都變成 hidden（兩個 stor
     disk.prepare("SELECT lifecycle FROM demand_posts WHERE id = 520").get()?.lifecycle, "blocked",
     "本機 handle 的 lifecycle 也必須是 blocked",
   );
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 讀取路徑（`getDemandPost`／`listDemandPosts`）的 parity。
+// 這一塊是 reply／close 能接線的前提：兩邊同源，新寫入的資料才不會「寫 PG、讀 SQLite」。
+
+test("讀取：詳情的形狀與可見性判斷，PG 版必須與同步版相同", async () => {
+  const [disk, exec] = resetBoth((h) => {
+    seedUserName(h, 1, "屋主甲");
+    seedUserName(h, 2, "路人乙");
+    seedPost(h, { id: 530, userId: 1 });
+    seedReply(h, { id: 630, postId: 530, userId: 2 });
+  });
+
+  const cases = [
+    { opts: { viewerId: 1 }, why: "屋主看自己的" },
+    { opts: { viewerId: 2 }, why: "別人看公開中" },
+    { opts: { viewerId: 0 }, why: "訪客看公開中" },
+    { opts: { viewerId: 0, publicOnly: true }, why: "公開頁" },
+    { opts: { viewerId: 1, publicOnly: true }, why: "屋主走公開頁" },
+    { opts: { viewerId: 2, includeActorReplies: true }, why: "含回覆" },
+  ];
+  for (const c of cases) {
+    // 同步版每次都會跑過期掃描（會寫），所以每一輪都先把磁碟還原成起點。
+    clearDemand(disk);
+    seedUsers(disk, [1, 2, 3, 4]);
+    seedUserName(disk, 1, "屋主甲");
+    seedUserName(disk, 2, "路人乙");
+    seedPost(disk, { id: 530, userId: 1 });
+    seedReply(disk, { id: 630, postId: 530, userId: 2 });
+
+    const syncView = syncMod.getDemandPost(disk, 530, c.opts);
+    const asyncView = await asyncMod.getDemandPostAsync(530, c.opts, { ...PG, exec, strict: true });
+    assert.deepEqual(asyncView, syncView, `詳情必須相同（${c.why}）`);
+  }
+  // 先確認兩個 store 的起點真的相同（否則 seeding bug 會偽裝成 parity bug）
+  const diskAuthors = disk.prepare("SELECT id, nickname FROM users WHERE id IN (1,2) ORDER BY id").all().map((r) => `${r.id}:${r.nickname}`);
+  const pgAuthors = exec.raw.prepare("SELECT id, nickname FROM users WHERE id IN (1,2) ORDER BY id").all().map((r) => `${r.id}:${r.nickname}`);
+  assert.deepEqual(pgAuthors, diskAuthors, "兩個 store 的 nickname 必須一致（起點檢查）");
+
+  // ⚠️ 公開視圖（`publicWishRoomView`）**刻意不含 `author`**，所以「作者暱稱」要在
+  // **屋主視圖**上驗；在公開視圖上驗會永遠拿到 undefined（第一版就是這樣紅的）。
+  const ownerView = await asyncMod.getDemandPostAsync(530, { viewerId: 1 }, { ...PG, exec, strict: true });
+  assert.equal(ownerView.id, 530);
+  assert.equal(ownerView.author, "屋主甲", "屋主視圖的作者暱稱必須從 users 取到");
+  assert.equal(ownerView.replies.length, 1, "回覆必須被帶進詳情");
+  assert.equal(ownerView.replies[0].author, "路人乙", "回覆作者暱稱必須取到");
+
+  const view = await asyncMod.getDemandPostAsync(530, { viewerId: 2 }, { ...PG, exec, strict: true });
+  assert.equal(view.id, 530);
+  assert.equal(view.public_path, "/w/tok-530", "public_path 必須用既有的 token");
+});
+
+test("讀取：詳情的 404 條件（找不到／已關閉／隱藏／草稿）兩邊一致", async () => {
+  const [disk, exec] = resetBoth((h) => {
+    seedPost(h, { id: 531, userId: 5 });
+    seedPost(h, { id: 532, userId: 6, status: "closed" });
+    seedPost(h, { id: 533, userId: 7, status: "hidden" });
+    seedPost(h, { id: 534, userId: 8, status: "draft" });
+  });
+  const cases = [
+    { postId: 999, opts: { viewerId: 1 }, why: "找不到" },
+    { postId: 532, opts: { viewerId: 2 }, why: "已關閉且非本人" },
+    { postId: 533, opts: { viewerId: 2 }, why: "已隱藏且非本人" },
+    { postId: 534, opts: { viewerId: 2 }, why: "草稿且非本人" },
+  ];
+  for (const c of cases) {
+    let syncErr = null;
+    try { syncMod.getDemandPost(disk, c.postId, c.opts); } catch (e) { syncErr = e; }
+    let asyncErr = null;
+    try { await asyncMod.getDemandPostAsync(c.postId, c.opts, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+    assert.ok(syncErr, `同步版應該要丟錯（${c.why}）`);
+    assert.ok(asyncErr, `PG 版應該要丟錯（${c.why}）`);
+    assert.equal(asyncErr.status, syncErr.status, `status 必須相同（${c.why}）`);
+    assert.equal(asyncErr.message, syncErr.message, `訊息必須相同（${c.why}）`);
+  }
+  // 本人的已關閉／草稿要看得到（不是 404）
+  for (const [id, owner] of [[532, 6], [534, 8]]) {
+    const view = await asyncMod.getDemandPostAsync(id, { viewerId: owner }, { ...PG, exec, strict: true });
+    assert.equal(view.id, id, `本人必須看得到自己的 ${id}`);
+  }
+});
+
+test("讀取：非數字 ref 要用 public_token 查，兩邊一致", async () => {
+  const [disk, exec] = resetBoth((h) => seedPost(h, { id: 535, userId: 1 }));
+  const syncView = syncMod.getDemandPost(disk, "tok-535", { viewerId: 0, publicOnly: true });
+  const asyncView = await asyncMod.getDemandPostAsync("tok-535", { viewerId: 0, publicOnly: true }, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncView, syncView, "用 token 查的結果必須相同");
+  assert.equal(asyncView.id, 535, "必須真的查到那一筆");
+});
+
+test("讀取：列表（mine 與公開，含篩選條件）兩邊一致，且公開列表不含禁欄位", async () => {
+  // 同一個人只能有一則 open ＋ 一則 draft（部分唯一索引），所以分給不同人。
+  const seedList = (h) => {
+    seedUserName(h, 1, "屋主甲");
+    seedPost(h, { id: 540, userId: 1 });
+    seedPost(h, { id: 541, userId: 2, status: "closed" });
+    seedPost(h, { id: 542, userId: 3, status: "draft" });
+  };
+  const [disk, exec] = resetBoth(seedList);
+  // mine 只回自己的：user 1 只有 540 那一筆。
+  const syncMine = syncMod.listDemandPosts(disk, { viewerId: 1, mine: true });
+  const asyncMine = await asyncMod.listDemandPostsAsync({ ...PG, exec, strict: true }, { viewerId: 1, mine: true });
+  assert.deepEqual(asyncMine, syncMine, "mine 列表必須相同");
+  assert.equal(asyncMine.length, 1, "user 1 只有一則");
+  assert.equal(asyncMine[0].id, 540);
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4]);
+  seedList(disk);
+  const syncPublic = syncMod.listDemandPosts(disk, { viewerId: 0, mine: false });
+  const asyncPublic = await asyncMod.listDemandPostsAsync({ ...PG, exec, strict: true }, { viewerId: 0, mine: false });
+  assert.deepEqual(asyncPublic, syncPublic, "公開列表必須相同");
+  assert.equal(asyncPublic.length, 1, "公開列表只該有 open 那一筆");
+  assert.equal(asyncPublic[0].id, 540);
+
+  // ⚠️ 一定要用**帶篩選條件**的查詢再比一次：不帶條件時 `matchesFilters` 永遠回 true，
+  // 把它拿掉照樣過關（變異測試當場抓到這條測試沒有鑑別力）。
+  for (const filters of [{ city: "臺北市" }, { district: "1-8" }, { housing_type: "apartment" }, { rent_min: 99999 }]) {
+    const syncFiltered = syncMod.listDemandPosts(disk, { viewerId: 0, mine: false, ...filters });
+    const asyncFiltered = await asyncMod.listDemandPostsAsync({ ...PG, exec, strict: true }, { viewerId: 0, mine: false, ...filters });
+    assert.deepEqual(asyncFiltered, syncFiltered, `帶篩選的公開列表必須相同（${JSON.stringify(filters)}）`);
+  }
+  for (const banned of ["user_id", "email", "phone", "line_url", "replies", "author"]) {
+    assert.ok(!(banned in asyncPublic[0]), `公開列表不得有 ${banned}（洩漏守衛）`);
+  }
+});
+
+test("讀取：過期掃描會把過期的 open 收掉，且兩個 store 都改（分庫一致性）", async () => {
+  const [disk, exec] = resetBoth((h) => {
+    seedPost(h, { id: 550, userId: 1 });
+    h.prepare("UPDATE demand_posts SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", 550);
+  });
+  await asyncMod.getDemandPostAsync(550, { viewerId: 1 }, { ...PG, exec, strict: true });
+  const pgRow = exec.raw.prepare("SELECT status FROM demand_posts WHERE id = 550").get();
+  assert.notEqual(pgRow.status, "open", "PG 側那一筆必須被收掉（這是真的來源）");
+  assert.notEqual(postStatus(disk, 550), "open", "本機 handle 也必須被收掉");
+  assert.equal(postStatus(disk, 550), pgRow.status, "兩個 store 的狀態必須相同");
 });
 
 test("夾具本身要真的拒絕 SQLite 專屬方言（否則上面的方言守衛是空的）", async () => {

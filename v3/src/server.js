@@ -135,11 +135,7 @@ import {
   touchLastLogin,
   resumeIdleIfNeeded,
   linkOauthIdentity,
-  listDemand,
-  getDemand,
   createDemand,
-  closeDemand,
-  replyDemand,
   updateWishRoomFor,
   publishWishRoomFor,
   reopenWishRoomFor,
@@ -304,9 +300,15 @@ import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync } from "./wishExampleAsync.js";
 import { closeSelfListingAsync } from "./selfListingsAsync.js";
-// 許願房檢舉的 PG 島嶼入口。`demandAsync.js` 另有 `addDemandReplyAsync`／`closeDemandPostAsync`，
-// 但這兩條路由**還沒接線**（要等 `getDemandPost()` 先搬上 PG，理由寫在 server.js 的 handler 上）。
-import { reportDemandAsync } from "./demandAsync.js";
+// 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情。
+// 讀取先搬是關鍵——在那之前「寫 PG、讀 SQLite」會讓新寫入看不到；現在兩邊同源。
+import {
+  addDemandReplyAsync,
+  closeDemandPostAsync,
+  getDemandPostAsync,
+  listDemandPostsAsync,
+  reportDemandAsync,
+} from "./demandAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -983,11 +985,12 @@ function wishListQuery(req) {
   };
 }
 
-function wishListPayload(req) {
+async function wishListPayload(req) {
   const session = readSession(req);
   const query = wishListQuery(req);
   getWishConditions();
-  const posts = listDemand(query);
+  // 列表本體走 PG 島嶼；`wishRoomOwnerSummary`（自己的統計）還沒搬，仍是同步的。
+  const posts = await listDemandPostsAsync(query);
   return {
     ...demandMeta(),
     posts,
@@ -996,17 +999,17 @@ function wishListPayload(req) {
   };
 }
 
-app.get("/api/demand", (req, res) => {
+app.get("/api/demand", async (req, res) => {
   try {
-    res.json(wishListPayload(req));
+    res.json(await wishListPayload(req));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/wish-rooms", (req, res) => {
+app.get("/api/wish-rooms", async (req, res) => {
   try {
-    res.json(wishListPayload(req));
+    res.json(await wishListPayload(req));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1045,7 +1048,7 @@ app.get("/api/demand/exposure", (req, res) => {
   }
 });
 
-app.get("/api/wish-rooms/mine", (req, res) => {
+app.get("/api/wish-rooms/mine", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -1055,7 +1058,7 @@ app.get("/api/wish-rooms/mine", (req, res) => {
     res.json({
       ...demandMeta(),
       ...wishRoomOwnerSummaryFor(session.userId),
-      posts: listDemand({ viewerId: session.userId, mine: true }),
+      posts: await listDemandPostsAsync({ viewerId: session.userId, mine: true }),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -1101,28 +1104,28 @@ app.delete("/api/wish-rooms/example", async (req, res) => {
   }
 });
 
-app.get("/api/demand/:id", (req, res) => {
+app.get("/api/demand/:id", async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(getDemand(req.params.id, { viewerId: session?.userId || 0 }));
+    res.json(await getDemandPostAsync(req.params.id, { viewerId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/wish-rooms/:id", (req, res) => {
+app.get("/api/wish-rooms/:id", async (req, res) => {
   try {
     const session = readSession(req);
     const viewerId = session?.userId || 0;
-    res.json(getDemand(req.params.id, { viewerId, publicOnly: !viewerId }));
+    res.json(await getDemandPostAsync(req.params.id, { viewerId, publicOnly: !viewerId }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/public/wish-room/:id", (req, res) => {
+app.get("/api/public/wish-room/:id", async (req, res) => {
   try {
-    const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
+    const post = await getDemandPostAsync(req.params.id, { viewerId: 0, publicOnly: true });
     const extras = sharePageExtrasFor();
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json({ ...(publicWishRoomView(post) || post), ...extras });
@@ -1131,14 +1134,14 @@ app.get("/api/public/wish-room/:id", (req, res) => {
   }
 });
 
-app.post("/api/public/wish-room/:id/share-events", (req, res) => {
+app.post("/api/public/wish-room/:id/share-events", async (req, res) => {
   try {
     const extras = sharePageExtrasFor();
     if (!extras.share_v2) {
       res.status(404).json({ error: "分享追蹤尚未開放", code: "share_disabled" });
       return;
     }
-    const post = getDemand(req.params.id, { viewerId: 0, publicOnly: true });
+    const post = await getDemandPostAsync(req.params.id, { viewerId: 0, publicOnly: true });
     const token = post?.public_token || post?.public_ref || req.params.id;
     const eventType = String(req.body?.event_type || "view");
     if (!["view", "cta"].includes(eventType)) {
@@ -2732,31 +2735,27 @@ app.post("/api/wish-rooms/:id/reopen", (req, res) => {
   });
 });
 
-// ⚠️ 這一條**刻意仍走同步版**（2026-09-28）：`demandAsync.addDemandReplyAsync()` 已經寫好並
-// 有 parity 測試，但回覆寫進 PG 之後，列表／詳情／公開頁仍然讀節點 SQLite（那些函式還沒搬），
-// 接線會變成「寫 PG、讀 SQLite」的雙寫分歧。前置條件是 `getDemandPost()`／`listDemand()` 先上 PG。
-app.post("/api/demand/:id/reply", (req, res) => {
+app.post("/api/demand/:id/reply", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能回覆" });
       return;
     }
-    res.json(replyDemand(session.userId, req.params.id, req.body?.body));
+    res.json(await addDemandReplyAsync(session.userId, req.params.id, req.body?.body));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-// ⚠️ 同 reply：`closeDemandPostAsync()` 已寫好也有測試，但仍走同步版（理由見上一條）。
-app.post("/api/demand/:id/close", (req, res) => {
+app.post("/api/demand/:id/close", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(closeDemand(session.userId, req.params.id, { admin: session.role === "admin" }));
+    res.json(await closeDemandPostAsync(session.userId, req.params.id, { admin: session.role === "admin" }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

@@ -32,6 +32,9 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
+// 可見性與公開視圖是**純函式**，直接重用（與 closeSelfListing 那批同一個做法）。
+import { WISH_SURFACE, wishVisibleOnSurface } from "./stage1FixtureIsolation.js";
+import { createPublicToken, publicInactiveWishView } from "./wishLifecycle.js";
 import {
   DEMAND_REPLY_MAX,
   DEMAND_REPLY_MAX_PER_HOUR,
@@ -44,6 +47,21 @@ import {
   applyReportHideEffectsAsync,
   assertMatureAccount,
   closeDemandPost as closeDemandPostSync,
+  decoratePostWith,
+  getDemandPost as getDemandPostSync,
+  matchesFilters,
+  assertPublicFields,
+  EXPIRE_CONFIRM_SQL,
+  EXPIRE_PAUSE_SQL,
+  EXPIRE_LEGACY_SQL,
+  EXPIRE_CONFIRM_PARAMS,
+  EXPIRE_PAUSE_PARAMS,
+  EXPIRE_LEGACY_PARAMS,
+  PRUNE_MATCH_DISTRICTS_SQL,
+  expireGraceCutoff,
+  expireOpenPosts,
+  isWishLifecycleExpiryEnabled,
+  publicWishRoomView,
   httpError,
   reportDemand as reportDemandSync,
   stripUnsafePlain,
@@ -232,4 +250,201 @@ export async function closeDemandPostAsync(userId, postId, opts = {}, options = 
     // 同上：同步版回傳整則許願房，這裡只回最小封包，理由與 `addDemandReplyAsync()` 相同。
     return { ok: true, id, status: "closed" };
   }, () => closeDemandPostSync(sqliteHandle(), userId, postId, opts));
+}
+
+// ── 讀取（許願房列表與詳情）──────────────────────────────────────────────────
+//
+// 這一塊是 `getDemandPost()`／`listDemandPosts()` 的 PG 版，也是 reply／close 能夠接線的
+// **前置條件**：在那之前，寫 PG 而讀 SQLite 會讓新寫入的資料在頁面上看不到。
+//
+// 共用邏輯全部重用 demand.js（`decoratePostWith` 吃 loader、`matchesFilters`、
+// `publicWishRoomView`、`assertPublicFields`、`wishVisibleOnSurface`），
+// 這裡只負責「跑語句」與「套篩選／排序／可見性」。
+export const POST_BY_ID_SQL = "SELECT * FROM demand_posts WHERE id = ?";
+export const POST_BY_TOKEN_SQL = "SELECT * FROM demand_posts WHERE public_token = ?";
+export const POSTS_MINE_SQL = `SELECT * FROM demand_posts
+       WHERE user_id = ?
+       ORDER BY COALESCE(updated_at, published_at, created_at) DESC, id DESC LIMIT 50`;
+export const POSTS_PUBLIC_SQL = `SELECT * FROM demand_posts
+       WHERE status = 'open'
+         AND (fixture_namespace IS NULL OR fixture_namespace = '')
+       ORDER BY COALESCE(updated_at, published_at, created_at) DESC, id DESC LIMIT 80`;
+export const REPLIES_BY_POST_SQL = `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
+     FROM demand_replies r
+     WHERE r.post_id = ?
+     ORDER BY r.id ASC`;
+export const AUTHOR_NAME_SQL = "SELECT nickname FROM users WHERE id = ?";
+export const ACTIVITY_LOGIN_SQL = "SELECT last_login_at FROM users WHERE id = ?";
+export const ACTIVITY_FLAGS_SQL = `SELECT MAX(viewed_at) AS viewed_at, MAX(watched_at) AS watched_at
+       FROM user_listing_flags WHERE user_id = ?`;
+export const TOKEN_UPDATE_SQL = "UPDATE demand_posts SET public_token = ? WHERE id = ?";
+
+// 過期掃描（讀取時順便寫入，與同步版同一個契約）。⚠️ 兩個 store 都要寫：
+// PG 是真的來源；本機 handle 追上，讓還沒搬完的讀取看到一致狀態。
+export async function expireOpenPostsAsync(run, now = new Date()) {
+  const stamp = iso(now);
+  // 本機 handle 也要跑一次：還沒搬完的讀取（以及讀取失敗時的回退）看的是它。
+  // 這與 reportDemand 的隱藏同一個處置——PG 是真的來源，本機追上才不會兩個 store 不一致。
+  expireOpenPosts(sqliteHandle(), now);
+  if (isWishLifecycleExpiryEnabled()) {
+    await run(EXPIRE_CONFIRM_SQL, EXPIRE_CONFIRM_PARAMS(stamp));
+    await run(EXPIRE_PAUSE_SQL, EXPIRE_PAUSE_PARAMS(stamp, expireGraceCutoff(now)));
+  } else {
+    await run(EXPIRE_LEGACY_SQL, EXPIRE_LEGACY_PARAMS(stamp));
+  }
+  await run(PRUNE_MATCH_DISTRICTS_SQL, []);
+}
+
+// PG 版的 loader：五個操作與 `syncDecorateLoader()` 一一對應，語句逐字相同。
+// `hasColumn` 一律 true——PG 的 demand_posts 由 `ensurePgSchema` 鏡射建表，欄位一定在。
+function pgDecorateLoader(run, cache) {
+  return {
+    replies: (row) => cache.replies.get(Number(row.id)) || [],
+    authorName: (userId) => cache.authors.get(Number(userId)) || "會員",
+    activitySignals: (row) => cache.signals.get(Number(row.id)) || {
+      last_confirmed_at: row.last_confirmed_at,
+      wish_edited_at: row.updated_at,
+    },
+    // 惰性補 token：與同步版相同，只有 public_token 是空的時候才會走到（那是 UPDATE）。
+    ensureToken: (row) => {
+      for (let i = 0; i < 5; i += 1) {
+        const token = createPublicToken();
+        cache.pendingTokenWrites.push({ token, id: Number(row.id) });
+        return token;
+      }
+      return "";
+    },
+    hasColumn: () => true,
+  };
+}
+
+// 先把整批列需要的中間資料一次抓齊（同步版是每一列各查一次，這裡刻意批次化：
+// 這一塊原本就是 N+1，PG 上更不該每一列都來回一趟）。
+async function hydrateForRows(run, rows, viewerId) {
+  const cache = {
+    replies: new Map(),
+    authors: new Map(),
+    signals: new Map(),
+    writtenTokens: new Map(),
+    pendingTokenWrites: [],
+  };
+  const ids = rows.map((row) => Number(row.id));
+  const owners = new Set(rows.map((row) => Number(row.user_id)));
+  for (const id of ids) {
+    const res = await run(REPLIES_BY_POST_SQL, [id]);
+    cache.replies.set(id, res.rows || []);
+  }
+  const authorIds = new Set(owners);
+  for (const list of cache.replies.values()) for (const r of list) authorIds.add(Number(r.user_id));
+  for (const uid of authorIds) {
+    const res = await run(AUTHOR_NAME_SQL, [uid]);
+    const nick = String(one(res.rows)?.nickname || "").trim();
+    if (nick) cache.authors.set(uid, nick);
+  }
+  // 活動訊號只有「自己的」許願房會用到（與 decoratePostWith 的判斷相同）。
+  if (Number(viewerId)) {
+    const res = await run(ACTIVITY_LOGIN_SQL, [viewerId]);
+    const lastLogin = one(res.rows)?.last_login_at;
+    const flags = one((await run(ACTIVITY_FLAGS_SQL, [viewerId])).rows);
+    const extra = { last_login_at: lastLogin || undefined, viewed_at: flags?.viewed_at || undefined, watched_at: flags?.watched_at || undefined };
+    for (const row of rows) {
+      if (Number(row.user_id) !== Number(viewerId)) continue;
+      cache.signals.set(Number(row.id), {
+        last_confirmed_at: row.last_confirmed_at,
+        wish_edited_at: row.updated_at,
+        ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v)),
+      });
+    }
+  }
+  return cache;
+}
+
+// 惰性補 token 的寫入要真的落地（同步版在 `ensurePublicToken()` 裡直接 UPDATE）。
+async function flushTokenWrites(run, loaderCache) {
+  for (const { token, id } of loaderCache.pendingTokenWrites) {
+    await run(TOKEN_UPDATE_SQL, [token, id]);
+    loaderCache.writtenTokens.set(token, { token });
+  }
+  loaderCache.pendingTokenWrites.length = 0;
+}
+
+async function rowsToViews(run, rows, { viewerId = 0, includeHiddenReplies = false } = {}) {
+  const cache = await hydrateForRows(run, rows, viewerId);
+  const loader = pgDecorateLoader(run, cache);
+  const decorated = rows.map((row) => decoratePostWith(loader, row, { viewerId, includeHiddenReplies }));
+  if (cache.pendingTokenWrites.length) {
+    await flushTokenWrites(run, cache);
+    // 補完 token 之後重算一次，讓回傳值帶到新 token（同步版是在組裝前就補好）。
+    const again = rows.map((row) => decoratePostWith(loader, row, { viewerId, includeHiddenReplies }));
+    return again;
+  }
+  return decorated;
+}
+
+// `listDemandPosts()` 的 PG 版。
+export async function listDemandPostsAsync(options = {}, filters = {}) {
+  const { viewerId = 0, mine = false, ...rest } = filters;
+  return withFallback(options, {}, async (run) => {
+    await expireOpenPostsAsync(run, new Date());
+    const res = mine && viewerId
+      ? await run(POSTS_MINE_SQL, [Number(viewerId)])
+      : await run(POSTS_PUBLIC_SQL, []);
+    const rows = res.rows || [];
+    const filtered = mine ? rows : rows.filter((row) => matchesFilters(row, rest));
+    filtered.sort((a, b) => {
+      const ta = recencyOf(a);
+      const tb = recencyOf(b);
+      if (ta !== tb) return tb.localeCompare(ta);
+      return Number(b.id) - Number(a.id);
+    });
+    const decorated = await rowsToViews(run, filtered, { viewerId });
+    return mine
+      ? decorated
+      : decorated.map((row) => assertPublicFields(publicWishRoomView({ ...row, mine: false, replies: row.replies })));
+  }, async () => (await import("./db.js")).listDemand({ viewerId, mine, ...rest }));
+}
+
+const recencyOf = (row) => row.updated_at || row.published_at || row.created_at || "";
+
+// `getDemandPost()` 的 PG 版。可見性與 404 的**順序**照抄同步版（順序錯了會把 404 變成 200
+// ＝洩漏），需要的判斷全部重用 demand.js 的純函式。
+export const POST_VISIBILITY_SQL = "SELECT 1"; // 佔位：可見性靠純函式，不需查詢
+
+export async function getDemandPostAsync(postId, opts = {}, options = {}) {
+  const { viewerId = 0, publicOnly = false, allowNumeric = false, includeActorReplies = false } = opts;
+  return withFallback(options, {}, async (run) => {
+    await expireOpenPostsAsync(run, new Date());
+    const ref = String(postId || "").trim();
+    const numeric = /^\d+$/.test(ref);
+    const row = numeric
+      ? one((await run(POST_BY_ID_SQL, [Number(ref) || 0])).rows)
+      : one((await run(POST_BY_TOKEN_SQL, [ref])).rows);
+    if (!row) throw httpError("找不到這則許願房", 404);
+    const mine = Number(row.user_id) === Number(viewerId);
+    const surface = mine && !publicOnly ? WISH_SURFACE.MINE : WISH_SURFACE.PUBLIC_DETAIL;
+    if (!wishVisibleOnSurface(row, { surface, viewerId })) throw httpError("找不到這則許願房", 404);
+    if (numeric && !allowNumeric && (publicOnly || !mine) && !Number(row.legacy_numeric_share)) {
+      throw httpError("找不到這則許願房", 404);
+    }
+    if (row.status === "hidden" && !mine) throw httpError("這則許願房已隱藏", 404);
+    if (row.status === "draft" && !mine) throw httpError("找不到這則許願房", 404);
+    if (publicOnly && row.status !== "open") {
+      if (isWishLifecycleExpiryEnabled() || row.status !== "draft") {
+        return assertPublicFields({
+          ...publicInactiveWishView(),
+          id: Number(row.id),
+          public_path: row.public_token ? `/w/${row.public_token}` : `/w/${row.id}`,
+        });
+      }
+      throw httpError("找不到這則許願房", 404);
+    }
+    if (!mine && row.status !== "open") throw httpError("找不到這則許願房", 404);
+    const [decorated] = await rowsToViews(run, [row], { viewerId, includeHiddenReplies: false });
+    if (!mine || publicOnly) {
+      const view = assertPublicFields(publicWishRoomView(decorated));
+      if (includeActorReplies) return { ...view, replies: decorated.replies };
+      return view;
+    }
+    return decorated;
+  }, () => getDemandPostSync(sqliteHandle(), postId, opts));
 }
