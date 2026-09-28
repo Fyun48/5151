@@ -59,7 +59,8 @@ test("live PG：系統爬蟲設定逐鍵來回、目錄快照落地、後台搜�
       if (value == null) await query("DELETE FROM settings WHERE key = $1", [key]);
       else await query("UPDATE settings SET value = $1 WHERE key = $2", [value, key]);
     }
-    await query("DELETE FROM listings WHERE source_key LIKE $1", [`${TOKEN}-%`]);
+    // 用 title 清理（`source_key` 是行政區鍵 `1|5`，不是我的測試前綴）。
+    await query("DELETE FROM listings WHERE title LIKE $1", [`${TOKEN}%`]);
   };
   t.after(async () => {
     try { await cleanup(); } catch { /* 盡力而為 */ }
@@ -75,11 +76,15 @@ test("live PG：系統爬蟲設定逐鍵來回、目錄快照落地、後台搜�
   };
   const opts = { driver: "postgres", pgDriver, exec, strict: true };
 
-  // 一筆在監看區、一筆不在、一筆沒有地址（測 COALESCE）
+  // 三筆：兩筆在監看區（`1|5` ⇒ 行政區鍵 `1-5`；一筆沒有地址，測 COALESCE）、
+  // 一筆不在（`1|7` ＋ 信義區的地址，兩條判斷都不匹配）。
+  // ⚠️ `source_key` 的格式是 `區域|行政區`（`listingMatchesDistrictKeys()` 用 `|` 切、
+  // 再組成 `區域-行政區`）；第一版寫成 `${TOKEN}-1-5` 根本不會走那一條分支，
+  // 只能靠地址裡的行政區名比對，於是「沒有地址」那一筆永遠不算數（CI 就是這樣紅的）。
   for (const [sourceKey, title, address, source] of [
-    [`${TOKEN}-1-5`, `${TOKEN} 大安區刊登`, "台北市大安區某路", "591"],
-    [`${TOKEN}-1-7`, `${TOKEN} 信義區刊登`, "台北市信義區某路", "self"],
-    [`${TOKEN}-1-5b`, `${TOKEN} 沒有地址`, null, "591"],
+    ["1|5", `${TOKEN} 大安區刊登`, "台北市大安區某路", "591"],
+    ["1|7", `${TOKEN} 信義區刊登`, "台北市信義區某路", "self"],
+    ["1|5", `${TOKEN} 沒有地址`, null, "591"],
   ]) {
     await query(
       `INSERT INTO listings(source_key, title, url, source, address, first_seen_at, last_seen_at)
@@ -112,7 +117,10 @@ test("live PG：系統爬蟲設定逐鍵來回、目錄快照落地、後台搜�
 
   // 2) 目錄快照：真的寫進 PG，而且只算監看區裡的刊登
   const snapshot = await contentAsync.refreshSiteCatalogStatsAsync(opts);
+  // 剛種的三筆裡有兩筆在監看區（`1|5`）；CI 的資料庫可能還有別的列也落在同一區，所以用 `>=`。
   assert.ok(snapshot.total >= 2, `監看區至少要包含剛種的兩筆（實際 total=${snapshot.total}）`);
+  assert.ok(Object.keys(snapshot.bySource).length >= 1, "來源分佈不得是空的");
+  assert.equal(snapshot.districtCount, 1, "監看區只有一個行政區");
   assert.equal(
     (await query("SELECT value FROM settings WHERE key = 'siteCatalogStats'"))[0]?.value,
     JSON.stringify(snapshot),
