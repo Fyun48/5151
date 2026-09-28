@@ -781,6 +781,111 @@ const OPS_MUTATIONS = [
   },
 ];
 
+// 租屋通知偏好／訂閱／取消訂閱 PG 分支的變異集
+// （v3/test/rental-notify-prefs-async.test.js）。
+const NPREFSWRITE_SRC = "v3/src/rentalNotifyPrefsAsync.js";
+const NPREFSWRITE_SYNC_SRC = "v3/src/rentalNotify.js";
+const NPREFSWRITE_MUTATIONS = [
+  {
+    name: "PG 不補訂閱的唯一索引（同一刊登會出現多列）",
+    file: NPREFSWRITE_SRC,
+    from: '  "CREATE UNIQUE INDEX IF NOT EXISTS rental_match_subscriptions_owner_listing_key ON rental_match_subscriptions(owner_user_id, listing_id)",\n',
+    to: "",
+    expect: "常數：PG 缺這三句",
+  },
+  {
+    name: "PG 不補 DROP IDENTITY（user_id 是使用者帶來的，健檢會永遠紅）",
+    file: NPREFSWRITE_SRC,
+    from: 'export const PREFS_DROP_IDENTITY_SQL =\n  "ALTER TABLE rental_notify_prefs ALTER COLUMN user_id DROP IDENTITY IF EXISTS";',
+    to: 'export const PREFS_DROP_IDENTITY_SQL = "SELECT 1";',
+    expect: "常數：PG 缺這三句",
+  },
+  {
+    name: "讀取不先灌行程內快取（caps 會拿到本機的舊旗標）",
+    file: NPREFSWRITE_SRC,
+    from: "export async function getRentalNotifyPrefsForAsync(userId, options = {}) {\n  await getWishConditionsAsync(options);\n",
+    to: "export async function getRentalNotifyPrefsForAsync(userId, options = {}) {\n",
+    expect: "prefs 讀取",
+  },
+  {
+    name: "寫入不先灌行程內快取（站上關閉通知時仍寫得進去）",
+    file: NPREFSWRITE_SRC,
+    from: "export async function saveRentalNotifyPrefsForAsync(userId, patch = {}, options = {}) {\n  await getWishConditionsAsync(options);\n",
+    to: "export async function saveRentalNotifyPrefsForAsync(userId, patch = {}, options = {}) {\n",
+    expect: "PG 說通知關閉",
+  },
+  {
+    name: "prefs 只寫 PG，不讓本機 handle 追上（同步的投遞規劃看到舊值）",
+    file: NPREFSWRITE_SRC,
+    from: "  sqliteHandle().prepare(PREFS_UPSERT_SQL).run(...params);\n",
+    to: "",
+    expect: "prefs 寫入：兩個 store",
+  },
+  {
+    name: "本機的計數不記（admin 的營運數字少一筆）",
+    file: NPREFSWRITE_SRC,
+    from: '  bumpAnalytics(sqliteHandle(), "pref_updated", now);\n',
+    to: "",
+    expect: "prefs 寫入：兩個 store",
+  },
+  {
+    name: "訂閱不檢查所有權（可以訂閱別人的刊登）",
+    file: NPREFSWRITE_SRC,
+    from: "    if (!(await listingOwnedAsync(run, uid, lid))) {\n      throw rentalNotifyHttpError(\"找不到這則刊登\", 404, \"listing_not_found\");\n    }\n",
+    to: "",
+    expect: "訂閱：不是自己的刊登",
+  },
+  {
+    name: "訂閱的 mode 不驗證（任意字串直接寫進去）",
+    file: NPREFSWRITE_SRC,
+    from: "    const next = RENTAL_MATCH_MODES.includes(mode) ? mode : \"off\";",
+    to: "    const next = mode;",
+    expect: "訂閱：不是自己的刊登",
+  },
+  {
+    name: "取消連結可以重複使用（不看 used_at）",
+    file: NPREFSWRITE_SRC,
+    from: "    if (row.used_at) return { ok: true, already: true };\n",
+    to: "",
+    expect: "取消訂閱：四種 scope",
+  },
+  {
+    name: "取消連結不檢查過期",
+    file: NPREFSWRITE_SRC,
+    from: "    if (Date.parse(row.expires_at) <= now.getTime()) {\n      throw rentalNotifyHttpError(\"取消連結已過期\", 400, \"unsub_expired\");\n    }\n",
+    to: "",
+    expect: "取消訂閱：過期",
+  },
+  {
+    name: "取消訂閱不暫時打開閘門（站上關閉通知時取消連結會 404）",
+    file: NPREFSWRITE_SRC,
+    from: "    await withNotificationsForcedEnabledAsync(async () => {",
+    to: "    await (async () => {",
+    expect: "取消訂閱：過期",
+  },
+  {
+    name: "取消訂閱忘記標記 token 已用（連結可以一直用）",
+    file: NPREFSWRITE_SRC,
+    from: "    await run(UNSUB_MARK_USED_SQL, [stamp, raw]);\n",
+    to: "",
+    expect: "取消訂閱：四種 scope",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: NPREFSWRITE_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+  {
+    name: "同步版的取消連結忘記標記 token 已用",
+    file: NPREFSWRITE_SYNC_SRC,
+    from: "  db.prepare(UNSUB_MARK_USED_SQL).run(iso(now), raw);\n",
+    to: "",
+    expect: "取消訂閱：四種 scope",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2406,6 +2511,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /rental-notify-prefs-async/.test(testFile) ? NPREFSWRITE_MUTATIONS
   : /rental-ops-async/.test(testFile) ? OPS_MUTATIONS
   : /rental-survey-async/.test(testFile) ? SURVEY_MUTATIONS
   : /wish-room-lifecycle-async/.test(testFile) ? WISHLIFECYCLE_MUTATIONS

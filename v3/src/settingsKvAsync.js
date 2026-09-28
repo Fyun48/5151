@@ -34,6 +34,13 @@ async function pgExec(options = {}) {
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
 
+// 注入式 `exec` 有兩種形狀：`pgDriver.query()` 直接回傳的裸陣列（這一支自己的 `pgExec()`），
+// 以及 `crmOutboxAsync` 起的 `{ rows, rowCount }` 慣例（其他島嶼模組的替身）。
+// 原本只認裸陣列，餵 `{ rows }` 時 `rows[0]` 會是 undefined ⇒ **靜默地**當成「這個鍵沒有值」，
+// 於是所有設定都退回預設值（2026-09-28 在 live PG 測試上實際踩到：站上明明開了通知，
+// PG 分支卻因為讀不到旗標而回 404 rental_notify_disabled）。兩種形狀都吃。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 // 與 db.js settingKey()／userSettingKey() 相同的解析語意：JSON.parse，壞掉就當作沒有值。
 function parseValue(raw) {
   if (raw == null) return undefined;
@@ -51,7 +58,7 @@ const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgr
 export async function getSiteSettingAsync(key, options = {}) {
   if (!isPg(options)) return settingKeySync(key);
   const exec = await pgExec(options);
-  const rows = await exec(SITE_SETTING_SELECT_SQL, [key]);
+  const rows = rowsOf(await exec(SITE_SETTING_SELECT_SQL, [key]));
   return parseValue(rows[0]?.value);
 }
 
@@ -72,7 +79,7 @@ export async function getUserSettingAsync(userId, key, options = {}) {
   if (!isPg(options)) return userSettingKeySync(uid, key);
   if (!uid) return undefined;
   const exec = await pgExec(options);
-  const rows = await exec(USER_SETTING_SELECT_SQL, [uid, key]);
+  const rows = rowsOf(await exec(USER_SETTING_SELECT_SQL, [uid, key]));
   return parseValue(rows[0]?.value);
 }
 
