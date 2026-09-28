@@ -25,7 +25,7 @@ import {
   safePayload,
 } from "./rentalNotify.js";
 import { isRentalDigestEnabled, isRentalNotificationsEnabled } from "./rentalMarketplaceFlags.js";
-import { BUMP_ANALYTICS_PG_SQL, bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
 import { getRentalNotifyPrefsAsync } from "./rentalNotifyReadsAsync.js";
 
 export const RENTAL_NOTIFY_TABLES = ["rental_notify_events", "rental_notify_deliveries", "rental_notify_prefs"];
@@ -83,11 +83,6 @@ export async function ensureRentalNotifyWriteOnce(pgDriver) {
 async function withFallback(options, { write = false }, runPostgres, runSqlite) {
   if (!isPg(options)) return runSqlite();
 
-  // ⚠️ 巢狀的 analytics 呼叫也要挑對語句：這一條路徑**沒有注入 exec**（真 PG），
-  // 所以要用限定表名的那一句；用錯會得到
-  // `column reference "value" is ambiguous`（CI 實測）。
-  // 沒有指定時由 `withFallback()` 依路徑選，所以只在真 PG 這條補上。
-  const nested = options.exec ? options : { ...options, sql: BUMP_ANALYTICS_PG_SQL };
   try {
     if (options.exec) {
       const injected = (sql, params = []) => Promise.resolve(options.exec(sql, params)).then(normalizeResult);
@@ -117,28 +112,26 @@ export async function insertDeliveryAsync(run, event, channel, status, now) {
 
 // `queueDeliveries()` 的 PG 版：政策判斷全部重用同步版的純函式。
 export async function queueDeliveriesAsync(run, event, now = new Date(), options = {}) {
-  // 同 `emitRentalNotifyEventAsync()`：真 PG 路徑要帶限定語句給巢狀的 analytics 呼叫。
-  const nested = options.exec ? options : { ...options, sql: BUMP_ANALYTICS_PG_SQL };
   const flags = currentRentalNotifyFlags();
   const prefs = await getRentalNotifyPrefsAsync(event.user_id, { ...options, exec: options.exec, driver: "postgres" });
   if (!preferenceAllows(prefs, event.event_type)) {
     await insertDeliveryAsync(run, event, "dock", "suppressed", now);
-    await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...nested, driver: "postgres" });
+    await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...options, driver: "postgres" });
     return;
   }
   for (const channel of RENTAL_NOTIFY_CHANNELS) {
     if (!channelAllowed(prefs, channel, flags)) {
       await insertDeliveryAsync(run, event, channel, "suppressed", now);
-      await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...nested, driver: "postgres" });
+      await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...options, driver: "postgres" });
       continue;
     }
     if (event.event_type === "owner_new_match_available" && channel !== "dock" && !isRentalDigestEnabled(flags)) {
       await insertDeliveryAsync(run, event, channel, "suppressed", now);
-      await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...nested, driver: "postgres" });
+      await bumpAnalyticsAsync("notify_suppressed", now, 1, { ...options, driver: "postgres" });
       continue;
     }
     await insertDeliveryAsync(run, event, channel, "queued", now);
-    await bumpAnalyticsAsync("notify_queued", now, 1, { ...nested, driver: "postgres" });
+    await bumpAnalyticsAsync("notify_queued", now, 1, { ...options, driver: "postgres" });
   }
 }
 
@@ -161,9 +154,6 @@ export async function emitRentalNotifyEventAsync({
   if (!uid) return { emitted: false, reason: "no_user" };
   const key = String(eventKey || `${eventType}:${uid}:${subjectRef}`).slice(0, 240);
   const stamp = iso(now);
-  // 真 PG 路徑的巢狀 analytics 呼叫要帶限定語句（見檔頭說明）。
-  const nested = options.exec ? options : { ...options, sql: BUMP_ANALYTICS_PG_SQL };
-
   return withFallback(options, { write: true }, async (run) => {
     // ⚠️ PG 版**不能**靠捕捉 UNIQUE 例外（同步版是那樣做）：PG 一撞唯一鍵整筆交易就進
     // aborted 狀態，後續語句全部失敗。所以用 `ON CONFLICT(event_key) DO NOTHING`，
@@ -175,12 +165,12 @@ export async function emitRentalNotifyEventAsync({
     const inserted = Number(res?.rowCount) > 0;
     if (!inserted) {
       // 去重（event_key 已存在）：同步版會記一筆 notify_deduped 並回 deduped。
-      await bumpAnalyticsAsync("notify_deduped", now, 1, { ...nested, driver: "postgres" });
+      await bumpAnalyticsAsync("notify_deduped", now, 1, { ...options, driver: "postgres" });
       const existing = one((await run(EVENT_BY_KEY_SQL, [key])).rows);
       return { emitted: false, reason: "deduped", event_key: key, event_id: existing?.id || 0 };
     }
     const event = one((await run(EVENT_BY_KEY_SQL, [key])).rows);
-    await bumpAnalyticsAsync("notify_generated", now, 1, { ...nested, driver: "postgres" });
+    await bumpAnalyticsAsync("notify_generated", now, 1, { ...options, driver: "postgres" });
     if (queue !== false) await queueDeliveriesAsync(run, event, now, options);
     return { emitted: true, event_id: event?.id, event_key: key };
   }, async () => (await import("./rentalNotify.js")).emitRentalNotifyEvent(sqliteHandle(), {

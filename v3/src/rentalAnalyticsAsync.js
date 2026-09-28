@@ -83,10 +83,12 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
 export async function bumpAnalyticsAsync(metric, now = new Date(), n = 1, options = {}) {
   const day = taipeiDay(now);
   const value = Number(n) || 1;
-  // `options.sql` 讓**呼叫端**明確指定要用哪一句（見上面兩句的說明）。
-  // 沒有指定時由 `withFallback()` 依路徑選。
-  return withFallback(options, { write: true }, async (run, sql) => {
-    await run(options.sql || sql, [day, String(metric), value]);
+  // ⚠️ **語句在這裡就決定**，不靠呼叫端轉傳：真 PG 需要限定表名的寫法，注入式夾具（SQLite
+  // 替身）需要未限定的寫法。中間不管經過幾層（例如從 `rentalNotifyWriteAsync` 的巢狀呼叫進來），
+  // 都不會再傳錯——第一版靠呼叫端帶 `options.sql`，結果漏傳一次就讓 CI 紅了三次。
+  const sql = isPg(options) && !options.exec ? BUMP_ANALYTICS_PG_SQL : BUMP_ANALYTICS_SQL;
+  return withFallback(options, { write: true }, async (run) => {
+    await run(sql, [day, String(metric), value]);
     return undefined;
   }, () => bumpAnalyticsSync(sqliteHandle(), metric, now, n));
 }
