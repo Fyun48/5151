@@ -130,3 +130,19 @@ test("非 postgres 必須回退同步路徑（讀磁碟，不碰傳入的 exec�
   assert.equal(rowsOf(db)[0].value, 1, "sqlite 模式必須寫磁碟");
   assert.equal(rowsOf(exec.raw).length, 0, "sqlite 模式不得寫夾具");
 });
+
+test("upsert 語句必須是 PG 也吃的那一種（value 要限定來源）", async () => {
+  // ⚠️ 這一條是 CI 的 live PG 抓到的：`DO UPDATE SET value = value + excluded.value`
+  // 在 PG 上會回 `column reference "value" is ambiguous`（SQLite 接受）。
+  // 離線夾具是 SQLite，所以**只驗語句文字**是這裡唯一能做的事——真正的驗證在 live PG。
+  assert.match(analytics.BUMP_ANALYTICS_PG_SQL, /ON CONFLICT\(day, metric\) DO UPDATE SET/);
+  assert.match(
+    analytics.BUMP_ANALYTICS_PG_SQL,
+    /SET rental_analytics_daily\.value = rental_analytics_daily\.value \+ EXCLUDED\.value/,
+    "左右兩邊都必須限定來源，否則 PG 會說 value 含糊",
+  );
+  assert.doesNotMatch(analytics.BUMP_ANALYTICS_PG_SQL, /SET value = value/i, "PG 那句不得留下未限定的寫法");
+  // 注入式夾具（SQLite 替身）用的那句必須是 SQLite 也吃得下的形狀
+  assert.match(analytics.BUMP_ANALYTICS_SQL, /SET value = value \+ excluded\.value/);
+  assert.doesNotMatch(analytics.BUMP_ANALYTICS_SQL, /rental_analytics_daily\.value/, "SQLite 不接受限定表名的 SET");
+});

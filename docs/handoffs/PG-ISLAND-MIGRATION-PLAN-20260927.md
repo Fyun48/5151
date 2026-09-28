@@ -1338,6 +1338,31 @@ POST /api/demand                              POST /api/self-listings/:id/matche
 （`transitionOffer`／`expirePendingIfDue`／`terminalizeOffers`／`recheckAcceptable`）
 可以照既有的 loader 模式搬，接線時 `emitRentalNotifyEventAsync()` 直接可用。
 
+### 36.8 🚨 真 PG 抓到的兩個錯（都是離線測不到的）
+
+CI 的 PG job 連兩次紅，兩次都是我自己的錯，而且**都只有真 PG 會現形**：
+
+1. **`ON CONFLICT(event_key)` 回 `42P10`**：live 測試一開始沒有先跑
+   `ensureRentalNotifyWriteOnce()`，所以 PG 上**沒有那個唯一索引** ⇒ `ON CONFLICT` 找不到目標。
+   **這正好證明那兩句 `CREATE UNIQUE INDEX` 是必要的**（不是裝飾）。修法是測試先跑 bootstrap，
+   並在跑完之後斷言兩條索引真的存在——這樣「拿掉建索引那段」就會被 live 測試殺掉。
+2. **`value` 在 `DO UPDATE SET` 裡含糊**（`column reference "value" is ambiguous`）：
+   同步版寫 `SET value = value + excluded.value`，**SQLite 接受、PG 不接受**。
+   PG 那句改成 `SET rental_analytics_daily.value = rental_analytics_daily.value + EXCLUDED.value`。
+
+   但接著遇到第二層：**SQLite 不接受限定表名的 `SET table.col = …`**（`near ".": syntax error`），
+   而離線夾具是**用 SQLite 當 PG 替身**。所以現在有兩句：
+
+   | 路徑 | 語句 |
+   |---|---|
+   | 真 PG（`pgDriver`） | `BUMP_ANALYTICS_PG_SQL`（限定寫法） |
+   | 注入式 `exec`（SQLite 替身） | `BUMP_ANALYTICS_SQL`（兩邊都合法的寫法） |
+
+   ⇒ 這是「注入式 exec 不經過 `toPostgresSql` ⇒ 語句要挑兩邊都合法者」那條紀律的**新變體**：
+   當 PG 需要 SQLite 不接受的語法時，**必須分岔並由 live PG 負責驗真 PG 那句**。
+   測試 `rental-analytics-async.test.js` 有一條**只驗語句文字**的守衛，
+   真正的執行驗證在 `rental-notify-live-pg.test.js`（它會跑真的 bump）。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |
