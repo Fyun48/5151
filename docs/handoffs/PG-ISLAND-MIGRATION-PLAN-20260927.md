@@ -1191,6 +1191,56 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負七、2026-09-28 第三十八批（**只做範圍界定，尚未實作**）：`getUserById` 與 `ensureUser`
+
+合併 #531～#533 之後，缺口的前兩大卡點換人了：
+
+| 卡點 | 缺口路由數 |
+|---|---:|
+| `getUserById` | **25** |
+| `ensureUser` | **22** |
+
+### 38.1 為什麼 `getUserById` 不是「一句 SELECT 的便宜目標」
+
+它看起來只是 `SELECT * FROM users WHERE id = ?`，但在 `db.js` 裡有 **8 處私有呼叫**，
+而且那些呼叫端**全部是同步函式**：
+
+```
+db.js:932／942／954   adminPatchMember()
+db.js:2282            listingToolsInfo()
+db.js:2299            createDescriptionTemplateFor()
+db.js:2720            getSettings()
+db.js:2727            saveSettings()
+db.js:2769            saveAsProfile()
+db.js:4111            armMemberExternalFetch()
+```
+
+⇒ 要讓 `getUserById` driver-aware，就得把上面這 7 支**一起**改成 async（或改成注入 loader）。
+這是一個**成組的批次**，不是單點修改；而且其中幾支本身就是高價值標的：
+
+- `getSettings` 是 **8 條**缺口路由的卡點（而且 `getSettingsAsync` **早就存在**，只是呼叫端沒接
+  ——與 `getWishConditions`／`stats` 同一類）。
+- `saveSettings`／`saveAsProfile` 對應 `POST /api/settings`、`POST /api/profiles`。
+- `adminPatchMember` 對應 `PATCH /api/admin/members/:id`。
+
+### 38.2 建議切法
+
+| 順序 | 標的 | 理由 |
+|---|---|---|
+| **1** | `getSettings` → 接上**既有的** `getSettingsAsync` | 8 條路由、零新程式（先查既有 `*Async.js` 那條紀律） |
+| **2** | `getUserById` 的 PG 版 ＋ 把上面 7 支改成接受 loader | 一次解鎖 25 條的卡點 |
+| **3** | `ensureUser`（22 條） | 它會**寫入**（PG 模式建立使用者？）——要先決定政策：PG 模式找不到人就明確失敗（`personalFlagsAsync.js` 已表明這個立場），不要偷偷在本機建帳號 |
+
+### 38.3 現況（合併後，可重跑）
+
+```
+node v3/scripts/route-data-map.mjs
+PG 173、MIXED 84、SQLite 11、無直接DB 20、缺口 95
+wishOffers 群：0 條
+```
+
+**已部署**：master `af21275`、image `sha256:8b587364…`（deploy evidence `passed: true`）。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
