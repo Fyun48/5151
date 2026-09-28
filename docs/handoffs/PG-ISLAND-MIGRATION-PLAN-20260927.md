@@ -2306,6 +2306,59 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 所以不是「換個 runner」就好——要決定用方言分支（PG 的 `EXTRACT(EPOCH FROM …)`）還是把中位數
 搬到 JS 算。這也是「尺規看不到方言問題」的又一個實例：量測說 2 條路由、實作有一個真障礙。
 
+## 二之負十一、2026-09-28 第四十二批：Admin 營運分析（rental ops）
+
+### 42.1 範圍與投報率
+
+41.4 列的下一個候選，也是 40.5 那條線的收尾：`rentalOpsSummary()`／`rentalOpsDrilldown()`
+（`GET /api/admin/rental-ops`、`GET /api/admin/rental-ops/drill`）。
+
+尺規：缺口 **89 → 87**，PG **179 → 181**。
+
+### 42.2 做法：語句一份、組裝是轉錄
+
+`rentalOpsSummary()` 是**一包 30 幾個查詢**的彙總（許願房存量、報價狀態、通知計數、成長指標、
+時間序列、中位數），硬寫成 PG 版會有一堆重複的 SQL。所以：
+
+1. **語句只有一份**：把每一句抽進 `RENTAL_OPS_SQL`／`WISH_COUNT_SQL`／`OFFER_STATUS_COUNT_SQL`
+   （抽的時候逐字照抄、不動行為——`rental-notify.test.js` 的 25 項當場驗證沒改壞），
+   PG 版跑同一批字串。
+2. **組裝是同步版的轉錄**，刻意**不**共用物件字面值：同步版是**參考實作**，
+   parity 測試深度比對整包 summary（含每個 `*_definition` 文案與每個鍵），
+   共用同一個字面的話「兩邊一起寫錯」會變成看不到的漂移。
+3. **錯誤碼沿用同一組**（`analytics_metric_failed`／`analytics_series_failed`／
+   `analytics_count_failed`／`analytics_median_failed`／`analytics_drill_failed`）——
+   admin 靠它分辨哪一類查詢壞掉。
+4. `DAY_START`／`DAY_END` 也抽成常數：區間的兩端各有測試（資料集刻意同時放**早於 from**
+   與**晚於 to** 的列，否則「迄日被忽略」那一類錯誤不會有任何測試紅——變異測試就是這樣抓到的）。
+
+### 42.3 🚨 `julianday()` 是 SQLite 專屬（尺規看不到的障礙）
+
+同步版的 `medianSecondsToAccept()` 用 `(julianday(accepted_at) - julianday(created_at)) * 86400`
+排序後取中間那 1～2 列；PG 沒有 `julianday()`。處理方式：
+
+- PG 版用 `EXTRACT(EPOCH FROM (accepted_at::timestamptz - created_at::timestamptz))`。
+  兩個時間欄位在 PG 上是 **TEXT**（SQLite 的 TEXT 鏡射過來），所以一定要明確轉型
+  （值都是應用程式寫入的 ISO 字串，轉型不會失敗）。
+- **刻意不把中位數搬到 JS 算**：那一句的 `LIMIT/OFFSET` 是「母體中位數、不是最快 N 筆」的
+  保證（`median_definition` 就是這樣寫給 admin 看的），搬到 JS 等於撈全量。
+- 離線夾具是記憶體 SQLite，所以它把 PG 那一句**翻回去**（`PG_TO_STANDIN`）才跑得動
+  ——也就是說「PG 的 SQL 本身對不對」在離線測試裡看不到，由
+  `rental-ops-live-pg.test.js` 在真 PG 上驗：拿真 PG 的列用 JS 算同一個中位數來對帳，
+  奇數／偶數兩種母體各一次。
+
+⚠️ 夾具的**順序**也是一個坑：要先驗「PG 分支有沒有寫出 SQLite 專屬語法」**再**翻譯，
+顛倒過來會讓翻譯出來的 `julianday(...)` 被自己的守衛擋下（症狀是 `analytics_median_failed`，
+看起來像模組壞了）。
+
+### 42.4 測試
+
+- `v3/test/rental-ops-async.test.js`（**7 項全綠**）：整包 summary 深度比對（偶數母體／
+  奇數母體／空資料庫）、區間驗證的錯誤形狀、明細兩種 kind ＋ 分頁游標、五種查詢失敗的
+  錯誤碼、非 postgres 走同步路徑。變異 **11 條全殺**。
+- `v3/test/rental-ops-live-pg.test.js`（新，CI 的 PG job 會跑）：方言 SQL 的中位數與 JS 對帳
+  （奇／偶各一次）、整包該有的鍵、明細在 PG 上真的能分頁且兩頁不重複。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2316,13 +2369,13 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十一批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十二批）** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **78** |
+| MIXED | — | **76** |
 | 無直接DB | — | **20** |
-| PG | 22 | **179** |
-| **缺口（SQLite＋MIXED）** | — | **89** |
+| PG | 22 | **181** |
+| **缺口（SQLite＋MIXED）** | — | **87** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

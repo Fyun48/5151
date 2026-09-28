@@ -180,8 +180,6 @@ import {
   saveMatchSubscriptionFor,
   applyUnsubscribeTokenFor,
   recordShareEventFor,
-  rentalOpsSummaryFor,
-  rentalOpsDrilldownFor,
   sharePageExtrasFor,
   runRentalNotifyWorkerTick,
   createSelfListing,
@@ -312,6 +310,11 @@ import {
 } from "./wishOffersAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
+// Admin 營運分析的 PG 島嶼入口（30 幾個彙總查詢；中位數那一句是方言分支）。
+import {
+  rentalOpsDrilldownAsync,
+  rentalOpsSummaryAsync,
+} from "./rentalOpsAnalyticsAsync.js";
 // 完成問卷（survey）的 PG 島嶼入口：讀取、送出，以及 admin 的 survey_breakdown 零件。
 import {
   getCompletionSurveyAsync,
@@ -2940,16 +2943,16 @@ app.post("/api/wish-rooms/:id/survey", async (req, res) => {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.get("/api/admin/rental-ops", requireAdminApi, (req, res) => {
+app.get("/api/admin/rental-ops", requireAdminApi, async (req, res) => {
   try {
-    res.json(rentalOpsSummaryFor({ from: req.query?.from, to: req.query?.to }));
+    res.json(await rentalOpsSummaryAsync({ from: req.query?.from, to: req.query?.to }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.get("/api/admin/rental-ops/drill", requireAdminApi, (req, res) => {
+app.get("/api/admin/rental-ops/drill", requireAdminApi, async (req, res) => {
   try {
-    res.json(rentalOpsDrilldownFor({
+    res.json(await rentalOpsDrilldownAsync({
       kind: req.query?.kind,
       cursor: req.query?.cursor,
       limit: req.query?.limit,
