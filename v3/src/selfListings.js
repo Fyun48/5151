@@ -380,9 +380,9 @@ function selfBanUntil(db, userId) {
 export function banSelfPublisher(db, userId, now = new Date()) {
   const uid = Number(userId) || 0;
   if (!uid) return "";
-  const until = new Date(nowMs(now) + SELF_BAN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const until = selfBanStamp(now);
   try {
-    db.prepare("UPDATE users SET self_ban_until = ? WHERE id = ?").run(until, uid);
+    db.prepare(BAN_SELF_PUBLISHER_SQL).run(until, uid);
   } catch {
     // 測試庫可能還沒有這欄
   }
@@ -1235,12 +1235,30 @@ export function closeSelfListing(db, userId, postId, { admin = false } = {}, now
   return getSelfListing(db, row.post_id, { viewerId: userId });
 }
 
+// 隱藏、檢舉與停權的語句抽成常數：PG 版（`selfListingsAsync.js`）逐字共用。
+// ⚠️ `banSelfPublisher()` 寫的是 **users**（`self_ban_until`）。PG 模式下 users 在 PG，
+// 但 `assertCanPublish()`（同步的建立路徑）讀的是本機 handle ⇒ 兩個 store 都要寫（見 async 版）。
+export const HIDE_SELF_LISTING_SQL =
+  "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?";
+export const REPORT_EXISTS_SQL = "SELECT id FROM listing_reports WHERE post_id = ? AND user_id = ?";
+export const REPORT_INSERT_SQL = "INSERT INTO listing_reports(post_id, user_id, reason, created_at) VALUES (?, ?, ?, ?)";
+export const REPORT_COUNT_SQL = "SELECT COUNT(*) AS n FROM listing_reports WHERE post_id = ?";
+export const BAN_SELF_PUBLISHER_SQL = "UPDATE users SET self_ban_until = ? WHERE id = ?";
+
+// 停權到期時間的算法（純函式）：兩個 driver 共用，這也是「停多久」的政策。
+// ⚠️ 時間來源要用 `Date`／數字／**ISO 字串**都可以：模組內的 `nowMs()` 只認 Date 與數字，
+// 餵字串時 `Number("2026-…")` 是 NaN ⇒ **靜默地**退回 `Date.now()`（PG 版與同步版的停權時間
+// 就會差幾小時，測試當場抓到）。這裡自己解析，解析不出來才用當下。
+export function selfBanStamp(now = new Date()) {
+  const ms = now instanceof Date ? now.getTime() : Date.parse(now);
+  const base = Number.isFinite(ms) ? ms : Date.now();
+  return new Date(base + SELF_BAN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export function hideSelfListing(db, postId, now = new Date()) {
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);
-  db.prepare(
-    "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?",
-  ).run(iso(now), row.post_id);
+  db.prepare(HIDE_SELF_LISTING_SQL).run(iso(now), row.post_id);
   try { listingOfferHook?.(db, { listingId: row.post_id, now }); } catch { /* offer sweep must not block hide */ }
   const until = banSelfPublisher(db, row.listed_by_user_id, now);
   return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };
@@ -1252,16 +1270,10 @@ export function reportSelfListing(db, userId, postId, reason = "", now = new Dat
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);
   if (Number(row.listed_by_user_id) === uid) throw httpError("不能檢舉自己的刊登");
-  const already = db.prepare(
-    "SELECT id FROM listing_reports WHERE post_id = ? AND user_id = ?",
-  ).get(row.post_id, uid);
+  const already = db.prepare(REPORT_EXISTS_SQL).get(row.post_id, uid);
   if (already) return { ok: true, already: true };
-  db.prepare(
-    "INSERT INTO listing_reports(post_id, user_id, reason, created_at) VALUES (?, ?, ?, ?)",
-  ).run(row.post_id, uid, String(reason || "").trim().slice(0, 200), iso(now));
-  const count = Number(
-    db.prepare("SELECT COUNT(*) AS n FROM listing_reports WHERE post_id = ?").get(row.post_id)?.n,
-  ) || 0;
+  db.prepare(REPORT_INSERT_SQL).run(row.post_id, uid, String(reason || "").trim().slice(0, 200), iso(now));
+  const count = Number(db.prepare(REPORT_COUNT_SQL).get(row.post_id)?.n) || 0;
   if (count >= SELF_REPORT_HIDE_AFTER) {
     hideSelfListing(db, row.post_id, now);
   }

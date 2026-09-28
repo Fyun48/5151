@@ -431,6 +431,17 @@ const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 const CLOSE_SELF_SRC = "v3/src/selfListingsAsync.js";
 const CLOSESELF_MUTATIONS = [
   {
+    // ⚠️ 這一條的殺手在 `close-self-listing-async.test.js`（不是 report 那一支的測試檔）：
+    // 「本機也要追上」那一行是 2026-09-28 補的（`listings` 的狀態是本機同步瀏覽路徑在讀）。
+    name: "關閉站內刊登只寫 PG（本機清單還看得到已關閉的）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);\n",
+    to: "",
+    // 殺手是第二條測試（「PG 分支自己就要把本機那一列關掉」）：第一條測試裡本機的 closed
+    // 是**同步版**寫的，所以那一條對這個變異沒有鑑別力。
+    expect: "PG 分支自己就要把本機那一列關掉",
+  },
+  {
     name: "不驗擁有權（別人的刊登也能關）",
     file: CLOSE_SELF_SRC,
     from: '  if (!admin && Number(row.listed_by_user_id) !== Number(userId)) {\n    throw httpError("只能關閉自己的刊登", 403);\n  }\n',
@@ -1009,6 +1020,68 @@ const IMPORTS_MUTATIONS = [
     name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
     file: IMPORTS_SRC,
     from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
+// 檢舉站內刊登／後台隱藏 PG 分支的變異集（v3/test/self-listing-report-async.test.js）。
+const SELFREPORT_SRC = "v3/src/selfListingsAsync.js";
+const SELFREPORT_SYNC_SRC = "v3/src/selfListings.js";
+const SELFREPORT_MUTATIONS = [
+  {
+    name: "達門檻不隱藏（檢舉再多都不會下架）",
+    file: SELFREPORT_SYNC_SRC,
+    from: "export const SELF_REPORT_HIDE_AFTER = 2;",
+    to: "export const SELF_REPORT_HIDE_AFTER = 9999;",
+    expect: "第一筆只寫檢舉不隱藏",
+  },
+  {
+    name: "第一筆就隱藏（門檻寫成 1）",
+    file: SELFREPORT_SYNC_SRC,
+    from: "export const SELF_REPORT_HIDE_AFTER = 2;",
+    to: "export const SELF_REPORT_HIDE_AFTER = 1;",
+    expect: "第一筆只寫檢舉不隱藏",
+  },
+  {
+    name: "重複檢舉不先查（同一人會多一列）",
+    file: SELFREPORT_SRC,
+    from: "  const already = await exec(REPORT_EXISTS_SQL, [row.post_id, uid]);\n  const alreadyRows = Array.isArray(already) ? already : (already?.rows || []);\n  if (alreadyRows[0]) return { ok: true, already: true };\n",
+    to: "",
+    expect: "同一人重複檢舉",
+  },
+  {
+    name: "不檢查『不能檢舉自己的刊登』",
+    file: SELFREPORT_SRC,
+    from: '  if (Number(row.listed_by_user_id) === uid) throw httpError("不能檢舉自己的刊登");\n',
+    to: "",
+    expect: "自己的刊登",
+  },
+  {
+    name: "隱藏只寫 PG，不讓本機 handle 追上（本機清單還看得到）",
+    file: SELFREPORT_SRC,
+    from: "  sqliteHandle().prepare(HIDE_SELF_LISTING_SQL).run(stamp, row.post_id);\n",
+    to: "",
+    expect: "第一筆只寫檢舉不隱藏",
+  },
+  {
+    name: "停權只寫 PG（換一台節點就又能上傳）",
+    file: SELFREPORT_SRC,
+    from: "  try { sqliteHandle().prepare(BAN_SELF_PUBLISHER_SQL).run(until, row.listed_by_user_id); } catch { /* 本機可能還沒有這一欄 */ }\n",
+    to: "",
+    expect: "停權之後",
+  },
+  {
+    name: "停權時間的字串解析寫錯（餵 ISO 字串時退回當下）",
+    file: SELFREPORT_SYNC_SRC,
+    from: "  const ms = now instanceof Date ? now.getTime() : Date.parse(now);\n  const base = Number.isFinite(ms) ? ms : Date.now();",
+    to: "  const base = now instanceof Date ? now.getTime() : Number(now) || Date.now();",
+    expect: "後台隱藏",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: SELFREPORT_SRC,
+    from: '  if ((options.driver || resolveDbDriver()) !== "postgres") {\n    return (await import("./db.js")).reportSelfListing(userId, postId, reason);\n  }\n',
     to: "",
     expect: "非 postgres 模式必須走同步路徑",
   },
@@ -2638,7 +2711,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+const MUTATIONS = /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
+  : /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
   : /listing-imports-async/.test(testFile) ? IMPORTS_MUTATIONS
   : /system-crawl-async/.test(testFile) ? SYSCRAWL_MUTATIONS
   : /rental-notify-prefs-async/.test(testFile) ? NPREFSWRITE_MUTATIONS

@@ -205,8 +205,6 @@ import {
   mediaUrlsForTagIdsFor,
   assertOwnsMemberMediaUrls,
   closeSelfListing,
-  hideSelfListing,
-  reportSelfListing,
   selfListingMeta,
   saveUserPushSubscription,
   deleteUserPushSubscription,
@@ -271,7 +269,7 @@ import {
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
-import { closeSelfListingAsync } from "./selfListingsAsync.js";
+import { closeSelfListingAsync, hideSelfListingAsync, reportSelfListingAsync } from "./selfListingsAsync.js";
 // 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情＋生命週期寫入（更新／刊登／重開）。
 // 讀取先搬是關鍵——在那之前「寫 PG、讀 SQLite」會讓新寫入看不到；現在兩邊同源。
 import {
@@ -3469,22 +3467,22 @@ app.post("/api/self-listings/:id/close", async (req, res) => {
   }
 });
 
-app.post("/api/self-listings/:id/report", (req, res) => {
+app.post("/api/self-listings/:id/report", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能檢舉" });
       return;
     }
-    res.json(reportSelfListing(session.userId, req.params.id, req.body?.reason));
+    res.json(await reportSelfListingAsync(session.userId, req.params.id, req.body?.reason));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/self-listings/:id/hide", requireAdminApi, (req, res) => {
+app.post("/api/admin/self-listings/:id/hide", requireAdminApi, async (req, res) => {
   try {
-    res.json(hideSelfListing(req.params.id));
+    res.json(await hideSelfListingAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
