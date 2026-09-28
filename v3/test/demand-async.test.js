@@ -54,7 +54,8 @@ function pgFixture() {
   // `demand_match_districts` 也要：讀取路徑的過期掃描會跑 `pruneDemandMatchDistricts()`，
   // 少了它 PG 分支會丟 "no such table"（離線夾具第一次就是這樣紅的）。
   // `user_listing_flags` 也是：屋主看自己的許願房時要讀活動訊號（同步版查同一張表）。
-  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports", "demand_match_districts", "user_listing_flags"]) {
+  // `wish_room_example` 與 `wish_offers` 也要：屋主摘要會讀「有沒有範例」與待處理報價數。
+  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports", "demand_match_districts", "user_listing_flags", "wish_room_example", "wish_offers"]) {
     const rows = disk.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").all(t);
     assert.equal(rows.length, 1, `必須抓到 ${t} 的 DDL（夾具不自己寫表格定義）`);
     mem.exec(rows[0].sql);
@@ -83,6 +84,8 @@ function clearDemand(h) {
   h.prepare("DELETE FROM demand_reports").run();
   h.prepare("DELETE FROM demand_replies").run();
   h.prepare("DELETE FROM demand_posts").run();
+  h.prepare("DELETE FROM wish_room_example").run();
+  h.prepare("DELETE FROM wish_offers").run();
   h.prepare("DELETE FROM users WHERE email LIKE 'demand%@example.com'").run();
   // ⚠️ user 1 是 `db.js` 開檔時建的 bootstrap 管理員，**不屬於**上面那批測試帳號，
   // 所以它不會被刪掉——而前面幾個測試會改它的 nickname。不還原的話，後面的測試會繼承
@@ -524,6 +527,87 @@ test("讀取：過期掃描會把過期的 open 收掉，且兩個 store 都改�
   assert.notEqual(pgRow.status, "open", "PG 側那一筆必須被收掉（這是真的來源）");
   assert.notEqual(postStatus(disk, 550), "open", "本機 handle 也必須被收掉");
   assert.equal(postStatus(disk, 550), pgRow.status, "兩個 store 的狀態必須相同");
+});
+
+
+test("屋主摘要：形狀（active／draft／can_create／has_example）與同步版相同", async () => {
+  const seedOwner = (h) => {
+    seedUserName(h, 5, "屋主戊");
+    seedPost(h, { id: 560, userId: 5 });
+    seedPost(h, { id: 561, userId: 6, status: "draft" });
+  };
+  const [disk, exec] = resetBoth(seedOwner);
+  const syncMine = syncMod.wishRoomOwnerSummary(disk, 5);
+  const asyncMine = await asyncMod.wishRoomOwnerSummaryAsync(5, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncMine, syncMine, "屋主摘要必須逐鍵相同");
+  assert.equal(asyncMine.active?.id, 560, "active 必須是自己的 open 那一則");
+  assert.equal(asyncMine.can_create, false, "已經有一則 open ⇒ 不能再建");
+
+  // 沒有 open 的人：can_create 要是 true，且 draft 要被抓到
+  const syncOther = syncMod.wishRoomOwnerSummary(disk, 6);
+  const asyncOther = await asyncMod.wishRoomOwnerSummaryAsync(6, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncOther, syncOther, "沒有 open 的屋主摘要必須相同");
+  assert.equal(asyncOther.active, null);
+  assert.equal(asyncOther.draft?.id, 561, "draft 必須是自己的草稿");
+  assert.equal(asyncOther.can_create, true, "沒有 open ⇒ 可以建");
+
+  // 未登入（uid 0）
+  const syncZero = syncMod.wishRoomOwnerSummary(disk, 0);
+  const asyncZero = await asyncMod.wishRoomOwnerSummaryAsync(0, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncZero, syncZero, "uid 0 的空摘要必須相同");
+});
+
+test("屋主摘要：has_example 與待處理報價數要從 PG 讀到", async () => {
+  const [disk, exec] = resetBoth((h) => {
+    seedPost(h, { id: 570, userId: 5 });
+    h.prepare("INSERT INTO wish_room_example(user_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)")
+      .run(5, '{"rent_max":20000}', NOW, NOW);
+  });
+  const syncMine = syncMod.wishRoomOwnerSummary(disk, 5);
+  const asyncMine = await asyncMod.wishRoomOwnerSummaryAsync(5, { ...PG, exec, strict: true });
+  assert.equal(syncMine.has_example, true, "同步版必須看到範例（否則這條沒鑑別力）");
+  assert.equal(asyncMine.has_example, true, "PG 版必須看到範例");
+  assert.deepEqual(asyncMine, syncMine);
+
+  // 待處理報價數（`wish_offers` 那張表；同步版在 db.js 的 wrapper 裡補上這兩個鍵）
+  const pending = await asyncMod.pendingOfferCountAsync(
+    async (sql, params = []) => exec(sql, params), 5,
+  );
+  assert.equal(pending, 0, "沒有 pending 報價時必須是 0");
+  // 欄位從 PRAGMA 推導，必填的（NOT NULL 且沒有預設值）自己補上——`wish_offers` 有
+  // `public_token NOT NULL` 這種欄位，漏了會直接違反約束（第一版就是這樣紅的）。
+  const info = disk.prepare("PRAGMA table_info(wish_offers)").all();
+  const provided = {
+    id: 9001, wish_id: 570, owner_user_id: 5, tenant_user_id: 5, status: "pending",
+    created_at: NOW, updated_at: NOW, public_token: "tok-offer-9001",
+  };
+  const required = info.filter((c) => c.notnull === 1 && c.dflt_value === null && c.pk === 0).map((c) => c.name);
+  const names = info.map((c) => c.name).filter((n) => n in provided || required.includes(n));
+  // ⚠️ 一定要同時種一筆**非 pending** 的：只有 pending 一筆時，「不篩 status」的變異
+  // 照樣回 1 ⇒ 測試沒有鑑別力（變異測試當場抓到）。
+  // ⚠️ `wish_offers` 有 `UNIQUE(owner_user_id, listing_id, wish_id)` 這一類的**表約束**
+  // （隱式索引），所以第二筆要換一個 listing_id，不能只換 id／status。
+  for (const row of [
+    provided,
+    { ...provided, id: 9002, status: "accepted", public_token: "tok-offer-9002", listing_id: 8801 },
+  ]) {
+    for (const h of [disk, exec.raw]) {
+      h.prepare(`INSERT INTO wish_offers(${names.join(",")}) VALUES (${names.map(() => "?").join(",")})`)
+        .run(...names.map((n) => {
+          if (n in row) return row[n];
+          const col = info.find((c) => c.name === n);
+          return /INT|REAL|NUM/i.test(col.type) ? 0 : `x-${n}`;
+        }));
+    }
+  }
+  assert.equal(
+    await asyncMod.pendingOfferCountAsync(async (sql, params = []) => exec(sql, params), 5), 1,
+    "PG 版必須數到待處理報價（兩筆裡只有一筆 pending）",
+  );
+  assert.equal(
+    exec.raw.prepare("SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = 5").get().n, 2,
+    "夾具上必須真的有兩筆（否則上面的 1 沒有鑑別力）",
+  );
 });
 
 test("夾具本身要真的拒絕 SQLite 專屬方言（否則上面的方言守衛是空的）", async () => {

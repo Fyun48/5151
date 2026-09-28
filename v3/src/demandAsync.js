@@ -448,3 +448,48 @@ export async function getDemandPostAsync(postId, opts = {}, options = {}) {
     return decorated;
   }, () => getDemandPostSync(sqliteHandle(), postId, opts));
 }
+
+// ── 屋主的許願房摘要與待處理報價數 ───────────────────────────────────────────
+//
+// `wishRoomOwnerSummaryFor()`（db.js）是列表與 `/mine` 這幾條路由最後的卡點之一。
+// 它做四件事：過期掃描、列出自己的許願房、`wish_room_example` 有沒有範例、以及
+// **待處理報價數**（`wish_offers` 那張表）；前者已在這一支、後者只是 COUNT。
+export const OWNER_POSTS_SQL = "SELECT * FROM demand_posts WHERE user_id = ? ORDER BY id DESC";
+export const HAS_EXAMPLE_SQL = "SELECT user_id FROM wish_room_example WHERE user_id = ?";
+export const PENDING_OFFER_COUNT_SQL =
+  "SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = ? AND status = 'pending'";
+
+// ⚠️ 逐鍵對齊同步版——**連它自己前後不一致的地方也要照抄**：
+// 同步版 `uid = 0` 的早退分支回 `{active,draft,closed,has_example}`（有 `closed`、沒有
+// `can_create`），而正常分支回 `{active,draft,has_example,can_create}`（相反）。
+// 第一版我兩邊都「整理乾淨」，parity 立刻紅——這正是 parity 要抓的漂移。
+// 要改這個不一致，應該改同步版並另開一批，不是在 PG 版偷偷對齊。
+const EMPTY_OWNER_SUMMARY_ZERO = { active: null, draft: null, closed: [], has_example: false };
+
+// `pendingInboxCount()` 的 PG 版（wishOfferQueries.js 那一支只吃 handle）。
+export async function pendingOfferCountAsync(run, userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return 0;
+  return Number(one((await run(PENDING_OFFER_COUNT_SQL, [uid])).rows)?.n) || 0;
+}
+
+// `wishRoomOwnerSummaryFor()` 的 PG 版：形狀與同步版逐鍵相同（`can_create` 也在內）。
+export async function wishRoomOwnerSummaryAsync(userId, options = {}) {
+  return withFallback(options, {}, async (run) => {
+    const uid = Number(userId) || 0;
+    if (!uid) return { ...EMPTY_OWNER_SUMMARY_ZERO };
+    await expireOpenPostsAsync(run, new Date());
+    const rows = (await run(OWNER_POSTS_SQL, [uid])).rows || [];
+    const active = rows.find((row) => row.status === "open") || null;
+    const draft = rows.find((row) => row.status === "draft") || null;
+    const decorated = await rowsToViews(run, [active, draft].filter(Boolean), { viewerId: uid });
+    const byId = new Map(decorated.map((view) => [Number(view.id), view]));
+    const hasExample = Boolean(one((await run(HAS_EXAMPLE_SQL, [uid])).rows));
+    return {
+      active: active ? byId.get(Number(active.id)) || null : null,
+      draft: draft ? byId.get(Number(draft.id)) || null : null,
+      has_example: hasExample,
+      can_create: !active,
+    };
+  }, async () => (await import("./db.js")).wishRoomOwnerSummaryFor(userId));
+}
