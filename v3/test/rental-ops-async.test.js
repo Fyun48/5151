@@ -268,7 +268,7 @@ test("彙總：空資料庫也要相同（中位數是 null）", async () => {
   const syncSummary = plain(syncMod.rentalOpsSummary(disk, RANGE));
   const asyncSummary = plain(await asyncMod.rentalOpsSummaryAsync(RANGE, { ...PG, exec, strict: true }));
   assert.deepEqual(asyncSummary, syncSummary, "空集合的 summary 必須逐鍵相同");
-  assert.equal(asyncSummary.offers.median_seconds_to_accept, null);
+  assert.strictEqual(asyncSummary.offers.median_seconds_to_accept, null);
   assert.equal(asyncSummary.offers.acceptance_rate, 0, "分母 0 時必須是 0，不是 NaN");
 });
 

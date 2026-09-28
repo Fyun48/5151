@@ -1087,6 +1087,73 @@ const SELFREPORT_MUTATIONS = [
   },
 ];
 
+// 匯入生命週期（讀取／修改／取消）PG 分支的變異集
+// （v3/test/listing-import-lifecycle-async.test.js）。
+const IMPLIFE_SRC = "v3/src/listingImportAsync.js";
+const IMPLIFE_SYNC_SRC = "v3/src/listingImport.js";
+const IMPLIFE_MUTATIONS = [
+  {
+    name: "讀取不檢查所有權（可以看別人的匯入）",
+    file: IMPLIFE_SRC,
+    from: "    const row = assertImportOwner(await readImportRow(run, id), userId);\n    return publicImportAsync(row, {}, options, run);",
+    to: "    const row = await readImportRow(run, id);\n    return publicImportAsync(row, {}, options, run);",
+    expect: "讀取：公開形狀逐鍵相同",
+  },
+  {
+    // 📌 原本想驗「沒有草稿時 listing 是 null 不是 undefined」，實測**殺不死**：
+    // `publicImportShape(row, { listing = null } = {})` 的**預設參數**對「顯式傳 undefined」
+    // 一樣生效 ⇒ `listing: undefined` 進到函式裡還是 `null`，那個變異是等價的。
+    // 照紀律：不為了殺它而發明測試，改成驗「PG 版根本沒去查草稿」這個**有鑑別力**的變異。
+    name: "PG 版不做草稿查詢（listing 永遠 null）",
+    file: IMPLIFE_SRC,
+    from: "  const resolved = listing === undefined ? await safeListingAsync(row, options, exec) : listing;",
+    to: "  const resolved = listing === undefined ? null : listing;",
+    expect: "讀取：公開形狀逐鍵相同",
+  },
+  {
+    name: "修改不檢查狀態（已確認的也能改）",
+    file: IMPLIFE_SRC,
+    from: "    if (row.status !== IMPORT_STATUSES.READY_FOR_REVIEW) {\n      throw httpError(\"這筆匯入目前不能修改\", 409, row.status);\n    }\n",
+    to: "",
+    expect: "修改：狀態不是 ready_for_review",
+  },
+  {
+    name: "修改只寫 PG，不讓本機追上",
+    file: IMPLIFE_SRC,
+    from: "    sqliteHandle().prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);\n",
+    to: "",
+    expect: "修改：標題與內容會淨化",
+  },
+  {
+    name: "標題不淨化（PG 版原樣寫入，頭尾空白留著）",
+    file: IMPLIFE_SRC,
+    from: "    const title = input.title != null ? sanitizeImportedTitle(input.title) : row.imported_title;",
+    to: "    const title = input.title != null ? String(input.title) : row.imported_title;",
+    expect: "修改：標題與內容會淨化",
+  },
+  {
+    name: "取消不擋已確認的匯入",
+    file: IMPLIFE_SRC,
+    from: '    if (row.status === IMPORT_STATUSES.CONFIRMED) throw httpError("已確認的匯入不能取消", 409);\n',
+    to: "",
+    expect: "取消：已取消是 idempotent",
+  },
+  {
+    name: "取消不把草稿一起收掉",
+    file: IMPLIFE_SRC,
+    from: "      await abandonImportedDraftListingAsync(userId, row.listing_id, { now, ...IMPORT_ROW_OPTIONS(rest, run) });\n",
+    to: "",
+    expect: "取消：匯入變 cancelled",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: IMPLIFE_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2711,7 +2778,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
+const MUTATIONS = /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS
+  : /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
   : /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
   : /listing-imports-async/.test(testFile) ? IMPORTS_MUTATIONS
   : /system-crawl-async/.test(testFile) ? SYSCRAWL_MUTATIONS

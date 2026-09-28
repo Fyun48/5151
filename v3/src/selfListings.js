@@ -478,7 +478,8 @@ function normalizePhotoUrl(value) {
   return url.toString().slice(0, SELF_PHOTO_URL_MAX);
 }
 
-function normalizePhotoList(input) {
+// 匯出給 PG 版：草稿欄位的正規化（照片清單）兩個 driver 必須相同。
+export function normalizePhotoList(input) {
   const raw = Array.isArray(input) ? input : [];
   const out = [];
   for (const item of raw) {
@@ -1079,6 +1080,12 @@ export function listingFormFields(row) {
   };
 }
 
+// 匯入草稿的兩個 UPDATE（PG 也接受、逐字共用）。
+export const DRAFT_LISTING_UPDATE_SQL =
+  "UPDATE listings SET title=?, self_body=?, self_photos=?, cover=? WHERE post_id=?";
+export const ABANDON_DRAFT_LISTING_SQL =
+  "UPDATE listings SET self_status='cancelled', last_event='offline', last_seen_at=? WHERE post_id=?";
+
 export function updateImportedDraftListing(db, userId, postId, input = {}) {
   const uid = Number(userId) || 0;
   const row = getSelfRow(db, postId);
@@ -1088,9 +1095,8 @@ export function updateImportedDraftListing(db, userId, postId, input = {}) {
   const title = input.title != null ? String(input.title || "").trim().slice(0, SELF_TITLE_MAX) : row.title;
   const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
   const photos = input.photos != null ? normalizePhotoList(input.photos) : listingPhotoUrls(row);
-  db.prepare(
-    "UPDATE listings SET title=?, self_body=?, self_photos=?, cover=? WHERE post_id=?",
-  ).run(title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id);
+  db.prepare(DRAFT_LISTING_UPDATE_SQL)
+    .run(title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id);
   return getSelfListing(db, row.post_id, { viewerId: uid });
 }
 
@@ -1100,9 +1106,7 @@ export function abandonImportedDraftListing(db, userId, postId, now = new Date()
   if (!row) return null;
   if (Number(row.listed_by_user_id) !== uid) throw httpError("只能取消自己的匯入草稿", 403);
   if (String(row.self_status || "") !== "draft") return getSelfListing(db, row.post_id, { viewerId: uid });
-  db.prepare(
-    "UPDATE listings SET self_status='cancelled', last_event='offline', last_seen_at=? WHERE post_id=?",
-  ).run(iso(now), row.post_id);
+  db.prepare(ABANDON_DRAFT_LISTING_SQL).run(iso(now), row.post_id);
   return getSelfListing(db, row.post_id, { viewerId: uid });
 }
 
