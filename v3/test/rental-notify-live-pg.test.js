@@ -70,6 +70,11 @@ test("live PG：通知寫入端建得起唯一索引，而且去重與遞送真�
     return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
   };
   const pgDriverForEnsure = pgDriver;
+  // ⚠️ 一定要先跑 bootstrap：`ON CONFLICT(event_key)`／`ON CONFLICT(event_id, channel)` 需要
+  // **真的存在**的唯一索引，否則 PG 直接回 `42P10`。
+  // 這也正是離線測不到的那一段（`ensureRentalNotifyWriteOnce()` 只在沒有注入 exec 時才會跑，
+  // 所以正式站在第一次寫入前會自己補；CI 第一次跑就是紅在這裡，證明這個守衛有效）。
+  await writeAsync.ensureRentalNotifyWriteOnce(pgDriverForEnsure);
 
   const emitted = await writeAsync.emitRentalNotifyEventAsync({
     eventType: "tenant_offer_received",
