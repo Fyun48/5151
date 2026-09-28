@@ -1191,6 +1191,69 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負五、2026-09-28 第三十六批（**只做偵察，尚未實作**）：wishOffers 最後 5 條的真實障礙
+
+剩下的 5 條是 `accept`／`decline`／`withdraw`／`block`／`contact`。動手前先追完依賴，
+**結論是：擋住它們的不是狀態機本身**。
+
+### 36.1 追出來的呼叫鏈（已查證）
+
+```
+acceptWishOfferFor()（db.js）
+  ├─ acceptWishOfferOn(db, …)            ← wishOfferTransitions.js 的狀態機
+  │    ├─ transitionOffer()              ← 樂觀鎖 UPDATE（wishOffers.js）
+  │    ├─ expirePendingIfDue()／terminalizeOffers()
+  │    ├─ recheckAcceptable() → liveMatchEligible()（純）＋ getSelfRow()
+  │    └─ writeOfferEvent()              ← wish_offer_events（PG 版已於第 33 批完成）
+  └─ emitRentalNotifyEventOn(db, …) ×2   ← **rentalNotify.js，1199 行、59 處 db.prepare**
+```
+
+⇒ **狀態機本身不是最難的部分**（248 行、10+ helper，但都可照既有 loader 模式搬）。
+真正的工作量在它後面那兩行：`accept`／`block` 成功後會呼叫 `emitRentalNotifyEvent()`，
+而那一支**整支還在 SQLite 上**（寫 `rental_notify_events`、`queueDeliveries()`、
+`insertDelivery()`、`bumpAnalytics()`）。
+
+### 36.2 為什麼不能只接狀態機
+
+若只把狀態機搬上 PG，就會出現：
+- `wish_offers`／`wish_offer_events` → **PG**
+- `rental_notify_events`／`rental_notify_deliveries`／`rental_analytics_daily` → **SQLite**
+
+也就是**同一次「接受提案」被拆到兩個 store**，通知與分析數字會留在節點本機
+——正是 `PG-ISLAND-ACTIVE-WRITES` 記的那個問題。所以正確順序是
+**先搬通知與分析那條線，再回來接狀態機**。
+
+### 36.3 建議的切法（下次照這個做）
+
+| 順序 | 標的 | 影響 |
+|---|---|---|
+| **1** | `bumpAnalytics()` → PG（`rental_analytics_daily` 一句 upsert） | 解鎖 **9 條**非 wishOffers 路由（見下） |
+| **2** | `emitRentalNotifyEvent()` ＋ `queueDeliveries()`／`insertDelivery()` → PG | `accept`／`block` 的前置條件 |
+| **3** | 狀態機（`transitionOffer`／`expirePendingIfDue`／`terminalizeOffers`／`recheckAcceptable`）＋ 4 條路由 | 收尾 |
+| **4** | `projectOfferContact()`（`/contact`，會先寫稽核事件） | 收尾 |
+
+**第 1 步就值得單獨做**：`bumpAnalytics` 目前是 **9 條缺口路由**的卡點，而且只是一句
+`INSERT … ON CONFLICT(day, metric) DO UPDATE`：
+
+```
+POST /api/public/wish-room/:id/share-events   POST /api/wish-rooms
+GET  /verify-email                            POST /api/self-listings
+GET  /auth/:provider/callback                 POST /api/wish-rooms/:id/survey
+POST /api/demand                              POST /api/self-listings/:id/matches/:wishRef/offers
+                                              POST /api/wish-offers/:offerRef/accept
+```
+
+（最後一條要等第 2、3 步；其餘 8 條第 1 步就能動。）
+
+### 36.4 `rentalNotify.js` 的規模（先量再切，不要憑感覺）
+
+- **1199 行**、**59 處 `db.prepare`**、`RENTAL_NOTIFY_EVENT_TYPES`／`CHANNELS`／
+  `preferenceAllows()`／`taipeiDay()` 等純邏輯可以重用。
+- 它自己也有 driver-aware 掛勾（`isRentalNotificationsEnabled(flagsCache)`），
+  但寫入端整支吃 handle。
+
+⇒ 這是一包**獨立的中大型工作**，不適合塞進 wishOffers 那包一起做。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |
