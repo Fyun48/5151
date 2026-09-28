@@ -83,8 +83,10 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
 export async function bumpAnalyticsAsync(metric, now = new Date(), n = 1, options = {}) {
   const day = taipeiDay(now);
   const value = Number(n) || 1;
+  // `options.sql` 讓**呼叫端**明確指定要用哪一句（見上面兩句的說明）。
+  // 沒有指定時由 `withFallback()` 依路徑選。
   return withFallback(options, { write: true }, async (run, sql) => {
-    await run(sql, [day, String(metric), value]);
+    await run(options.sql || sql, [day, String(metric), value]);
     return undefined;
   }, () => bumpAnalyticsSync(sqliteHandle(), metric, now, n));
 }
