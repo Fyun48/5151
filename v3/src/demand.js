@@ -943,7 +943,34 @@ function recencyStamp(row) {
   return row.updated_at || row.published_at || row.created_at || "";
 }
 
-function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
+// 一列的「裝飾」需要四種**條件式**的資料庫讀取。把它們抽成介面，讓同步版（吃 handle）與
+// PG 版（吃注入式 runner，見 demandAsync.js）共用**同一段純邏輯**——否則兩個 driver 的
+// 輸出形狀一定會漂移。介面上的每個方法都對應原本那一句 SQL，語句文字不變：
+//   replies(row)      ← decoratePost 內的 demand_replies 查詢（本來每一列都查一次）
+//   authorName(uid)   ← userAuthorName()（nickname，取不到就「會員」）
+//   activitySignals() ← collectWishActivitySignals()（只有 mine 會用到）
+//   ensureToken()     ← ensurePublicToken()（只有 public_token 是空的時候才寫入）
+//   hasColumn(name)   ← hasWishColumn()（決定要不要碰某個欄位）
+export function syncDecorateLoader(db) {
+  return {
+    replies: (row) => db.prepare(
+      `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
+       FROM demand_replies r
+       WHERE r.post_id = ?
+       ORDER BY r.id ASC`,
+    ).all(row.id),
+    authorName: (userId) => userAuthorName(db, userId),
+    activitySignals: (row) => collectWishActivitySignals(db, row.user_id, row),
+    ensureToken: (row) => ensurePublicToken(db, row.id),
+    hasColumn: (name) => hasWishColumn(db, name),
+  };
+}
+
+function decoratePost(db, row, opts = {}) {
+  return decoratePostWith(syncDecorateLoader(db), row, opts);
+}
+
+export function decoratePostWith(loader, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
   const storedChoices = parseJsonObject(row.condition_choices);
   let groups;
@@ -962,12 +989,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
       ? storedChoices
       : wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid).choices;
   }
-  const replies = db.prepare(
-    `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
-     FROM demand_replies r
-     WHERE r.post_id = ?
-     ORDER BY r.id ASC`,
-  ).all(row.id);
+  const replies = loader.replies(row);
   const visible = replies.filter((item) => !item.hidden || includeHiddenReplies || Number(item.user_id) === viewerId);
   const mine = Number(row.user_id) === Number(viewerId);
   const publicContact = {
@@ -976,10 +998,10 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     line_url: String(row.line_url || ""),
   };
   const hasContact = Boolean(publicContact.contact_name || publicContact.phone || publicContact.line_url);
-  const token = String(row.public_token || "") || ensurePublicToken(db, row.id);
+  const token = String(row.public_token || "") || loader.ensureToken(row);
   const lifecycle = mapLegacyLifecycle(row);
   const activitySignals = mine
-    ? collectWishActivitySignals(db, row.user_id, row)
+    ? loader.activitySignals(row)
     : { last_confirmed_at: row.last_confirmed_at, wish_edited_at: row.updated_at };
   const scored = activityScoreFromSignals(activitySignals);
   const lastActive = scored.last_active_at || row.last_active_at || row.last_confirmed_at || row.updated_at || row.created_at;
@@ -988,7 +1010,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     id: Number(row.id),
     product: WISH_PRODUCT_NAME,
     headline: "租屋需求",
-    author: userAuthorName(db, row.user_id),
+    author: loader.authorName(row.user_id),
     mine,
     city: String(row.city || "") || cityFromDistricts(districts),
     districts,
@@ -1039,7 +1061,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     contact: hasContact ? publicContact : null,
     replies: visible.map((item) => ({
       id: Number(item.id),
-      author: userAuthorName(db, item.user_id),
+      author: loader.authorName(item.user_id),
       mine: Number(item.user_id) === Number(viewerId),
       body: String(item.body || ""),
       created_at: item.created_at,
