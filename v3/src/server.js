@@ -3602,8 +3602,11 @@ async function ensureWorkCoords() {
   }
 }
 
-function queueGeoBackfill(settings = getSettings()) {
-  settings = settingsForGeoBackfill(settings);
+// ⚠️ 同步預設值改成 async 入口：`getSettings()` 讀的是節點本機 SQLite，
+// PG 模式（正式站）會拿到另一份設定。呼叫端若已經有 settings 就傳進來（不要重讀）。
+async function queueGeoBackfill(settings = null) {
+  const resolved = settings || await getSettingsAsync(0);
+  settings = settingsForGeoBackfill(resolved);
   if (rememberBackfillRequest(geoBackfillState) === "queued") return;
   const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
@@ -3925,7 +3928,7 @@ app.get("/api/state", async (req, res) => {
   const uid = session.userId;
   let settings;
   try {
-    settings = getSettings(uid);
+    settings = await getSettingsAsync(uid);
   } catch (error) {
     res.status(500).json({ error: error.message || "讀取設定失敗" });
     return;
@@ -3960,21 +3963,21 @@ app.get("/api/state", async (req, res) => {
   });
 });
 
-app.post("/api/commute/focus", (req, res) => {
+app.post("/api/commute/focus", async (req, res) => {
   const session = requireMember(req, res);
   if (!session) return;
   const uid = session.userId;
   const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter((id) => id > 0).slice(0, 80);
   commuteFocusByUser.set(uid, { ids, at: Date.now() });
-  queueGeoBackfill(getSettings(uid));
+  await queueGeoBackfill(await getSettingsAsync(uid));
   res.json({ ok: true, count: ids.length });
 });
 
-app.get("/api/commute/snapshot", (req, res) => {
+app.get("/api/commute/snapshot", async (req, res) => {
   const session = requireMember(req, res);
   if (!session) return;
   const uid = session.userId;
-  const settings = getSettings(uid);
+  const settings = await getSettingsAsync(uid);
   const ids = String(req.query.ids || "")
     .split(",")
     .map(Number)
@@ -4352,7 +4355,7 @@ async function persistSettings(body = {}, userId) {
   delete body.workLocationClass;
   const workAddress = String(body.workAddress || "").trim();
   if (body.workAddress !== undefined || Number(body.commuteKm) > 0) {
-    const current = getSettings(uid);
+    const current = await getSettingsAsync(uid);
     const resolved = resolveWorkPointForSave(current, {
       workAddress: body.workAddress !== undefined ? workAddress : current.workAddress,
       commuteKm: body.commuteKm !== undefined ? body.commuteKm : current.commuteKm,

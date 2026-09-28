@@ -1191,6 +1191,158 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負七、2026-09-28 第三十八批（**只做範圍界定，尚未實作**）：`getUserById` 與 `ensureUser`
+
+合併 #531～#533 之後，缺口的前兩大卡點換人了：
+
+| 卡點 | 缺口路由數 |
+|---|---:|
+| `getUserById` | **25** |
+| `ensureUser` | **22** |
+
+### 38.1 為什麼 `getUserById` 不是「一句 SELECT 的便宜目標」
+
+它看起來只是 `SELECT * FROM users WHERE id = ?`，但在 `db.js` 裡有 **8 處私有呼叫**，
+而且那些呼叫端**全部是同步函式**：
+
+```
+db.js:932／942／954   adminPatchMember()
+db.js:2282            listingToolsInfo()
+db.js:2299            createDescriptionTemplateFor()
+db.js:2720            getSettings()
+db.js:2727            saveSettings()
+db.js:2769            saveAsProfile()
+db.js:4111            armMemberExternalFetch()
+```
+
+⇒ 要讓 `getUserById` driver-aware，就得把上面這 7 支**一起**改成 async（或改成注入 loader）。
+這是一個**成組的批次**，不是單點修改；而且其中幾支本身就是高價值標的：
+
+- `getSettings` 是 **8 條**缺口路由的卡點（而且 `getSettingsAsync` **早就存在**，只是呼叫端沒接
+  ——與 `getWishConditions`／`stats` 同一類）。
+- `saveSettings`／`saveAsProfile` 對應 `POST /api/settings`、`POST /api/profiles`。
+- `adminPatchMember` 對應 `PATCH /api/admin/members/:id`。
+
+### 38.2 建議切法
+
+| 順序 | 標的 | 理由 |
+|---|---|---|
+| **1** | `getSettings` → 接上**既有的** `getSettingsAsync` | 8 條路由、零新程式（先查既有 `*Async.js` 那條紀律） |
+| **2** | `getUserById` 的 PG 版 ＋ 把上面 7 支改成接受 loader | 一次解鎖 25 條的卡點 |
+| **3** | `ensureUser`（22 條） | 它會**寫入**（PG 模式建立使用者？）——要先決定政策：PG 模式找不到人就明確失敗（`personalFlagsAsync.js` 已表明這個立場），不要偷偷在本機建帳號 |
+
+### 38.3 現況（合併後，可重跑）
+
+```
+node v3/scripts/route-data-map.mjs
+PG 173、MIXED 84、SQLite 11、無直接DB 20、缺口 95
+wishOffers 群：0 條
+```
+
+**已部署**：master `af21275`、image `sha256:8b587364…`（deploy evidence `passed: true`）。
+
+### 38.4 第 2 步的第一塊：`getUserByIdAsync()`（`v3/src/usersAsync.js`）
+
+缺口的**頭號卡點**（25 條路由）現在有 PG 版了：
+
+- 語句 `SELECT * FROM users WHERE id = ?`，與 `members.getUserById()` 逐字相同。
+- **查不到回 `null` 而不是 `undefined`**——呼叫端（`adminPatchMember`、`getSettings`、
+  `saveSettings`…）靠 `if (!user)` 判斷，形狀不能變。
+- `uid` 為 0／非數字時**直接早退、不送查詢**（同步版同義）。
+- 測試 `v3/test/users-async.test.js`（5 項全綠）＋變異 **4 條全殺**。
+
+**變異測試又抓到我兩個問題，都不是程式的錯：**
+
+1. **斷言用了 `assert.equal` 而不是 `assert.strictEqual`**：`assert.equal(undefined, null)` 是**通過的**
+   （`node:assert` 的非嚴格版本用 `==`）。所以「回 undefined 而不是 null」的變異原本殺不死。
+   已全部改成 `strictEqual`。
+2. **一句多餘的 `|| null`**：`one()` 本身就保證查不到回 `null`，所以在它後面再接 `|| null`
+   是**等價**的——拿掉測試照樣過。已把那一句從原始碼移除，並在變異集寫明「刻意不放這條變異」，
+   免得留下「看起來有守衛、其實沒作用」的程式碼。
+
+#### ⚠️ 第 2 步的**另一半還沒做**（下一次）
+
+`getUserById` 的 7 個私有呼叫端（見 38.1）還沒轉成 async／loader。它們**不是同一種難度**：
+
+| 呼叫端 | 難度 | 說明 |
+|---|---|---|
+| `listingToolsInfo()` | 低 | 只讀 `plan`／`role` 交給 `listingToolsMeta()`；但它所在的 `/api/self-listings` 還有 `getRentalCatalog`／`listMineSelfListings` 等同步依賴 |
+| `createDescriptionTemplateFor()` | 低 | 只傳 `plan`／`role` 給 `createDescriptionTemplateOn()` |
+| `armMemberExternalFetch()` | 低 | 只讀 `plan` 算間隔 |
+| `getSettings()` | 中 | **`getSettingsAsync` 早就存在**（第三十八批 38.2 的第 1 步），應先接它 |
+| `saveSettings()`／`saveAsProfile()` | 中 | 依賴 `getSettings()`／`getUserById()` 兩者 |
+| `adminPatchMember()` | 高 | 完整的會員修改流程，牽涉多張表與稽核 |
+
+⇒ 建議**先接 `getSettingsAsync`**（零新程式、單獨卡 8 條），再處理低難度那三支。
+
+### 38.5 第 1 步（38.2 的順序）：`getSettings` 接上既有的 `getSettingsAsync()`
+
+**零新程式**——`getSettingsAsync()` 早就寫好了，只是呼叫端沒接（與 `getWishConditions`／
+`stats` 同一類）。這一輪把 `server.js` 裡剩下的同步呼叫全部改掉：
+
+| 位置 | 原本 | 現在 |
+|---|---|---|
+| `queueGeoBackfill()` 的同步預設值 | `settings = getSettings()` | `settings = null` ⇒ `await getSettingsAsync(0)` |
+| `GET /api/state` | `getSettings(uid)`（在 try 裡） | `await getSettingsAsync(uid)`（**保留原本的 500 處理**） |
+| `POST /api/commute/focus` | handler 同步 ＋ `queueGeoBackfill(getSettings(uid))` | handler 改 async ＋ `await queueGeoBackfill(await getSettingsAsync(uid))` |
+| `GET /api/commute/snapshot` | handler 同步 | handler 改 async |
+| 已在 async 內的一處（`resolveWorkPointForSave` 之前） | `getSettings(uid)` | `await getSettingsAsync(uid)` |
+
+結果：**`getSettings` 從這三條路由的卡點清單消失**（`/api/state`、`/api/commute/focus`、
+`/api/commute/snapshot`）。
+
+#### ⚠️ 但**尺規沒動**（缺口仍 95）——這是對的
+
+那三條路由各自還有別的卡點（`ensureUser`、`getUserById`、`countWatched`、
+`collectCommuteSettings`… 都在清單上），所以只換掉一個函式不會改變判定。
+`GET /api/settings` 本來就已經是 PG（它用的是 `getSettingsAsync`）。
+
+`GET /api/demo` 仍把 `getSettings` **以參考傳遞**給 `buildDemoState()`：
+
+```js
+res.json(buildDemoState({ listUserIds, getSettings, defaultUserId, listListings, stats }));
+```
+
+那是「以參考傳遞的函式」那一類（尺規現在看得到它，見第三十一批的缺陷 (2) 修正），
+要改成注入值而不是注入函式才算真的搬完——留給 `/api/demo` 那一包。
+
+#### 測試
+
+57 項相關測試全綠（commute／demo／settings／profile／route-data-map／module-imports／boot）。
+`queueGeoBackfill()` 改成 async 之後，三個仍以同步方式呼叫它的地方（`reason !== "startup"`、
+`settings.enabled` 分支、啟動流程）不會爆——它體內的 DB 讀取已移到最前面並由呼叫端提供，
+throws 只可能發生在「呼叫端已 await」或「參數已備好」的情況下。
+
+#### 38.6 ⚠️ 動手前的量測：為什麼「先轉低難度那三支」其實不會解鎖路由
+
+第 38.4 節建議「先處理低難度那三支（`listingToolsInfo`／`createDescriptionTemplateFor`／
+`armMemberExternalFetch`）」。**實測之後要修正這個建議**：
+
+| 函式 | 目前單獨卡幾條路由 |
+|---|---:|
+| `getUserById` | **24** |
+| `ensureUser` | **22** |
+| `sqlExcludeFixtureRows` | 13 |
+| `countWatched` | 12 |
+| `listingToolsInfo` | **0** |
+| `armMemberExternalFetch` | **0** |
+
+而且**沒有任何一條路由是「只差 `getUserById`」**（`(r.sqlite||[]).length === 1` 且該項為
+`getUserById` ⇒ **0 條**）。
+
+⇒ 兩個結論：
+
+1. **`getUserById` 是一整群的共同卡點，不是終點。** 它出現的 24 條路由每一條都還有別的卡點
+   （`ensureUser`、`countWatched`、`sqlExcludeFixtureRows`、`collectCommuteSettings`…）。
+   所以要看到數字下降，得**成組清掉這些共同卡點**，而不是一次轉一個。
+2. **`listingToolsInfo` 與 `armMemberExternalFetch` 不是「低難度捷徑」。** 它們目前單獨卡 0 條
+   ⇒ 轉了它們**不會改變任何路由的判定**，而且 `/api/self-listings` 還有
+   `getRentalCatalog`／`listMineSelfListings`／`getRentalMarketplaceFlags` 等同步依賴
+   （其中 `getRentalCatalog` 就是第 31.2 節提到的「PG 版快取沒補」那條線）。
+
+**下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
+再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，

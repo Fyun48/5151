@@ -2023,6 +2023,41 @@ const NWRITE_MUTATIONS = [
   // 改由 live PG 測試驗證：`ensureRentalNotifyWriteOnce()` 之後那兩條索引必須真的存在。
 ];
 
+// 使用者讀取（`getUserById`）PG 分支的變異集（v3/test/users-async.test.js）。
+const USERS_SRC = "v3/src/usersAsync.js";
+const USERS_MUTATIONS = [
+  // ⚠️ 刻意**沒有**「查不到人回 undefined」這一條：`one()` 本身就保證回 `null`，
+  // 所以在它後面加 `|| null` 是**等價的**（拿掉測試照樣過）。那個多餘的守衛已從原始碼移除。
+  {
+    name: "沒有 id 時照樣查（送出 id = 0 的查詢）",
+    file: USERS_SRC,
+    from: "  if (!id) return null;",
+    to: "  if (false) return null;",
+    expect: "查不到人",
+  },
+  {
+    name: "SQL 不帶 WHERE id（回傳第一個人 ⇒ 權限判斷全錯）",
+    file: USERS_SRC,
+    from: "export const USER_BY_ID_SQL = \"SELECT * FROM users WHERE id = ?\";",
+    to: "export const USER_BY_ID_SQL = \"SELECT * FROM users LIMIT 1\";",
+    expect: "查得到人",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: USERS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "寫入失敗時靜默吞掉（fail-open）",
+    file: USERS_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, {})) throw error;\n    return runSqlite();",
+    to: "    if (!sqliteFallbackAllowed(options, {})) return null;\n    return runSqlite();",
+    expect: "fail-closed",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -2045,6 +2080,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /users-async/.test(testFile) ? USERS_MUTATIONS
   : /rental-notify-write-async/.test(testFile) ? NWRITE_MUTATIONS
   : /rental-notify-reads-async/.test(testFile) ? NPREFS_MUTATIONS
   : /rental-analytics-async/.test(testFile) ? RANALYTICS_MUTATIONS
