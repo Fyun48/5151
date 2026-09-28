@@ -1,0 +1,157 @@
+// 許願房寫入（檢舉／回覆／關閉）的 **live PG** 驗證（2026-09-28）。
+//
+// 離線 parity（demand-async.test.js）用的 PG 替身是**記憶體 SQLite**，它證明不了三件事：
+//
+//   1. **`ensurePgSchema` 的鏡射建表在真 PG 上真的跑得起來**。離線測試是自己 `CREATE TABLE`
+//      的，完全沒走到 bootstrap。`demand_posts` 有 41 個欄位、含部分唯一索引
+//      （`idx_demand_one_open` 這種 `WHERE status='open'` 的索引），SQLite 的 DDL
+//      不是每一句都能直接餵給 PG。
+//   2. **送進 PG 的語句真的合法**（`COALESCE`、`COUNT(*) AS n`、`ORDER BY id DESC LIMIT 1`）。
+//      夾具會擋 SQLite 方言，但擋不了「PG 也不接受的第三種寫法」。
+//   3. **寫入真的生效**，而不是只回了一個看起來對的結果。
+//
+// ⚠️ 安全設計照抄 `member-media-live-pg.test.js`：**不吃 `PG_TEST_URL`**（本機那個指向
+// `5151_shadow` 正式影子庫），只認 `PG_LIVE_REPRO_URL` 且資料庫名要在允許清單內。
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const RAW = String(process.env.PG_LIVE_REPRO_URL || "").trim();
+const ALLOWED_DB = new Set(["repro", "tracker_test", "repro2"]);
+const DB = (() => { try { return new URL(RAW).pathname.replace(/^\//, ""); } catch { return ""; } })();
+const REFUSED = RAW && !ALLOWED_DB.has(DB);
+const skip = !RAW ? "PG_LIVE_REPRO_URL 未設定（live PG 驗證需要隔離環境）"
+  : REFUSED ? `拒絕執行：資料庫 "${DB}" 不在允許清單 ${[...ALLOWED_DB].join("/")}（正式庫 5151_shadow 一律拒絕）`
+    : false;
+
+// 測試專用的識別碼，與正式資料不可能撞。
+const UID = 900000000301;
+const OTHER = 900000000302;
+const ADMIN = 900000000303;
+const POST_ID = 900000000401;
+const REPLY_ID = 900000000501;
+const TOKEN = "livetest-demand-token-0001";
+const OLD = "2026-01-01T00:00:00.000Z";
+const EXPIRES = "2099-01-01T00:00:00.000Z";
+
+const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-demand-live-"));
+process.env.DATA_DIR = process.env.DATA_DIR || dataDir;
+
+test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 demand_posts 的部分唯一索引存在", { skip }, async () => {
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const demandAsync = await import("../src/demandAsync.js");
+  const { sqliteHandle } = await import("../src/db.js");
+
+  const pgDriver = await createPostgresDriver({ connectionString: RAW });
+  const query = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  const who = (await query("SELECT current_database() AS db"))[0];
+  assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
+
+  const cleanup = async () => {
+    await query("DELETE FROM demand_reports WHERE user_id = ANY($1)", [[UID, OTHER, ADMIN]]);
+    await query("DELETE FROM demand_replies WHERE post_id = $1", [POST_ID]);
+    await query("DELETE FROM demand_posts WHERE id = $1", [POST_ID]);
+    await query("DELETE FROM users WHERE id = ANY($1)", [[UID, OTHER, ADMIN]]);
+  };
+  await cleanup();
+
+  // 使用者與許願房用原生 SQL 種（本批還沒把建立許願房搬上 PG）。
+  await query(
+    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'屋主', 'member','free',$3)",
+    [UID, `live-demand-${UID}@example.com`, OLD],
+  );
+  await query(
+    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'路人甲','member','free',$3)",
+    [OTHER, `live-demand-${OTHER}@example.com`, OLD],
+  );
+  await query(
+    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'管理員','admin','free',$3)",
+    [ADMIN, `live-demand-${ADMIN}@example.com`, OLD],
+  );
+  await query(
+    `INSERT INTO demand_posts(id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token)
+     VALUES ($1,$2,'[]',0,'any',0,'live PG 驗證用的許願房','open',$3,$4,$5)`,
+    [POST_ID, UID, OLD, EXPIRES, TOKEN],
+  );
+  await query(
+    "INSERT INTO demand_replies(id, post_id, user_id, body, created_at, hidden) VALUES ($1,$2,$3,'live 回覆',$4,0)",
+    [REPLY_ID, POST_ID, UID, OLD],
+  );
+
+  // 注入式 exec 走的是**真的 PG**，而且不經過 toPostgresSql——與離線夾具的差別就在這裡。
+  const exec = async (sql, params = []) => {
+    const res = await pgDriver.query(sql, params);
+    return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
+  };
+  const opts = { driver: "postgres", pgDriver, exec, strict: true };
+
+  // 1) 檢舉：第一筆不隱藏、第二筆（不同人）達門檻才隱藏
+  const first = await demandAsync.reportDemandAsync(OTHER, { targetType: "post", targetId: POST_ID, reason: "live 廣告" }, opts);
+  assert.deepEqual(first, { ok: true, hidden: false }, "第一筆檢舉不該隱藏");
+  let status = (await query("SELECT status FROM demand_posts WHERE id = $1", [POST_ID]))[0].status;
+  assert.equal(status, "open", "第一筆之後仍必須是 open");
+
+  const second = await demandAsync.reportDemandAsync(ADMIN, { targetType: "post", targetId: POST_ID, reason: "live 廣告" }, opts);
+  assert.deepEqual(second, { ok: true, hidden: true }, "第二筆必須達門檻");
+  const afterReport = (await query("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = $1", [POST_ID]))[0];
+  assert.equal(afterReport.status, "hidden", "檢舉達門檻必須在 PG 上真的把 status 設成 hidden");
+  const reports = await query("SELECT target_type, target_id, user_id, reason FROM demand_reports WHERE target_id = $1 ORDER BY id", [POST_ID]);
+  assert.equal(reports.length, 2, "兩筆檢舉都必須真的寫進 PG 的 demand_reports");
+  assert.equal(reports[0].target_type, "post");
+
+  // 同一人重複檢舉：PG 上沒有唯一鍵，靠先查再寫——這一條要真的在 PG 上驗。
+  const again = await demandAsync.reportDemandAsync(OTHER, { targetType: "post", targetId: POST_ID, reason: "live 廣告" }, opts);
+  assert.deepEqual(again, { ok: true, already: true }, "同一人第二次必須回 already");
+  assert.equal(
+    (await query("SELECT COUNT(*)::int AS n FROM demand_reports WHERE target_id = $1", [POST_ID]))[0].n, 2,
+    "重複檢舉不得寫入第三列",
+  );
+
+  // 把貼文還原成 open，繼續驗回覆與關閉
+  await query("UPDATE demand_posts SET status = 'open', closed_at = NULL WHERE id = $1", [POST_ID]);
+  await query("DELETE FROM demand_replies WHERE id <> $1 AND post_id = $1", [REPLY_ID, POST_ID]);
+
+  // 2) 回覆：真的寫進 PG，而且 20 秒間隔在真 PG 的資料上也擋得住
+  const replied = await demandAsync.addDemandReplyAsync(OTHER, POST_ID, "live PG 的回覆", opts);
+  assert.deepEqual(replied, { ok: true, id: POST_ID, replied: true });
+  const reply = (await query("SELECT body, user_id FROM demand_replies WHERE post_id = $1 AND user_id = $2", [POST_ID, OTHER]))[0];
+  assert.ok(reply, "回覆必須真的寫進 PG 的 demand_replies");
+  assert.equal(reply.body, "live PG 的回覆");
+
+  await assert.rejects(
+    () => demandAsync.addDemandReplyAsync(OTHER, POST_ID, "太快了", opts),
+    /密集/,
+    "20 秒間隔限制必須用真 PG 上的上一則時間擋下來",
+  );
+
+  // 3) 關閉：status 與 lifecycle 都要在 PG 上落地；非本人不得關閉
+  await assert.rejects(
+    () => demandAsync.closeDemandPostAsync(OTHER, POST_ID, {}, opts),
+    /只能關閉自己的許願房/,
+    "非本人不得關閉",
+  );
+  const closed = await demandAsync.closeDemandPostAsync(UID, POST_ID, {}, opts);
+  assert.deepEqual(closed, { ok: true, id: POST_ID, status: "closed" });
+  const afterClose = (await query("SELECT status, closed_at FROM demand_posts WHERE id = $1", [POST_ID]))[0];
+  assert.equal(afterClose.status, "closed", "關閉必須在 PG 上真的生效");
+  assert.ok(afterClose.closed_at, "closed_at 必須被寫入");
+
+  // 4) bootstrap 的產物：`demand_posts` 的部分唯一索引。
+  //    SQLite 的 `idx_demand_one_open` 是 `WHERE status='open'` 的**部分**唯一索引。
+  //    這是「CREATE TABLE 的 UNIQUE 鏡射不到」那個坑的同類，所以要用真 PG 查一次。
+  const idx = await query(
+    "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = current_schema() AND tablename = 'demand_posts' ORDER BY indexname",
+  );
+  const names = idx.map((r) => r.indexname);
+  assert.ok(names.includes("demand_posts_pkey"), `demand_posts 必須有主鍵索引（實際：${names.join(",")}）`);
+  // 這一句是「bootstrap 補建」的證據；索引名稱由 SQLite 的 DDL 沿用。
+  const partial = idx.find((r) => /demand_posts_user_id.*open/i.test(r.indexdef) || /idx_demand_one_open/i.test(r.indexname));
+  assert.ok(partial, `必須有『同一人只能有一則 open』的部分唯一索引（實際索引：${names.join(",")}）`);
+
+  await cleanup();
+  await pgDriver.close();
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 檔案被鎖住就算了 */ }
+  void sqliteHandle;
+});

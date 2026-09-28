@@ -561,7 +561,9 @@ function withImmediate(db, fn) {
   }
 }
 
-function stripUnsafePlain(value, max) {
+// 匯出只為了讓 driver-aware 版（demandAsync.js）逐字重用同一支淨化規則——
+// 回覆內容的清洗**不能**有第二份實作。行為完全不變。
+export function stripUnsafePlain(value, max) {
   let text = sanitizeDocumentText(value, max);
   text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
   if (containsUnsafeMarkup(text)) {
@@ -730,7 +732,9 @@ function userAuthorName(db, userId) {
   return "會員";
 }
 
-function userCreatedAt(db, userId) {
+// 匯出只為了讓 driver-aware 版（demandAsync.js）重用：新帳號的「註冊時間」查詢，
+// 不在 PG 分支重寫第二份判斷。行為完全不變。
+export function userCreatedAt(db, userId) {
   try {
     return String(db.prepare("SELECT created_at FROM users WHERE id = ?").get(userId)?.created_at || "");
   } catch {
@@ -804,7 +808,7 @@ export function migrateOpenWishesOnActivation(db, now = new Date()) {
   return n;
 }
 
-function assertMatureAccount(db, userId, now, actionLabel) {
+export function assertMatureAccount(db, userId, now, actionLabel) {
   const created = Date.parse(userCreatedAt(db, userId));
   if (Number.isFinite(created) && nowMs(now) - created < DEMAND_NEW_ACCOUNT_WAIT_MS) {
     throw httpError(`新帳號註冊滿 24 小時後才能${actionLabel}，避免洗版`, 403);
@@ -1447,14 +1451,21 @@ export function closeDemandPost(db, userId, postId, { admin = false } = {}, now 
   const row = rowById(db, postId);
   if (!row) throw httpError("找不到這則許願房", 404);
   if (!admin && Number(row.user_id) !== Number(userId)) throw httpError("只能關閉自己的許願房", 403);
+  applyClosedPostEffects(db, row.id, now);
+  return getDemandPost(db, row.id, { viewerId: userId });
+}
+
+// 關閉許願房之後的寫入與連動，抽出來給 driver-aware 版（demandAsync.js）共用，
+// 理由與 `applyReportHideEffects()` 相同（見下方說明）：主要資料上 PG，
+// 跨模組副作用留在本機 handle。`applyReportHideEffects()` 是它的姊妹函式。
+export function applyClosedPostEffects(db, id, now = new Date()) {
   const stamp = iso(now);
   db.prepare(
     "UPDATE demand_posts SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?",
-  ).run(stamp, stamp, row.id);
-  writeLifecycle(db, row.id, { lifecycle: "paused", closed_reason: "paused" });
-  syncDemandMatchDistricts(db, row.id);
-  notifyWishOfferLifecycle(db, { wishId: row.id, lifecycle: "paused", now });
-  return getDemandPost(db, row.id, { viewerId: userId });
+  ).run(stamp, stamp, id);
+  writeLifecycle(db, id, { lifecycle: "paused", closed_reason: "paused" });
+  syncDemandMatchDistricts(db, id);
+  notifyWishOfferLifecycle(db, { wishId: id, lifecycle: "paused", now });
 }
 
 export function reopenWishRoom(db, userId, postId, now = new Date()) {
@@ -1607,16 +1618,27 @@ export function reportDemand(db, userId, { targetType, targetId, reason } = {}, 
   const count = Number(
     db.prepare("SELECT COUNT(*) AS n FROM demand_reports WHERE target_type = ? AND target_id = ?").get(kind, id)?.n,
   ) || 0;
-  if (count >= DEMAND_REPORT_HIDE_AFTER) {
-    if (kind === "reply") {
-      db.prepare("UPDATE demand_replies SET hidden = 1 WHERE id = ?").run(id);
-    } else {
-      db.prepare("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(iso(now), id);
-      writeLifecycle(db, id, { lifecycle: "blocked", closed_reason: "blocked" });
-      notifyWishOfferLifecycle(db, { wishId: id, lifecycle: "blocked", now });
-    }
-  }
+  if (count >= DEMAND_REPORT_HIDE_AFTER) applyReportHideEffects(db, kind, id, now);
   return { ok: true, hidden: count >= DEMAND_REPORT_HIDE_AFTER };
+}
+
+// 檢舉數達到門檻之後的「隱藏」副作用。
+//
+// driver-aware 版（`demandAsync.reportDemandAsync`）把檢舉的寫入搬到 PG，但**副作用留在這裡**：
+// 它們跨越 demand.js 內外（`writeLifecycle` 是模組內私有、`notifyWishOfferLifecycle` 走
+// wishOffers.js 註冊的 hook，那個模組整支還在 SQLite handle 上）。與 `closeSelfListing`
+// 同一種處置：先讓「這條路由的主要資料」上 PG，跨模組的連動照舊跑在本機 handle 上，
+// 不假裝它已經搬完（尺規會正確地把 hook 那條線留在 sqlite 集合裡）。
+//
+// 兩個分支都走這個函式，所以「PG 版與同步版的隱藏語意不同」這種漂移不可能發生。
+export function applyReportHideEffects(db, kind, id, now = new Date()) {
+  if (kind === "reply") {
+    db.prepare("UPDATE demand_replies SET hidden = 1 WHERE id = ?").run(id);
+    return;
+  }
+  db.prepare("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(iso(now), id);
+  writeLifecycle(db, id, { lifecycle: "blocked", closed_reason: "blocked" });
+  notifyWishOfferLifecycle(db, { wishId: id, lifecycle: "blocked", now });
 }
 
 export function applyWishLifecycleAction(db, userId, postId, action, now = new Date()) {
