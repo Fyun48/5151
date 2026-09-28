@@ -129,10 +129,12 @@ test("live PG：讀取／修改／取消端到端（含媒體清理與孤兒 lis
   assert.equal(draftAfter.self_body, "改過的內容", "草稿內容要一起更新");
 
   // 4) 取消：匯入與草稿都變 cancelled，而且媒體列真的被 soft delete
+  // ⚠️ 欄位照 `memberMedia.js` 的 DDL：`member_media` 沒有 `public_token`／`mime_type`／`updated_at`，
+  // 是 `mime`／`format`／`digest`／`created_at`／`deleted_at`（`storage_key` 有唯一索引）。
   const [MEDIA_ID] = (await query(
-    `INSERT INTO member_media(user_id, public_token, storage_key, mime_type, bytes, created_at, updated_at)
-     VALUES ($1, $2, $3, 'image/jpeg', 1234, $4, $4) RETURNING id`,
-    [UID, `${TOKEN}-media`, `media/${TOKEN}/a.jpg`, OLD],
+    `INSERT INTO member_media(user_id, storage_key, mime, format, bytes, created_at)
+     VALUES ($1, $2, 'image/jpeg', 'jpeg', 1234, $3) RETURNING id`,
+    [UID, `media/${TOKEN}/a.jpg`, OLD],
   )).map((r) => Number(r.id));
   const DRAFT2 = await mkDraft("cancel");
   const CANCEL_ID = await mkImport({ tag: "cancel", listingId: DRAFT2, mediaIds: [MEDIA_ID] });
