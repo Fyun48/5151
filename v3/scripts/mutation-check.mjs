@@ -1773,6 +1773,30 @@ const WOFFERS_MUTATIONS = [
     expect: "驗證、寫入與稽核事件兩邊一致",
   },
   {
+    name: "解除封鎖不檢查擁有者（可以解除別人的封鎖）",
+    file: WOFFERS_SRC,
+    from: "  if (!row || Number(row.blocker_user_id) !== Number(userId)) return null;",
+    to: "  if (!row) return null;",
+    expect: "解除封鎖",
+  },
+  // ⚠️ 刻意**沒有**「解除封鎖接受數字型 ref」這一條：`newBlockToken()` 產生的 token 永遠不是
+  // 純數字，所以拿掉那個守衛在**可觀察行為上是等價的**（數字 ref 一樣查不到、一樣 404）。
+  // 放進變異集只會得到假 SURVIVED，所以寧可寫明理由。
+  {
+    name: "moderation 封鎖可以自行解除（停權處分被繞過）",
+    file: WOFFERS_SRC,
+    from: "    if (String(row.context || \"\") === \"moderation\") {\n      throw offerHttpError(\"這筆封鎖不能自行解除\", 403, \"block_locked\");\n    }",
+    to: "    if (false) {\n      throw offerHttpError(\"這筆封鎖不能自行解除\", 403, \"block_locked\");\n    }",
+    expect: "解除封鎖",
+  },
+  {
+    name: "封鎖名單不查刊登標題（清單少一個欄位）",
+    file: WOFFERS_SRC,
+    from: "      const listing = row.listing_id ? await getSelfRowAsync(row.listing_id, { ...options, driver: \"postgres\" }) : null;",
+    to: "      const listing = null;",
+    expect: "形狀（含刊登標題）",
+  },
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",

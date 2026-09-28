@@ -390,3 +390,90 @@ test("檢舉：只有房客能檢舉（屋主／第三人 ⇒ 404），兩邊一
     assert.equal(asyncErr.status, syncErr.status, `status 必須相同（${why}）`);
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 封鎖名單（`GET /api/wish-offers/blocks`、`POST …/blocks/:ref/remove`）
+
+test("封鎖名單：清單形狀（含刊登標題）與同步版相同", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  const blocked = transitions.blockOwnerFromOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  assert.ok(blocked.block_ref, "封鎖必須真的建立（否則這條沒鑑別力）");
+  copyRows(db, mem);
+
+  const syncItems = offers.listMyBlocks(db, 1);
+  const asyncItems = await offerAsync.listMyBlocksAsync(1, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncItems, syncItems, "封鎖名單必須逐鍵相同");
+  assert.equal(asyncItems.length, 1);
+  assert.equal(asyncItems[0].block_ref, blocked.block_ref);
+  // 同步版會補上刊登標題（`getSelfRow()`）；PG 版必須一樣，否則清單會少一個欄位
+  assert.equal(asyncItems[0].listing_title, syncItems[0].listing_title, "刊登標題必須相同");
+  assert.ok(asyncItems[0].listing_title, "標題必須真的取到（不是空字串）");
+  assert.equal(asyncItems[0].listing_ref, syncItems[0].listing_ref);
+});
+
+test("封鎖名單：空清單與未登入（uid 0）兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  seedPairWithOffer(db);
+  copyRows(db, mem);
+  assert.deepEqual(await offerAsync.listMyBlocksAsync(1, { ...PG, exec, strict: true }), [], "沒有封鎖時必須是空的");
+  assert.deepEqual(await offerAsync.listMyBlocksAsync(0, { ...PG, exec, strict: true }), [], "uid 0 必須回空陣列");
+  assert.deepEqual(offers.listMyBlocks(db, 1), []);
+});
+
+test("解除封鎖：成功、找不到、非本人，兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  const blocked = transitions.blockOwnerFromOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  copyRows(db, mem);
+
+  // 非本人（屋主 2）不能解除房客 1 的封鎖 ⇒ 404（`loadOwnedBlock` 要求 blocker 是他自己）
+  let syncErr = null;
+  try { offers.unblockByRef(db, 2, blocked.block_ref); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try { await offerAsync.unblockByRefAsync(2, blocked.block_ref, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr && asyncErr, "非本人必須丟錯");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同");
+
+  // 找不到的 ref（含數字型 ref，同步版刻意不接受）
+  for (const ref of ["does-not-exist", "12345", ""]) {
+    let s2 = null;
+    try { offers.unblockByRef(db, 1, ref); } catch (e) { s2 = e; }
+    let a2 = null;
+    try { await offerAsync.unblockByRefAsync(1, ref, { ...PG, exec, strict: true }); } catch (e) { a2 = e; }
+    assert.ok(s2 && a2, `找不到的 ref 必須丟錯（${ref || "空字串"}）`);
+    assert.equal(a2.code, s2.code, `錯誤碼必須相同（${ref || "空字串"}）`);
+  }
+
+  // 本人解除 ⇒ 成功，而且 PG 上的那一列要真的被刪掉
+  const done = await offerAsync.unblockByRefAsync(1, blocked.block_ref, { ...PG, exec, strict: true });
+  assert.deepEqual(done, { ok: true, block_ref: blocked.block_ref });
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM user_blocks").get().n, 0, "PG 上的封鎖列必須被刪除");
+});
+
+test("解除封鎖：moderation 的封鎖不能自行解除，兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  seedPairWithOffer(db);
+  const token = "mod-block-token-0001";
+  for (const h of [db, mem]) {
+    h.prepare(
+      `INSERT INTO user_blocks(public_token, blocker_user_id, blocked_user_id, context, offer_id, listing_id, created_at)
+       VALUES (?, 1, 2, 'moderation', NULL, NULL, ?)`,
+    ).run(token, new Date().toISOString());
+  }
+  let syncErr = null;
+  try { offers.unblockByRef(db, 1, token); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try { await offerAsync.unblockByRefAsync(1, token, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr, "同步版：moderation 封鎖必須拒絕解除");
+  assert.ok(asyncErr, "PG 版：moderation 封鎖必須拒絕解除");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同（應為 403）");
+  assert.equal(asyncErr.code, "block_locked");
+  // 而且那一列**不能被刪掉**（停權處分被繞過就是這裡出事）
+  assert.equal(
+    exec.raw.prepare("SELECT COUNT(*) AS n FROM user_blocks WHERE public_token = ?").get(token).n, 1,
+    "PG 上的 moderation 封鎖列必須還在",
+  );
+});

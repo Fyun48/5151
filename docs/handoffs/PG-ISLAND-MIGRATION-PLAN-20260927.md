@@ -1191,6 +1191,40 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負三、2026-09-28 第三十四批：封鎖名單（wishOffers 第二支）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/wish-offers/blocks` | MIXED | **PG** |
+| `POST /api/wish-offers/blocks/:blockRef/remove` | MIXED | **PG** |
+
+尺規（master `7a150e4` 為基準）：**PG 158→164、MIXED 99→93、缺口 110→104**。
+
+### 34.1 為什麼與檢舉同一批
+
+`user_blocks` 的**寫入端 `insertUserBlock()` 同時被 block 與 report 兩條路由使用**，
+所以這張表不能只搬一半——上一輪的偵察已經確認過。這一包把它的讀取
+（`listBlocksForUser`／`loadOwnedBlock`）與刪除（`DELETE`）一起搬完，
+`blockOwnerFromOffer()`（建立封鎖）留給狀態機那批。
+
+### 34.2 投影與守衛全部重用
+
+`publicBlockView()` 是純函式，直接重用；兩個業務規則也照抄同步版：
+
+- `loadOwnedBlock()` 要求 **blocker 必須是本人**（別人的封鎖 ⇒ 404）。
+- `context === 'moderation'` 的封鎖**不能自行解除**（⇒ 403 `block_locked`）。
+
+### 34.3 變異測試抓到我缺兩條測試
+
+第一輪 4 條新變異裡有 2 條 SURVIVED，而且**都不是假陽性**：
+
+1. **moderation 守衛根本沒有測試**（同步版有、我的檔案沒有）。補上之後殺死。
+   ⇒ 「這一條同步版有測」不等於「PG 版有測」。
+2. 「接受數字型 ref」那條**是可觀察行為等價**的（token 永遠不是純數字），
+   所以**移除該變異並寫明理由**，而不是硬寫一條人工測試。
+
+這一組現在 **12 條變異全殺**。
+
 ## 二之負二、2026-09-28 第三十三批：提案檢舉上 PG（wishOffers 寫入的第一支）
 
 | 路由 | 之前 | 現在 |

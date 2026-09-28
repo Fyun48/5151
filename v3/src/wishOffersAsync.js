@@ -29,6 +29,7 @@ import {
   loadVisibleOffer as loadVisibleOfferSync,
   newOfferToken,
   offerHttpError,
+  publicBlockView,
   publicOfferViewWith,
 } from "./wishOffers.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
@@ -311,4 +312,62 @@ export async function reportVisibleOfferAsync(offerRef, userId, input = {}, opti
     throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
   }
   return reportOfferAsync(userId, offer, input, options);
+}
+
+// ── 封鎖名單（`GET /api/wish-offers/blocks`、`POST /api/wish-offers/blocks/:ref/remove`）──
+//
+// `listMyBlocks()` 除了封鎖列本身，還會對每一列查一次刊登（只為了標題）；
+// `unblockByRef()` 則是 `loadOwnedBlock()` ＋ 一句 DELETE。
+// 兩者都與 `insertUserBlock()`（block／report 路由在用）共用同一張 `user_blocks`，
+// 所以這一張表的讀寫要在同一批搬完，否則會出現「同一張表一半 PG、一半 SQLite」。
+export const BLOCKS_BY_USER_SQL =
+  "SELECT * FROM user_blocks WHERE blocker_user_id = ? ORDER BY created_at DESC, id DESC";
+export const BLOCK_BY_TOKEN_SQL = "SELECT * FROM user_blocks WHERE public_token = ?";
+export const BLOCK_DELETE_SQL = "DELETE FROM user_blocks WHERE id = ? AND blocker_user_id = ?";
+
+export async function listBlocksForUserAsync(run, userId) {
+  const uid = Number(userId) || 0;
+  if (!uid) return [];
+  return (await run(BLOCKS_BY_USER_SQL, [uid])).rows || [];
+}
+
+// `loadOwnedBlock()` 的 PG 版：ref 必須是 token（不接受數字），而且要屬於這個人。
+export async function loadOwnedBlockAsync(run, userId, blockRef) {
+  const token = String(blockRef || "").trim();
+  if (!token || /^\d+$/.test(token)) return null;
+  const row = one((await run(BLOCK_BY_TOKEN_SQL, [token])).rows);
+  if (!row || Number(row.blocker_user_id) !== Number(userId)) return null;
+  return row;
+}
+
+// `listMyBlocks()` 的 PG 版。投影重用 `wishOffers.js` 的 `publicBlockView()`（純函式）。
+export async function listMyBlocksAsync(userId, options = {}) {
+  return withFallback(options, {}, async (run) => {
+    assertWishOfferEnabled();
+    const uid = Number(userId) || 0;
+    if (!uid) return [];
+    const rows = await listBlocksForUserAsync(run, uid);
+    const items = [];
+    for (const row of rows) {
+      // 刊登列沿用既有的 PG 版；沒有 listing_id 的那種直接帶 null（同步版同義）。
+      const listing = row.listing_id ? await getSelfRowAsync(row.listing_id, { ...options, driver: "postgres" }) : null;
+      items.push(publicBlockView(row, listing || null));
+    }
+    return items;
+  }, async () => (await import("./wishOffers.js")).listMyBlocks(sqliteHandle(), userId));
+}
+
+// `unblockByRef()` 的 PG 版：找不到 ⇒ 404；`context = 'moderation'` 不能自行解除 ⇒ 403。
+export async function unblockByRefAsync(userId, blockRef, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    const uid = Number(userId) || 0;
+    const row = await loadOwnedBlockAsync(run, uid, blockRef);
+    if (!row) throw offerHttpError("找不到這筆封鎖", 404, "block_not_found");
+    if (String(row.context || "") === "moderation") {
+      throw offerHttpError("這筆封鎖不能自行解除", 403, "block_locked");
+    }
+    await run(BLOCK_DELETE_SQL, [Number(row.id), uid]);
+    return { ok: true, block_ref: row.public_token };
+  }, async () => (await import("./wishOffers.js")).unblockByRef(sqliteHandle(), userId, blockRef));
 }

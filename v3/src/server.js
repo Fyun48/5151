@@ -185,8 +185,6 @@ import {
   blockWishOfferFor,
   reportWishOfferFor,
   readWishOfferContactFor,
-  listMyWishOfferBlocksFor,
-  unblockWishOfferFor,
   listAdminWishOfferReportsFor,
   runWishOfferExpiryWorkerTick,
   getRentalNotifyPrefsFor,
@@ -2982,27 +2980,27 @@ app.get("/api/wish-offers/owner", async (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/blocks", (req, res) => {
+app.get("/api/wish-offers/blocks", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(listMyWishOfferBlocksFor(session.userId));
+    res.json({ items: await listMyBlocksAsync(session.userId) });
   } catch (error) {
     sendOfferError(res, error);
   }
 });
 
-app.post("/api/wish-offers/blocks/:blockRef/remove", (req, res) => {
+app.post("/api/wish-offers/blocks/:blockRef/remove", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(unblockWishOfferFor(session.userId, req.params.blockRef));
+    res.json(await unblockByRefAsync(session.userId, req.params.blockRef));
   } catch (error) {
     sendOfferError(res, error);
   }
