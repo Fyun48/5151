@@ -65,10 +65,16 @@ export async function expireOpenSelfListingsAsync(exec, now = new Date()) {
   }
 }
 
+// 🚨 這一支原本寫成 `const rows = await exec(...); return rows[0]`，但統一的 exec 形狀是
+// **`{ rows, rowCount }`**（見本檔開頭與 crmOutboxAsync.js），所以 `rows[0]` 永遠是
+// undefined ⇒ PG 模式下這一支**永遠回 undefined**。它先前沒有呼叫端（`getSelfListingAsync()`
+// 用它，但那一條當時也沒接線），所以缺陷一直沒被發現；2026-09-28 接 wish-offers 讀取時
+// 由 parity 測試抓到（投影只剩 `listing_ref`）。
 export async function getSelfRowAsync(postId, options = {}) {
   if (!isPg(options)) return getSelfRowSync(sqliteHandle(), postId);
   const exec = await pgExec(options);
-  const rows = await exec(SELF_ROW_SQL, [Number(postId) || 0]);
+  const result = await exec(SELF_ROW_SQL, [Number(postId) || 0]);
+  const rows = Array.isArray(result) ? result : (result?.rows || []);
   return rows[0] || undefined;
 }
 

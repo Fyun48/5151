@@ -136,7 +136,25 @@ function listOfferPageRows(db, {
   return db.prepare(sql).all(...params);
 }
 
-function listWishOffers(db, {
+// 三個查詢抽成介面：同步版（吃 handle）與 PG 版（吃注入式 runner，見 wishOffersAsync.js）
+// 共用下面**同一段**分頁／游標／統計邏輯。語句文字不變——PG 版只是換人跑。
+export function syncOfferListQueries(db) {
+  return {
+    count: ({ column, userId, status }) => countOfferRows(db, { column, userId, status }),
+    page: ({ column, userId, status, afterCreatedAt, afterId, limit }) => (
+      listOfferPageRows(db, { column, userId, status, afterCreatedAt, afterId, limit })
+    ),
+    pendingCount: (userId) => pendingInboxCount(db, userId),
+    // 每一列的投影：同步版直接呼叫 `publicOfferView(db, row, userId)`。
+    project: (row, userId) => publicOfferView(db, row, userId),
+  };
+}
+
+// ⚠️ 共用主體是 **async**：查詢與投影都走 `await queries.*`。
+// 同步版的 `queries` 只是把同步結果包成 resolved promise，所以兩邊跑的是**同一段**
+// 分頁／游標／統計邏輯（不是兩份）。`publicOfferView()` 本身是純轉換，同步路徑不會因此變慢
+// ——它只多了一層 microtask。
+export async function listWishOffersWith(queries, {
   role,
   column,
   userId,
@@ -158,16 +176,16 @@ function listWishOffers(db, {
     total = Number(boundary.total) || 0;
     pendingCount = includePendingCount ? Number(boundary.pendingCount) || 0 : 0;
   } else {
-    total = countOfferRows(db, { column, userId, status });
+    total = await queries.count({ column, userId, status });
     counted = true;
     countQueries += 1;
     if (includePendingCount) {
-      pendingCount = pendingInboxCount(db, userId);
+      pendingCount = await queries.pendingCount(userId);
       pendingCounted = true;
       countQueries += 1;
     }
   }
-  const rows = listOfferPageRows(db, {
+  const rows = await queries.page({
     column,
     userId,
     status,
@@ -176,7 +194,11 @@ function listWishOffers(db, {
     limit: size,
   });
   const pageRows = rows.slice(0, size);
-  const views = pageRows.map((row) => publicOfferView(db, row, userId)).filter(Boolean);
+  const views = [];
+  for (const row of pageRows) {
+    const view = await queries.project(row, userId);
+    if (view) views.push(view);
+  }
   lastListStats = {
     fetched: rows.length,
     projected: views.length,
@@ -209,8 +231,19 @@ function listWishOffers(db, {
   return result;
 }
 
+// 同步版：把同步查詢包成 resolved promise，共用上面那一段 async 主體。
+export function syncOfferPagedQueries(db) {
+  const q = syncOfferListQueries(db);
+  return {
+    count: (a) => Promise.resolve(q.count(a)),
+    page: (a) => Promise.resolve(q.page(a)),
+    pendingCount: (u) => Promise.resolve(q.pendingCount(u)),
+    project: (row, u) => Promise.resolve(q.project(row, u)),
+  };
+}
+
 export function listOwnerWishOffers(db, userId, { status, limit, cursor } = {}) {
-  return listWishOffers(db, {
+  return listWishOffersWith(syncOfferPagedQueries(db), {
     role: "owner",
     column: "owner_user_id",
     userId,
@@ -221,7 +254,7 @@ export function listOwnerWishOffers(db, userId, { status, limit, cursor } = {}) 
 }
 
 export function listTenantWishOffers(db, userId, { status, limit, cursor } = {}) {
-  return listWishOffers(db, {
+  return listWishOffersWith(syncOfferPagedQueries(db), {
     role: "tenant",
     column: "tenant_user_id",
     userId,

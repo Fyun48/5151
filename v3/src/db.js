@@ -2107,6 +2107,8 @@ export function getWishOfferFor(userId, offerRef) {
   return offerJson(db, offer, userId);
 }
 
+// ⚠️ 這兩支現在回傳 Promise：共用主體（`listWishOffersWith()`）是 async，
+// 因為 PG 版要 await 查詢與投影。呼叫端（server.js 的 handler）已經在 await。
 export function listOwnerWishOffersFor(userId, opts = {}) {
   hydrateRentalMarketplace();
   return listOwnerWishOffersOn(db, userId, opts);

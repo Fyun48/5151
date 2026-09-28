@@ -1261,6 +1261,62 @@ PG 版把同步版「每一列各查一次」的部分**批次化**（回覆、�
    清理時不會被刪——但前面的測試會改它的 nickname。不還原就會**跨測試汙染**
    （「作者暱稱」那一條就是這樣紅的）。
 
+## 二之負一、2026-09-28 第三十二批：許願房**提案**的讀取（wishOffers 第一刀）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/wish-offers/:offerRef` | MIXED | **PG** |
+| `GET /api/wish-offers/inbox` | MIXED | **PG** |
+| `GET /api/wish-offers/owner` | MIXED | **PG** |
+
+尺規（以 master `7a150e4` 為基準，同一支尺規逐條比對）：**PG 158→161、MIXED 99→96、缺口 110→107**，
+而且**只有這三條**改變（不是「大概差不多」）。
+
+### 32.1 做法：兩個投影函式抽 loader，列表主體改成共用 async
+
+- `publicOfferView()`（投影＋安全檢查）只從 handle 讀**兩列**（許願房、站內刊登）＋一次封鎖查詢。
+  抽成 loader 之後 `publicOfferViewWith()` 是純轉換，同步版與 PG 版共用——
+  `assertOfferSafeView()`（洩漏守衛）因此只有一份實作。
+- `listWishOffers()` 的分頁／游標／統計／投影順序抽成 `listWishOffersWith()` 並**改成 async**：
+  查詢與投影都 `await queries.*`，同步版把同步結果包成 resolved promise。兩邊跑同一段程式。
+- `tenantBlocksOwner()`／`loadVisibleOffer()`／`loadFreshOffer()` 各一句 SELECT，集中在新模組
+  `wishOffersAsync.js`。
+
+### 32.2 🚨 順手抓到一個**既有的真缺陷**：`getSelfRowAsync()` 永遠回 undefined
+
+```js
+const rows = await exec(SELF_ROW_SQL, [id]);
+return rows[0] || undefined;          // ← exec 回的是 { rows, rowCount }
+```
+
+統一的 exec 形狀是 `{ rows, rowCount }`（`crmOutboxAsync.js` 起的慣例），所以 `rows[0]` 恆為
+`undefined`。它先前**沒有實際呼叫端**（`getSelfListingAsync()` 用它，但那條路由當時也沒接線），
+所以缺陷一直躺著；這一包接 wish-offers 讀取時 parity 第一次跑就抓到（症狀：投影只剩 `listing_ref`）。
+
+⇒ 教訓：**「這一支有 PG 版」不等於「這一支是對的」**。沒有呼叫端的程式碼就是沒有被執行過的程式碼；
+接線前先確認它真的被測過。
+
+### 32.3 三個測試自己的坑（都由變異測試或 parity 逼出來）
+
+1. **`next_cursor` 是加密字串**（每次 IV 不同）⇒ 不能比字串。改成「去掉游標比內容」
+   ＋「各自用自己的游標走到第二頁，再比第二頁的專案」。
+2. **回退測試原本沒有鑑別力**：磁碟與夾具資料一模一樣，「不回退、直接讀夾具」照樣過關。
+   加上「PG runner 呼叫次數必須為 0」才殺得死。
+3. **角色種錯**：`wish_offers` 的 owner 由「刊登的 `listed_by_user_id`」決定、tenant 由
+   「許願房的 `user_id`」決定，而 `createWishOffer(db, ownerUserId, …)` 的第二個參數是**屋主**。
+   第一版把刊登與許願房掛在同一個人身上，整排紅在「找不到這則站內刊登」。
+
+### 32.4 這一包**只做讀取**
+
+`accept`／`decline`／`withdraw`／`block`／`report` 是狀態機＋事件；
+`GET /api/wish-offers/:offerRef/contact` 的 `projectOfferContact()` 會**先寫
+`wish_offer_events` 稽核事件**才回聯絡方式——有副作用，所以兩者都歸下一批。在那之前仍走同步版。
+
+### 32.5 暫時的重複（合併後要收斂）
+
+`PENDING_OFFER_COUNT_SQL` 在 `wishOffersAsync.js` 與 `demandAsync.js`（PR #531 的屋主摘要）
+各有一份：這一包刻意**不依賴未合併的 PR**。**兩支都合併之後要收斂成一支。**
+
 ## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
 原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
@@ -1418,10 +1474,10 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **99** |
+| MIXED | — | **96** |
 | 無直接DB | — | **20** |
-| PG | 22 | **158** |
-| **缺口（SQLite＋MIXED）** | — | **110** |
+| PG | 22 | **161** |
+| **缺口（SQLite＋MIXED）** | — | **107** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

@@ -778,14 +778,29 @@ export function viewerRoleForOffer(offer, userId) {
   return "";
 }
 
-export function publicOfferView(db, offer, userId, { includeMatch = true } = {}) {
+// `publicOfferView()` 只從 handle 讀**兩列**（許願房與站內刊登），其餘全是純函式。
+// 把這兩個讀取抽成介面，同步版與 PG 版（wishOffersAsync.js）就能共用**同一段投影邏輯**
+// ——這是 `safeListingSummary()`／`assertOfferSafeView()` 這類安全相關轉換只有一份實作的保證。
+export function syncOfferLoader(db) {
+  return {
+    wishRow: (wishId) => db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(Number(wishId)),
+    listingRow: (listingId) => getSelfRow(db, listingId),
+    blocksOwner: (tenantUserId, ownerUserId) => tenantBlocksOwner(db, tenantUserId, ownerUserId),
+  };
+}
+
+export function publicOfferView(db, offer, userId, opts = {}) {
+  return publicOfferViewWith(syncOfferLoader(db), offer, userId, opts);
+}
+
+export function publicOfferViewWith(loader, offer, userId, { includeMatch = true } = {}) {
   const role = viewerRoleForOffer(offer, userId);
   if (!role) return null;
-  const wishRow = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(offer.wish_id);
-  const listingRow = getSelfRow(db, offer.listing_id);
+  const wishRow = loader.wishRow(offer.wish_id);
+  const listingRow = loader.listingRow(offer.listing_id);
   let match = null;
   if (includeMatch && wishRow && listingRow) {
-    const live = liveMatchEligible(db, listingRow, wishRow);
+    const live = liveMatchEligible(null, listingRow, wishRow);
     match = live.match || null;
   }
   const pending = offer.status === "pending";
@@ -813,7 +828,7 @@ export function publicOfferView(db, offer, userId, { includeMatch = true } = {})
       withdraw: role === "owner" && pending,
       block: role === "tenant" && (pending || accepted),
       report: role === "tenant",
-      contact: accepted && !tenantBlocksOwner(db, offer.tenant_user_id, offer.owner_user_id),
+      contact: accepted && !loader.blocksOwner(offer.tenant_user_id, offer.owner_user_id),
     },
   };
   return assertOfferSafeView(view);

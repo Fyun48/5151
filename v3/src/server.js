@@ -179,8 +179,6 @@ import {
   rentalMatchOwnerMeta,
   createWishOfferFor,
   getWishOfferFor,
-  listOwnerWishOffersFor,
-  listTenantWishOffersFor,
   acceptWishOfferFor,
   declineWishOfferFor,
   withdrawWishOfferFor,
@@ -2950,14 +2948,14 @@ app.get("/api/admin/rental-ops/drill", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/inbox", (req, res) => {
+app.get("/api/wish-offers/inbox", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(listTenantWishOffersFor(session.userId, {
+    res.json(await listTenantWishOffersAsync(session.userId, {
       status: req.query?.status,
       limit: req.query?.limit,
       cursor: req.query?.cursor,
@@ -2967,14 +2965,14 @@ app.get("/api/wish-offers/inbox", (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/owner", (req, res) => {
+app.get("/api/wish-offers/owner", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(listOwnerWishOffersFor(session.userId, {
+    res.json(await listOwnerWishOffersAsync(session.userId, {
       status: req.query?.status,
       limit: req.query?.limit,
       cursor: req.query?.cursor,
@@ -3025,14 +3023,21 @@ app.get("/api/wish-offers/:offerRef/contact", (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/:offerRef", (req, res) => {
+app.get("/api/wish-offers/:offerRef", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(getWishOfferFor(session.userId, req.params.offerRef));
+    // 詳情＝「可見性檢查（loadVisibleOffer）＋ 投影（publicOfferView）」，兩者都在 PG 島嶼上；
+    // 投影與安全檢查重用 wishOffers.js 的 `publicOfferViewWith()`，所以只有一份實作。
+    const offer = await loadVisibleOfferAsync(req.params.offerRef, session.userId);
+    if (!offer) {
+      res.status(404).json({ error: "找不到這筆提案", code: "offer_not_found" });
+      return;
+    }
+    res.json(await publicOfferViewAsync(offer, session.userId));
   } catch (error) {
     sendOfferError(res, error);
   }
