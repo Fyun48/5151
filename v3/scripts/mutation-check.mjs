@@ -1811,6 +1811,24 @@ const WOFFERS_MUTATIONS = [
     expect: "後台檢舉清單",
   },
   {
+    name: "聯絡方式不檢查角色（第三人也拿得到聯絡方式）",
+    file: WOFFERS_SRC,
+    from: "    assertContactReadable(role, offer || {}, blocked);",
+    to: "    if (!offer) throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");",
+    expect: "聯絡方式",
+  },
+  {
+    name: "聯絡方式不寫稽核事件（事後查不到誰看過）",
+    file: WOFFERS_SRC,
+    from: "    await writeOfferEventAsync(run, {\n      offerId: offer.id,\n      actorUserId: userId,\n      eventType: \"contact_projection_accessed\",",
+    to: "    await (async () => {})({\n      offerId: offer.id,\n      actorUserId: userId,\n      eventType: \"contact_projection_accessed\",",
+    expect: "稽核事件",
+  },
+  // ⚠️ 刻意**沒有**「聯絡方式不檢查封鎖」這一條：`blockOwnerFromOffer()` 會**同時**把提案
+  // 終結成 `blocked`，而 `assertContactReadable()` 先檢查 `status !== 'accepted'` ⇒
+  // 拿掉封鎖查詢之後錯誤碼與 status 完全一樣（可觀察行為等價）。放著只會得到假 SURVIVED。
+  // 「封鎖之後拿不到」這個**契約**仍有一條測試守著（`wish-offers-async.test.js`）。
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",

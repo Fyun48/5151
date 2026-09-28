@@ -1363,6 +1363,39 @@ CI 的 PG job 連兩次紅，兩次都是我自己的錯，而且**都只有真 
    測試 `rental-analytics-async.test.js` 有一條**只驗語句文字**的守衛，
    真正的執行驗證在 `rental-notify-live-pg.test.js`（它會跑真的 bump）。
 
+### 36.9 第 4 步完成：`/contact`（`projectOfferContactAsync()`）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/wish-offers/:offerRef/contact` | MIXED | **PG** |
+
+尺規（master `7a150e4`）：**PG 158→166、MIXED 99→91、缺口 110→102**。
+
+- 守衛與組裝抽成純函式（`assertContactReadable()`／`contactFieldsFor()`／`contactProjection()`），
+  兩個 driver 共用 ⇒ 三種 `next_step` 文案與錯誤碼不可能漂移。
+- 三個讀取都已有 PG 版（可見性、許願房列、刊登列、封鎖），稽核事件用上一輪的
+  `writeOfferEventAsync()`。
+- 測試 3 條（投影 parity、稽核事件、錯誤形狀）＋封鎖後的契約 1 條 ⇒ 這一檔共 **19 項**，
+  變異 **16 條全殺**。
+
+#### 這一批的兩個「測試自己」的教訓
+
+1. **節流器是行程內記憶體、跨測試共用**：前一條測試把 `contact:1` 的額度用完，後面那條就拿到
+   `RATE_LIMITED` 而不是它要測的 `contact_unavailable`。⇒ `resetWorld()` 要一併
+   `offers.resetWishOfferRateLimits()`。
+2. **一條可觀察行為等價的變異要移除而不是硬殺**：「拿掉封鎖查詢」之所以殺不死，是因為
+   `blockOwnerFromOffer()` 會**同時**把提案終結成 `blocked`，而 `assertContactReadable()`
+   先檢查 `status !== 'accepted'` ⇒ 錯誤碼與 status 完全一樣。已在變異集寫明理由，
+   但「封鎖之後拿不到」的**契約**仍留一條測試守著。
+
+#### 剩下的（第 3 步）：狀態機
+
+`accept`／`decline`／`withdraw`／`block` 四條。它們的**前置條件都已就位**：
+通知寫入端（第 2 步）、`wish_offer_events`、`loadVisibleOfferAsync`／`loadFreshOfferAsync`／
+`getSelfRowAsync`／`terminalizeOffers` 需要的 `wish_offers` 讀寫。剩下要搬的是
+`transitionOffer()`（樂觀鎖 UPDATE，靠 `rowCount` 判斷）、`expirePendingIfDue()`、
+`terminalizeOffers()`、`recheckAcceptable()` 與四支路由的 `*For` 包裝。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |

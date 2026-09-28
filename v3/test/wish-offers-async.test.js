@@ -121,6 +121,10 @@ function resetWorld() {
   }
   hydrate();
   queries.resetWishOfferQueryCursors();
+  // ⚠️ 節流器（`assertOfferBurst`）是**行程內記憶體**，跨測試共用 ⇒ 不重設的話
+  // 前面的測試會把同一個 actor 的額度用完，後面的測試就拿到 `RATE_LIMITED`
+  // 而不是它要測的那個錯誤（第一版就是這樣紅的）。
+  offers.resetWishOfferRateLimits();
   const mem = mirrorFixture();
   copyRows(db, mem);
   return [db, mem, pgExec(mem)];
@@ -513,4 +517,95 @@ test("後台檢舉清單：形狀、排序與 limit 兩邊一致", async () => {
     const a2 = await offerAsync.listAdminOfferReportsAsync({ limit }, { ...PG, exec, strict: true });
     assert.deepEqual(a2, { items: s2 }, `limit=${limit} 的結果必須相同`);
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 聯絡方式（`GET /api/wish-offers/:offerRef/contact`）：投影 ＋ 稽核事件
+
+test("聯絡方式：accepted 之後 owner 與 tenant 都看得到，形狀與同步版相同", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  transitions.acceptWishOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  copyRows(db, mem);
+
+  for (const [who, role] of [[1, "tenant"], [2, "owner"]]) {
+    const sync = transitions.readOfferContact(db, who, offer.public_token, { actorKey: `contact:${who}` });
+    const asyncView = await offerAsync.projectOfferContactAsync(
+      offer.public_token, who, { actorKey: `contact:${who}` }, { ...PG, exec, strict: true },
+    );
+    assert.deepEqual(asyncView, sync, `聯絡方式投影必須相同（${role}）`);
+    assert.equal(asyncView.viewer_role, role);
+    assert.equal(asyncView.status, "accepted");
+    assert.ok(typeof asyncView.contact.display_name === "string");
+  }
+});
+
+test("聯絡方式：會寫一筆 contact_projection_accessed 稽核事件", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  transitions.acceptWishOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  copyRows(db, mem);
+  await offerAsync.projectOfferContactAsync(offer.public_token, 1, { actorKey: "contact:1" }, { ...PG, exec, strict: true });
+  const events = exec.raw.prepare(
+    "SELECT event_type, meta_json FROM wish_offer_events WHERE event_type = 'contact_projection_accessed'",
+  ).all();
+  assert.equal(events.length, 1, "必須寫一筆稽核事件（這是這一條路由有副作用的原因）");
+  assert.match(events[0].meta_json, /tenant/);
+});
+
+test("聯絡方式：未互相確認／第三人／非本人，錯誤形狀兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+
+  // pending（尚未 accepted）⇒ contact_unavailable
+  let syncErr = null;
+  try { transitions.readOfferContact(db, 1, offer.public_token, { actorKey: "contact:1" }); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try {
+    await offerAsync.projectOfferContactAsync(offer.public_token, 1, { actorKey: "contact:1" }, { ...PG, exec, strict: true });
+  } catch (e) { asyncErr = e; }
+  assert.ok(syncErr && asyncErr, "pending 時兩邊都必須拒絕");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同");
+  assert.equal(asyncErr.code, "contact_unavailable");
+
+  // 第三人 / 不存在的 ref
+  for (const [who, ref, why] of [[3, offer.public_token, "第三人"], [1, "nope", "不存在的 ref"]]) {
+    let s2 = null;
+    try { transitions.readOfferContact(db, who, ref, { actorKey: `contact:${who}` }); } catch (e) { s2 = e; }
+    let a2 = null;
+    try { await offerAsync.projectOfferContactAsync(ref, who, { actorKey: `contact:${who}` }, { ...PG, exec, strict: true }); } catch (e) { a2 = e; }
+    assert.ok(s2 && a2, `必須拒絕（${why}）`);
+    assert.equal(a2.code, s2.code, `錯誤碼必須相同（${why}）`);
+    assert.equal(a2.status, s2.status, `status 必須相同（${why}）`);
+  }
+});
+
+test("聯絡方式：房客封鎖屋主之後就拿不到（兩邊一致）", async () => {
+  // ⚠️ 這一條是變異測試逼出來的：原本只測「未 accepted」，所以「不檢查封鎖」的變異活得好好的。
+  // 封鎖是這一條路由的**安全**判斷（`tenantBlocksOwner`），一定要單獨驗。
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  transitions.acceptWishOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  // 房客封鎖屋主（`blockOwnerFromOffer` 會把提案終結成 blocked）
+  transitions.blockOwnerFromOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  copyRows(db, mem);
+
+  let syncErr = null;
+  try { transitions.readOfferContact(db, 1, offer.public_token, { actorKey: "contact:1" }); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try {
+    await offerAsync.projectOfferContactAsync(offer.public_token, 1, { actorKey: "contact:1" }, { ...PG, exec, strict: true });
+  } catch (e) { asyncErr = e; }
+  assert.ok(syncErr, "同步版：封鎖後必須拒絕");
+  assert.ok(asyncErr, "PG 版：封鎖後必須拒絕");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同");
+  assert.equal(asyncErr.code, "contact_unavailable");
+  // 而且不得寫下「已存取聯絡方式」的稽核事件（那會是假的紀錄）
+  const events = exec.raw.prepare(
+    "SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = 'contact_projection_accessed'",
+  ).get().n;
+  assert.equal(events, 0, "被拒絕時不得留下存取紀錄");
 });

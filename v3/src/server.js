@@ -184,7 +184,6 @@ import {
   withdrawWishOfferFor,
   blockWishOfferFor,
   reportWishOfferFor,
-  readWishOfferContactFor,
   runWishOfferExpiryWorkerTick,
   getRentalNotifyPrefsFor,
   saveRentalNotifyPrefsFor,
@@ -3010,14 +3009,15 @@ app.post("/api/wish-offers/blocks/:blockRef/remove", async (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/:offerRef/contact", (req, res) => {
+app.get("/api/wish-offers/:offerRef/contact", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(readWishOfferContactFor(session.userId, req.params.offerRef, {
+    // 這一條會先寫稽核事件（`contact_projection_accessed`）才回聯絡方式 ⇒ 走島嶼的寫入路徑。
+    res.json(await projectOfferContactAsync(req.params.offerRef, session.userId, {
       actorKey: `contact:${session.userId}`,
     }));
   } catch (error) {

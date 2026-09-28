@@ -23,8 +23,11 @@ import {
   OFFER_REPORT_DETAIL_MAX,
   ADMIN_REPORTS_SQL,
   OFFER_REPORT_REASONS,
+  assertContactReadable,
   assertOfferBurst,
   assertWishOfferEnabled,
+  contactFieldsFor,
+  contactProjection,
   createOfferReport as createOfferReportSync,
   loadFreshOffer as loadFreshOfferSync,
   loadVisibleOffer as loadVisibleOfferSync,
@@ -387,5 +390,40 @@ export async function listAdminOfferReportsAsync(opts = {}, options = {}) {
   }, async () => {
     const mod = await import("./wishOffers.js");
     return { items: mod.listAdminOfferReports(sqliteHandle(), opts) };
+  });
+}
+
+// ── 聯絡方式（`GET /api/wish-offers/:offerRef/contact`）────────────────────────
+//
+// 這一條會**先寫一筆稽核事件**（`contact_projection_accessed`）才回聯絡方式，所以它與狀態機
+// 同屬「寫入」那一類。三個讀取（可見性、許願房列、刊登列、封鎖）都已經有 PG 版；
+// 組裝與守衛重用 `wishOffers.js` 的純函式，兩個 driver 的行為不可能漂移。
+export async function projectOfferContactAsync(offerRef, userId, { now = new Date(), actorKey = "" } = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    if (actorKey) assertOfferBurst(`contact:${actorKey}`, now);
+    const offer = await loadVisibleOfferAsync(offerRef, userId, options);
+    const role = offer ? (Number(offer.owner_user_id) === Number(userId)
+      ? "owner"
+      : (Number(offer.tenant_user_id) === Number(userId) ? "tenant" : "")) : "";
+    // 順序與同步版一致：先角色／狀態／封鎖（由 `assertContactReadable()` 一次判完），
+    // 再讀兩列。錯誤碼相同 ⇒ 呼叫端看到的行為不變。
+    const blocked = offer && role ? await tenantBlocksOwnerAsync(run, offer.tenant_user_id, offer.owner_user_id) : false;
+    assertContactReadable(role, offer || {}, blocked);
+    const wishRow = one((await run(WISH_BY_ID_SQL, [Number(offer.wish_id)])).rows);
+    const listingRow = offer.listing_id ? await getSelfRowAsync(offer.listing_id, { ...options, driver: "postgres" }) : null;
+    const fields = contactFieldsFor({ role, wishRow, listingRow });
+    const projection = contactProjection(offer, role, fields);
+    await writeOfferEventAsync(run, {
+      offerId: offer.id,
+      actorUserId: userId,
+      eventType: "contact_projection_accessed",
+      meta: { viewer_role: role, available: projection.contact.available },
+      now,
+    });
+    return projection;
+  }, async () => {
+    const mod = await import("./wishOfferTransitions.js");
+    return mod.readOfferContact(sqliteHandle(), userId, offerRef, { now, actorKey });
   });
 }
