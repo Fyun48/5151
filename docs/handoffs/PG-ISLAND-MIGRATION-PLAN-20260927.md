@@ -1254,6 +1254,22 @@ POST /api/demand                              POST /api/self-listings/:id/matche
 
 ⇒ 這是一包**獨立的中大型工作**，不適合塞進 wishOffers 那包一起做。
 
+### 36.5 第 1 步已實作：`bumpAnalyticsAsync()`（`v3/src/rentalAnalyticsAsync.js`）
+
+照 36.3 的順序，第 1 步先做完了：
+
+- 語句與 `rentalNotify.js:491` **逐字相同**（`ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`）。
+- 日界線重用**同一支** `taipeiDay()`（時區規則不能有第二份實作）。
+- `rental_analytics_daily` 的主鍵是 `PRIMARY KEY (day, metric)`（複合）；已**實測**
+  `pgSchema.createTableStatement()` 會逐字鏡射這一句，所以 PG 上 `ON CONFLICT(day, metric)`
+  有索引可用（不是靠欄位層級 UNIQUE）。
+- 測試 `v3/test/rental-analytics-async.test.js`（6 項全綠）＋變異 **5 條全殺**。
+
+⚠️ **尚未接線任何路由**。原因是：`bumpAnalytics` 雖然是 9 條路由的卡點，但那 9 條**各自還有
+別的同步呼叫**（`createDemand`／`recordShareEvent`／`submitCompletionSurvey` /
+`getRentalNotifyPrefs`…），所以只搬這一支**不會讓任何路由的判定改變**（尺規不動是正確的）。
+這一支是**前置零件**，等它的同伴也搬完才會一起反映在數字上。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |

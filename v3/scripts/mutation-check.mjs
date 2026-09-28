@@ -1826,6 +1826,46 @@ const WOFFERS_MUTATIONS = [
   },
 ];
 
+// 租屋分析（`bumpAnalytics`）PG 分支的變異集（v3/test/rental-analytics-async.test.js）。
+const RANALYTICS_SRC = "v3/src/rentalAnalyticsAsync.js";
+const RANALYTICS_MUTATIONS = [
+  {
+    name: "upsert 改成覆蓋（不是累加）",
+    file: RANALYTICS_SRC,
+    from: "    ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`;",
+    to: "    ON CONFLICT(day, metric) DO UPDATE SET value = excluded.value`;",
+    expect: "累加",
+  },
+  {
+    name: "日界線自己算（不用 taipeiDay ⇒ 跨時區會落在不同天）",
+    file: RANALYTICS_SRC,
+    from: "  const day = taipeiDay(now);",
+    to: "  const day = new Date(now instanceof Date ? now.getTime() : Date.now()).toISOString().slice(0, 10);",
+    expect: "日界線",
+  },
+  {
+    name: "n 的邊界改成直接 Number（0 會寫 0，與同步版不同）",
+    file: RANALYTICS_SRC,
+    from: "  const value = Number(n) || 1;",
+    to: "  const value = Number(n);",
+    expect: "n 的邊界",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: RANALYTICS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "寫入失敗時靜默吞掉（fail-open）",
+    file: RANALYTICS_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();",
+    to: "    if (!sqliteFallbackAllowed(options, { write })) return undefined;\n    return runSqlite();",
+    expect: "fail-closed",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -1848,6 +1888,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /rental-analytics-async/.test(testFile) ? RANALYTICS_MUTATIONS
   : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS
   : /demand-async/.test(testFile) ? DEMAND_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
