@@ -2460,6 +2460,67 @@ GET   /api/admin/feedback                      deliveryControl, feedbackStats, l
 
 在 Owner 決定之前，這一叢**不要**列進「剩下的工作」，以免下一個 session 又量到同一個結論。
 
+## 二之負十四、2026-09-28 第四十四批：系統爬蟲設定／目錄快照／後台刊登搜尋／分享頁 extras
+
+### 44.1 範圍與投報率
+
+第四十三批之後，跳過「需要 Owner 決定」的回饋／Ops 遞送那一叢（見二之負十三），
+改挑四條各自只差一個函式、而且互不相干的路由：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET /api/public/wish-room/:id` | `sharePageExtrasAsync`（新 `rentalShareGrowthAsync.js`） |
+| `GET /api/admin/system-crawl` | `getSystemCrawlAsync` ＋ `refreshSiteCatalogStatsAsync` |
+| `PUT /api/admin/system-crawl` | `saveSystemCrawlAsync` |
+| `GET /api/admin/listings/search` | `searchAdminListingsAsync`（`adminOverviewAsync.js`） |
+
+尺規：缺口 **82 → 78**，PG **186 → 190**。
+順帶把 `POST /api/public/wish-room/:id/share-events` 的旗標來源也換成 PG（同一組旗標不該有兩個
+來源），那一條的卡點因此從 3 個降到 2 個（`bumpAnalytics`／`recordShareEvent`）。
+
+### 44.2 這一包的四個坑
+
+1. **「只套用有給的欄位」是這一包最容易寫錯的地方**：`PUT /api/admin/system-crawl` 是五個
+   **獨立**的 settings 鍵（不是一個 JSON blob），後台只切一個開關時若整包覆蓋，其他設定會被洗掉。
+   規則抽成純函式 `normalizeSystemCrawlPatch(partial, current)`，兩個 driver 共用；
+   ⚠️ `showMrt: false` 是「有給」而不是「沒給」，要用 `hasOwnProperty` 判斷（不是 truthiness）。
+2. **後台改完要對爬蟲生效**：`systemCrawlFromRows()` 還有**同步**讀者（爬蟲角色的
+   `crawlIntervalMinutes()`、`getSettings()` 的 system 區塊），所以 PG 寫完**本機也要寫同一組值**，
+   而且本機的會員設定記憶體快取要清（`forgetSettings()`；同步版也做這一步）。
+3. **目錄快照的兩個 driver 要一致**：`buildSiteCatalogSnapshot()` 抽成純函式共用，但
+   「列出」的來源不同（PG vs 本機）；快照本身要寫進 `settings.siteCatalogStats`
+   （同步的 `readSiteCatalogStats()` 是 adminOverview 的來源健康度在用）。測試用**同一個**資料集
+   驗兩個 driver 逐鍵相同，並確認 PG 與本機都寫了同一份。
+   ⚠️ 快照的 `at` 是「跑快照的當下」，兩個 driver 不可能同毫秒 ⇒ parity 比對要遮罩它。
+4. **`IFNULL` 是 SQLite 專屬**：後台刊登搜尋的 LIKE 那一段原本是 `IFNULL(address, '')`，
+   PG 沒有這個函式 ⇒ 共用常數改成兩邊都有的 `COALESCE`，並順手補上 `, post_id DESC`
+   （原本只按 `last_seen_at DESC`，時間相同時兩個 driver 的順序不保證一樣）。
+
+**共用 vs 轉錄的取捨**：這一包把「政策」全部抽成純函式共用（patch 規則、快照組裝、搜尋的
+needle／上限、來源標籤），只把「跑語句」留給 driver——與第四十二批（整包轉錄）不同，
+因為這裡的每一段都是短函式、共用不會犧牲可讀性。
+
+### 44.3 測試
+
+- `v3/test/system-crawl-async.test.js`（**6 項全綠**）：分享頁 extras 跟 PG 的旗標、
+  後台搜尋六種輸入（含 `address` 是 NULL、limit 上限值本身）、系統爬蟲設定讀取與 partial patch
+  （含「明確 false 要生效」）、目錄快照（含來源標籤與「不在監看區不算」）、
+  非 postgres 走同步路徑。變異 **9 條全殺**。
+  ⚠️ 「上限」那一條變異證明了一件事：**共用政策的變異 parity 抓不到**（兩邊一起被改壞），
+  所以測試要對「值本身」下斷言，不能只比對兩個 driver 相等。
+- `v3/test/system-crawl-live-pg.test.js`（新，CI 的 PG job 會跑）：`settings` 的 upsert 在真 PG 上
+  可用、五個鍵逐鍵讀回來的結果等於用同一批列組出來的、快照真的寫進 PG、
+  後台搜尋的 `COALESCE` 對 NULL 位址的列真的能跑。
+- CI 抓到的兩個**既有守衛**問題（都已修）：
+  1. **尺規的缺陷 (2) 守衛又到期了**（這是第 6 次）：它拿「目前還沒移植」當 ground truth，
+     這一包把 `GET /api/admin/listings/search` 移植掉之後它必然紅。重新實測（套回缺陷 (2)）
+     後全站只剩 `GET /api/events/revision` 會因缺陷變判定 ⇒ 標的換成它，
+     **並補上「已移植的那四條現在必須是 PG」的反向斷言**，讓「移植完就整條失效」不再重演。
+  2. **注入式 `exec` 的兩種形狀**：`siteContentAsync`／`adminOverviewAsync` 的 runner 原本
+     只吃裸陣列，餵 `{ rows, rowCount }` 會在 `for…of` 爆 `rows is not iterable`
+     （live PG 測試抓到）。兩個 runner 都統一成裸陣列（與 `settingsKvAsync`／
+     `wishExampleAsync` 的修法相同）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2470,13 +2531,13 @@ GET   /api/admin/feedback                      deliveryControl, feedbackStats, l
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十三批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十四批）** |
 |---|---:|---:|
 | SQLite | 95 | **10** |
-| MIXED | — | **72** |
+| MIXED | — | **68** |
 | 無直接DB | — | **20** |
-| PG | 22 | **186** |
-| **缺口（SQLite＋MIXED）** | — | **82** |
+| PG | 22 | **190** |
+| **缺口（SQLite＋MIXED）** | — | **78** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

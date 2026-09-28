@@ -886,6 +886,79 @@ const NPREFSWRITE_MUTATIONS = [
   },
 ];
 
+// 站台設定讀取（系統爬蟲＋目錄快照）與後台搜尋的變異集
+// （v3/test/system-crawl-async.test.js）。
+const SYSCRAWL_SRC = "v3/src/siteContentAsync.js";
+const SYSCRAWL_DB_SRC = "v3/src/db.js";
+const SYSCRAWL_ADMIN_SRC = "v3/src/adminOverviewAsync.js";
+const SYSCRAWL_ADMIN_SYNC_SRC = "v3/src/adminOverview.js";
+const SYSCRAWL_SHARE_SRC = "v3/src/rentalShareGrowthAsync.js";
+const SYSCRAWL_MUTATIONS = [
+  {
+    name: "系統爬蟲設定整包覆蓋（後台只切一個開關就把其他設定洗掉）",
+    file: SYSCRAWL_DB_SRC,
+    from: "    systemCrawlIntervalMinutes: has(\"intervalMinutes\")\n      ? clampIntervalMinutes(src.intervalMinutes, { admin: true, fallback: current.intervalMinutes })\n      : current.intervalMinutes,",
+    to: "    systemCrawlIntervalMinutes: 30,",
+    expect: "partial patch 只覆蓋有給的鍵",
+  },
+  {
+    name: "明確給 false 被當成沒給（showMrt 關不掉）",
+    file: SYSCRAWL_DB_SRC,
+    from: "    systemShowMrt: has(\"showMrt\") ? src.showMrt !== false : current.showMrt !== false,",
+    to: "    systemShowMrt: current.showMrt !== false,",
+    expect: "partial patch 只覆蓋有給的鍵",
+  },
+  {
+    name: "PG 只寫不讓本機追上（爬蟲繼續用舊設定跑）",
+    file: SYSCRAWL_SRC,
+    from: "  const local = sqliteHandle();\n  for (const [key, value] of Object.entries(nextValues)) {\n    local.prepare(SETTINGS_UPSERT_SQL).run(key, JSON.stringify(value));\n  }\n",
+    to: "",
+    expect: "partial patch 只覆蓋有給的鍵",
+  },
+  {
+    name: "目錄快照不寫回 settings（readSiteCatalogStats 永遠是舊的）",
+    file: SYSCRAWL_SRC,
+    from: "  await setSiteSettingAsync(SITE_CATALOG_STATS_KEY, snapshot, options);\n",
+    to: "",
+    expect: "partial patch 只覆蓋有給的鍵",
+  },
+  {
+    name: "目錄快照不過濾監看區（全部刊登都算進來）",
+    file: SYSCRAWL_DB_SRC,
+    from: "    if (!listingMatchesDistrictKeys(row, keySet, nameSet)) continue;\n",
+    to: "",
+    expect: "目錄快照：只算監看區",
+  },
+  {
+    name: "分享頁 extras 讀本機旗標而不是 PG（PG 站會顯示錯的開關）",
+    file: SYSCRAWL_SHARE_SRC,
+    from: "  await getWishConditionsAsync(options);\n  return sharePageExtras(currentRentalMarketplaceFlags());",
+    to: "  return sharePageExtras(currentRentalMarketplaceFlags());",
+    expect: "分享頁 extras",
+  },
+  {
+    name: "後台搜尋用 IFNULL 送 PG（PG 沒有這個函式）",
+    file: SYSCRAWL_ADMIN_SYNC_SRC,
+    from: "     WHERE title LIKE ? OR COALESCE(address, '') LIKE ?",
+    to: "     WHERE title LIKE ? OR IFNULL(address, '') LIKE ?",
+    expect: "後台刊登搜尋",
+  },
+  {
+    name: "後台搜尋不看上限（limit 1000 就真的查 1000 筆）",
+    file: SYSCRAWL_ADMIN_SYNC_SRC,
+    from: "  const cap = Math.max(1, Math.min(40, Number(limit) || 20));",
+    to: "  const cap = Math.max(1, Number(limit) || 20);",
+    expect: "後台刊登搜尋",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: SYSCRAWL_ADMIN_SRC,
+    from: '  if ((options.driver || resolveDbDriver()) !== "postgres") return searchAdminListingsSync(q, limit);\n',
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2511,6 +2584,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /system-crawl-async/.test(testFile) ? SYSCRAWL_MUTATIONS
   : /rental-notify-prefs-async/.test(testFile) ? NPREFSWRITE_MUTATIONS
   : /rental-ops-async/.test(testFile) ? OPS_MUTATIONS
   : /rental-survey-async/.test(testFile) ? SURVEY_MUTATIONS

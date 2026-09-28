@@ -16,6 +16,20 @@ import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources } from "
 import { emptyCommsConfig, normalizeCommsConfig } from "./comms.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
 import {
+  SYSTEM_CRAWL_SETTING_KEYS,
+  SITE_CATALOG_ROWS_SQL,
+  SITE_CATALOG_STATS_KEY,
+  SETTINGS_UPSERT_SQL,
+  buildSiteCatalogSnapshot,
+  forgetSettings,
+  getSystemCrawl as getSystemCrawlSync,
+  refreshSiteCatalogStats as refreshSiteCatalogStatsSync,
+  systemCrawlFromRows,
+  normalizeSystemCrawlPatch,
+  saveSystemCrawl as saveSystemCrawlSync,
+  sqliteHandle,
+} from "./db.js";
+import {
   getCommsConfig as getCommsConfigSync,
   getCrawlSources as getCrawlSourcesSync,
   getHelpQa as getHelpQaSync,
@@ -36,6 +50,24 @@ const HELP_QA_KEY = "helpQa";
 const CRAWL_SOURCES_KEY = "crawlSources";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
+
+// 這個模組原本只碰 settings（走 `settingsKvAsync`），但目錄快照要掃 `listings`，
+// 所以補一個與 `adminOverviewAsync.js` 同一個形狀的 runner（注入式 exec 優先）。
+async function pgExec(options = {}) {
+  if (options.exec) {
+    // ⚠️ 注入式 exec 有兩種形狀：`pgDriver.query()` 的裸陣列，以及 `crmOutboxAsync` 起的
+    // `{ rows, rowCount }`。呼叫端是 `for…of`，所以這裡**統一成裸陣列**
+    // （2026-09-28 CI 的 live 測試就是這樣抓到 `rows is not iterable`）。
+    const injected = options.exec;
+    return async (sql, params = []) => {
+      const raw = await injected(sql, params);
+      return Array.isArray(raw) ? raw : (raw?.rows || []);
+    };
+  }
+  const pgDriver = options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver());
+  const { toPostgresSql } = await import("./sqlDialect.js");
+  return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
+}
 
 // ---- 居住數據 ----
 
@@ -167,5 +199,62 @@ export async function saveCommsConfigAsync(partial = {}, options = {}) {
   const src = partial && typeof partial === "object" ? partial : {};
   const next = normalizeCommsConfig({ ...current, ...src });
   await setSiteSettingAsync(COMMS_KEY, next, options);
+  return next;
+}
+
+// ---- 系統爬蟲設定（systemWatchDistricts 等五個鍵 ＋ 目錄快照）----
+//
+// 這一組與上面的單鍵形狀不同：**五個獨立的 settings 鍵**（同步版是「讀整張 settings 再挑」），
+// 而且同步版的 `saveSystemCrawl()` 會：
+//   1. 只套用有給的欄位（`normalizeSystemCrawlPatch()`，共用純函式）
+//   2. 清掉本機的會員設定記憶體快取（`forgetSettings()`）
+//   3. 重算目錄快照並寫回 `settings.siteCatalogStats`
+// **兩個 store 都要寫**：`systemCrawlFromRows()` 還有**同步**讀者（爬蟲角色的
+// `crawlIntervalMinutes()`、`getSettings()` 的 system 區塊），只寫 PG 會讓爬蟲繼續用舊設定跑。
+
+async function readSystemCrawlRows(options) {
+  const rows = [];
+  for (const key of SYSTEM_CRAWL_SETTING_KEYS) {
+    const value = await getSiteSettingAsync(key, options);
+    if (value !== undefined) rows.push({ key, value: JSON.stringify(value) });
+  }
+  return rows;
+}
+
+export async function getSystemCrawlAsync(options = {}) {
+  if (!isPg(options)) return getSystemCrawlSync();
+  return systemCrawlFromRows(await readSystemCrawlRows(options));
+}
+
+async function refreshSiteCatalogStatsPg(options, system) {
+  const exec = await pgExec(options);
+  const rows = await exec(SITE_CATALOG_ROWS_SQL, []);
+  const snapshot = buildSiteCatalogSnapshot(rows, system);
+  await setSiteSettingAsync(SITE_CATALOG_STATS_KEY, snapshot, options);
+  // 本機追上：`readSiteCatalogStats()`（adminOverview 的來源健康度在用）是**同步**讀者。
+  sqliteHandle().prepare(SETTINGS_UPSERT_SQL).run(SITE_CATALOG_STATS_KEY, JSON.stringify(snapshot));
+  return snapshot;
+}
+
+export async function refreshSiteCatalogStatsAsync(options = {}) {
+  if (!isPg(options)) return refreshSiteCatalogStatsSync();
+  return refreshSiteCatalogStatsPg(options, await getSystemCrawlAsync(options));
+}
+
+export async function saveSystemCrawlAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveSystemCrawlSync(partial);
+  const current = await getSystemCrawlAsync(options);
+  const nextValues = normalizeSystemCrawlPatch(partial, current);
+  for (const [key, value] of Object.entries(nextValues)) {
+    await setSiteSettingAsync(key, value, options);
+  }
+  // 本機追上（同一組值）＋ 清本機的會員設定快取（同步版也做這一步）。
+  const local = sqliteHandle();
+  for (const [key, value] of Object.entries(nextValues)) {
+    local.prepare(SETTINGS_UPSERT_SQL).run(key, JSON.stringify(value));
+  }
+  forgetSettings();
+  const next = await getSystemCrawlAsync(options);
+  next.catalog = await refreshSiteCatalogStatsPg(options, next);
   return next;
 }

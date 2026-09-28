@@ -2685,7 +2685,9 @@ function rememberSettings(uid, value) {
   return value;
 }
 
-function forgetSettings(uid) {
+// 匯出給 PG 版：寫完站台設定後，本機的 `settingsMemo`（會員設定的記憶體快取）必須失效，
+// 否則同一台節點上**同步**的 `getSettings()` 讀者會拿到舊值（PG 版沒有那個快取，但仍要清本機的）。
+export function forgetSettings(uid) {
   if (uid == null) {
     settingsMemo.clear();
     return;
@@ -5432,6 +5434,16 @@ export function enqueueListingEvent(listing, event) {
 }
 
 // Pure: the system-crawl block, from the `settings` rows a driver already fetched.
+// 系統爬蟲設定的五個鍵：同步版是「讀整張 settings 再挑」，PG 版是「逐鍵讀」，
+// 兩邊一定要用同一份清單（少一個鍵就是後台改了沒生效）。
+export const SYSTEM_CRAWL_SETTING_KEYS = Object.freeze([
+  "systemWatchDistricts",
+  "systemCrawlIntervalMinutes",
+  "systemOfflineConfirmDays",
+  "systemShowMrt",
+  "systemShowListRefreshBar",
+]);
+
 export function systemCrawlFromRows(rows) {
   const stored = parseSettingRows(rows);
   const intervalRaw = Number(stored.systemCrawlIntervalMinutes);
@@ -5452,31 +5464,36 @@ export function getSystemCrawl() {
   return systemCrawlFromRows(db.prepare("SELECT key, value FROM settings").all());
 }
 
+// 「只套用有給的欄位」的規則抽成純函式：PG 版逐字共用（後台只切一個開關時最容易被寫錯）。
+export function normalizeSystemCrawlPatch(partial = {}, current = {}) {
+  const src = partial && typeof partial === "object" ? partial : {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(src, key);
+  return {
+    systemWatchDistricts: has("watchDistricts")
+      ? normalizeWatchDistricts(src.watchDistricts)
+      : normalizeWatchDistricts(current.watchDistricts),
+    systemCrawlIntervalMinutes: has("intervalMinutes")
+      ? clampIntervalMinutes(src.intervalMinutes, { admin: true, fallback: current.intervalMinutes })
+      : current.intervalMinutes,
+    systemOfflineConfirmDays: has("offlineConfirmDays")
+      ? normalizeOfflineConfirmDays(src.offlineConfirmDays)
+      : current.offlineConfirmDays,
+    systemShowMrt: has("showMrt") ? src.showMrt !== false : current.showMrt !== false,
+    systemShowListRefreshBar: has("showListRefreshBar")
+      ? src.showListRefreshBar === true
+      : current.showListRefreshBar === true,
+  };
+}
+
+// `settings` 的 upsert 語句（PG 也接受）：PG 版逐字共用。
+export const SETTINGS_UPSERT_SQL =
+  "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
 export function saveSystemCrawl(partial = {}) {
   const current = getSystemCrawl();
-  const watchDistricts = Object.prototype.hasOwnProperty.call(partial, "watchDistricts")
-    ? normalizeWatchDistricts(partial.watchDistricts)
-    : current.watchDistricts;
-  const intervalMinutes = Object.prototype.hasOwnProperty.call(partial, "intervalMinutes")
-    ? clampIntervalMinutes(partial.intervalMinutes, { admin: true, fallback: current.intervalMinutes })
-    : current.intervalMinutes;
-  const offlineConfirmDays = Object.prototype.hasOwnProperty.call(partial, "offlineConfirmDays")
-    ? normalizeOfflineConfirmDays(partial.offlineConfirmDays)
-    : current.offlineConfirmDays;
-  const upsert = db.prepare(
-    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-  );
-  const showMrt = Object.prototype.hasOwnProperty.call(partial, "showMrt")
-    ? partial.showMrt !== false
-    : current.showMrt !== false;
-  const showListRefreshBar = Object.prototype.hasOwnProperty.call(partial, "showListRefreshBar")
-    ? partial.showListRefreshBar === true
-    : current.showListRefreshBar === true;
-  upsert.run("systemWatchDistricts", JSON.stringify(watchDistricts));
-  upsert.run("systemCrawlIntervalMinutes", JSON.stringify(intervalMinutes));
-  upsert.run("systemOfflineConfirmDays", JSON.stringify(offlineConfirmDays));
-  upsert.run("systemShowMrt", JSON.stringify(showMrt));
-  upsert.run("systemShowListRefreshBar", JSON.stringify(showListRefreshBar));
+  const next_values = normalizeSystemCrawlPatch(partial, current);
+  const upsert = db.prepare(SETTINGS_UPSERT_SQL);
+  for (const [key, value] of Object.entries(next_values)) upsert.run(key, JSON.stringify(value));
   forgetSettings();
   const next = getSystemCrawl();
   next.catalog = refreshSiteCatalogStats();
@@ -6436,7 +6453,9 @@ function applyProfileScope(rows, settings, provider = null) {
   });
 }
 
-function listingMatchesDistrictKeys(row, keySet, nameSet) {
+// 匯出給 PG 版（`siteContentAsync.refreshSiteCatalogStatsAsync`）：這一支是**篩選政策**，
+// 「哪些刊登算在這個行政區」兩個 driver 必須完全相同。
+export function listingMatchesDistrictKeys(row, keySet, nameSet) {
   if (!keySet.size) return false;
   const bits = String(row?.source_key || "").split("|");
   if (bits.length >= 2 && bits[0] !== "" && bits[1] !== "") {
@@ -6446,12 +6465,15 @@ function listingMatchesDistrictKeys(row, keySet, nameSet) {
   return Boolean(name && nameSet.has(name));
 }
 
-export function refreshSiteCatalogStats() {
-  const system = getSystemCrawl();
+// 快照的組裝（純函式）：同步版跑完列出後交給它，PG 版跑完 PG 的列出後交給同一支。
+// `SITE_CATALOG_STATS_KEY` 也要共用，否則兩個 driver 會把快照寫到不同的鍵。
+export const SITE_CATALOG_STATS_KEY = "siteCatalogStats";
+export const SITE_CATALOG_ROWS_SQL = "SELECT source, source_key, address, title FROM listings";
+
+export function buildSiteCatalogSnapshot(rows = [], system = {}, now = new Date()) {
   const keys = normalizeWatchDistricts(system.watchDistricts);
   const keySet = new Set(keys);
   const nameSet = new Set(keys.map((key) => lookupDistrict(key)?.name).filter(Boolean));
-  const rows = db.prepare("SELECT source, source_key, address, title FROM listings").all();
   const bySource = {};
   let total = 0;
   for (const row of rows) {
@@ -6461,8 +6483,8 @@ export function refreshSiteCatalogStats() {
     bySource[source] = (bySource[source] || 0) + 1;
   }
   const self = Number(bySource.self) || 0;
-  const snapshot = {
-    at: new Date().toISOString(),
+  return {
+    at: (now instanceof Date ? now : new Date(now)).toISOString(),
     total,
     self,
     sources: Math.max(0, total - self),
@@ -6472,7 +6494,14 @@ export function refreshSiteCatalogStats() {
       Object.entries(bySource).map(([id, count]) => [selfSourceLabel(id), count]),
     ),
   };
-  writeSettingKey("siteCatalogStats", snapshot);
+}
+
+export function refreshSiteCatalogStats() {
+  const snapshot = buildSiteCatalogSnapshot(
+    db.prepare(SITE_CATALOG_ROWS_SQL).all(),
+    getSystemCrawl(),
+  );
+  writeSettingKey(SITE_CATALOG_STATS_KEY, snapshot);
   return snapshot;
 }
 
