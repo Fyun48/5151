@@ -1191,6 +1191,94 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之一、2026-09-28 第三十批：許願房的三個寫入（demand.js 的第一刀）
+
+**三個原本「只差一個同步函式」的路由，一起搬上 PG**：
+
+| 路由 | 舊卡點 | 新入口 |
+|---|---|---|
+| `POST /api/demand/:id/report` | `reportDemand` | `demandAsync.reportDemandAsync` |
+| `POST /api/demand/:id/reply` | `addDemandReply` | `demandAsync.addDemandReplyAsync` |
+| `POST /api/demand/:id/close` | `closeDemandPost` | `demandAsync.closeDemandPostAsync` |
+
+新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（10 項，全綠）＋
+`v3/test/demand-live-pg.test.js`（真 PG，CI 的 PG job 會跑，本機沒有隔離環境時 skip）。
+
+### 30.1 副作用刻意留在 `demand.js`（與 `closeSelfListing` 同一個處置）
+
+`reportDemand` 達門檻後的「隱藏」與 `closeDemandPost` 的收尾都會碰到**跨模組**的東西：
+`writeLifecycle()`（demand.js 私有）、`syncDemandMatchDistricts()`、
+`notifyWishOfferLifecycle()`（`wishOffers.js` 註冊的 hook，那個模組整支還在 SQLite handle 上）。
+所以抽出兩支共用副作用函式 `applyReportHideEffects()`／`applyClosedPostEffects()`，
+**兩個 driver 呼叫同一支**（PG 分支傳本機 handle 進去），而不是在 PG 分支重寫一份。
+好處有兩個：語意不可能漂移；hook 那條線仍留在 sqlite 集合裡，尺規不會假裝它搬完了。
+
+### 30.2 回傳封包**刻意**與同步版不同，這是這批最重要的取捨
+
+同步版這三支最後都回**整則許願房**（`getDemandPost()`）。那一支還沒搬上 PG，
+所以 PG 分支如果照抄去讀本機 handle，會拿到**還沒寫進去的回覆**——寫 PG、讀 SQLite 的假資料，
+比不回傳更糟。因此：
+
+- `reportDemandAsync`：回 `{ ok, hidden }`（原本就是這個形狀，**沒有差異**）。
+- `addDemandReplyAsync`：回 `{ ok: true, id, replied: true }`（同步版回整則）。
+- `closeDemandPostAsync`：回 `{ ok: true, id, status: "closed" }`（同步版回整則）。
+
+**依據（實測，不是猜測）**：客戶端 `v3/public/index.html` 的 close 流程是
+`const data = await readApi(res); if (!res.ok) {...}; await loadDemand();`——
+成功路徑只看 `res.ok`，之後一律整批重載，沒有讀取封包裡的許願房內容。
+**⇒ 下一個真正該做的是 `getDemandPost()` → PG**（它會一次解鎖 `GET /api/demand/:id`、
+`GET /api/wish-rooms/:id`、`GET /api/public/wish-room/:id` 三條，並讓上面兩個封包可以還原成整則）。
+
+### 30.3 這批抓到的兩個「測試自己的錯」
+
+1. **回傳封包被拿來當 parity 的對照組，會掩蓋真正的差異。** 第一版測試斷言
+   `deepEqual(async結果, 同步結果)`，於是紅在 `public_token`（隨機產生，兩邊不同）與
+   `replies`（寫 PG、讀 SQLite）——**兩個都與本批無關**，而真正要釘的「落地狀態」反而沒被驗到。
+   改成：落地狀態比對（`status`／`hidden`／`lifecycle`／PG 上的回覆列）＋封包只斷言它自己。
+2. **對照組要先確認起點相同。** PG 分支跑之前磁碟已經被清回起點，所以
+   「磁碟上的回覆列」不能當 PG 分支的對照組（那時是 0 列）；要比的是**同步版留下的快照**。
+
+### 30.4 🚨 我寫出一個會讓整條路徑壞掉的 bug，而 parity 測試是唯一抓到它的東西
+
+`withFallback(options, …, async (exec) => {…})` 的**參數名 `exec` 遮住了 `options.exec`**。
+於是 PG 分支（注入式 runner 的正規路徑）拿到的是 `options.exec` 這個**函式物件**，
+`one()` 收到非陣列就回 `null` ⇒ **每一筆檢舉都被判成「找不到要檢舉的內容」**，
+而 SQL 其實只送出一句、且跑得好好的。
+
+- 症狀極具誤導性：錯誤訊息正確、SQL 正確、只有「查到的東西不見了」。
+- 修法：參數改名 `run`，讀取一律 `(await run(...)).rows`（**`run` 的統一回傳形狀是
+  `{ rows, rowCount }`，不是「一列一列的陣列」**——這一點是 `crmOutboxAsync.js` 起的慣例，
+  但它的 `one()` 是取 `rows`，本檔第一版沒照抄）。
+- 已把這個錯誤類別寫成**夾具守衛**：`demand-async.test.js` 的 PG 替身現在會拒絕
+  「不是 SQL 字串」的輸入，同型 bug 下次會直接紅在夾具，而不是紅在一個看起來像業務邏輯的 404。
+
+### 30.5 變異測試：7 條全殺，但前 3 條是**假 SURVIVED**
+
+第一輪跑出 3 條 SURVIVED，實際上都**有**對應測試失敗——是我 `expect` 寫的
+**測試名字串**與真實測試名不符（紀律 6 第 N 次）。實際失敗項與預期殺手不一致時，
+工具會誠實地把它列成「沒有失敗」而不是「殺掉了」，這一點救了這批的可信度。
+改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**。
+
+### 30.6 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
+
+```
+PG demand_posts 欄位 41 個（與節點 SQLite 相同）✓
+PG demand_posts／demand_replies／demand_reports 只有 pkey，SQLite 定義的索引**一個都沒有** ✗
+```
+
+也就是 `idx_demand_one_open`（同一人只能有一則 open 的部分唯一索引）在 PG 上**不存在**。
+這與「PG 沒有 `CREATE TABLE` 的 UNIQUE」是同一類（第 N 次），但這裡更嚴重一點：
+它不是「鏡射不到」，而是**從來沒有人對這三張表呼叫過 `ensurePgSchema`**。
+本批的 `ensureDemandStoreOnce()` 會在第一次用到時補建（含部分唯一索引）。
+**補建前已先查過資料**：PG 上 `>1 open`＝0 人、重複 `public_token`＝0、`>1 draft`＝0，
+所以索引建得起來（現況 35 列：draft 2／closed 33）。live 測試會斷言這個索引真的存在。
+
+### 30.7 這批的尺規變化
+
+```
+PG 153 → 156　MIXED 103 → 100　缺口 115 → 112
+```
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -1204,10 +1292,19 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
 | SQLite | 95 | **12** |
-| MIXED | — | **117** |
+| MIXED | — | **100** |
 | 無直接DB | — | **20** |
-| PG | 22 | **139** |
-| **缺口（SQLite＋MIXED）** | — | **129** |
+| PG | 22 | **156** |
+| **缺口（SQLite＋MIXED）** | — | **112** |
+
+> ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
+> - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
+>   ＋ `resolveSession()` 中介層每請求解析一次，`readSession()` 改讀 `req` 上的快取）。
+>   113 個呼叫點沒有改，但每請求只查一次 `users`。**這一項不必再重追。**
+> - 障礙清單裡的 `deleteWishExample`／`getWishExample`／`saveWishConditions`／
+>   `getAdminAdsSettings`／`applyBrandUpload`／`getAdminBroadcastsSettings`／
+>   `remoteCsAcceptControl` **都已經完成**（實跑尺規：這些函式已經不在任何缺口路由的卡點裡）。
+> - 障礙清單第 1 項（`ensureUser` 3 條）**仍然成立**；新增的 2026-09-28 進度看「二之一」。
 
 PR #529（`fix/route-map-driver-aware`，34 個 commit）**CI 全綠、未部署**；
 Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部署要 Owner 明確批准（§8.2）。**
