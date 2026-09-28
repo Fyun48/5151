@@ -1866,6 +1866,46 @@ const RANALYTICS_MUTATIONS = [
   },
 ];
 
+// 租屋通知 prefs 讀取 PG 分支的變異集（v3/test/rental-notify-reads-async.test.js）。
+const NPREFS_SRC = "v3/src/rentalNotifyReadsAsync.js";
+const NPREFS_MUTATIONS = [
+  {
+    name: "布林轉換改成 truthy（'0' 會變成 true ⇒ 通知設定反向）",
+    file: NPREFS_SRC,
+    from: "    lifecycle_reminder: Number(row.lifecycle_reminder) === 1,",
+    to: "    lifecycle_reminder: Boolean(row.lifecycle_reminder),",
+    expect: "布林轉換",
+  },
+  {
+    name: "沒有設定列時回 null（呼叫端會爆或走錯分支）",
+    file: NPREFS_SRC,
+    from: "  if (!row) return defaultRentalNotifyPrefs();",
+    to: "  if (!row) return null;",
+    expect: "預設",
+  },
+  {
+    name: "timezone 空字串不回退（使用者會拿到空時區）",
+    file: NPREFS_SRC,
+    from: "    timezone: row.timezone || RENTAL_SITE_TZ,",
+    to: "    timezone: row.timezone,",
+    expect: "落回站台時區",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: NPREFS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "寫入失敗時靜默吞掉（fail-open）",
+    file: NPREFS_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();",
+    to: "    if (!sqliteFallbackAllowed(options, { write })) return null;\n    return runSqlite();",
+    expect: "fail-closed",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -1888,6 +1928,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /rental-notify-reads-async/.test(testFile) ? NPREFS_MUTATIONS
   : /rental-analytics-async/.test(testFile) ? RANALYTICS_MUTATIONS
   : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS
   : /demand-async/.test(testFile) ? DEMAND_MUTATIONS

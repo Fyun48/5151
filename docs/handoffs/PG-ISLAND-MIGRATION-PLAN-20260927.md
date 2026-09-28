@@ -1270,6 +1270,34 @@ POST /api/demand                              POST /api/self-listings/:id/matche
 `getRentalNotifyPrefs`…），所以只搬這一支**不會讓任何路由的判定改變**（尺規不動是正確的）。
 這一支是**前置零件**，等它的同伴也搬完才會一起反映在數字上。
 
+### 36.6 第 2 步的第一塊零件：`getRentalNotifyPrefsAsync()`（`v3/src/rentalNotifyReadsAsync.js`）
+
+通知寫入端（`emitRentalNotifyEvent`／`queueDeliveries`／`insertDelivery`）的第一個依賴是
+`getRentalNotifyPrefs()`——`queueDeliveries()` 一開頭就讀它。所以先搬這一支：
+
+- 列→prefs 轉換抽成純函式 `prefsFromRow()`，兩個 driver 共用；沒有列時回
+  `defaultRentalNotifyPrefs()`（與同步版同義）。
+- `timezone` 空字串落回 `RENTAL_SITE_TZ`（站台時區）。
+- 測試 `v3/test/rental-notify-reads-async.test.js`（7 項全綠）＋變異 **5 條全殺**。
+- 順手把 `safePayload()`（PII 過濾）與 `currentRentalNotifyFlags()` 從 `rentalNotify.js`
+  匯出，讓後續 PG 版**逐字重用同一支**淨化規則與同一份旗標快取，不必重寫第二份。
+
+⚠️ **同樣尚未接線**（尺規不動是正確的）：這一支是零件，`queueDeliveries()`／
+`insertDelivery()` 還沒搬，所以沒有任何路由的判定會改變。
+
+**變異測試又抓到我一個假設錯誤**：memory SQLite 對 INTEGER 欄位回的是**數字**，
+所以 `Boolean(row.x)` 與 `Number(row.x) === 1` 在夾具上結果相同 ⇒ 殺不死該變異。
+但真 PG 驅動在某些路徑可能回**字串**，而 `Boolean("0")` 是 `true`——那會讓「關閉的通知」
+變成開啟。補了一條直接餵**字串列**給 `prefsFromRow()` 的測試之後才殺得死。
+
+#### 第 2 步剩下的（下一次）
+
+| 標的 | 說明 |
+|---|---|
+| `emitRentalNotifyEventAsync()` | 寫 `rental_notify_events`（`event_key` UNIQUE ⇒ 去重語意要一致）＋呼叫 queue |
+| `queueDeliveriesAsync()` | `preferenceAllows()`／`channelAllowed()`／`isRentalDigestEnabled()` 都是**純函式可直接重用**；寫 `rental_notify_deliveries` |
+| `insertDeliveryAsync()` | **`UNIQUE(event_id, channel)` 是表約束（隱式索引）⇒ 這是第 N 次「PG 沒有 CREATE TABLE 的 UNIQUE」**：`ensurePgSchema` 鏡射不到它，要先自己 `CREATE UNIQUE INDEX IF NOT EXISTS`（並確認既有資料沒有重複，否則會失敗） |
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |

@@ -41,6 +41,12 @@ export const RENTAL_SITE_TZ = "Asia/Taipei";
 const PII_KEYS = Object.freeze(["phone", "email", "line_url", "contact", "session", "user_id", "wish_id"]);
 
 let flagsCache = {};
+
+// 匯出只給 driver-aware 版讀取目前的旗標快取（`flagsCache` 是模組層狀態）。
+// ⚠️ 仍然只有 `setRentalNotifyFlags()` 能**寫**它，PG 版不得自己改，否則兩邊的旗標來源會分岔。
+export function currentRentalNotifyFlags() {
+  return flagsCache;
+}
 let dockWriter = null;
 let mailSink = null;
 let pushSink = null;
@@ -147,7 +153,9 @@ function newToken(bytes = 18) {
   return randomBytes(bytes).toString("base64url");
 }
 
-function safePayload(meta = {}) {
+// 匯出只為了讓 PG 版（`rentalNotifyAsync.js`）逐字重用同一支淨化規則：
+// 通知 payload 的 PII 過濾**不能**有第二份實作，否則兩邊會漂移。
+export function safePayload(meta = {}) {
   const out = {};
   for (const [key, value] of Object.entries(meta || {})) {
     if (PII_KEYS.includes(key)) continue;
