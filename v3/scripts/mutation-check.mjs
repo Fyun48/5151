@@ -698,6 +698,89 @@ const SURVEY_MUTATIONS = [
   },
 ];
 
+// Admin 營運分析（rental ops）PG 分支的變異集（v3/test/rental-ops-async.test.js）。
+const OPS_SRC = "v3/src/rentalOpsAnalyticsAsync.js";
+const OPS_SYNC_SRC = "v3/src/rentalOpsAnalytics.js";
+const OPS_MUTATIONS = [
+  {
+    name: "中位數用 SQLite 的 julianday 送 PG（真 PG 會說函式不存在）",
+    file: OPS_SYNC_SRC,
+    from: "  medianOrderPg: `SELECT (EXTRACT(EPOCH FROM (accepted_at::timestamptz - created_at::timestamptz))) AS secs",
+    to: "  medianOrderPg: `SELECT (julianday(accepted_at) - julianday(created_at)) * 86400 AS secs",
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "中位數的奇數分支寫成偶數（取中間兩個的平均）",
+    file: OPS_SRC,
+    from: "    if (n % 2 === 1) {\n      const row = one((await run(sql, [start, end, 1, Math.floor((n - 1) / 2)])).rows);\n      return { median: Math.round(Number(row?.secs) || 0), n };\n    }",
+    to: "    if (false) {\n      const row = one((await run(sql, [start, end, 1, Math.floor((n - 1) / 2)])).rows);\n      return { median: Math.round(Number(row?.secs) || 0), n };\n    }",
+    expect: "母體中位數是奇數",
+  },
+  {
+    name: "中位數的母體取樣偏移少 1（OFFSET 從 0 開始）",
+    file: OPS_SRC,
+    from: "      const row = one((await run(sql, [start, end, 1, Math.floor((n - 1) / 2)])).rows);",
+    to: "      const row = one((await run(sql, [start, end, 1, 0])).rows);",
+    expect: "母體中位數是奇數",
+  },
+  {
+    name: "期間篩選忽略迄日（把整個月之後的也算進來）",
+    file: OPS_SYNC_SRC,
+    from: 'export const DAY_END = (day) => `${day}T23:59:59.999Z`;',
+    to: 'export const DAY_END = (day) => `${day.slice(0, 4)}-12-31T23:59:59.999Z`;',
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "報價狀態的存量查不到（pending 永遠 0）",
+    file: OPS_SRC,
+    from: '      pending: await countWhere(run, OFFER_STATUS_COUNT_SQL, ["pending"]),',
+    to: "      pending: 0,",
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "growth 的鍵接錯（confirm_after_reminder 接到 share_cta）",
+    file: OPS_SRC,
+    from: '      confirm_after_reminder: await sumMetric(run, "wish_confirmed", range.from, range.to),',
+    to: '      confirm_after_reminder: await sumMetric(run, "share_cta", range.from, range.to),',
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "通知計數的鍵接錯（digest 接到 notify_delivered）",
+    file: OPS_SRC,
+    from: '      digest: await sumMetric(run, "digest_count", range.from, range.to),',
+    to: '      digest: await sumMetric(run, "notify_delivered", range.from, range.to),',
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "接受率的分母用 accepted（自己除自己，永遠 1）",
+    file: OPS_SRC,
+    from: "      acceptance_rate: offerCreated ? Number((offerAccepted / offerCreated).toFixed(4)) : 0,",
+    to: "      acceptance_rate: offerAccepted ? Number((offerAccepted / offerAccepted).toFixed(4)) : 0,",
+    expect: "彙總：整包逐鍵相同",
+  },
+  {
+    name: "查詢失敗不轉錯誤碼（admin 分不出哪一類查詢壞掉）",
+    file: OPS_SRC,
+    from: '    throw analyticsQueryError(error, "analytics_metric_failed");',
+    to: "    throw error;",
+    expect: "錯誤碼",
+  },
+  {
+    name: "明細的分頁游標不看『還有下一頁』（永遠給空字串）",
+    file: OPS_SRC,
+    from: '        next_cursor: rows.length > size ? offset + size : "",\n      };\n    }',
+    to: '        next_cursor: "",\n      };\n    }',
+    expect: "明細：offers 與 surveys",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: OPS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2323,6 +2406,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /rental-ops-async/.test(testFile) ? OPS_MUTATIONS
   : /rental-survey-async/.test(testFile) ? SURVEY_MUTATIONS
   : /wish-room-lifecycle-async/.test(testFile) ? WISHLIFECYCLE_MUTATIONS
   : /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
