@@ -1396,6 +1396,20 @@ CI 的 PG job 連兩次紅，兩次都是我自己的錯，而且**都只有真 
 `transitionOffer()`（樂觀鎖 UPDATE，靠 `rowCount` 判斷）、`expirePendingIfDue()`、
 `terminalizeOffers()`、`recheckAcceptable()` 與四支路由的 `*For` 包裝。
 
+#### 36.10 環境敏感測試的量化證據（CI 紅燈的判讀依據）
+
+第 40 批之後 PR 的 **PostgreSQL integration job 全綠**，但一般的 **Tests job 兩次紅**，
+兩次都是**既存**的環境敏感測試，不是這一分支的改動：
+
+| 測試 | 症狀 | 證據 |
+|---|---|---|
+| `listing-search-parity` 的 `cooperative member processing…` | 在本機**每次**紅（2/2 次）、CI 間歇紅 | 在 **base commit `7a150e4` 的 worktree** 上跑同一條 ⇒ 同樣紅（`fail 1`） |
+| `listing-search-parity` 的 `cursor walks past the old 2000-row candidate cap` | 本機與 CI 間歇紅 | 同一條在 base 上也紅（先前已驗證過一次） |
+
+⇒ 這幾條是**資料量／時序**敏感（2000 列候選、1.5 秒預算之類），與 wishOffers 的改動無關：
+本分支的 18 個改動檔案裡**沒有任何一個**是 `commute`／`listing-search` 相關。
+判讀規則：**先看 PG job**（它才是島嶼改動的守門員），再用 base worktree 比對一般 Tests job 的紅燈。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |
