@@ -1191,6 +1191,54 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負一、2026-09-28 第三十二批：許願房**列表**的三個尾巴（屋主摘要／目錄／待處理報價數）
+
+第三十一批把列表本體搬上 PG，但 `GET /api/demand`／`/api/wish-rooms`／`/mine` 還是 MIXED，
+因為同一個 handler 裡還有三個同步呼叫。這一包把他們清掉，三條**都變成 PG**。
+
+| 函式 | 原本 | 現在 |
+|---|---|---|
+| `getWishConditions()`（性質目錄） | 同步入口 | 改用**既有的** `getWishConditionsAsync()`（`rentalCatalogAsync.js`，本來就寫好了） |
+| `wishRoomOwnerSummaryFor()`（屋主摘要） | 同步 | 新增 `wishRoomOwnerSummaryAsync()` |
+| `pendingInboxCount()`（待處理報價數） | 同步（`wishOfferQueries.js`，只吃 handle） | 新增 `pendingOfferCountAsync()` |
+
+尺規：**PG 158→161、MIXED 99→96、缺口 110→107**。三條列表路由全部 `sqlite: -`。
+
+### 32.1 `getWishConditions` 這件事本身是一個提醒
+
+它**早就有** driver-aware 入口（`getWishConditionsAsync()`），只是 handler 還在呼叫同步版。
+這與第二批的 `stats`、以及計畫文件裡「有現成的卻沒接」是同一類——
+**每次動手前先查既有的 `*Async.js` 有沒有這支**，比重新寫一支便宜得多。
+
+### 32.2 屋主摘要：把「同步版自己的前後不一致」也照抄
+
+同步版 `wishRoomOwnerSummary()` 有兩個分支，回傳的鍵**不一樣**：
+
+```js
+if (!uid) return { active, draft, closed: [], has_example };          // 有 closed、沒有 can_create
+return { active, draft, has_example, can_create: !active };           // 反過來
+```
+
+我第一版把兩邊「整理乾淨」（都給 `can_create`），parity 立刻紅。
+⇒ 原則是：**要改這個不一致，應該改同步版並另開一批，不是在 PG 版偷偷對齊**；
+parity 的價值就在這裡——它會逼你承認既有的形狀，而不是順手發明一個更好的。
+
+### 32.3 變異測試又抓到兩條沒有鑑別力的測試（同一類，第 N 次）
+
+1. **待處理報價數**：只種一筆 pending 時，「不篩 `status = 'pending'`」的變異照樣回 1。
+   補一筆 accepted 之後才殺得死。
+2. 同一條的 `expect` 又寫成**斷言訊息**而不是**測試名稱**（紀律 6 第 N 次）。
+   工具把它列成「沒有失敗」而不是「殺掉了」，這一點再次救了可信度。
+
+這一組現在 **14 條變異全殺**。
+
+### 32.4 夾具的第三個坑：表約束（隱式索引）會擋住第二筆種子資料
+
+`wish_offers` 有 `UNIQUE(owner_user_id, listing_id, wish_id)` 這類**表約束**，
+所以想種「第二筆報價」不能只換 `id`／`status`，要換到約束裡的欄位。
+⇒ 這是「PG 沒有 `CREATE TABLE` 的 UNIQUE」那條紀律的**鏡像**：SQLite 這邊有，
+夾具（用 SQLite 當 PG 替身）也會照樣擋——**種子資料要照真實約束設計**。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
@@ -1418,10 +1466,10 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **99** |
+| MIXED | — | **96** |
 | 無直接DB | — | **20** |
-| PG | 22 | **158** |
-| **缺口（SQLite＋MIXED）** | — | **110** |
+| PG | 22 | **161** |
+| **缺口（SQLite＋MIXED）** | — | **107** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
