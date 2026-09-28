@@ -1455,6 +1455,37 @@ return Number(res?.rowCount) || 0;
   3. 過期那條測試**忘了先 `copyRows()`**，夾具還是空的 ⇒ PG 分支回 `offer_not_found` 而不是
      `offer_expired`。這一條是「測試要先確認兩邊起點相同」的又一次實例。
 
+### 36.12 這條線的收尾狀態（下一個 session 的起點）
+
+第三十六批那份順序的四個步驟**都已完成**，但落成**三個 PR**（都未部署）：
+
+| PR | 內容 | 狀態 |
+|---|---|---|
+| **#531** | 許願房列表三條路由（`getWishConditions`／`wishRoomOwnerSummary`／`pendingInboxCount`） | CI 全綠 |
+| **#532** | 提案讀取三條路由（＋抓到 `getSelfRowAsync` 的既有缺陷） | CI 全綠 |
+| **#533** | 檢舉／封鎖／後台清單／分析／通知寫入端／聯絡方式／狀態機（wishOffers 全群） | CI 全綠 |
+
+⚠️ **#532／#533 是堆疊在彼此之上**（#533 的 base 目前是 master，但它的 diff 含 #532 的內容）。
+**合併順序建議：#531 → #532 → #533**；#532 合併後 #533 的 diff 會自動收斂。
+
+以 master `7a150e4` 為基準的尺規變化（三支合併後應為）：
+
+| 判定 | 起點 | 現在 |
+|---|---:|---:|
+| SQLite | 95 | **11** |
+| MIXED | — | **87** |
+| 無直接DB | — | **20** |
+| PG | 22 | **170** |
+| **缺口** | — | **98** |
+
+`route-data-map` 過濾 `wish-offer` ⇒ **0 條**（wishOffers 群清空）。
+
+#### 下一步（不在本輪範圍）
+
+下一個最大的單一群是**通知／分析的其餘部分**與 **`getUserById`（25 條）／`ensureUser`（22 條）**；
+`bumpAnalyticsAsync()` 與通知寫入端已就位，所以 `POST /api/demand`、`POST /api/wish-rooms`、
+`POST /api/self-listings`、`/verify-email`、`/auth/:provider/callback` 等 8 條已經少了一個卡點。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |
