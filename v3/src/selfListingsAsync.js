@@ -23,7 +23,9 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import {
+  ABANDON_DRAFT_LISTING_SQL,
   BAN_SELF_PUBLISHER_SQL,
+  DRAFT_LISTING_UPDATE_SQL,
   HIDE_SELF_LISTING_SQL,
   REPORT_COUNT_SQL,
   REPORT_EXISTS_SQL,
@@ -32,11 +34,16 @@ import {
   decorateSelfListing,
   getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
+  SELF_BODY_MAX,
+  SELF_TITLE_MAX,
   getSelfListing as getSelfListingSync,
   getSelfRow as getSelfRowSync,
   httpError,
+  listingPhotoUrls,
+  normalizePhotoList,
   selfBanStamp,
 } from "./selfListings.js";
+import { sanitizeListingBodyHtml } from "./listingBody.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
@@ -188,4 +195,48 @@ export async function reportSelfListingAsync(userId, postId, reason = "", { now 
   // 多一次查詢但語意與同步版完全相同（同步版也是 `hideSelfListing()` 自己再取列）。
   if (hide) await hideSelfListingAsync(row.post_id, { now, ...options, exec });
   return { ok: true, hidden: hide };
+}
+
+// ---- 匯入草稿的兩個寫入（第四十七批）----
+//
+// 對應 `selfListings.js` 的 `updateImportedDraftListing()`（1082）與
+// `abandonImportedDraftListing()`（1097）。兩支都只碰 `listings` 的 self_* 欄位，
+// 語句與正規化（`normalizePhotoList`／`sanitizeListingBodyHtml`）全部共用。
+export async function updateImportedDraftListingAsync(userId, postId, input = {}, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    const { updateImportedDraftListing } = await import("./db.js");
+    return updateImportedDraftListing(userId, postId, input);
+  }
+  const uid = Number(userId) || 0;
+  const exec = await pgExec(options);
+  const row = await getSelfRowAsync(postId, { ...options, exec });
+  if (!row) throw httpError("找不到這則匯入草稿", 404);
+  if (Number(row.listed_by_user_id) !== uid) throw httpError("只能改自己的匯入草稿", 403);
+  if (String(row.self_status || "") !== "draft") throw httpError("只有草稿可以修改匯入內容", 409);
+  const title = input.title != null ? String(input.title || "").trim().slice(0, SELF_TITLE_MAX) : row.title;
+  const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
+  const photos = input.photos != null ? normalizePhotoList(input.photos) : listingPhotoUrls(row);
+  await exec(DRAFT_LISTING_UPDATE_SQL, [title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id]);
+  // 兩個 store 都寫（本機的同步瀏覽路徑讀 `listings`）。
+  sqliteHandle().prepare(DRAFT_LISTING_UPDATE_SQL)
+    .run(title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id);
+  return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
+}
+
+export async function abandonImportedDraftListingAsync(userId, postId, { now = new Date(), ...options } = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    return (await import("./db.js")).abandonImportedDraftListing(userId, postId);
+  }
+  const uid = Number(userId) || 0;
+  const exec = await pgExec(options);
+  const row = await getSelfRowAsync(postId, { ...options, exec });
+  if (!row) return null;
+  if (Number(row.listed_by_user_id) !== uid) throw httpError("只能取消自己的匯入草稿", 403);
+  if (String(row.self_status || "") !== "draft") {
+    return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
+  }
+  const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
+  await exec(ABANDON_DRAFT_LISTING_SQL, [stamp, row.post_id]);
+  sqliteHandle().prepare(ABANDON_DRAFT_LISTING_SQL).run(stamp, row.post_id);
+  return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
 }

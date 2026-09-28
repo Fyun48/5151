@@ -2613,6 +2613,65 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 - `v3/test/self-listing-report-live-pg.test.js`（新，CI 的 PG job 會跑）：真 PG 上的門檻、
   重複檢舉、隱藏與 `hidden`／`hidden_at`、停權時間（由注入的 now 算出 2026-10-12）、後台隱藏。
 
+## 二之負十七、2026-09-28 第四十七批：匯入生命週期（讀取／修改／取消）
+
+### 47.1 範圍與投報率
+
+第四十六批之後，這一包是「同一個深度模組、同一組狀態機」的三條路由：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET   /api/listing-imports/:id` | `getOwnedListingImportViewAsync` |
+| `PATCH /api/listing-imports/:id` | `reviewListingImportAsync` |
+| `POST  /api/listing-imports/:id/cancel` | `cancelListingImportAsync` |
+
+尺規：缺口 **74 → 71**，PG **194 → 197**。
+（`POST /api/listing-imports/:id/confirm` 只差 `confirmListingImport`＋`recordConsent`，
+`/publish` 那一條則卡在 fixture 隔離與 `publishImportedDraftListing`——都留給後續批次。）
+
+### 47.2 做法與四個坑
+
+- `publicImport()` 的 **20 個鍵**抽成 `publicImportShape()` 共用；`listing` 那一格在 PG 版是
+  `getSelfListingAsync()` 的 try/catch（同步版是 `safeListing()`）——「查不到就 null」的寬容度
+  兩邊一致，測試也驗了「`listing_id` 指向不存在的刊登」這一條。
+- **狀態機共用**：`reviewListingImport()` 只接受 `ready_for_review`；`cancelListingImport()` 對
+  `confirmed` 丟 409、對 `cancelled` 回同一筆（idempotent）。這些狀態碼是**共用政策**，
+  parity 抓不到「兩邊一起改壞」，所以測試直接對值下斷言。
+- **取消要一起收掉草稿**（`updateImportedDraftListing`／`abandonImportedDraftListing` 都用共用的
+  `DRAFT_LISTING_UPDATE_SQL`／`ABANDON_DRAFT_LISTING_SQL`），而且**兩個 store 都寫**
+  （本機的同步瀏覽路徑讀 `listings`）。
+- **媒體清理是 best-effort**：逐筆 try/catch（同步版也是）——「已被引用或已刪」不該讓取消失敗；
+  live PG 測試另外驗「存在的媒體列真的被 soft delete」。
+
+⚠️ 測試踩到的兩個**方法論**坑（都不是程式的錯，但會讓測試失去鑑別力）：
+
+1. **同步對照也可能是 async**：`cancelListingImport()` 在同步版就是 `async`（要 await 媒體清理），
+   所以「同步對照」若用同步的錯誤捕捉會拿到 `null`，看起來像「同步版沒有擋」。
+2. **等價的變異不要硬殺**：原本想驗「沒有草稿時 `listing` 是 `null` 不是 `undefined`」，
+   但 `publicImportShape(row, { listing = null } = {})` 的**預設參數**對「顯式傳 undefined」
+   一樣生效 ⇒ 那個變異是**等價**的、殺不死。照紀律改成驗「PG 版根本沒去查草稿」
+   （`listing: null` 永遠），這一條有鑑別力。另外 `assert.equal(undefined, null)` 會**放過**
+   這類差異——已改用 `assert.strictEqual`。
+
+### 47.3 測試
+
+- `v3/test/listing-import-lifecycle-async.test.js`（**6 項全綠**）：讀取（公開形狀逐鍵相同、
+  巢狀 `listing`、沒有草稿時 `listing` 是 `null`、別人的 403／不存在的 404）、修改
+  （標題淨化、草稿一起更新、兩個 store 都寫、狀態 409、別人的 403）、取消
+  （匯入與草稿都變 `cancelled`、兩個 store、idempotent、已確認 409、別人的 403）、
+  非 postgres 走同步路徑。變異 **8 條全殺**。
+- `v3/test/listing-import-lifecycle-live-pg.test.js`（新，CI 的 PG job 會跑）：真 PG 上的
+  巢狀 listing、孤兒 `listing_id`、修改同步更新草稿、取消的媒體 soft delete、idempotent。
+- ⚠️ **`syncSequence()` 的主鍵不要用預設值**：`listings` 的主鍵是 `post_id`，這一輪有三支
+  live 測試各踩一次 `column "id" does not exist`。最新的一支改成**自己查主鍵**
+  （`pg_index` ＋ `pg_attribute`），新寫的 live 測試請照抄。
+- 🚨 **注入式 `exec` 的形狀問題第四次出現**（`memberMediaAsync`）：它的 `pgExec()`／
+  `withFallbackTx()` 只吃裸陣列，餵 `{ rows, rowCount }` 時 `firstRow()` 拿到 undefined
+  ⇒ `deleteMemberMediaAsync()` 靜默地變成 404、被呼叫端的 try/catch 吞掉
+  ⇒ **「取消匯入時的媒體清理」在 PG 上整個沒作用**（沒有錯誤、沒有任何跡象）。
+  已統一成裸陣列。四次清單：`wishExampleAsync`、`settingsKvAsync`、`siteContentAsync`＋
+  `adminOverviewAsync`、`memberMediaAsync`——**新模組請在 runner 邊界就 `rowsOf()`**。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2623,13 +2682,13 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十六批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十七批）** |
 |---|---:|---:|
 | SQLite | 95 | **10** |
-| MIXED | — | **64** |
+| MIXED | — | **61** |
 | 無直接DB | — | **20** |
-| PG | 22 | **194** |
-| **缺口（SQLite＋MIXED）** | — | **74** |
+| PG | 22 | **197** |
+| **缺口（SQLite＋MIXED）** | — | **71** |
 
 > 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
 > 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`

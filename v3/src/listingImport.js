@@ -127,8 +127,13 @@ export function rowToImport(row) {
   };
 }
 
+export const IMPORT_BY_ID_SQL = "SELECT * FROM listing_import WHERE id=?";
+// 兩個寫入語句（PG 也接受、逐字共用）。
+export const IMPORT_TITLE_TEXT_UPDATE_SQL = "UPDATE listing_import SET imported_title=?, imported_text=? WHERE id=?";
+export const IMPORT_STATUS_UPDATE_SQL = "UPDATE listing_import SET status=? WHERE id=?";
+
 export function getListingImport(db, id) {
-  return rowToImport(db.prepare("SELECT * FROM listing_import WHERE id=?").get(Number(id) || 0));
+  return rowToImport(db.prepare(IMPORT_BY_ID_SQL).get(Number(id) || 0));
 }
 
 // 兩個清單查詢與「上限夾法」抽成共用零件（PG 版逐字共用）。
@@ -185,7 +190,8 @@ export function importMeta(db, { plan = "free", now = new Date() } = {}) {
   return importMetaShape(getEffectiveDocument(db, IMPORT_DECLARATION_TYPE, { now }), { plan });
 }
 
-function assertOwner(row, userId) {
+// 匯出給 PG 版：所有權與 404 的判斷兩個 driver 必須完全相同。
+export function assertImportOwner(row, userId) {
   if (!row) throw httpError("找不到這筆匯入", 404);
   if (Number(row.user_id) !== Number(userId)) throw httpError("只能操作自己的匯入", 403);
   return row;
@@ -370,8 +376,9 @@ function failImport(db, id, code, reason) {
   ).run(IMPORT_STATUSES.FAILED, String(code || "FAILED").slice(0, 40), String(reason || "").slice(0, 240), Number(id));
 }
 
-export function publicImport(db, row, extra = {}) {
-  const listing = extra.listing || (row.listing_id ? safeListing(db, row.listing_id, row.user_id) : null);
+// 純投影：PG 版（`listingImportAsync.js`）共用同一份，20 個鍵不可能漂移。
+// `listing` 由呼叫端先查好（同步版用 `safeListing()`、PG 版用 `getSelfListingAsync()` 的 try/catch）。
+export function publicImportShape(row, { listing = null, reused = false } = {}) {
   return {
     id: row.id,
     provider: row.provider,
@@ -393,9 +400,14 @@ export function publicImport(db, row, extra = {}) {
     failure_code: row.failure_code,
     failure_reason: row.failure_reason,
     photo_errors: row.photo_errors,
-    reused: Boolean(extra.reused),
+    reused: Boolean(reused),
     live_sync: false,
   };
+}
+
+export function publicImport(db, row, extra = {}) {
+  const listing = extra.listing || (row.listing_id ? safeListing(db, row.listing_id, row.user_id) : null);
+  return publicImportShape(row, { listing, reused: extra.reused });
 }
 
 function safeListing(db, postId, userId) {
@@ -407,7 +419,7 @@ function safeListing(db, postId, userId) {
 }
 
 export function getOwnedListingImport(db, userId, id) {
-  return assertOwner(getListingImport(db, id), userId);
+  return assertImportOwner(getListingImport(db, id), userId);
 }
 
 export function reviewListingImport(db, userId, id, input = {}) {
@@ -428,7 +440,7 @@ export function reviewListingImport(db, userId, id, input = {}) {
       photos: keep,
     });
   }
-  db.prepare("UPDATE listing_import SET imported_title=?, imported_text=? WHERE id=?").run(title, text, row.id);
+  db.prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);
   return publicImport(db, { ...row, imported_title: title, imported_text: text }, { listing });
 }
 
@@ -438,7 +450,7 @@ export async function cancelListingImport(db, userId, id, { now = new Date() } =
   if (row.status === IMPORT_STATUSES.CANCELLED) return publicImport(db, row);
   if (row.listing_id) abandonImportedDraftListing(db, userId, row.listing_id, now);
   await cleanupImportedMedia(db, userId, row.media_ids);
-  db.prepare("UPDATE listing_import SET status=? WHERE id=?").run(IMPORT_STATUSES.CANCELLED, row.id);
+  db.prepare(IMPORT_STATUS_UPDATE_SQL).run(IMPORT_STATUSES.CANCELLED, row.id);
   return publicImport(db, getListingImport(db, row.id));
 }
 

@@ -188,10 +188,7 @@ import {
   updateContactProfileFor,
   deleteContactProfileFor,
   listingImportMeta,
-  getOwnedListingImport,
   startListingImportFor,
-  reviewListingImportFor,
-  cancelListingImportFor,
   confirmListingImportFor,
   publishConfirmedImportFor,
   saveMemberMediaFor,
@@ -262,9 +259,12 @@ import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import {
+  cancelListingImportAsync,
+  getOwnedListingImportViewAsync,
   importMetaAsync,
   listAdminListingImportsAsync,
   listMineListingImportsAsync,
+  reviewListingImportAsync,
 } from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
@@ -3319,25 +3319,25 @@ app.post("/api/listing-imports", async (req, res) => {
     res.json(row);
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-imports/:id", (req, res) => {
+app.get("/api/listing-imports/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getOwnedListingImport(session.userId, req.params.id));
+    res.json(await getOwnedListingImportViewAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.patch("/api/listing-imports/:id", (req, res) => {
+app.patch("/api/listing-imports/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(reviewListingImportFor(session.userId, req.params.id, req.body || {}));
+    res.json(await reviewListingImportAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.post("/api/listing-imports/:id/cancel", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(await cancelListingImportFor(session.userId, req.params.id));
+    res.json(await cancelListingImportAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.post("/api/listing-imports/:id/confirm", (req, res) => {
