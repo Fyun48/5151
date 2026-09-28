@@ -2199,8 +2199,11 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 順手補掉一個**潛在缺陷**：`wishExampleAsync` 的 `pgExec()` 回裸陣列，但注入式 `exec` 的既有慣例是
 `{ rows, rowCount }`（`crmOutboxAsync` 起）。原本只認裸陣列，餵另一種會**靜默地**回 null
 （症狀：「範例明明存進去了，GET 卻說沒有」）。現在 `rowsOf()` 兩種都吃。
-⚠️ 同一類的形狀問題在 `settingsKvAsync.getSiteSettingAsync()` 還在（它讀 `rows[0]?.value`）——
-   目前**只影響注入式 `exec` 的測試**（正式路徑 `pgExec()` 回裸陣列，所以沒事），尚未處理。
+⚠️ 同一類的形狀問題在 `settingsKvAsync.getSiteSettingAsync()` 也在（它讀 `rows[0]?.value`）。
+   **2026-09-28 第四十三批已修**：注入 `{ rows, rowCount }` 形狀的替身時，它會**靜默地**把所有
+   設定當成「沒有值」⇒ 全部退回預設值。實際症狀是 live PG 測試裡的
+   「站上明明開了通知，PG 分支卻回 404 `rental_notify_disabled`」——那個錯誤離「讀不到 settings」
+   很遠，所以查了一段時間。現在兩種形狀都吃（與 `wishExampleAsync` 同一個 `rowsOf()` 寫法）。
 
 ### 40.3.1 🚨 只有真 PG（CI 的 PG job）才抓得到的兩個錯
 
@@ -2414,6 +2417,8 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 - `v3/test/rental-notify-prefs-live-pg.test.js`（新，CI 的 PG job 會跑）：唯一索引真的在 PG 上、
   `user_id` 不是 identity、prefs 的 `ON CONFLICT` insert／update 兩條分支、
   訂閱的 INSERT→UPDATE 與「第二列被唯一索引擋下」、取消連結端到端（prefs＋訂閱＋`used_at`）。
+- CI 這一條抓到的兩個**測試自己**的錯：`syncSequence()` 寫死 `id`（`listings` 的主鍵是
+  `post_id`），以及上面的 `settingsKvAsync` 形狀問題。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
