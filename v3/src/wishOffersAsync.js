@@ -19,11 +19,19 @@ import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import { getSelfRowAsync } from "./selfListingsAsync.js";
 import {
+  OFFER_REPORT_DAILY_CAP,
+  OFFER_REPORT_DETAIL_MAX,
+  OFFER_REPORT_REASONS,
+  assertOfferBurst,
   assertWishOfferEnabled,
+  createOfferReport as createOfferReportSync,
   loadFreshOffer as loadFreshOfferSync,
   loadVisibleOffer as loadVisibleOfferSync,
+  newOfferToken,
+  offerHttpError,
   publicOfferViewWith,
 } from "./wishOffers.js";
+import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
 import { listWishOffersWith } from "./wishOfferQueries.js";
 
 // 這一批碰的表：提案本體、許願房、封鎖名單（刊登由 `getSelfRowAsync()` 自己處理）。
@@ -218,4 +226,89 @@ export async function listTenantWishOffersAsync(userId, opts = {}, options = {})
 
 export async function listOwnerWishOffersAsync(userId, opts = {}, options = {}) {
   return listOffersAsync("owner", userId, opts, options);
+}
+
+// ── 檢舉（`POST /api/wish-offers/:offerRef/report`）────────────────────────────
+//
+// 這一支是**寫入 ＋ 稽核事件**，所以只做讀取的上一包刻意沒動它。
+// 規則（原因代碼、每日上限、同一人對同一提案只能檢舉一次、內容淨化）全部重用
+// `wishOffers.js` 的常數與 `safeContent.js` 的淨化函式——不在這裡重寫第二份。
+// 節流（`assertOfferBurst`）是**行程內記憶體**，與 driver 無關，直接共用。
+export const REPORT_WINDOW_SQL =
+  "SELECT COUNT(*) AS n FROM wish_offer_reports WHERE reporter_user_id = ? AND created_at >= ?";
+export const REPORT_EXISTING_SQL =
+  "SELECT public_token FROM wish_offer_reports WHERE offer_id = ? AND reporter_user_id = ?";
+export const REPORT_INSERT_SQL = `INSERT INTO wish_offer_reports(
+         public_token, offer_id, reporter_user_id, reported_user_id, listing_id, reason, detail, status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`;
+export const OFFER_EVENT_INSERT_SQL =
+  "INSERT INTO wish_offer_events(offer_id, actor_user_id, event_type, created_at, meta_json) VALUES (?, ?, ?, ?, ?)";
+
+const isoOf = (now) => (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+const rollingWindowStart = (now, ms) => isoOf(new Date((now instanceof Date ? now.getTime() : Date.now()) - ms));
+
+// `writeOfferEvent()` 的 PG 版：沿用同一組「敏感欄位不落庫」的過濾清單。
+// ⚠️ 呼叫端只能傳 `writeOfferEvent()` 的白名單事件（`OFFER_EVENTS`）；本批只用到
+// `offer_reported`。要新增事件時，兩邊的白名單要一起看（見 `wishOffers.js` 的 OFFER_EVENTS）。
+export async function writeOfferEventAsync(run, {
+  offerId = null,
+  actorUserId = null,
+  eventType,
+  meta = {},
+  now = new Date(),
+} = {}) {
+  const safe = { ...(meta && typeof meta === "object" ? meta : {}) };
+  for (const key of ["phone", "email", "line_url", "contact", "session"]) delete safe[key];
+  await run(OFFER_EVENT_INSERT_SQL, [
+    offerId || null, actorUserId || null, String(eventType), isoOf(now), JSON.stringify(safe),
+  ]);
+}
+
+// `createOfferReport()` 的 PG 版。順序與同步版逐條相同：
+// 驗證 → 每日上限 → 已檢舉過就回 already → 寫入 → 撞唯一鍵也回 already → 稽核事件。
+export async function reportOfferAsync(userId, offer, { reason, detail = "", now = new Date(), actorKey = "" } = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    if (actorKey) assertOfferBurst(`report:${actorKey}`, now);
+    const code = String(reason || "").trim();
+    if (!OFFER_REPORT_REASONS.includes(code)) {
+      throw offerHttpError("請選擇檢舉原因", 400, "invalid_report_reason");
+    }
+    if (containsUnsafeMarkup(detail)) {
+      throw offerHttpError("檢舉內容含有不允許的標記", 400, "unsafe_report_detail");
+    }
+    const text = sanitizeDocumentText(detail, OFFER_REPORT_DETAIL_MAX);
+    const uid = Number(userId) || 0;
+    const since = rollingWindowStart(now, 24 * 60 * 60 * 1000);
+    const used = Number(one((await run(REPORT_WINDOW_SQL, [uid, since])).rows)?.n) || 0;
+    if (used >= OFFER_REPORT_DAILY_CAP) {
+      throw offerHttpError("今日檢舉次數已達上限", 429, "RATE_LIMITED", { retry_after: 3600 });
+    }
+    const existing = one((await run(REPORT_EXISTING_SQL, [Number(offer.id), uid])).rows);
+    if (existing) return { ok: true, already: true, report_ref: existing.public_token };
+    const token = newOfferToken();
+    const inserted = await run(REPORT_INSERT_SQL, [
+      token, Number(offer.id), uid, offer.owner_user_id, offer.listing_id, code, text, isoOf(now),
+    ]);
+    // 同步版靠 SQLite 的 UNIQUE 例外走 already 分支；PG 版用 rowCount 判斷有沒有真的寫進去
+    // （競態時另一方已經寫入）。兩邊回傳形狀相同。
+    if (Number(inserted?.rowCount) === 0) {
+      const row = one((await run(REPORT_EXISTING_SQL, [Number(offer.id), uid])).rows);
+      return { ok: true, already: true, report_ref: row?.public_token || "" };
+    }
+    await writeOfferEventAsync(run, {
+      offerId: offer.id, actorUserId: uid, eventType: "offer_reported", meta: { reason: code }, now,
+    });
+    return { ok: true, already: false, report_ref: token };
+  }, () => createOfferReportSync(sqliteHandle(), userId, offer, { reason, detail, now, actorKey }));
+}
+
+// 產業務入口：把「可見性 → 只有房客能檢舉 → 寫入」收在模組裡，server.js 不必自己組。
+// 角色檢查與同步版 `reportWishOffer()` 逐字相同（`tenant_user_id` 必須是檢舉人）。
+export async function reportVisibleOfferAsync(offerRef, userId, input = {}, options = {}) {
+  const offer = await loadVisibleOfferAsync(offerRef, userId, options);
+  if (!offer || Number(offer.tenant_user_id) !== Number(userId)) {
+    throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
+  }
+  return reportOfferAsync(userId, offer, input, options);
 }

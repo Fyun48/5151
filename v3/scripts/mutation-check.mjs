@@ -1752,6 +1752,27 @@ const WOFFERS_MUTATIONS = [
     expect: "status 篩選與空集合",
   },
   {
+    name: "檢舉不檢查角色（屋主也能檢舉自己的提案）",
+    file: WOFFERS_SRC,
+    from: "  if (!offer || Number(offer.tenant_user_id) !== Number(userId)) {\n    throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");\n  }",
+    to: "  if (!offer) {\n    throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");\n  }",
+    expect: "只有房客能檢舉",
+  },
+  {
+    name: "檢舉不檢查重複（同一人可以一直檢舉同一提案）",
+    file: WOFFERS_SRC,
+    from: "    const existing = one((await run(REPORT_EXISTING_SQL, [Number(offer.id), uid])).rows);\n    if (existing) return { ok: true, already: true, report_ref: existing.public_token };",
+    to: "    const existing = null;\n    if (existing) return { ok: true, already: true, report_ref: existing.public_token };",
+    expect: "驗證、寫入與稽核事件兩邊一致",
+  },
+  {
+    name: "檢舉不寫稽核事件（事後查不到）",
+    file: WOFFERS_SRC,
+    from: "    await writeOfferEventAsync(run, {\n      offerId: offer.id, actorUserId: uid, eventType: \"offer_reported\", meta: { reason: code }, now,\n    });",
+    to: "    void writeOfferEventAsync;",
+    expect: "驗證、寫入與稽核事件兩邊一致",
+  },
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",

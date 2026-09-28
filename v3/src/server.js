@@ -3103,17 +3103,20 @@ app.post("/api/wish-offers/:offerRef/block", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/report", (req, res) => {
+app.post("/api/wish-offers/:offerRef/report", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(reportWishOfferFor(session.userId, req.params.offerRef, {
+    // 可見性、角色檢查（只有房客能檢舉）與寫入＋稽核事件都收在島嶼入口裡，
+    // 與同步版 `reportWishOffer()` 的行為逐條相同。
+    res.json(await reportVisibleOfferAsync(req.params.offerRef, session.userId, {
       reason: req.body?.reason,
       detail: req.body?.detail,
-    }, { actorKey: `report:${session.userId}` }));
+      actorKey: `report:${session.userId}`,
+    }));
   } catch (error) {
     sendOfferError(res, error);
   }

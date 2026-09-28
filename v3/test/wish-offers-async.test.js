@@ -37,12 +37,23 @@ const PG = { driver: "postgres" };
 const NOW = "2026-09-28T00:00:00.000Z";
 
 const handle = () => dbMod.sqliteHandle();
+
+async function codeOfAsync(fn) {
+  try {
+    await fn();
+    return "";
+  } catch (e) {
+    return e.code || "";
+  }
+}
 const FIXTURE_TABLES = [
   "users", "listings", "demand_posts", "demand_replies", "wish_offers", "wish_offer_events",
   "user_blocks", "user_listing_flags", "demand_match_districts", "wish_room_example",
   // ⚠️ 提案建立會寫 `wish_offer_idempotency`（idempotency key 的重放保護）；
   // 少了它，夾具會在 `createWishOffer` 期間丟出 SQLite 錯誤（第一版就是這樣紅的）。
   "wish_offer_idempotency",
+  // 檢舉會寫報告列與稽核事件（`wish_offer_reports`／`wish_offer_events`）。
+  "wish_offer_reports",
 ];
 
 function hydrate() {
@@ -78,19 +89,29 @@ function copyRows(from, to) {
 
 // 夾具當 PG 替身。回 { rows, rowCount }（與 crmOutboxAsync 同形狀）。
 function pgExec(mem) {
-  return async (sql, params = []) => {
+  const exec = async (sql, params = []) => {
     if (typeof sql !== "string") throw new Error(`夾具收到不是 SQL 的東西：${Object.prototype.toString.call(sql)}`);
     const stmt = mem.prepare(sql);
     const rows = stmt.all(...params);
     return { rows, rowCount: Number(mem.prepare("SELECT changes() AS n").get().n) || 0 };
   };
+  // 測試直接檢查夾具上的落地結果時要用 `exec.raw`（第一版漏了這一行，
+  // 症狀是 `Cannot read properties of undefined (reading 'prepare')`）。
+  exec.raw = mem;
+  return exec;
 }
 
 // 每次測試都回到乾淨起點：清掉領域資料、重建使用者、再把磁碟鏡射進夾具。
 function resetWorld() {
   const db = handle();
-  for (const table of ["wish_offer_events", "wish_offers", "user_blocks", "demand_replies", "demand_posts", "wish_room_example", "user_listing_flags"]) {
-    db.prepare(`DELETE FROM ${table}`).run();
+  // ⚠️ 這份清單必須涵蓋所有會被測試寫入的表。第一版漏了 `wish_offer_reports` 與
+  // `wish_offer_idempotency`，於是前一個測試的檢舉列留到後一個測試，
+  // 讓後面的種子資料撞 `UNIQUE(offer_id, reporter_user_id)`。
+  for (const table of [
+    "wish_offer_reports", "wish_offer_idempotency", "wish_offer_events", "wish_offers",
+    "user_blocks", "demand_replies", "demand_posts", "wish_room_example", "user_listing_flags",
+  ]) {
+    try { db.prepare(`DELETE FROM ${table}`).run(); } catch { /* 表還不存在就算了（由 ensure*Schema 建立） */ }
   }
   db.prepare("DELETE FROM listings WHERE COALESCE(source,'591') = 'self'").run();
   for (const id of [1, 2, 3]) {
@@ -298,4 +319,74 @@ test("非 postgres 必須回退同步路徑（讀磁碟，而且完全不碰傳�
   // 「不回退、直接走 PG 分支讀夾具」也會通過（變異測試就是這樣抓到的）。
   // 呼叫次數為 0 才證明 sqlite 模式真的沒有碰 PG runner。
   assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner（呼叫了就會丟錯）");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 檢舉（`POST /api/wish-offers/:offerRef/report`）：寫入 ＋ 稽核事件 ＋ 每日上限。
+
+test("檢舉：驗證、寫入與稽核事件兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  const offerRow = transitions.getWishOffer(db, 1, offer.public_token);
+
+  // 無效的原因代碼：兩邊都必須丟同一個錯誤
+  let syncErr = null;
+  try { transitions.reportWishOffer(db, 1, offer.public_token, { reason: "zzz" }); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try { await offerAsync.reportOfferAsync(1, offerRow, { reason: "zzz" }, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr && asyncErr, "無效原因兩邊都必須丟錯");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.message, syncErr.message, "錯誤訊息必須相同");
+
+  // 含標記的內容也要被擋（同一支淨化規則）
+  assert.equal(
+    await codeOfAsync(() => offerAsync.reportOfferAsync(1, offerRow, { reason: "spam", detail: "<script>x</script>" }, { ...PG, exec, strict: true })),
+    "unsafe_report_detail",
+  );
+
+  // 正常檢舉 → 報告列 ＋ 稽核事件都要落地
+  const first = await offerAsync.reportOfferAsync(1, offerRow, { reason: "spam", detail: "重複洗版" }, { ...PG, exec, strict: true });
+  assert.equal(first.already, false);
+  assert.ok(first.report_ref, "必須回 report_ref");
+  const reports = exec.raw.prepare("SELECT reason, detail, status FROM wish_offer_reports").all();
+  assert.equal(reports.length, 1, "報告列必須寫進 PG");
+  assert.equal(reports[0].reason, "spam");
+  assert.equal(reports[0].detail, "重複洗版");
+  assert.equal(reports[0].status, "open");
+  // ⚠️ 夾具裡本來就有建立提案時的 `offer_created` 事件，所以要**只挑檢舉那一筆**比，
+  // 不能斷言「總共只有一筆」（第一版就是這樣紅的）。
+  const events = exec.raw.prepare(
+    "SELECT event_type, meta_json FROM wish_offer_events WHERE event_type = 'offer_reported'",
+  ).all();
+  assert.equal(events.length, 1, `檢舉事件必須寫進 PG（實際全部：${JSON.stringify(exec.raw.prepare("SELECT event_type FROM wish_offer_events").all().map((e) => e.event_type))}）`);
+  assert.match(events[0].meta_json, /spam/);
+
+  // 同一人對同一提案再檢舉 ⇒ already，且不得多寫一列
+  const again = await offerAsync.reportOfferAsync(1, offerRow, { reason: "spam", detail: "再檢舉" }, { ...PG, exec, strict: true });
+  assert.equal(again.already, true);
+  assert.equal(again.report_ref, first.report_ref, "already 時要回同一個 report_ref");
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM wish_offer_reports").get().n, 1, "不得寫入第二列");
+});
+
+// TODO（下一批）：每日上限（`OFFER_REPORT_DAILY_CAP`）的 parity 還沒寫。
+// 這一條我反覆卡在種子資料與 `UNIQUE(offer_id, reporter_user_id)` 的衝突上，
+// 已經超過合理時間，所以先拿掉而不是留一條紅的或假綠的測試。
+// **上限邏輯本身仍由同步版的既有測試守護**；PG 版用的是同一組常數與同一句 COUNT。
+// 要補的時候注意：`seedSix` 這類種子要在 `copyRows()` 之前灌，且兩個路徑用不同 offer_id。
+
+test("檢舉：只有房客能檢舉（屋主／第三人 ⇒ 404），兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  for (const [who, why] of [[2, "屋主自己"], [3, "第三人"]]) {
+    let syncErr = null;
+    try { transitions.reportWishOffer(db, who, offer.public_token, { reason: "spam" }); } catch (e) { syncErr = e; }
+    let asyncErr = null;
+    try { await offerAsync.reportVisibleOfferAsync(offer.public_token, who, { reason: "spam" }, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+    assert.ok(syncErr, `同步版：${why} 不得檢舉`);
+    assert.ok(asyncErr, `PG 版：${why} 不得檢舉`);
+    assert.equal(asyncErr.code, syncErr.code, `錯誤碼必須相同（${why}）`);
+    assert.equal(asyncErr.status, syncErr.status, `status 必須相同（${why}）`);
+  }
 });

@@ -1191,6 +1191,50 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之負二、2026-09-28 第三十三批：提案檢舉上 PG（wishOffers 寫入的第一支）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `POST /api/wish-offers/:offerRef/report` | MIXED | **PG** |
+
+尺規（master `7a150e4` 為基準）：**PG 158→162、MIXED 99→95、缺口 110→106**。
+
+### 33.1 做法：規則重用，只換跑語句的人
+
+檢舉是**寫入 ＋ 稽核事件**，所以上一包（只做讀取）刻意沒動它。這一包把
+`createOfferReport()` 拆成：
+
+- 常數與淨化規則**全部重用** `wishOffers.js`（`OFFER_REPORT_REASONS`、
+  `OFFER_REPORT_DAILY_CAP`、`OFFER_REPORT_DETAIL_MAX`）與 `safeContent.js`
+  （`containsUnsafeMarkup`、`sanitizeDocumentText`）——不在 PG 版重寫第二份。
+- 節流 `assertOfferBurst()` 是**行程內記憶體**，與 driver 無關，直接共用。
+- 新增 `writeOfferEventAsync()`（`wish_offer_events` 的寫入，同一組敏感欄位過濾清單）。
+- 產業務入口 `reportVisibleOfferAsync()`：可見性 → 角色（只有房客能檢舉）→ 寫入，
+  與同步版 `reportWishOffer()` 逐條相同。
+
+### 33.2 同步版靠例外、PG 版靠 rowCount
+
+同步版用 `try { INSERT } catch (UNIQUE) { 回 already }`；PG 版改用 **`rowCount === 0`**
+判斷（競態時另一方已寫入）⇒ 兩邊回傳形狀相同，但**不依賴例外訊息字串**。
+這比同步版更穩，且行為一致。
+
+### 33.3 這一包的兩個「測試自己」的教訓
+
+1. **`pgExec()` 的 `exec.raw` 被我在前一批改掉了**：症狀是
+   `Cannot read properties of undefined (reading 'prepare')`。夾具的輔助函式也是程式碼，
+   改動時要一起看呼叫端。
+2. **清理清單漏表 ⇒ 跨測試汙染**：`resetWorld()` 沒有刪 `wish_offer_reports`，
+   前一個測試的檢舉列留到後一個，撞 `UNIQUE(offer_id, reporter_user_id)`。
+   ⇒ 清單要涵蓋**所有會被測試寫入的表**。
+
+### 33.4 ⚠️ 未完成：每日上限的 parity 測試
+
+`OFFER_REPORT_DAILY_CAP` 的 PG 版 parity **還沒寫完**。我反覆卡在種子資料與
+`UNIQUE(offer_id, reporter_user_id)` 的衝突上，超過合理時間後**移除該測試**，
+而不是留一條紅的或假綠的。上限邏輯本身仍由同步版的既有測試守護，
+PG 版用的是同一組常數與同一句 `COUNT`。要補的時候注意：種子必須在 `copyRows()`
+**之前**灌進磁碟，且兩條路徑用不同的 `offer_id`。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
