@@ -54,7 +54,16 @@ const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgr
 // 這個模組原本只碰 settings（走 `settingsKvAsync`），但目錄快照要掃 `listings`，
 // 所以補一個與 `adminOverviewAsync.js` 同一個形狀的 runner（注入式 exec 優先）。
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    // ⚠️ 注入式 exec 有兩種形狀：`pgDriver.query()` 的裸陣列，以及 `crmOutboxAsync` 起的
+    // `{ rows, rowCount }`。呼叫端是 `for…of`，所以這裡**統一成裸陣列**
+    // （2026-09-28 CI 的 live 測試就是這樣抓到 `rows is not iterable`）。
+    const injected = options.exec;
+    return async (sql, params = []) => {
+      const raw = await injected(sql, params);
+      return Array.isArray(raw) ? raw : (raw?.rows || []);
+    };
+  }
   const pgDriver = options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver());
   const { toPostgresSql } = await import("./sqlDialect.js");
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);

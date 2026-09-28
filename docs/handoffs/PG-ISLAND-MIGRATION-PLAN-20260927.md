@@ -2511,6 +2511,15 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 - `v3/test/system-crawl-live-pg.test.js`（新，CI 的 PG job 會跑）：`settings` 的 upsert 在真 PG 上
   可用、五個鍵逐鍵讀回來的結果等於用同一批列組出來的、快照真的寫進 PG、
   後台搜尋的 `COALESCE` 對 NULL 位址的列真的能跑。
+- CI 抓到的兩個**既有守衛**問題（都已修）：
+  1. **尺規的缺陷 (2) 守衛又到期了**（這是第 6 次）：它拿「目前還沒移植」當 ground truth，
+     這一包把 `GET /api/admin/listings/search` 移植掉之後它必然紅。重新實測（套回缺陷 (2)）
+     後全站只剩 `GET /api/events/revision` 會因缺陷變判定 ⇒ 標的換成它，
+     **並補上「已移植的那四條現在必須是 PG」的反向斷言**，讓「移植完就整條失效」不再重演。
+  2. **注入式 `exec` 的兩種形狀**：`siteContentAsync`／`adminOverviewAsync` 的 runner 原本
+     只吃裸陣列，餵 `{ rows, rowCount }` 會在 `for…of` 爆 `rows is not iterable`
+     （live PG 測試抓到）。兩個 runner 都統一成裸陣列（與 `settingsKvAsync`／
+     `wishExampleAsync` 的修法相同）。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 

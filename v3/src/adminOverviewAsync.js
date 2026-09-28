@@ -28,7 +28,15 @@ const TODAY_NEW_SQL =
    FROM listings WHERE first_seen_at >= ? GROUP BY COALESCE(source, '591')`;
 
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    // ⚠️ 與 `siteContentAsync.js` 同一個理由：注入式 exec 可能是 `{ rows, rowCount }` 形狀，
+    // 而這裡的呼叫端是 `for…of` 或 `[0]`，所以統一成裸陣列。
+    const injected = options.exec;
+    return async (sql, params = []) => {
+      const raw = await injected(sql, params);
+      return Array.isArray(raw) ? raw : (raw?.rows || []);
+    };
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }

@@ -151,24 +151,37 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("吃 handle 參數的 helper 必須被看見：/api/admin/listings/search 的 searchAdminListings", () => {
-  // 📌 這條**已經換過五次標的**，換的原因值得記下來：
+test("吃 handle 參數的 helper 必須被看見：/api/events/revision 的 changesSince", () => {
+  // 📌 這條**已經換過六次標的**，換的原因值得記下來：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
   //   2. `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 下一步又移植掉 ⇒ 失效。
   //   3. `/api/media`（`listMemberMedia(db)`）→ 第十四批移植掉 ⇒ 失效。
   //   4. `/api/admin/campaigns`（`listCampaignsAdmin(db)`）→ 第十七批移植掉 ⇒ 失效。
   //   5. `/api/wish-rooms/example`（`getWishExample(db, …)`）→ 第二十七批移植掉 ⇒ 失效。
+  //   6. `GET /api/admin/listings/search`（`searchAdminListings`，adminOverview.js）
+  //      → 第四十四批移植掉 ⇒ 失效（就是這一次）。
   // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效。**
   //
-  // 這一次的挑法是照紀律做**實測**（不再憑感覺）：把缺陷 (2) 套回去跑一次尺規，
-  // 288 條裡只有兩條判定會變——`GET /api/admin/listings/search`（`searchAdminListings`，
-  // adminOverview.js）與 `GET /api/events/revision`（`changesSince`／`currentRevision`，
-  // dataRevision.js）。這裡用前者。
-  // ⚠️ 移植它們時，這一條要再換標的，**不要刪掉斷言**。
-  const r = route("GET /api/admin/listings/search");
+  // 這一次照紀律**重新實測**（`node v3/scripts/route-data-map.mjs --json`＋把缺陷 (2)
+  // 手動套回去跑一次）：288 條裡只剩 **`GET /api/events/revision`** 會因為缺陷 (2) 而變判定，
+  // 所以標的換成它。下面的 `已移植` 斷言是**反向**的：把第四十四批的成果釘住，
+  // 這樣「移植完就整條失效」的歷史不會再重演一次（失效的是 MIXED 那一半，不是整條測試）。
+  const r = route("GET /api/events/revision");
   assert.equal(r.verdict, "MIXED", `缺陷 (2) 會讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("searchAdminListings"),
-    `必須看得到 searchAdminListings（住在 adminOverview.js、吃 handle）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.ok(r.sqlite.includes("changesSince"),
+    `必須看得到 changesSince（住在 dataRevision.js、吃 handle）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.ok(r.sqlite.includes("currentRevision"),
+    `必須看得到 currentRevision（同一支）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  for (const path of [
+    "GET /api/admin/listings/search",
+    "GET /api/admin/system-crawl",
+    "PUT /api/admin/system-crawl",
+    "GET /api/public/wish-room/:id",
+  ]) {
+    const moved = route(path);
+    assert.equal(moved.verdict, "PG", `第四十四批已把 ${path} 判成 PG。實際：${JSON.stringify(moved)}`);
+    assert.deepEqual(moved.sqlite, [], `${path} 不得再有 SQLite 卡點。實際 sqlite=${JSON.stringify(moved.sqlite)}`);
+  }
 });
 
 test("跨模組的 handle helper 是可替換的守衛（單一標的移植掉時整條不會失效）", () => {
