@@ -476,7 +476,7 @@ const WISHEXAMPLE_MUTATIONS = [
   {
     name: "讀取不查 PG（永遠回 null）",
     file: WEX_SRC,
-    from: "    const rows = await exec(WISH_EXAMPLE_SELECT_SQL, [uid]);\n    return exampleFromRow(rows?.[0] || null);",
+    from: "    const rows = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));\n    return exampleFromRow(rows[0] || null);",
     to: "    return null;",
     expect: "有範例",
   },
@@ -486,6 +486,125 @@ const WISHEXAMPLE_MUTATIONS = [
     from: '  if (!uid) throw httpError("請先登入", 401);\n',
     to: "",
     expect: "未登入丟 401",
+  },
+];
+
+// 許願房生命週期寫入（更新／刊登／重開）＋範例寫入的變異集
+// （v3/test/wish-room-lifecycle-async.test.js）。
+const WISHLIFECYCLE_SRC = "v3/src/demandAsync.js";
+const WISHLIFECYCLE_SYNC_SRC = "v3/src/demand.js";
+const WISHLIFECYCLE_MUTATIONS = [
+  {
+    name: "更新不檢查所有權（可以改別人的許願房）",
+    file: WISHLIFECYCLE_SRC,
+    from: '    if (Number(row.user_id) !== uid) throw httpError("只能修改自己的許願房", 403);\n',
+    to: "",
+    expect: "所有權／不存在的錯誤形狀",
+  },
+  {
+    name: "更新不擋已隱藏的許願房",
+    file: WISHLIFECYCLE_SRC,
+    from: '    if (row.status === "hidden") throw httpError("已隱藏的許願房不能再改", 400);\n',
+    to: "",
+    expect: "所有權／不存在的錯誤形狀",
+  },
+  {
+    name: "更新 open 的許願房時不驗刊登條件（可以改成空殼）",
+    file: WISHLIFECYCLE_SRC,
+    from: '    if (row.status === "open") assertPublishable(fields);\n',
+    to: "",
+    expect: "所有權／不存在的錯誤形狀",
+  },
+  {
+    name: "更新只寫 PG，不讓本機 handle 追上（還沒搬完的讀取會看到舊資料）",
+    file: WISHLIFECYCLE_SRC,
+    from: "    writeRow(sqliteHandle(), row.id, fields, extra);\n",
+    to: "",
+    expect: "正規化的欄位與落地狀態",
+  },
+  {
+    name: "刊登的容量檢查不排除自己（永遠撞上限）",
+    file: WISHLIFECYCLE_SRC,
+    from: "    if (await countMutableAsync(run, uid, row.id) >= DEMAND_MAX_OPEN) throwActiveLimit();\n    try {\n      await applyPublishInPlaceAsync(run, row, fields, now);",
+    to: "    if (await countMutableAsync(run, uid, 0) >= DEMAND_MAX_OPEN) throwActiveLimit();\n    try {\n      await applyPublishInPlaceAsync(run, row, fields, now);",
+    expect: "刊登：draft → open",
+  },
+  {
+    name: "刊登不蓋 lifecycle（PG 上的那一列不會變 active）",
+    file: WISHLIFECYCLE_SYNC_SRC,
+    from: "  await run(PUBLISH_OPEN_SQL, [expires, row.id]);\n  await run(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(row.id, publishLifecyclePatch(row, stamp)));",
+    to: "  await run(PUBLISH_OPEN_SQL, [expires, row.id]);",
+    expect: "刊登：draft → open",
+  },
+  {
+    name: "刊登的 23505 不轉成 wish_active_limit（競態時丟出 PG 的原始錯誤）",
+    file: WISHLIFECYCLE_SRC,
+    from: "function rethrowActiveLimit(error) {\n  if (isUniqueUserConstraintError(error)) throwActiveLimit();\n  throw error;\n}",
+    to: "function rethrowActiveLimit(error) {\n  throw error;\n}",
+    expect: "PG 的競態",
+  },
+  {
+    name: "所有 PG 錯誤都當成 wish_active_limit（把連線中斷也吞掉）",
+    file: WISHLIFECYCLE_SRC,
+    from: "function rethrowActiveLimit(error) {\n  if (isUniqueUserConstraintError(error)) throwActiveLimit();\n  throw error;\n}",
+    to: "function rethrowActiveLimit(error) {\n  throwActiveLimit();\n}",
+    expect: "PG 的競態",
+  },
+  {
+    name: "重開不擋已封存的舊草稿",
+    file: WISHLIFECYCLE_SRC,
+    from: "    assertNotCollapsed(row);\n",
+    to: "",
+    expect: "重開：closed → open",
+  },
+  {
+    name: "重開不擋 lifecycle=blocked",
+    file: WISHLIFECYCLE_SRC,
+    from: '    if (mapLegacyLifecycle(row) === "blocked") throw httpError("已封鎖的許願房不能重開", 400, "wish_blocked");\n',
+    to: "",
+    expect: "重開：closed → open",
+  },
+  {
+    name: "不先用 PG 的 settings 灌行程內快取（拿空目錄正規化）",
+    file: WISHLIFECYCLE_SRC,
+    from: "    await getWishConditionsAsync(options);\n    const id = Number(postId) || 0;\n    const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);\n    if (!row) throw httpError(\"找不到這則許願房\", 404);\n    if (Number(row.user_id) !== uid) throw httpError(\"只能修改自己的許願房\", 403);",
+    to: "    const id = Number(postId) || 0;\n    const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);\n    if (!row) throw httpError(\"找不到這則許願房\", 404);\n    if (Number(row.user_id) !== uid) throw httpError(\"只能修改自己的許願房\", 403);",
+    expect: "行程內快取必須先用 PG",
+  },
+  {
+    name: "範例用 SQLite 的 ON CONFLICT 寫 PG（PG 沒有那個約束）",
+    file: WEX_SRC,
+    from: "    const existing = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));\n    if (existing[0]) await exec(WISH_EXAMPLE_UPDATE_SQL, [payload, stamp, uid]);\n    else await exec(WISH_EXAMPLE_INSERT_SQL, [uid, payload, stamp, stamp]);",
+    to: "    await exec(WISH_EXAMPLE_UPSERT_SQL, [uid, payload, stamp, stamp]);",
+    expect: "第一次寫入是 INSERT",
+  },
+  {
+    name: "範例只寫 PG，不讓本機 handle 追上",
+    file: WEX_SRC,
+    from: "    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {",
+    to: "    if (false) {",
+    expect: "兩個 store 的 payload",
+  },
+  {
+    name: "注入式 exec 的形狀只認一種（另一種會靜默回 null）",
+    file: WEX_SRC,
+    from: "const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));",
+    to: "const rowsOf = (raw) => raw;",
+    expect: "兩種形狀",
+  },
+  {
+    name: "本機沒有這個帳號也硬寫本機那一份（PG 寫成功卻回 500：本機 FK）",
+    file: WEX_SRC,
+    from: "    const local = sqliteHandle();\n    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {\n      local.prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);\n    }",
+    to: "    sqliteHandle().prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);",
+    expect: "本機沒有這個帳號時仍要成功",
+  },
+  {
+    name: "範例的聯絡人快照不查 PG（用自己的聯絡人會變空白）",
+    file: WEX_SRC,
+    from: "    const rows = rowsOf(await exec(WISH_CONTACT_PROFILE_SQL, [profileId]));\n    row = rows[0] || null;",
+    to: "    row = null;",
+    expect: "未登入與別人的聯絡人",
   },
 ];
 
@@ -2114,6 +2233,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /wish-room-lifecycle-async/.test(testFile) ? WISHLIFECYCLE_MUTATIONS
   : /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
   : /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
   : /same-house-backfill-status/.test(testFile) ? BACKFILL_MUTATIONS

@@ -373,7 +373,7 @@ test("server /publish route only forwards to publishWishRoomFor", () => {
     server.indexOf('app.post("/api/wish-rooms/:id/publish"'),
     server.indexOf('app.post("/api/wish-rooms/:id/reopen"'),
   );
-  assert.match(route, /publishWishRoomFor\(session\.userId, req\.params\.id/);
+  assert.match(route, /await publishWishRoomAsync\(session\.userId, req\.params\.id/);
   assert.doesNotMatch(route, /applyPublishInPlace/);
   assert.doesNotMatch(route, /lifecycle\s*=\s*['"]active['"]/);
   assert.match(readFileSync(path.join(dir, "../src/demand.js"), "utf8"), /classifyWishPublishState/);

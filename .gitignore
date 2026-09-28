@@ -10,3 +10,6 @@ node_modules/
 **/__pycache__/
 *.pyc
 design-system/dist/
+
+# Cline 對話歷史匯出（含先前 session 的原始輸出，可能夾帶憑證；不得進 repo）
+docs/cline-history/

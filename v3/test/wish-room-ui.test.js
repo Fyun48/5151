@@ -111,7 +111,9 @@ test("server-side one-active and example APIs are present", () => {
     server.indexOf('app.post("/api/wish-rooms/:id/publish"'),
     server.indexOf('app.post("/api/wish-rooms/:id/reopen"'),
   );
-  assert.match(publishRoute, /publishWishRoomFor/);
+  // 2026-09-28（第四十批）：接線的進入點改成 driver-aware 的 `publishWishRoomAsync`；
+  // 這一條的用意不變——路由只能轉呼叫，不得自己寫 SQL／自己改狀態。
+  assert.match(publishRoute, /publishWishRoomAsync/);
   assert.doesNotMatch(publishRoute, /applyPublishInPlace|status\s*=\s*['"]open['"]/);
   assert.match(server, /app\.get\("\/api\/admin\/wish-conditions"/);
   assert.match(server, /app\.put\("\/api\/admin\/wish-conditions"/);

@@ -316,7 +316,9 @@ function rowByRef(db, ref) {
   return db.prepare("SELECT * FROM demand_posts WHERE public_token = ?").get(raw) || null;
 }
 
-function publishExpiry(now) {
+// 匯出給 driver-aware 版（`demandAsync.js` 的 publish／reopen）逐字重用：
+// 有效期限的算法（生命週期開關決定 TTL 或遠期）**不能**有第二份實作。
+export function publishExpiry(now) {
   return isWishLifecycleEnabled(marketplaceFlags) ? ttlExpiresAt(now) : WISH_FAR_EXPIRE;
 }
 
@@ -472,37 +474,49 @@ function existingOpenId(db, uid) {
   return Number(row?.id) || 0;
 }
 
-function countMutable(db, userId, exceptId = 0) {
+// 「同時只能有一則公開的許願房」的計數語句。抽成常數讓 PG 版（`demandAsync.js`）逐字共用。
+export const COUNT_MUTABLE_SQL =
+  "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft')";
+export const COUNT_MUTABLE_EXCEPT_SQL =
+  "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft') AND id != ?";
+
+export function countMutable(db, userId, exceptId = 0) {
   const row = exceptId
-    ? db.prepare(
-      "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft') AND id != ?",
-    ).get(userId, exceptId)
-    : db.prepare(
-      "SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = ? AND status IN ('open', 'draft')",
-    ).get(userId);
+    ? db.prepare(COUNT_MUTABLE_EXCEPT_SQL).get(userId, exceptId)
+    : db.prepare(COUNT_MUTABLE_SQL).get(userId);
   return Number(row?.n) || 0;
 }
 
 function isUniqueUserConstraint(error) {
-  return /UNIQUE constraint failed: demand_posts\.user_id/i.test(String(error?.message || ""));
+  const message = String(error?.message || "");
+  if (/UNIQUE constraint failed: demand_posts\.user_id/i.test(message)) return true;
+  // PG 的 unique_violation 要**指名**是「一人一則」那幾條部分唯一索引——`demand_posts` 上還有
+  // `idx_demand_public_token`，把所有 23505 都當成 active limit 會把 token 撞號講成「已有許願房」。
+  return String(error?.code || "") === "23505" && /idx_demand_one_(open|draft|mutable)/i.test(message);
 }
 
 function throwDraftBesideOpen() {
   throw httpError("已有公開的許願房時不能再存草稿", 409, "wish_mutable_limit");
 }
 
-function throwActiveLimit() {
+// 匯出給 PG 版重用：`demandAsync.js` 沒有 SQLite 的 `BEGIN IMMEDIATE`，
+// 撞到「同一人只能有一則 open」的部分唯一索引時要丟**同一個**錯誤。
+export function throwActiveLimit() {
   throw httpError("同時只能有一則公開的許願房", 409, "wish_active_limit");
 }
 
-function assertNotCollapsed(row) {
+export function isUniqueUserConstraintError(error) {
+  return isUniqueUserConstraint(error);
+}
+
+export function assertNotCollapsed(row) {
   if (String(row?.closed_reason || "") === LEGACY_COLLAPSED_REASON) {
     throw httpError("這則舊草稿已封存，請另開新的一則", 400, "wish_collapsed");
   }
 }
 
 /** /publish 只接受 draft；already-open 可 idempotent 回傳，其餘狀態 fail-closed。 */
-function classifyWishPublishState(row) {
+export function classifyWishPublishState(row) {
   assertNotCollapsed(row);
   const status = String(row?.status || "");
   if (status === "draft") return "draft";
@@ -844,21 +858,18 @@ function countOpen(db, userId, exceptId = 0) {
   return Number(row?.n) || 0;
 }
 
-function snapshotContact(db, userId, input = {}, fallback = {}) {
-  const profileId = Number(input.contact_profile_id) || 0;
-  if (profileId) {
-    let row;
-    try {
-      row = db.prepare("SELECT * FROM listing_contact_profile WHERE id = ?").get(profileId);
-    } catch {
-      throw httpError("找不到這個聯絡人", 404);
-    }
-    if (!row) throw httpError("找不到這個聯絡人", 404);
-    if (Number(row.user_id) !== Number(userId)) throw httpError("只能使用自己的聯絡人", 403);
+export const WISH_CONTACT_PROFILE_SQL = "SELECT * FROM listing_contact_profile WHERE id = ?";
+
+// 聯絡人快照的**純**部分：吃「已經查好的聯絡人列」，自己不碰 DB。
+// 抽出來是為了讓 PG 版（`demandAsync.js` 的 `normalizeWishFields` 呼叫端）用同一份規則——
+// 「只能用自己的聯絡人」「電話太短」「line 正規化」這些判斷不能有第二份實作。
+export function contactFields(userId, input = {}, fallback = {}, profileRow = null) {
+  if (profileRow) {
+    if (Number(profileRow.user_id) !== Number(userId)) throw httpError("只能使用自己的聯絡人", 403);
     return {
-      contact_name: stripUnsafePlain(row.contact_name, SELF_CONTACT_MAX),
-      phone: digitsPhone(row.phone),
-      line_url: row.line_url || "",
+      contact_name: stripUnsafePlain(profileRow.contact_name, SELF_CONTACT_MAX),
+      phone: digitsPhone(profileRow.phone),
+      line_url: profileRow.line_url || "",
     };
   }
   const contactName = stripUnsafePlain(
@@ -873,7 +884,25 @@ function snapshotContact(db, userId, input = {}, fallback = {}) {
   return { contact_name: contactName, phone, line_url: lineUrl };
 }
 
-function normalizeWishInput(db, userId, input = {}, fallback = {}) {
+function snapshotContact(db, userId, input = {}, fallback = {}) {
+  const profileId = Number(input.contact_profile_id) || 0;
+  if (profileId) {
+    let row;
+    try {
+      row = db.prepare(WISH_CONTACT_PROFILE_SQL).get(profileId);
+    } catch {
+      throw httpError("找不到這個聯絡人", 404);
+    }
+    if (!row) throw httpError("找不到這個聯絡人", 404);
+    return contactFields(userId, input, fallback, row);
+  }
+  return contactFields(userId, input, fallback, null);
+}
+
+// `normalizeWishInput()` 的**純**核心：`contactThunk` 會在原本 `snapshotContact()` 的**位置**
+// 才被呼叫，所以「同時有多個錯誤時先丟哪一個」與同步版完全相同（先前的欄位驗證仍然優先）。
+// PG 版就是把查好的聯絡人列包成 thunk 傳進來（查詢是非同步的，只能先查、後取值）。
+export function normalizeWishFields(userId, input = {}, fallback = {}, contactThunk) {
   const districts = normalizeWatchDistricts(input.districts ?? parseJsonArray(fallback.districts)).slice(0, 12);
   const city = stripUnsafePlain(input.city != null ? input.city : fallback.city, 40) || cityFromDistricts(districts);
   const locationNote = stripUnsafePlain(
@@ -925,7 +954,7 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
     ? (input.mrt_walk === true || input.mrt_walk === 1 ? 1 : 0)
     : (Number(fallback.mrt_walk) === 1 ? 1 : 0);
   const body = stripUnsafePlain(input.body != null ? input.body : fallback.body, DEMAND_BODY_MAX);
-  const contact = snapshotContact(db, userId, input, fallback);
+  const contact = typeof contactThunk === "function" ? contactThunk() : {};
   return {
     city,
     districts,
@@ -949,7 +978,11 @@ function normalizeWishInput(db, userId, input = {}, fallback = {}) {
   };
 }
 
-function assertPublishable(fields) {
+function normalizeWishInput(db, userId, input = {}, fallback = {}) {
+  return normalizeWishFields(userId, input, fallback, () => snapshotContact(db, userId, input, fallback));
+}
+
+export function assertPublishable(fields) {
   if (!fields.districts.length) throw httpError("請至少選一個行政區");
   if (fields.body.length < 4) throw httpError("請寫一點找房條件（至少 4 個字）");
 }
@@ -1333,9 +1366,11 @@ function insertRow(db, uid, fields, status, now, isolation) {
   return id;
 }
 
-function writeRow(db, id, fields, extra = {}) {
-  db.prepare(
-    `UPDATE demand_posts SET
+// `writeRow()` 的語句與參數順序抽成常數／純函式，讓 PG 版（`demandAsync.js` 的
+// update／publish／reopen）逐字使用同一份——兩個 driver 的欄位對應不可能漂移。
+// ⚠️ 跨模組副作用（`syncDemandMatchDistricts()`）**不在**這裡：PG 版由呼叫端另外用
+// 本機 handle 觸發（與 `applyReportHideEffects` 同一個處置）。
+export const WRITE_ROW_SQL = `UPDATE demand_posts SET
       districts=?, rent_max=?, housing_type=?, mrt_walk=?, body=?,
       city=?, location_note=?, rent_min=?, includes_management=?, ping_min=?, layout=?,
       move_in_date=?, lease_duration=?, transit_note=?, destination_note=?, commute_minutes=?,
@@ -1343,8 +1378,10 @@ function writeRow(db, id, fields, extra = {}) {
       updated_at=?, status=COALESCE(?, status), expires_at=COALESCE(?, expires_at),
       published_at=COALESCE(?, published_at), closed_at=COALESCE(?, closed_at),
       condition_choices=COALESCE(?, condition_choices)
-     WHERE id=?`,
-  ).run(
+     WHERE id=?`;
+
+export function writeRowParams(id, fields, extra = {}) {
+  return [
     JSON.stringify(fields.districts),
     fields.rent_max,
     fields.housing_type,
@@ -1374,11 +1411,37 @@ function writeRow(db, id, fields, extra = {}) {
     extra.closed_at === undefined ? null : extra.closed_at,
     fields.condition_choices ? JSON.stringify(fields.condition_choices) : null,
     id,
-  );
+  ];
+}
+
+// 匯出給 PG 版當「本機 handle 追上」的那一半：它比 `WRITE_ROW_SQL` 多跑
+// `syncDemandMatchDistricts()`（吃 handle、整支還在 SQLite 上）。
+export function writeRow(db, id, fields, extra = {}) {
+  db.prepare(WRITE_ROW_SQL).run(...writeRowParams(id, fields, extra));
   syncDemandMatchDistricts(db, id);
 }
 
-function applyPublishInPlace(db, row, fields, now) {
+// 「刊登」與「重開」用到的三條 UPDATE。抽成常數讓 PG 版逐字共用（見 `applyPublishInPlaceAsync`）。
+export const PUBLISHED_AT_BACKFILL_SQL =
+  "UPDATE demand_posts SET published_at = ? WHERE id = ? AND published_at IS NULL";
+export const PUBLISH_OPEN_SQL =
+  "UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?";
+export const REOPEN_OPEN_SQL = "UPDATE demand_posts SET closed_at = NULL, status = 'open' WHERE id = ?";
+
+// 刊登時要寫入的 lifecycle patch。同步版與 PG 版共用同一份（`applyPublishInPlace` 的參數）。
+export function publishLifecyclePatch(row, stamp) {
+  return {
+    lifecycle: "active",
+    last_confirmed_at: stamp,
+    last_active_at: stamp,
+    continuous_active_from: row.continuous_active_from || stamp,
+    closed_reason: "",
+  };
+}
+
+// 匯出給 PG 版當「本機 handle 追上」的那一半（它含 `writeRow()` 裡的
+// `syncDemandMatchDistricts()`，那一支吃 handle）。
+export function applyPublishInPlace(db, row, fields, now) {
   const stamp = iso(now);
   const expires = publishExpiry(now);
   writeRow(db, row.id, fields, {
@@ -1389,16 +1452,30 @@ function applyPublishInPlace(db, row, fields, now) {
     closed_at: null,
   });
   if (!row.published_at) {
-    db.prepare("UPDATE demand_posts SET published_at = ? WHERE id = ? AND published_at IS NULL").run(stamp, row.id);
+    db.prepare(PUBLISHED_AT_BACKFILL_SQL).run(stamp, row.id);
   }
-  db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open', expires_at = ? WHERE id = ?").run(expires, row.id);
-  writeLifecycle(db, row.id, {
-    lifecycle: "active",
-    last_confirmed_at: stamp,
-    last_active_at: stamp,
-    continuous_active_from: row.continuous_active_from || stamp,
-    closed_reason: "",
-  });
+  db.prepare(PUBLISH_OPEN_SQL).run(expires, row.id);
+  writeLifecycle(db, row.id, publishLifecyclePatch(row, stamp));
+}
+
+// `applyPublishInPlace()` 的 PG 版：**同一組語句與同一個 lifecycle patch**，跑在 PG 上。
+// ⚠️ 跨模組那半（`writeRow()` 內的 `syncDemandMatchDistricts()`）不在這裡——它吃 handle，
+// 由呼叫端另外用本機 handle 觸發（與 `applyClosedPostEffectsAsync` 同一個處置）。
+export async function applyPublishInPlaceAsync(run, row, fields, now) {
+  const stamp = iso(now);
+  const expires = publishExpiry(now);
+  await run(WRITE_ROW_SQL, writeRowParams(row.id, fields, {
+    updated_at: stamp,
+    status: "open",
+    expires_at: expires,
+    published_at: row.published_at || stamp,
+    closed_at: null,
+  }));
+  if (!row.published_at) {
+    await run(PUBLISHED_AT_BACKFILL_SQL, [stamp, row.id]);
+  }
+  await run(PUBLISH_OPEN_SQL, [expires, row.id]);
+  await run(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(row.id, publishLifecyclePatch(row, stamp)));
 }
 
 export function createDemandPost(db, userId, input = {}, now = new Date(), options = {}) {
@@ -1537,28 +1614,57 @@ export function reopenWishRoom(db, userId, postId, now = new Date()) {
       throw httpError("已找到房的許願房請另開新的一則", 400, "wish_completed");
     }
     if (mapLegacyLifecycle(row) === "blocked") throw httpError("已封鎖的許願房不能重開", 400, "wish_blocked");
-    const stamp = iso(now);
-    const expires = publishExpiry(now);
-    writeRow(db, row.id, fields, {
-      updated_at: stamp,
-      status: "open",
-      expires_at: expires,
-      published_at: row.published_at || stamp,
-      closed_at: null,
-    });
-    db.prepare("UPDATE demand_posts SET closed_at = NULL, status = 'open' WHERE id = ?").run(row.id);
-    writeLifecycle(db, row.id, {
-      lifecycle: "active",
-      last_confirmed_at: stamp,
-      last_active_at: stamp,
-      continuous_active_from: stamp,
-      closed_reason: "",
-    });
+    applyReopenInPlace(db, row, fields, now);
     return getDemandPost(db, row.id, { viewerId: uid });
   });
 }
 
-function examplePayload(fields) {
+// 「重開」的資料半（`reopenWishRoom()` 的狀態轉換），抽出來讓 PG 版逐字共用。
+// ⚠️ 重開的 `continuous_active_from` 是**當下**（不是沿用舊值），與刊登不同——照抄同步版。
+export function applyReopenInPlace(db, row, fields, now) {
+  const stamp = iso(now);
+  const expires = publishExpiry(now);
+  writeRow(db, row.id, fields, {
+    updated_at: stamp,
+    status: "open",
+    expires_at: expires,
+    published_at: row.published_at || stamp,
+    closed_at: null,
+  });
+  db.prepare(REOPEN_OPEN_SQL).run(row.id);
+  writeLifecycle(db, row.id, {
+    lifecycle: "active",
+    last_confirmed_at: stamp,
+    last_active_at: stamp,
+    continuous_active_from: stamp,
+    closed_reason: "",
+  });
+}
+
+// `applyReopenInPlace()` 的 PG 版：同一組語句與同一個 lifecycle patch，跑在 PG 上。
+export async function applyReopenInPlaceAsync(run, row, fields, now) {
+  const stamp = iso(now);
+  const expires = publishExpiry(now);
+  await run(WRITE_ROW_SQL, writeRowParams(row.id, fields, {
+    updated_at: stamp,
+    status: "open",
+    expires_at: expires,
+    published_at: row.published_at || stamp,
+    closed_at: null,
+  }));
+  await run(REOPEN_OPEN_SQL, [row.id]);
+  await run(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(row.id, {
+    lifecycle: "active",
+    last_confirmed_at: stamp,
+    last_active_at: stamp,
+    continuous_active_from: stamp,
+    closed_reason: "",
+  }));
+}
+
+// 匯出給 PG 版（`wishExampleAsync.saveWishExampleAsync`）逐字重用：範例的 payload 形狀
+// 不能有第二份實作，否則兩個 driver 存進去的 JSON 會長得不一樣。
+export function examplePayload(fields) {
   return {
     city: fields.city || "",
     districts: fields.districts,
@@ -1597,17 +1703,20 @@ export function getWishExample(db, userId) {
   }
 }
 
+// 範例的 upsert。**SQLite 專屬**（`ON CONFLICT(user_id) DO UPDATE` 靠的是 SQLite 的
+// 主鍵／唯一約束；PG 那邊刻意用「先查再寫」，見 `wishExampleAsync.js` 的說明），
+// 但本機 handle 的「追上」那一半用的是同一句，所以抽成常數、不要抄第二份。
+export const WISH_EXAMPLE_UPSERT_SQL = `INSERT INTO wish_room_example(user_id, payload, created_at, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`;
+
 export function saveWishExample(db, userId, input = {}, now = new Date()) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
   const fields = normalizeWishInput(db, uid, input);
   const stamp = iso(now);
   const payload = JSON.stringify(examplePayload(fields));
-  db.prepare(
-    `INSERT INTO wish_room_example(user_id, payload, created_at, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
-  ).run(uid, payload, stamp, stamp);
+  db.prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);
   return getWishExample(db, uid);
 }
 
