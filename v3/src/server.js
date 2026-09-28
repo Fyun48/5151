@@ -142,7 +142,6 @@ import {
   getWishExampleFor,
   saveWishExampleFor,
   deleteWishExampleFor,
-  wishRoomOwnerSummaryFor,
   publicWishRoomView,
   demandMeta,
   submitFeedback,
@@ -308,6 +307,7 @@ import {
   getDemandPostAsync,
   listDemandPostsAsync,
   reportDemandAsync,
+  wishRoomOwnerSummaryAsync,
 } from "./demandAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
@@ -988,14 +988,14 @@ function wishListQuery(req) {
 async function wishListPayload(req) {
   const session = readSession(req);
   const query = wishListQuery(req);
-  getWishConditions();
-  // 列表本體走 PG 島嶼；`wishRoomOwnerSummary`（自己的統計）還沒搬，仍是同步的。
+  // 目錄（性質清單）已有 driver-aware 入口，直接用；列表與屋主摘要都走 PG 島嶼。
+  await getWishConditionsAsync();
   const posts = await listDemandPostsAsync(query);
   return {
     ...demandMeta(),
     posts,
     rooms: posts,
-    mine: query.mine ? wishRoomOwnerSummaryFor(session.userId) : undefined,
+    mine: query.mine ? await wishRoomOwnerSummaryAsync(session.userId) : undefined,
   };
 }
 
@@ -1057,7 +1057,7 @@ app.get("/api/wish-rooms/mine", async (req, res) => {
     }
     res.json({
       ...demandMeta(),
-      ...wishRoomOwnerSummaryFor(session.userId),
+      ...(await wishRoomOwnerSummaryAsync(session.userId)),
       posts: await listDemandPostsAsync({ viewerId: session.userId, mine: true }),
     });
   } catch (error) {

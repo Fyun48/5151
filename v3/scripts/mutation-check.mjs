@@ -1711,6 +1711,27 @@ const DEMAND_MUTATIONS = [
     expect: "兩個 store 都改",
   },
   {
+    name: "屋主摘要的 can_create 永遠 true（已有一則 open 還說可以再建）",
+    file: DEMAND_SRC,
+    from: "      can_create: !active,",
+    to: "      can_create: true,",
+    expect: "can_create",
+  },
+  {
+    name: "屋主摘要不查範例（has_example 永遠 false）",
+    file: DEMAND_SRC,
+    from: "    const hasExample = Boolean(one((await run(HAS_EXAMPLE_SQL, [uid])).rows));",
+    to: "    const hasExample = false;",
+    expect: "has_example",
+  },
+  {
+    name: "待處理報價不篩 pending（把處理完的也算進去）",
+    file: DEMAND_SRC,
+    from: "export const PENDING_OFFER_COUNT_SQL =\n  \"SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = ? AND status = 'pending'\";",
+    to: "export const PENDING_OFFER_COUNT_SQL =\n  \"SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = ?\";",
+    expect: "待處理報價數要從 PG 讀到",
+  },
+  {
     name: "公開列表不套公開篩選條件（city／district 篩選失效）",
     file: DEMAND_SRC,
     from: "    const filtered = mine ? rows : rows.filter((row) => matchesFilters(row, rest));",
