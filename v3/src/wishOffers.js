@@ -873,26 +873,10 @@ function contactAvailable(fields) {
   return Boolean(fields.display_name || fields.phone || fields.line_url);
 }
 
-export function projectOfferContact(db, offer, userId, now = new Date()) {
-  const role = viewerRoleForOffer(offer, userId);
-  if (!role) throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
-  if (offer.status !== "accepted") {
-    throw offerHttpError("尚未互相確認，無法查看聯絡方式", 404, "contact_unavailable");
-  }
-  if (tenantBlocksOwner(db, offer.tenant_user_id, offer.owner_user_id)) {
-    throw offerHttpError("聯絡方式已無法使用", 404, "contact_unavailable");
-  }
-  const wishRow = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(offer.wish_id);
-  const listingRow = getSelfRow(db, offer.listing_id);
-  const fields = role === "owner" ? contactFieldsFromWish(wishRow) : contactFieldsFromListing(listingRow);
+// 聯絡方式投影的**組裝**抽成純函式（吃已載入的列），讓 PG 版用同一段組裝邏輯。
+// `role` 與 `available` 的判斷、以及三種 `next_step` 文案都只有這一份。
+export function contactProjection(offer, role, fields) {
   const available = contactAvailable(fields);
-  writeOfferEvent(db, {
-    offerId: offer.id,
-    actorUserId: userId,
-    eventType: "contact_projection_accessed",
-    meta: { viewer_role: role, available },
-    now,
-  });
   return {
     offer_ref: offer.public_token,
     status: "accepted",
@@ -909,6 +893,38 @@ export function projectOfferContact(db, offer, userId, now = new Date()) {
           : "請用房源頁的公開聯絡方式聯繫，或請對方補上資料。"),
     },
   };
+}
+
+// 角色與狀態的守衛（含封鎖判斷）抽出來，兩個 driver 用同一組順序與錯誤碼。
+export function assertContactReadable(role, offer, blocked) {
+  if (!role) throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
+  if (offer.status !== "accepted") {
+    throw offerHttpError("尚未互相確認，無法查看聯絡方式", 404, "contact_unavailable");
+  }
+  if (blocked) throw offerHttpError("聯絡方式已無法使用", 404, "contact_unavailable");
+}
+
+export function contactFieldsFor(opts) {
+  return opts.role === "owner"
+    ? contactFieldsFromWish(opts.wishRow)
+    : contactFieldsFromListing(opts.listingRow);
+}
+
+export function projectOfferContact(db, offer, userId, now = new Date()) {
+  const role = viewerRoleForOffer(offer, userId);
+  assertContactReadable(role, offer, tenantBlocksOwner(db, offer.tenant_user_id, offer.owner_user_id));
+  const wishRow = db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(offer.wish_id);
+  const listingRow = getSelfRow(db, offer.listing_id);
+  const fields = contactFieldsFor({ role, wishRow, listingRow });
+  const projection = contactProjection(offer, role, fields);
+  writeOfferEvent(db, {
+    offerId: offer.id,
+    actorUserId: userId,
+    eventType: "contact_projection_accessed",
+    meta: { viewer_role: role, available: projection.contact.available },
+    now,
+  });
+  return projection;
 }
 
 export function attachOfferCtas(db, items, { listingId, ownerUserId, now = new Date() } = {}) {
@@ -1049,19 +1065,29 @@ export function createOfferReport(db, userId, offer, { reason, detail = "", now 
   return { ok: true, already: false, report_ref: token };
 }
 
-export function listAdminOfferReports(db, { limit = 50 } = {}) {
-  const size = Math.min(100, Math.max(1, Number(limit) || 50));
-  return db.prepare(
-    `SELECT public_token, offer_id, reason, status, created_at, listing_id
-     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`,
-  ).all(size).map((row) => ({
+// 列 → 檢舉視圖的映射抽成純函式，PG 版（wishOffersAsync.listAdminOfferReportsAsync）
+// 用同一支，確保後台看到的欄位形狀不可能與同步版不同。
+export function publicAdminReportView(row) {
+  return {
     report_ref: row.public_token,
     reason: row.reason,
     status: row.status,
     created_at: truncateTime(row.created_at),
     listing_ref: row.listing_id,
-  }));
+  };
 }
+
+export function listAdminOfferReports(db, { limit = 50 } = {}) {
+  const size = Math.min(100, Math.max(1, Number(limit) || 50));
+  return db.prepare(
+    `SELECT public_token, offer_id, reason, status, created_at, listing_id
+     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).all(size).map(publicAdminReportView);
+}
+
+// ⚠️ 查詢語句抽成常數：PG 版逐字用它（只差 LIMIT 的綁定方式）。
+export const ADMIN_REPORTS_SQL = `SELECT public_token, offer_id, reason, status, created_at, listing_id
+     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`;
 
 export function explainWishOfferPlans(db) {
   const explain = (sql) => {

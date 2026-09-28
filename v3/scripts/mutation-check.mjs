@@ -1711,27 +1711,6 @@ const DEMAND_MUTATIONS = [
     expect: "兩個 store 都改",
   },
   {
-    name: "屋主摘要的 can_create 永遠 true（已有一則 open 還說可以再建）",
-    file: DEMAND_SRC,
-    from: "      can_create: !active,",
-    to: "      can_create: true,",
-    expect: "can_create",
-  },
-  {
-    name: "屋主摘要不查範例（has_example 永遠 false）",
-    file: DEMAND_SRC,
-    from: "    const hasExample = Boolean(one((await run(HAS_EXAMPLE_SQL, [uid])).rows));",
-    to: "    const hasExample = false;",
-    expect: "has_example",
-  },
-  {
-    name: "待處理報價不篩 pending（把處理完的也算進去）",
-    file: DEMAND_SRC,
-    from: "export const PENDING_OFFER_COUNT_SQL =\n  \"SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = ? AND status = 'pending'\";",
-    to: "export const PENDING_OFFER_COUNT_SQL =\n  \"SELECT COUNT(*) AS n FROM wish_offers WHERE tenant_user_id = ?\";",
-    expect: "待處理報價數要從 PG 讀到",
-  },
-  {
     name: "公開列表不套公開篩選條件（city／district 篩選失效）",
     file: DEMAND_SRC,
     from: "    const filtered = mine ? rows : rows.filter((row) => matchesFilters(row, rest));",
@@ -1773,6 +1752,118 @@ const WOFFERS_MUTATIONS = [
     expect: "status 篩選與空集合",
   },
   {
+    name: "檢舉不檢查角色（屋主也能檢舉自己的提案）",
+    file: WOFFERS_SRC,
+    from: "  if (!offer || Number(offer.tenant_user_id) !== Number(userId)) {\n    throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");\n  }",
+    to: "  if (!offer) {\n    throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");\n  }",
+    expect: "只有房客能檢舉",
+  },
+  {
+    name: "檢舉不檢查重複（同一人可以一直檢舉同一提案）",
+    file: WOFFERS_SRC,
+    from: "    const existing = one((await run(REPORT_EXISTING_SQL, [Number(offer.id), uid])).rows);\n    if (existing) return { ok: true, already: true, report_ref: existing.public_token };",
+    to: "    const existing = null;\n    if (existing) return { ok: true, already: true, report_ref: existing.public_token };",
+    expect: "驗證、寫入與稽核事件兩邊一致",
+  },
+  {
+    name: "檢舉不寫稽核事件（事後查不到）",
+    file: WOFFERS_SRC,
+    from: "    await writeOfferEventAsync(run, {\n      offerId: offer.id, actorUserId: uid, eventType: \"offer_reported\", meta: { reason: code }, now,\n    });",
+    to: "    void writeOfferEventAsync;",
+    expect: "驗證、寫入與稽核事件兩邊一致",
+  },
+  {
+    name: "解除封鎖不檢查擁有者（可以解除別人的封鎖）",
+    file: WOFFERS_SRC,
+    from: "  if (!row || Number(row.blocker_user_id) !== Number(userId)) return null;",
+    to: "  if (!row) return null;",
+    expect: "解除封鎖",
+  },
+  // ⚠️ 刻意**沒有**「解除封鎖接受數字型 ref」這一條：`newBlockToken()` 產生的 token 永遠不是
+  // 純數字，所以拿掉那個守衛在**可觀察行為上是等價的**（數字 ref 一樣查不到、一樣 404）。
+  // 放進變異集只會得到假 SURVIVED，所以寧可寫明理由。
+  {
+    name: "moderation 封鎖可以自行解除（停權處分被繞過）",
+    file: WOFFERS_SRC,
+    from: "    if (String(row.context || \"\") === \"moderation\") {\n      throw offerHttpError(\"這筆封鎖不能自行解除\", 403, \"block_locked\");\n    }",
+    to: "    if (false) {\n      throw offerHttpError(\"這筆封鎖不能自行解除\", 403, \"block_locked\");\n    }",
+    expect: "解除封鎖",
+  },
+  {
+    name: "封鎖名單不查刊登標題（清單少一個欄位）",
+    file: WOFFERS_SRC,
+    from: "      const listing = row.listing_id ? await getSelfRowAsync(row.listing_id, { ...options, driver: \"postgres\" }) : null;",
+    to: "      const listing = null;",
+    expect: "形狀（含刊登標題）",
+  },
+  {
+    name: "後台清單不套 limit 夾限（負數或爆量都照送）",
+    file: WOFFERS_SRC,
+    from: "  const size = Math.min(100, Math.max(1, Number(opts?.limit) || 50));",
+    to: "  const size = Number(opts?.limit) || 50;",
+    expect: "後台檢舉清單",
+  },
+  {
+    name: "後台清單多回傳檢舉人（個資外洩）",
+    file: WOFFERS_SRC,
+    from: "    const rows = (await run(ADMIN_REPORTS_SQL, [size])).rows || [];\n    return { items: rows.map(publicAdminReportView) };",
+    to: "    const rows = (await run(ADMIN_REPORTS_SQL, [size])).rows || [];\n    return { items: rows };",
+    expect: "後台檢舉清單",
+  },
+  {
+    name: "聯絡方式不檢查角色（第三人也拿得到聯絡方式）",
+    file: WOFFERS_SRC,
+    from: "    assertContactReadable(role, offer || {}, blocked);",
+    to: "    if (!offer) throw offerHttpError(\"找不到這筆提案\", 404, \"offer_not_found\");",
+    expect: "聯絡方式",
+  },
+  {
+    name: "聯絡方式不寫稽核事件（事後查不到誰看過）",
+    file: WOFFERS_SRC,
+    from: "    await writeOfferEventAsync(run, {\n      offerId: offer.id,\n      actorUserId: userId,\n      eventType: \"contact_projection_accessed\",",
+    to: "    await (async () => {})({\n      offerId: offer.id,\n      actorUserId: userId,\n      eventType: \"contact_projection_accessed\",",
+    expect: "稽核事件",
+  },
+  // ⚠️ 刻意**沒有**「聯絡方式不檢查封鎖」這一條：`blockOwnerFromOffer()` 會**同時**把提案
+  // 終結成 `blocked`，而 `assertContactReadable()` 先檢查 `status !== 'accepted'` ⇒
+  // 拿掉封鎖查詢之後錯誤碼與 status 完全一樣（可觀察行為等價）。放著只會得到假 SURVIVED。
+  // 「封鎖之後拿不到」這個**契約**仍有一條測試守著（`wish-offers-async.test.js`）。
+  {
+    name: "樂觀鎖不帶 version（併發時覆蓋別人的變更）",
+    file: WOFFERS_SRC,
+    from: "     WHERE id = ? AND status = ? AND version = ?`,\n    [toStatus, stamp, stamp, Number(offerId), fromStatus, Number(version)],",
+    to: "     WHERE id = ? AND status = ? AND (? IS NOT NULL)`,\n    [toStatus, stamp, stamp, Number(offerId), fromStatus, Number(version)],",
+    expect: "樂觀鎖",
+  },
+  {
+    name: "樂觀鎖用 changes 而不是 rowCount（PG 上永遠是 undefined ⇒ 衝突被誤判）",
+    file: WOFFERS_SRC,
+    from: "  return Number(res?.rowCount) || 0;\n}\n\n// `expirePendingIfDue()` 的 PG 版。",
+    to: "  return Number(res?.changes) || 0;\n}\n\n// `expirePendingIfDue()` 的 PG 版。",
+    expect: "樂觀鎖",
+  },
+  {
+    name: "接受提案不檢查租客身分（屋主也能接受自己的提案）",
+    file: WOFFERS_SRC,
+    from: "    const mine = offer && (role === \"tenant\"\n      ? Number(offer.tenant_user_id) === Number(userId)\n      : Number(offer.owner_user_id) === Number(userId));",
+    to: "    const mine = Boolean(offer);",
+    expect: "拒絕／撤回",
+  },
+  {
+    name: "終結提案不寫事件（事後查不到）",
+    file: WOFFERS_SRC,
+    from: "  for (const row of rows) {\n    await writeOfferEventAsync(run, {\n      offerId: row.id,",
+    to: "  for (const row of []) {\n    await writeOfferEventAsync(run, {\n      offerId: row.id,",
+    expect: "封鎖屋主",
+  },
+  {
+    name: "封鎖不建立封鎖列（只終結提案）",
+    file: WOFFERS_SRC,
+    from: "    const block = await insertUserBlockAsync(run, {",
+    to: "    const block = await (async () => null)({",
+    expect: "封鎖屋主",
+  },
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",
@@ -1786,6 +1877,150 @@ const WOFFERS_MUTATIONS = [
     to: "    queries.project = (row) => row;",
     expect: "分頁、統計、游標兩邊一致",
   },
+];
+
+// 租屋分析（`bumpAnalytics`）PG 分支的變異集（v3/test/rental-analytics-async.test.js）。
+const RANALYTICS_SRC = "v3/src/rentalAnalyticsAsync.js";
+const RANALYTICS_MUTATIONS = [
+  {
+    name: "累加改成覆蓋（不是 value + n）",
+    file: RANALYTICS_SRC,
+    from: "      await run(ANALYTICS_UPDATE_SQL, [Number(existing.value || 0) + value, day, key]);",
+    to: "      await run(ANALYTICS_UPDATE_SQL, [value, day, key]);",
+    expect: "累加",
+  },
+  {
+    name: "UPDATE 的 WHERE 不帶 metric（不同指標會互相覆蓋）",
+    file: RANALYTICS_SRC,
+    from: "export const ANALYTICS_UPDATE_SQL = \"UPDATE rental_analytics_daily SET value = ? WHERE day = ? AND metric = ?\";",
+    to: "export const ANALYTICS_UPDATE_SQL = \"UPDATE rental_analytics_daily SET value = ? WHERE day = ?\";",
+    expect: "同一天的不同指標",
+  },
+  {
+    name: "日界線自己算（不用 taipeiDay ⇒ 跨時區會落在不同天）",
+    file: RANALYTICS_SRC,
+    from: "  const day = taipeiDay(now);",
+    to: "  const day = new Date(now instanceof Date ? now.getTime() : Date.now()).toISOString().slice(0, 10);",
+    expect: "日界線",
+  },
+  {
+    name: "n 的邊界改成直接 Number（0 會寫 0，與同步版不同）",
+    file: RANALYTICS_SRC,
+    from: "  const value = Number(n) || 1;",
+    to: "  const value = Number(n);",
+    expect: "n 的邊界",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: RANALYTICS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "寫入失敗時靜默吞掉（fail-open）",
+    file: RANALYTICS_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();",
+    to: "    if (!sqliteFallbackAllowed(options, { write })) return undefined;\n    return runSqlite();",
+    expect: "fail-closed",
+  },
+];
+
+// 租屋通知 prefs 讀取 PG 分支的變異集（v3/test/rental-notify-reads-async.test.js）。
+const NPREFS_SRC = "v3/src/rentalNotifyReadsAsync.js";
+const NPREFS_MUTATIONS = [
+  {
+    name: "布林轉換改成 truthy（'0' 會變成 true ⇒ 通知設定反向）",
+    file: NPREFS_SRC,
+    from: "    lifecycle_reminder: Number(row.lifecycle_reminder) === 1,",
+    to: "    lifecycle_reminder: Boolean(row.lifecycle_reminder),",
+    expect: "布林轉換",
+  },
+  {
+    name: "沒有設定列時回 null（呼叫端會爆或走錯分支）",
+    file: NPREFS_SRC,
+    from: "  if (!row) return defaultRentalNotifyPrefs();",
+    to: "  if (!row) return null;",
+    expect: "預設",
+  },
+  {
+    name: "timezone 空字串不回退（使用者會拿到空時區）",
+    file: NPREFS_SRC,
+    from: "    timezone: row.timezone || RENTAL_SITE_TZ,",
+    to: "    timezone: row.timezone,",
+    expect: "落回站台時區",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: NPREFS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "寫入失敗時靜默吞掉（fail-open）",
+    file: NPREFS_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();",
+    to: "    if (!sqliteFallbackAllowed(options, { write })) return null;\n    return runSqlite();",
+    expect: "fail-closed",
+  },
+];
+
+// 租屋通知寫入 PG 分支的變異集（v3/test/rental-notify-write-async.test.js）。
+const NWRITE_SRC = "v3/src/rentalNotifyWriteAsync.js";
+const NWRITE_MUTATIONS = [
+  {
+    name: "事件寫入拿掉 ON CONFLICT（撞唯一鍵就整筆交易失敗）",
+    file: NWRITE_SRC,
+    from: " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(event_key) DO NOTHING`;",
+    to: " VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;",
+    expect: "去重",
+  },
+  {
+    name: "遞送寫入拿掉 ON CONFLICT（同通道會重複寫）",
+    file: NWRITE_SRC,
+    from: "      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?) ON CONFLICT(event_id, channel) DO NOTHING`;",
+    to: "      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?)`;",
+    expect: "同一事件同一通道",
+  },
+  {
+    name: "不檢查旗標（關閉時照樣發通知）",
+    file: NWRITE_SRC,
+    from: "  if (!isRentalNotificationsEnabled(flags)) return { emitted: false, reason: \"flag_off\" };",
+    to: "  if (false) return { emitted: false, reason: \"flag_off\" };",
+    expect: "旗標關閉",
+  },
+  {
+    name: "不檢查事件白名單（未知型別照樣寫）",
+    file: NWRITE_SRC,
+    from: "  if (!RENTAL_NOTIFY_EVENT_TYPES.includes(eventType)) return { emitted: false, reason: \"unknown_type\" };",
+    to: "  if (false) return { emitted: false, reason: \"unknown_type\" };",
+    expect: "未知事件型別",
+  },
+  {
+    name: "queueDeliveries 不套 prefs（被關掉的通知照樣排遞送）",
+    file: NWRITE_SRC,
+    from: "  if (!preferenceAllows(prefs, event.event_type)) {",
+    to: "  if (false) {",
+    expect: "prefs 關掉",
+  },
+  {
+    name: "通知 payload 不套 PII 過濾（電話會落庫）",
+    file: NWRITE_SRC,
+    from: "      JSON.stringify(safePayload(payload)), stamp,",
+    to: "      JSON.stringify(payload), stamp,",
+    expect: "發通知",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: NWRITE_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  // ⚠️ 刻意**沒有**「PG 上不補唯一索引」這一條：那個迴圈只在**沒有注入 exec** 時才會跑
+  // （它要真的 `pgDriver.exec`），離線夾具碰不到，所以放進變異集只會得到假 SURVIVED。
+  // 改由 live PG 測試驗證：`ensureRentalNotifyWriteOnce()` 之後那兩條索引必須真的存在。
 ];
 
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
@@ -1810,6 +2045,9 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /rental-notify-write-async/.test(testFile) ? NWRITE_MUTATIONS
+  : /rental-notify-reads-async/.test(testFile) ? NPREFS_MUTATIONS
+  : /rental-analytics-async/.test(testFile) ? RANALYTICS_MUTATIONS
   : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS
   : /demand-async/.test(testFile) ? DEMAND_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS

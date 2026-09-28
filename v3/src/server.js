@@ -178,15 +178,7 @@ import {
   rentalMatchOwnerMeta,
   createWishOfferFor,
   getWishOfferFor,
-  acceptWishOfferFor,
-  declineWishOfferFor,
-  withdrawWishOfferFor,
-  blockWishOfferFor,
   reportWishOfferFor,
-  readWishOfferContactFor,
-  listMyWishOfferBlocksFor,
-  unblockWishOfferFor,
-  listAdminWishOfferReportsFor,
   runWishOfferExpiryWorkerTick,
   getRentalNotifyPrefsFor,
   saveRentalNotifyPrefsFor,
@@ -307,6 +299,22 @@ import {
   reportDemandAsync,
   wishRoomOwnerSummaryAsync,
 } from "./demandAsync.js";
+// 許願房提案（wishOffers）的 PG 島嶼入口：讀取、檢舉、封鎖名單、後台清單、聯絡方式與狀態機。
+import {
+  acceptWishOfferAsync,
+  blockOwnerFromOfferAsync,
+  declineWishOfferAsync,
+  listAdminOfferReportsAsync,
+  listMyBlocksAsync,
+  listOwnerWishOffersAsync,
+  listTenantWishOffersAsync,
+  loadVisibleOfferAsync,
+  projectOfferContactAsync,
+  publicOfferViewAsync,
+  reportVisibleOfferAsync,
+  unblockByRefAsync,
+  withdrawWishOfferAsync,
+} from "./wishOffersAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
@@ -2210,8 +2218,13 @@ app.get("/api/admin/rental-match-rules", requireAdminApi, async (_req, res) => {
   res.json(await rentalMatchAdminRulesAsync());
 });
 
-app.get("/api/admin/wish-offer-reports", requireAdminApi, (_req, res) => {
-  res.json(listAdminWishOfferReportsFor());
+// 檢舉列由 PG 島嶼寫入，所以後台清單也必須讀 PG（否則管理員看到的是舊資料）。
+app.get("/api/admin/wish-offer-reports", requireAdminApi, async (req, res) => {
+  try {
+    res.json(await listAdminOfferReportsAsync({ limit: req.query?.limit }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
 });
 
 app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
@@ -2982,40 +2995,41 @@ app.get("/api/wish-offers/owner", async (req, res) => {
   }
 });
 
-app.get("/api/wish-offers/blocks", (req, res) => {
+app.get("/api/wish-offers/blocks", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(listMyWishOfferBlocksFor(session.userId));
+    res.json({ items: await listMyBlocksAsync(session.userId) });
   } catch (error) {
     sendOfferError(res, error);
   }
 });
 
-app.post("/api/wish-offers/blocks/:blockRef/remove", (req, res) => {
+app.post("/api/wish-offers/blocks/:blockRef/remove", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(unblockWishOfferFor(session.userId, req.params.blockRef));
+    res.json(await unblockByRefAsync(session.userId, req.params.blockRef));
   } catch (error) {
     sendOfferError(res, error);
   }
 });
 
-app.get("/api/wish-offers/:offerRef/contact", (req, res) => {
+app.get("/api/wish-offers/:offerRef/contact", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(readWishOfferContactFor(session.userId, req.params.offerRef, {
+    // 這一條會先寫稽核事件（`contact_projection_accessed`）才回聯絡方式 ⇒ 走島嶼的寫入路徑。
+    res.json(await projectOfferContactAsync(req.params.offerRef, session.userId, {
       actorKey: `contact:${session.userId}`,
     }));
   } catch (error) {
@@ -3043,14 +3057,14 @@ app.get("/api/wish-offers/:offerRef", async (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/accept", (req, res) => {
+app.post("/api/wish-offers/:offerRef/accept", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(acceptWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await acceptWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
@@ -3058,14 +3072,14 @@ app.post("/api/wish-offers/:offerRef/accept", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/decline", (req, res) => {
+app.post("/api/wish-offers/:offerRef/decline", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(declineWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await declineWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
@@ -3073,14 +3087,14 @@ app.post("/api/wish-offers/:offerRef/decline", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/withdraw", (req, res) => {
+app.post("/api/wish-offers/:offerRef/withdraw", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(withdrawWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await withdrawWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `owner:${session.userId}`,
     }));
   } catch (error) {
@@ -3088,14 +3102,14 @@ app.post("/api/wish-offers/:offerRef/withdraw", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/block", (req, res) => {
+app.post("/api/wish-offers/:offerRef/block", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(blockWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await blockOwnerFromOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
@@ -3103,17 +3117,20 @@ app.post("/api/wish-offers/:offerRef/block", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/report", (req, res) => {
+app.post("/api/wish-offers/:offerRef/report", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(reportWishOfferFor(session.userId, req.params.offerRef, {
+    // 可見性、角色檢查（只有房客能檢舉）與寫入＋稽核事件都收在島嶼入口裡，
+    // 與同步版 `reportWishOffer()` 的行為逐條相同。
+    res.json(await reportVisibleOfferAsync(req.params.offerRef, session.userId, {
       reason: req.body?.reason,
       detail: req.body?.detail,
-    }, { actorKey: `report:${session.userId}` }));
+      actorKey: `report:${session.userId}`,
+    }));
   } catch (error) {
     sendOfferError(res, error);
   }

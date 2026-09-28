@@ -41,6 +41,12 @@ export const RENTAL_SITE_TZ = "Asia/Taipei";
 const PII_KEYS = Object.freeze(["phone", "email", "line_url", "contact", "session", "user_id", "wish_id"]);
 
 let flagsCache = {};
+
+// 匯出只給 driver-aware 版讀取目前的旗標快取（`flagsCache` 是模組層狀態）。
+// ⚠️ 仍然只有 `setRentalNotifyFlags()` 能**寫**它，PG 版不得自己改，否則兩邊的旗標來源會分岔。
+export function currentRentalNotifyFlags() {
+  return flagsCache;
+}
 let dockWriter = null;
 let mailSink = null;
 let pushSink = null;
@@ -147,7 +153,9 @@ function newToken(bytes = 18) {
   return randomBytes(bytes).toString("base64url");
 }
 
-function safePayload(meta = {}) {
+// 匯出只為了讓 PG 版（`rentalNotifyAsync.js`）逐字重用同一支淨化規則：
+// 通知 payload 的 PII 過濾**不能**有第二份實作，否則兩邊會漂移。
+export function safePayload(meta = {}) {
   const out = {};
   for (const [key, value] of Object.entries(meta || {})) {
     if (PII_KEYS.includes(key)) continue;
@@ -494,7 +502,9 @@ export function bumpAnalytics(db, metric, now = new Date(), n = 1) {
   `).run(day, String(metric), Number(n) || 1);
 }
 
-function preferenceAllows(prefs, eventType) {
+// 匯出給 PG 版逐字重用：這兩個是**政策**（誰收得到、走哪個通道），不是 SQL。
+// 兩個 driver 必須用同一份判斷，否則「PG 站多寄一封信」這種事不會有任何錯誤訊息。
+export function preferenceAllows(prefs, eventType) {
   if (["wish_lifecycle_due_3d", "wish_lifecycle_due_1d", "wish_needs_confirmation", "wish_paused_inactive", "tenant_retention_quiet"].includes(eventType)) {
     return prefs.lifecycle_reminder;
   }
@@ -509,7 +519,7 @@ function preferenceAllows(prefs, eventType) {
   return true;
 }
 
-function channelAllowed(prefs, channel, flags) {
+export function channelAllowed(prefs, channel, flags) {
   if (channel === "dock") return prefs.channel_dock;
   if (channel === "mail") return prefs.channel_mail && isRentalOutboundMailEnabled(flags);
   if (channel === "push") return prefs.channel_push && isRentalOutboundPushEnabled(flags);

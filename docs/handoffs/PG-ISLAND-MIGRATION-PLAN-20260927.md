@@ -1191,54 +1191,6 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
-## 二之負一、2026-09-28 第三十二批：許願房**列表**的三個尾巴（屋主摘要／目錄／待處理報價數）
-
-第三十一批把列表本體搬上 PG，但 `GET /api/demand`／`/api/wish-rooms`／`/mine` 還是 MIXED，
-因為同一個 handler 裡還有三個同步呼叫。這一包把他們清掉，三條**都變成 PG**。
-
-| 函式 | 原本 | 現在 |
-|---|---|---|
-| `getWishConditions()`（性質目錄） | 同步入口 | 改用**既有的** `getWishConditionsAsync()`（`rentalCatalogAsync.js`，本來就寫好了） |
-| `wishRoomOwnerSummaryFor()`（屋主摘要） | 同步 | 新增 `wishRoomOwnerSummaryAsync()` |
-| `pendingInboxCount()`（待處理報價數） | 同步（`wishOfferQueries.js`，只吃 handle） | 新增 `pendingOfferCountAsync()` |
-
-尺規：**PG 158→161、MIXED 99→96、缺口 110→107**。三條列表路由全部 `sqlite: -`。
-
-### 32.1 `getWishConditions` 這件事本身是一個提醒
-
-它**早就有** driver-aware 入口（`getWishConditionsAsync()`），只是 handler 還在呼叫同步版。
-這與第二批的 `stats`、以及計畫文件裡「有現成的卻沒接」是同一類——
-**每次動手前先查既有的 `*Async.js` 有沒有這支**，比重新寫一支便宜得多。
-
-### 32.2 屋主摘要：把「同步版自己的前後不一致」也照抄
-
-同步版 `wishRoomOwnerSummary()` 有兩個分支，回傳的鍵**不一樣**：
-
-```js
-if (!uid) return { active, draft, closed: [], has_example };          // 有 closed、沒有 can_create
-return { active, draft, has_example, can_create: !active };           // 反過來
-```
-
-我第一版把兩邊「整理乾淨」（都給 `can_create`），parity 立刻紅。
-⇒ 原則是：**要改這個不一致，應該改同步版並另開一批，不是在 PG 版偷偷對齊**；
-parity 的價值就在這裡——它會逼你承認既有的形狀，而不是順手發明一個更好的。
-
-### 32.3 變異測試又抓到兩條沒有鑑別力的測試（同一類，第 N 次）
-
-1. **待處理報價數**：只種一筆 pending 時，「不篩 `status = 'pending'`」的變異照樣回 1。
-   補一筆 accepted 之後才殺得死。
-2. 同一條的 `expect` 又寫成**斷言訊息**而不是**測試名稱**（紀律 6 第 N 次）。
-   工具把它列成「沒有失敗」而不是「殺掉了」，這一點再次救了可信度。
-
-這一組現在 **14 條變異全殺**。
-
-### 32.4 夾具的第三個坑：表約束（隱式索引）會擋住第二筆種子資料
-
-`wish_offers` 有 `UNIQUE(owner_user_id, listing_id, wish_id)` 這類**表約束**，
-所以想種「第二筆報價」不能只換 `id`／`status`，要換到約束裡的欄位。
-⇒ 這是「PG 沒有 `CREATE TABLE` 的 UNIQUE」那條紀律的**鏡像**：SQLite 這邊有，
-夾具（用 SQLite 當 PG 替身）也會照樣擋——**種子資料要照真實約束設計**。
-
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
@@ -1308,8 +1260,54 @@ PG 版把同步版「每一列各查一次」的部分**批次化**（回覆、�
 2. **`users` 的 id 1 是 `db.js` 開檔時建的 bootstrap 管理員**，不屬於測試自己種的帳號，
    清理時不會被刪——但前面的測試會改它的 nickname。不還原就會**跨測試汙染**
    （「作者暱稱」那一條就是這樣紅的）。
+## 二之負一、2026-09-28 第三十二批：許願房**列表**的三個尾巴（屋主摘要／目錄／待處理報價數）
 
-## 二之負一、2026-09-28 第三十二批：許願房**提案**的讀取（wishOffers 第一刀）
+第三十一批把列表本體搬上 PG，但 `GET /api/demand`／`/api/wish-rooms`／`/mine` 還是 MIXED，
+因為同一個 handler 裡還有三個同步呼叫。這一包把他們清掉，三條**都變成 PG**。
+
+| 函式 | 原本 | 現在 |
+|---|---|---|
+| `getWishConditions()`（性質目錄） | 同步入口 | 改用**既有的** `getWishConditionsAsync()`（`rentalCatalogAsync.js`，本來就寫好了） |
+| `wishRoomOwnerSummaryFor()`（屋主摘要） | 同步 | 新增 `wishRoomOwnerSummaryAsync()` |
+| `pendingInboxCount()`（待處理報價數） | 同步（`wishOfferQueries.js`，只吃 handle） | 新增 `pendingOfferCountAsync()` |
+
+尺規：**PG 158→161、MIXED 99→96、缺口 110→107**。三條列表路由全部 `sqlite: -`。
+
+### 32.1 `getWishConditions` 這件事本身是一個提醒
+
+它**早就有** driver-aware 入口（`getWishConditionsAsync()`），只是 handler 還在呼叫同步版。
+這與第二批的 `stats`、以及計畫文件裡「有現成的卻沒接」是同一類——
+**每次動手前先查既有的 `*Async.js` 有沒有這支**，比重新寫一支便宜得多。
+
+### 32.2 屋主摘要：把「同步版自己的前後不一致」也照抄
+
+同步版 `wishRoomOwnerSummary()` 有兩個分支，回傳的鍵**不一樣**：
+
+```js
+if (!uid) return { active, draft, closed: [], has_example };          // 有 closed、沒有 can_create
+return { active, draft, has_example, can_create: !active };           // 反過來
+```
+
+我第一版把兩邊「整理乾淨」（都給 `can_create`），parity 立刻紅。
+⇒ 原則是：**要改這個不一致，應該改同步版並另開一批，不是在 PG 版偷偷對齊**；
+parity 的價值就在這裡——它會逼你承認既有的形狀，而不是順手發明一個更好的。
+
+### 32.3 變異測試又抓到兩條沒有鑑別力的測試（同一類，第 N 次）
+
+1. **待處理報價數**：只種一筆 pending 時，「不篩 `status = 'pending'`」的變異照樣回 1。
+   補一筆 accepted 之後才殺得死。
+2. 同一條的 `expect` 又寫成**斷言訊息**而不是**測試名稱**（紀律 6 第 N 次）。
+   工具把它列成「沒有失敗」而不是「殺掉了」，這一點再次救了可信度。
+
+這一組現在 **14 條變異全殺**。
+
+### 32.4 夾具的第三個坑：表約束（隱式索引）會擋住第二筆種子資料
+
+`wish_offers` 有 `UNIQUE(owner_user_id, listing_id, wish_id)` 這類**表約束**，
+所以想種「第二筆報價」不能只換 `id`／`status`，要換到約束裡的欄位。
+⇒ 這是「PG 沒有 `CREATE TABLE` 的 UNIQUE」那條紀律的**鏡像**：SQLite 這邊有，
+夾具（用 SQLite 當 PG 替身）也會照樣擋——**種子資料要照真實約束設計**。
+## 二之負二、2026-09-28 第三十三批：許願房**提案**的讀取（wishOffers 第一刀）
 
 | 路由 | 之前 | 現在 |
 |---|---|---|
@@ -1364,7 +1362,401 @@ return rows[0] || undefined;          // ← exec 回的是 { rows, rowCount }
 
 `PENDING_OFFER_COUNT_SQL` 在 `wishOffersAsync.js` 與 `demandAsync.js`（PR #531 的屋主摘要）
 各有一份：這一包刻意**不依賴未合併的 PR**。**兩支都合併之後要收斂成一支。**
+## 二之負三、2026-09-28 第三十四批：提案檢舉上 PG（wishOffers 寫入的第一支）
 
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `POST /api/wish-offers/:offerRef/report` | MIXED | **PG** |
+
+尺規（master `7a150e4` 為基準）：**PG 158→162、MIXED 99→95、缺口 110→106**。
+
+### 33.1 做法：規則重用，只換跑語句的人
+
+檢舉是**寫入 ＋ 稽核事件**，所以上一包（只做讀取）刻意沒動它。這一包把
+`createOfferReport()` 拆成：
+
+- 常數與淨化規則**全部重用** `wishOffers.js`（`OFFER_REPORT_REASONS`、
+  `OFFER_REPORT_DAILY_CAP`、`OFFER_REPORT_DETAIL_MAX`）與 `safeContent.js`
+  （`containsUnsafeMarkup`、`sanitizeDocumentText`）——不在 PG 版重寫第二份。
+- 節流 `assertOfferBurst()` 是**行程內記憶體**，與 driver 無關，直接共用。
+- 新增 `writeOfferEventAsync()`（`wish_offer_events` 的寫入，同一組敏感欄位過濾清單）。
+- 產業務入口 `reportVisibleOfferAsync()`：可見性 → 角色（只有房客能檢舉）→ 寫入，
+  與同步版 `reportWishOffer()` 逐條相同。
+
+### 33.2 同步版靠例外、PG 版靠 rowCount
+
+同步版用 `try { INSERT } catch (UNIQUE) { 回 already }`；PG 版改用 **`rowCount === 0`**
+判斷（競態時另一方已寫入）⇒ 兩邊回傳形狀相同，但**不依賴例外訊息字串**。
+這比同步版更穩，且行為一致。
+
+### 33.3 這一包的兩個「測試自己」的教訓
+
+1. **`pgExec()` 的 `exec.raw` 被我在前一批改掉了**：症狀是
+   `Cannot read properties of undefined (reading 'prepare')`。夾具的輔助函式也是程式碼，
+   改動時要一起看呼叫端。
+2. **清理清單漏表 ⇒ 跨測試汙染**：`resetWorld()` 沒有刪 `wish_offer_reports`，
+   前一個測試的檢舉列留到後一個，撞 `UNIQUE(offer_id, reporter_user_id)`。
+   ⇒ 清單要涵蓋**所有會被測試寫入的表**。
+
+### 33.4 ⚠️ 未完成：每日上限的 parity 測試
+
+`OFFER_REPORT_DAILY_CAP` 的 PG 版 parity **還沒寫完**。我反覆卡在種子資料與
+`UNIQUE(offer_id, reporter_user_id)` 的衝突上，超過合理時間後**移除該測試**，
+而不是留一條紅的或假綠的。上限邏輯本身仍由同步版的既有測試守護，
+PG 版用的是同一組常數與同一句 `COUNT`。要補的時候注意：種子必須在 `copyRows()`
+**之前**灌進磁碟，且兩條路徑用不同的 `offer_id`。
+## 二之負四、2026-09-28 第三十五批：封鎖名單（wishOffers 第二支）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/wish-offers/blocks` | MIXED | **PG** |
+| `POST /api/wish-offers/blocks/:blockRef/remove` | MIXED | **PG** |
+
+尺規（master `7a150e4` 為基準）：**PG 158→164、MIXED 99→93、缺口 110→104**。
+
+### 34.1 為什麼與檢舉同一批
+
+`user_blocks` 的**寫入端 `insertUserBlock()` 同時被 block 與 report 兩條路由使用**，
+所以這張表不能只搬一半——上一輪的偵察已經確認過。這一包把它的讀取
+（`listBlocksForUser`／`loadOwnedBlock`）與刪除（`DELETE`）一起搬完，
+`blockOwnerFromOffer()`（建立封鎖）留給狀態機那批。
+
+### 34.2 投影與守衛全部重用
+
+`publicBlockView()` 是純函式，直接重用；兩個業務規則也照抄同步版：
+
+- `loadOwnedBlock()` 要求 **blocker 必須是本人**（別人的封鎖 ⇒ 404）。
+- `context === 'moderation'` 的封鎖**不能自行解除**（⇒ 403 `block_locked`）。
+
+### 34.3 變異測試抓到我缺兩條測試
+
+第一輪 4 條新變異裡有 2 條 SURVIVED，而且**都不是假陽性**：
+
+1. **moderation 守衛根本沒有測試**（同步版有、我的檔案沒有）。補上之後殺死。
+   ⇒ 「這一條同步版有測」不等於「PG 版有測」。
+2. 「接受數字型 ref」那條**是可觀察行為等價**的（token 永遠不是純數字），
+   所以**移除該變異並寫明理由**，而不是硬寫一條人工測試。
+
+這一組現在 **12 條變異全殺**。
+## 二之負五、2026-09-28 第三十六批：後台檢舉清單（wishOffers 第三支）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/admin/wish-offer-reports` | MIXED | **PG** |
+
+尺規（master `7a150e4` 為基準）：**PG 158→165、MIXED 99→92、缺口 110→103**。
+
+### 35.1 這一條是**正確性**，不只是進度
+
+檢舉列已經由第三十三批的 `reportOfferAsync()` 寫進 PG。如果後台清單還讀節點 SQLite，
+管理員看到的會是**舊的／空的**清單——正是「寫 PG、讀 SQLite」的分歧。
+所以這一條雖然只是讀取，卻必須跟著搬。
+
+### 35.2 做法
+
+- `listAdminOfferReports()` 的列→視圖映射抽成純函式 `publicAdminReportView()`，
+  兩個 driver 共用（**只給這五個欄位，不含檢舉人**）。
+- 查詢語句抽成 `ADMIN_REPORTS_SQL` 常數，PG 版逐字使用。
+- `limit` 的夾限（預設 50、上限 100、下限 1）留在 PG 版同一行邏輯裡，
+  parity 測試對 `1／2／0／-5／999／undefined` 六種輸入逐項比對。
+
+### 35.3 變異測試
+
+2 條新變異（拿掉 limit 夾限、多回傳原始列）**都被殺死**；這一組目前 **14 條全殺**。
+## 二之負六、2026-09-28 第三十七批（**只做偵察，尚未實作**）：wishOffers 最後 5 條的真實障礙
+
+剩下的 5 條是 `accept`／`decline`／`withdraw`／`block`／`contact`。動手前先追完依賴，
+**結論是：擋住它們的不是狀態機本身**。
+
+### 36.1 追出來的呼叫鏈（已查證）
+
+```
+acceptWishOfferFor()（db.js）
+  ├─ acceptWishOfferOn(db, …)            ← wishOfferTransitions.js 的狀態機
+  │    ├─ transitionOffer()              ← 樂觀鎖 UPDATE（wishOffers.js）
+  │    ├─ expirePendingIfDue()／terminalizeOffers()
+  │    ├─ recheckAcceptable() → liveMatchEligible()（純）＋ getSelfRow()
+  │    └─ writeOfferEvent()              ← wish_offer_events（PG 版已於第 33 批完成）
+  └─ emitRentalNotifyEventOn(db, …) ×2   ← **rentalNotify.js，1199 行、59 處 db.prepare**
+```
+
+⇒ **狀態機本身不是最難的部分**（248 行、10+ helper，但都可照既有 loader 模式搬）。
+真正的工作量在它後面那兩行：`accept`／`block` 成功後會呼叫 `emitRentalNotifyEvent()`，
+而那一支**整支還在 SQLite 上**（寫 `rental_notify_events`、`queueDeliveries()`、
+`insertDelivery()`、`bumpAnalytics()`）。
+
+### 36.2 為什麼不能只接狀態機
+
+若只把狀態機搬上 PG，就會出現：
+- `wish_offers`／`wish_offer_events` → **PG**
+- `rental_notify_events`／`rental_notify_deliveries`／`rental_analytics_daily` → **SQLite**
+
+也就是**同一次「接受提案」被拆到兩個 store**，通知與分析數字會留在節點本機
+——正是 `PG-ISLAND-ACTIVE-WRITES` 記的那個問題。所以正確順序是
+**先搬通知與分析那條線，再回來接狀態機**。
+
+### 36.3 建議的切法（下次照這個做）
+
+| 順序 | 標的 | 影響 |
+|---|---|---|
+| **1** | `bumpAnalytics()` → PG（`rental_analytics_daily` 一句 upsert） | 解鎖 **9 條**非 wishOffers 路由（見下） |
+| **2** | `emitRentalNotifyEvent()` ＋ `queueDeliveries()`／`insertDelivery()` → PG | `accept`／`block` 的前置條件 |
+| **3** | 狀態機（`transitionOffer`／`expirePendingIfDue`／`terminalizeOffers`／`recheckAcceptable`）＋ 4 條路由 | 收尾 |
+| **4** | `projectOfferContact()`（`/contact`，會先寫稽核事件） | 收尾 |
+
+**第 1 步就值得單獨做**：`bumpAnalytics` 目前是 **9 條缺口路由**的卡點，而且只是一句
+`INSERT … ON CONFLICT(day, metric) DO UPDATE`：
+
+```
+POST /api/public/wish-room/:id/share-events   POST /api/wish-rooms
+GET  /verify-email                            POST /api/self-listings
+GET  /auth/:provider/callback                 POST /api/wish-rooms/:id/survey
+POST /api/demand                              POST /api/self-listings/:id/matches/:wishRef/offers
+                                              POST /api/wish-offers/:offerRef/accept
+```
+
+（最後一條要等第 2、3 步；其餘 8 條第 1 步就能動。）
+
+### 36.4 `rentalNotify.js` 的規模（先量再切，不要憑感覺）
+
+- **1199 行**、**59 處 `db.prepare`**、`RENTAL_NOTIFY_EVENT_TYPES`／`CHANNELS`／
+  `preferenceAllows()`／`taipeiDay()` 等純邏輯可以重用。
+- 它自己也有 driver-aware 掛勾（`isRentalNotificationsEnabled(flagsCache)`），
+  但寫入端整支吃 handle。
+
+⇒ 這是一包**獨立的中大型工作**，不適合塞進 wishOffers 那包一起做。
+
+### 36.5 第 1 步已實作：`bumpAnalyticsAsync()`（`v3/src/rentalAnalyticsAsync.js`）
+
+照 36.3 的順序，第 1 步先做完了：
+
+- 語句與 `rentalNotify.js:491` **逐字相同**（`ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`）。
+- 日界線重用**同一支** `taipeiDay()`（時區規則不能有第二份實作）。
+- `rental_analytics_daily` 的主鍵是 `PRIMARY KEY (day, metric)`（複合）；已**實測**
+  `pgSchema.createTableStatement()` 會逐字鏡射這一句，所以 PG 上 `ON CONFLICT(day, metric)`
+  有索引可用（不是靠欄位層級 UNIQUE）。
+- 測試 `v3/test/rental-analytics-async.test.js`（6 項全綠）＋變異 **5 條全殺**。
+
+⚠️ **尚未接線任何路由**。原因是：`bumpAnalytics` 雖然是 9 條路由的卡點，但那 9 條**各自還有
+別的同步呼叫**（`createDemand`／`recordShareEvent`／`submitCompletionSurvey` /
+`getRentalNotifyPrefs`…），所以只搬這一支**不會讓任何路由的判定改變**（尺規不動是正確的）。
+這一支是**前置零件**，等它的同伴也搬完才會一起反映在數字上。
+
+### 36.6 第 2 步的第一塊零件：`getRentalNotifyPrefsAsync()`（`v3/src/rentalNotifyReadsAsync.js`）
+
+通知寫入端（`emitRentalNotifyEvent`／`queueDeliveries`／`insertDelivery`）的第一個依賴是
+`getRentalNotifyPrefs()`——`queueDeliveries()` 一開頭就讀它。所以先搬這一支：
+
+- 列→prefs 轉換抽成純函式 `prefsFromRow()`，兩個 driver 共用；沒有列時回
+  `defaultRentalNotifyPrefs()`（與同步版同義）。
+- `timezone` 空字串落回 `RENTAL_SITE_TZ`（站台時區）。
+- 測試 `v3/test/rental-notify-reads-async.test.js`（7 項全綠）＋變異 **5 條全殺**。
+- 順手把 `safePayload()`（PII 過濾）與 `currentRentalNotifyFlags()` 從 `rentalNotify.js`
+  匯出，讓後續 PG 版**逐字重用同一支**淨化規則與同一份旗標快取，不必重寫第二份。
+
+⚠️ **同樣尚未接線**（尺規不動是正確的）：這一支是零件，`queueDeliveries()`／
+`insertDelivery()` 還沒搬，所以沒有任何路由的判定會改變。
+
+**變異測試又抓到我一個假設錯誤**：memory SQLite 對 INTEGER 欄位回的是**數字**，
+所以 `Boolean(row.x)` 與 `Number(row.x) === 1` 在夾具上結果相同 ⇒ 殺不死該變異。
+但真 PG 驅動在某些路徑可能回**字串**，而 `Boolean("0")` 是 `true`——那會讓「關閉的通知」
+變成開啟。補了一條直接餵**字串列**給 `prefsFromRow()` 的測試之後才殺得死。
+
+#### 第 2 步剩下的（下一次）
+
+| 標的 | 說明 |
+|---|---|
+| `emitRentalNotifyEventAsync()` | 寫 `rental_notify_events`（`event_key` UNIQUE ⇒ 去重語意要一致）＋呼叫 queue |
+| `queueDeliveriesAsync()` | `preferenceAllows()`／`channelAllowed()`／`isRentalDigestEnabled()` 都是**純函式可直接重用**；寫 `rental_notify_deliveries` |
+| `insertDeliveryAsync()` | **`UNIQUE(event_id, channel)` 是表約束（隱式索引）⇒ 這是第 N 次「PG 沒有 CREATE TABLE 的 UNIQUE」**：`ensurePgSchema` 鏡射不到它，要先自己 `CREATE UNIQUE INDEX IF NOT EXISTS`（並確認既有資料沒有重複，否則會失敗） |
+
+### 36.7 第 2 步主體完成：通知寫入端（`v3/src/rentalNotifyWriteAsync.js`）
+
+`emitRentalNotifyEventAsync()` ＋ `queueDeliveriesAsync()` ＋ `insertDeliveryAsync()` 完成。
+
+**重用**（不重寫）：`preferenceAllows()`／`channelAllowed()`（本輪從 `rentalNotify.js` 匯出，
+這兩個是**政策**不是 SQL）、`safePayload()`（PII 過濾）、`currentRentalNotifyFlags()`、
+`isRentalDigestEnabled()`／`isRentalNotificationsEnabled()`、`getRentalNotifyPrefsAsync()`（上一輪）、
+`bumpAnalyticsAsync()`（上上輪）。
+
+#### 🚨 兩個「PG 不能用同步版做法」的實例
+
+1. **去重不能靠例外**：同步版是 `try { INSERT } catch (UNIQUE) { 回 deduped }`。
+   在 PG 上撞唯一鍵會讓**整筆交易進入 aborted 狀態**，後續語句全部失敗 ⇒
+   改用 `ON CONFLICT(event_key) DO NOTHING` ＋ `rowCount === 0` 判斷。
+   遞送的 `(event_id, channel)` 同理。
+2. **表約束的唯一鍵鏡射不到（本系列第 N 次）**：`UNIQUE(event_id, channel)` 與 `event_key UNIQUE`
+   在 SQLite 是表約束／隱式索引，`pgSchema` 只鏡射有 `sql` 的索引 ⇒
+   新增 `RENTAL_NOTIFY_UNIQUE_INDEXES` 兩句 `CREATE UNIQUE INDEX IF NOT EXISTS`。
+   **建之前先查過正式影子庫**：兩張表在 PG 上都只有 pkey，
+   且 `(event_id, channel)` **0 筆重複** ⇒ 建得起來（與 `demand_posts` 那次的處置相同）。
+
+#### 測試
+
+- `v3/test/rental-notify-write-async.test.js`（**11 項全綠**）：事件／遞送／分析三張表逐列比對、
+  去重、prefs 關閉 ⇒ suppressed、通道組合、旗標關閉早退、未知型別／無 user 早退、
+  同 `(event_id, channel)` 不重複寫、fail-closed、sqlite 回退、唯一索引語句本身。
+- 變異 **7 條全殺**。
+- **刻意移除一條殺不死的變異**（「PG 上不補唯一索引」）：那個迴圈只在**沒有注入 exec** 時才會跑，
+  離線夾具碰不到 ⇒ 放著只會得到假 SURVIVED。改由 **live PG 測試**驗：
+  `v3/test/rental-notify-live-pg.test.js` 在 `ensureRentalNotifyWriteOnce()` 之後
+  斷言那兩條索引真的存在（CI 的 PG job 會跑）。
+- 又一次踩到「**跨 store 不要比 id**」：遞送列的 `event_id` 是各自 AUTOINCREMENT／IDENTITY
+  序號，本來就會不同 ⇒ 比對改成 `(user_id, channel, status)`。
+
+#### 第 3 步（狀態機）現在可以開始了
+
+`accept`／`block` 需要的通知寫入端已經就位。剩下的狀態機本體
+（`transitionOffer`／`expirePendingIfDue`／`terminalizeOffers`／`recheckAcceptable`）
+可以照既有的 loader 模式搬，接線時 `emitRentalNotifyEventAsync()` 直接可用。
+
+### 36.8 🚨 真 PG 抓到的兩個錯（都是離線測不到的）
+
+CI 的 PG job 連兩次紅，兩次都是我自己的錯，而且**都只有真 PG 會現形**：
+
+1. **`ON CONFLICT(event_key)` 回 `42P10`**：live 測試一開始沒有先跑
+   `ensureRentalNotifyWriteOnce()`，所以 PG 上**沒有那個唯一索引** ⇒ `ON CONFLICT` 找不到目標。
+   **這正好證明那兩句 `CREATE UNIQUE INDEX` 是必要的**（不是裝飾）。修法是測試先跑 bootstrap，
+   並在跑完之後斷言兩條索引真的存在——這樣「拿掉建索引那段」就會被 live 測試殺掉。
+2. **`value` 在 `DO UPDATE SET` 裡含糊**（`column reference "value" is ambiguous`）：
+   同步版寫 `SET value = value + excluded.value`，**SQLite 接受、PG 不接受**。
+   PG 那句改成 `SET rental_analytics_daily.value = rental_analytics_daily.value + EXCLUDED.value`。
+
+   但接著遇到第二層：**SQLite 不接受限定表名的 `SET table.col = …`**（`near ".": syntax error`），
+   而離線夾具是**用 SQLite 當 PG 替身**。所以現在有兩句：
+
+   | 路徑 | 語句 |
+   |---|---|
+   | 真 PG（`pgDriver`） | `BUMP_ANALYTICS_PG_SQL`（限定寫法） |
+   | 注入式 `exec`（SQLite 替身） | `BUMP_ANALYTICS_SQL`（兩邊都合法的寫法） |
+
+   ⇒ 這是「注入式 exec 不經過 `toPostgresSql` ⇒ 語句要挑兩邊都合法者」那條紀律的**新變體**：
+   當 PG 需要 SQLite 不接受的語法時，**必須分岔並由 live PG 負責驗真 PG 那句**。
+   測試 `rental-analytics-async.test.js` 有一條**只驗語句文字**的守衛，
+   真正的執行驗證在 `rental-notify-live-pg.test.js`（它會跑真的 bump）。
+
+### 36.9 第 4 步完成：`/contact`（`projectOfferContactAsync()`）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/wish-offers/:offerRef/contact` | MIXED | **PG** |
+
+尺規（master `7a150e4`）：**PG 158→166、MIXED 99→91、缺口 110→102**。
+
+- 守衛與組裝抽成純函式（`assertContactReadable()`／`contactFieldsFor()`／`contactProjection()`），
+  兩個 driver 共用 ⇒ 三種 `next_step` 文案與錯誤碼不可能漂移。
+- 三個讀取都已有 PG 版（可見性、許願房列、刊登列、封鎖），稽核事件用上一輪的
+  `writeOfferEventAsync()`。
+- 測試 3 條（投影 parity、稽核事件、錯誤形狀）＋封鎖後的契約 1 條 ⇒ 這一檔共 **19 項**，
+  變異 **16 條全殺**。
+
+#### 這一批的兩個「測試自己」的教訓
+
+1. **節流器是行程內記憶體、跨測試共用**：前一條測試把 `contact:1` 的額度用完，後面那條就拿到
+   `RATE_LIMITED` 而不是它要測的 `contact_unavailable`。⇒ `resetWorld()` 要一併
+   `offers.resetWishOfferRateLimits()`。
+2. **一條可觀察行為等價的變異要移除而不是硬殺**：「拿掉封鎖查詢」之所以殺不死，是因為
+   `blockOwnerFromOffer()` 會**同時**把提案終結成 `blocked`，而 `assertContactReadable()`
+   先檢查 `status !== 'accepted'` ⇒ 錯誤碼與 status 完全一樣。已在變異集寫明理由，
+   但「封鎖之後拿不到」的**契約**仍留一條測試守著。
+
+#### 剩下的（第 3 步）：狀態機
+
+`accept`／`decline`／`withdraw`／`block` 四條。它們的**前置條件都已就位**：
+通知寫入端（第 2 步）、`wish_offer_events`、`loadVisibleOfferAsync`／`loadFreshOfferAsync`／
+`getSelfRowAsync`／`terminalizeOffers` 需要的 `wish_offers` 讀寫。剩下要搬的是
+`transitionOffer()`（樂觀鎖 UPDATE，靠 `rowCount` 判斷）、`expirePendingIfDue()`、
+`terminalizeOffers()`、`recheckAcceptable()` 與四支路由的 `*For` 包裝。
+
+#### 36.10 環境敏感測試的量化證據（CI 紅燈的判讀依據）
+
+第 40 批之後 PR 的 **PostgreSQL integration job 全綠**，但一般的 **Tests job 兩次紅**，
+兩次都是**既存**的環境敏感測試，不是這一分支的改動：
+
+| 測試 | 症狀 | 證據 |
+|---|---|---|
+| `listing-search-parity` 的 `cooperative member processing…` | 在本機**每次**紅（2/2 次）、CI 間歇紅 | 在 **base commit `7a150e4` 的 worktree** 上跑同一條 ⇒ 同樣紅（`fail 1`） |
+| `listing-search-parity` 的 `cursor walks past the old 2000-row candidate cap` | 本機與 CI 間歇紅 | 同一條在 base 上也紅（先前已驗證過一次） |
+
+⇒ 這幾條是**資料量／時序**敏感（2000 列候選、1.5 秒預算之類），與 wishOffers 的改動無關：
+本分支的 18 個改動檔案裡**沒有任何一個**是 `commute`／`listing-search` 相關。
+判讀規則：**先看 PG job**（它才是島嶼改動的守門員），再用 base worktree 比對一般 Tests job 的紅燈。
+
+### 36.11 第 3 步完成：提案狀態機（**wishOffers 群清空**）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `POST /api/wish-offers/:offerRef/accept` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/decline` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/withdraw` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/block` | MIXED | **PG** |
+
+尺規（master `7a150e4`）：**PG 158→170、MIXED 99→87、缺口 110→98**。
+**wishOffers 群已經沒有任何缺口路由**（`route-data-map` 過濾 `wish-offer` ⇒ 0 條）。
+
+#### 做法
+
+- 葉節點 helper 全部搬過來：`transitionOfferAsync()`（樂觀鎖）、`expirePendingIfDueAsync()`、
+  `terminalizeOffersAsync()`、`insertUserBlockAsync()`、`recheckAcceptableAsync()`。
+- 四條路由共用一個主體 `transitionRoute()`：可見性 → 角色 → 過期／衝突 → 樂觀鎖 → 事件，
+  順序與同步版逐條相同；`denied` 的處置（`recordOfferFail()` ＋ 409）也相同。
+- 契約（`accept` 之後發通知）留在 `db.js` 的 `acceptWishOfferFor()`，所以**路由層沒有動它**；
+  通知寫入端在前一輪已具備 PG 版。
+
+#### 🚨 這一包最關鍵的一行：`rowCount` 不是 `changes`
+
+```js
+// 同步版
+return Number(result.changes) || 0;
+// PG 版
+return Number(res?.rowCount) || 0;
+```
+
+樂觀鎖靠「改到 0 列」判斷衝突。PG 的 `pg` 回的是 `rowCount`，用 `changes` 會得到 `undefined`
+⇒ `|| 0` 一樣是 0…**但 `transitionOfferAsync()` 的呼叫端若拿 `undefined` 去做真值判斷，
+就會把衝突誤判成成功**。變異集裡放了一條「改用 changes」的變異，由
+「樂觀鎖：version 不對必須是衝突」那條測試殺掉。
+
+#### 測試
+
+- `wish-offers-async.test.js` **24 項全綠**（新增 5 項：接受、樂觀鎖、拒絕／撤回、封鎖、過期）。
+- 變異 **21 條全殺**。過程中修掉三條沒有鑑別力的地方：
+  1. 「封鎖屋主」原本只比 `status`，所以**把終結時的事件拿掉也照樣過關** ⇒ 補上
+     `offer_blocked` 事件的斷言。
+  2. `block_ref` 是**隨機 token**（每個 store 各自產生）⇒ 不能比字串，只能比「兩邊都有值」。
+  3. 過期那條測試**忘了先 `copyRows()`**，夾具還是空的 ⇒ PG 分支回 `offer_not_found` 而不是
+     `offer_expired`。這一條是「測試要先確認兩邊起點相同」的又一次實例。
+
+### 36.12 這條線的收尾狀態（下一個 session 的起點）
+
+第三十六批那份順序的四個步驟**都已完成**，但落成**三個 PR**（都未部署）：
+
+| PR | 內容 | 狀態 |
+|---|---|---|
+| **#531** | 許願房列表三條路由（`getWishConditions`／`wishRoomOwnerSummary`／`pendingInboxCount`） | CI 全綠 |
+| **#532** | 提案讀取三條路由（＋抓到 `getSelfRowAsync` 的既有缺陷） | CI 全綠 |
+| **#533** | 檢舉／封鎖／後台清單／分析／通知寫入端／聯絡方式／狀態機（wishOffers 全群） | CI 全綠 |
+
+⚠️ **#532／#533 是堆疊在彼此之上**（#533 的 base 目前是 master，但它的 diff 含 #532 的內容）。
+**合併順序建議：#531 → #532 → #533**；#532 合併後 #533 的 diff 會自動收斂。
+
+以 master `7a150e4` 為基準的尺規變化（三支合併後應為）：
+
+| 判定 | 起點 | 現在 |
+|---|---:|---:|
+| SQLite | 95 | **11** |
+| MIXED | — | **87** |
+| 無直接DB | — | **20** |
+| PG | 22 | **170** |
+| **缺口** | — | **98** |
+
+`route-data-map` 過濾 `wish-offer` ⇒ **0 條**（wishOffers 群清空）。
+
+#### 下一步（不在本輪範圍）
+
+下一個最大的單一群是**通知／分析的其餘部分**與 **`getUserById`（25 條）／`ensureUser`（22 條）**；
+`bumpAnalyticsAsync()` 與通知寫入端已就位，所以 `POST /api/demand`、`POST /api/wish-rooms`、
+`POST /api/self-listings`、`/verify-email`、`/auth/:provider/callback` 等 8 條已經少了一個卡點。
 ## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
 原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
@@ -1522,10 +1914,10 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **96** |
+| MIXED | — | **87** |
 | 無直接DB | — | **20** |
-| PG | 22 | **161** |
-| **缺口（SQLite＋MIXED）** | — | **107** |
+| PG | 22 | **170** |
+| **缺口（SQLite＋MIXED）** | — | **98** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
