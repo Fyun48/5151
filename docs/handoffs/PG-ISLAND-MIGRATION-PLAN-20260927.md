@@ -2665,6 +2665,12 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 - ⚠️ **`syncSequence()` 的主鍵不要用預設值**：`listings` 的主鍵是 `post_id`，這一輪有三支
   live 測試各踩一次 `column "id" does not exist`。最新的一支改成**自己查主鍵**
   （`pg_index` ＋ `pg_attribute`），新寫的 live 測試請照抄。
+- 🚨 **注入式 `exec` 的形狀問題第四次出現**（`memberMediaAsync`）：它的 `pgExec()`／
+  `withFallbackTx()` 只吃裸陣列，餵 `{ rows, rowCount }` 時 `firstRow()` 拿到 undefined
+  ⇒ `deleteMemberMediaAsync()` 靜默地變成 404、被呼叫端的 try/catch 吞掉
+  ⇒ **「取消匯入時的媒體清理」在 PG 上整個沒作用**（沒有錯誤、沒有任何跡象）。
+  已統一成裸陣列。四次清單：`wishExampleAsync`、`settingsKvAsync`、`siteContentAsync`＋
+  `adminOverviewAsync`、`memberMediaAsync`——**新模組請在 runner 邊界就 `rowsOf()`**。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 

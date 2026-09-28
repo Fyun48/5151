@@ -168,8 +168,18 @@ const stampOf = (now) => (now instanceof Date ? now : new Date(now || Date.now()
 const placeholders = (n) => Array.from({ length: n }, () => "?").join(",");
 const uniqIds = (tagIds) => [...new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter((n) => n > 0))];
 
+// 注入式 `exec` 有兩種形狀：`pgDriver.query()` 的裸陣列，以及 `crmOutboxAsync` 起的
+// `{ rows, rowCount }`。這個模組的呼叫端（`firstRow()`／`for…of`）一律當**裸陣列**用，
+// 所以這裡統一轉成裸陣列——2026-09-28 由 listing-import 的 live PG 測試抓到：
+// 餵 `{ rows }` 時 `firstRow()` 拿到 undefined ⇒ 媒體刪除靜默地變成 404（被呼叫端的
+// try/catch 吞掉），於是「取消匯入時的媒體清理」在 PG 上整個沒作用。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => rowsOf(await injected(sql, params));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
@@ -234,7 +244,10 @@ async function withFallback(options, runPostgres, runSqlite) {
 async function withFallbackTx(options, runPostgres, runSqlite) {
   if (!isPg(options)) return runSqlite();
   try {
-    if (options.exec) return await runPostgres(options.exec);
+    if (options.exec) {
+      const injected = options.exec;
+      return await runPostgres((sql, params = []) => Promise.resolve(injected(sql, params)).then(rowsOf));
+    }
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensureMemberMediaStoreOnce(pgDriver);
     return await pgDriver.withTransaction(async (client) => {
