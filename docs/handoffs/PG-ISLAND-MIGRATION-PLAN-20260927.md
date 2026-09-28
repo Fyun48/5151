@@ -2662,6 +2662,9 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
   非 postgres 走同步路徑。變異 **8 條全殺**。
 - `v3/test/listing-import-lifecycle-live-pg.test.js`（新，CI 的 PG job 會跑）：真 PG 上的
   巢狀 listing、孤兒 `listing_id`、修改同步更新草稿、取消的媒體 soft delete、idempotent。
+- ⚠️ **`syncSequence()` 的主鍵不要用預設值**：`listings` 的主鍵是 `post_id`，這一輪有三支
+  live 測試各踩一次 `column "id" does not exist`。最新的一支改成**自己查主鍵**
+  （`pg_index` ＋ `pg_attribute`），新寫的 live 測試請照抄。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 

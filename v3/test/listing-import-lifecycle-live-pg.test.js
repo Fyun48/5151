@@ -42,10 +42,19 @@ test("live PG：讀取／修改／取消端到端（含媒體清理與孤兒 lis
   const who = (await query("SELECT current_database() AS db"))[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
 
-  const syncSequence = async (table, column = "id") => {
+  // ⚠️ 主鍵欄位**自己查**，不要靠呼叫端記得傳：`listings` 是 `post_id`、其餘多半是 `id`，
+  // 這一輪已經有三支 live 測試因為「預設 id」拿到 `column "id" does not exist`。
+  const syncSequence = async (table) => {
+    const pk = (await query(
+      `SELECT a.attname AS column FROM pg_index i
+         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = $1::regclass AND i.indisprimary`,
+      [table],
+    ))[0]?.column;
+    assert.ok(pk, `${table} 必須有主鍵（序列同步要用）`);
     await query(
-      `SELECT setval(pg_get_serial_sequence($1, $2), GREATEST((SELECT COALESCE(MAX(${column}),0) FROM ${table}), 1))`,
-      [table, column],
+      `SELECT setval(pg_get_serial_sequence($1, $2), GREATEST((SELECT COALESCE(MAX("${pk}"),0) FROM ${table}), 1))`,
+      [table, pk],
     );
   };
   const cleanup = async () => {
