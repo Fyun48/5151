@@ -2247,6 +2247,65 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 `surveyAggregate`／`rentalOpsSummary`／`rentalOpsDrilldown`（2 條路由，`rentalOpsAnalytics.js` 206 行）
 ＝ **4 條路由**，而且 `getDemandPost`／`bumpAnalytics` 都已經在島上。
 
+## 二之負十、2026-09-28 第四十一批：完成問卷（completion survey）
+
+### 41.1 範圍與投報率
+
+40.5 列的下一個候選。`rentalSurvey.js` 只有 72 行，而且兩個前置條件都已經在島上
+——`getDemandPostAsync()`（同步版走 `db.js getDemand()`）與 `bumpAnalyticsAsync()`
+（第三十六批 36.5）。做完放掉兩條路由：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /api/wish-rooms/:id/survey` | `getCompletionSurveyAsync` |
+| `POST /api/wish-rooms/:id/survey` | `submitCompletionSurveyAsync` |
+
+尺規：缺口 **91 → 89**，PG **177 → 179**。
+
+另外把 `surveyAggregateAsync()` 也備好（admin 的 `survey_breakdown` 在用）；它目前唯一的
+呼叫端是 `rentalOpsSummary()`，那一支還沒搬，所以這一批不放掉任何路由，但 parity 先釘住
+（第四十二批會直接用）。
+
+### 41.2 這一包的三個坑
+
+1. **`rental_completion_surveys` 的兩條唯一鍵在 PG 上不存在**。SQLite 的 DDL 是
+   `wish_id INTEGER NOT NULL UNIQUE` 與 `public_token TEXT NOT NULL UNIQUE`——都是**表約束**，
+   而 `ensurePgSchema()` 只從 `PRAGMA table_info` 重建欄位／主鍵／預設值（表約束的隱式索引抓不到，
+   本系列已中過四次）。少了它們，PG 上的「一則許願房一則問卷」與「token 不重複」會**整個失效
+   而且不會有任何錯誤**。所以 `ensureSurveyStoreOnce()` 除了鏡射建表，還要自己補
+   `SURVEY_UNIQUE_INDEXES`（與 `rentalNotifyWriteAsync` 同一個做法），live PG 測試再直接
+   對 PG 插第二列確認它真的在擋。
+2. **`wish_id` 是全域唯一，不是 `(wish_id, user_id)`**。所以「同一則許願房有兩個人的問卷」
+   這個狀態不存在——測試第一版就是這樣紅的（夾具的 `UNIQUE` 擋下來）。要驗「不是自己的」
+   只能用**別人的許願房**，而且要挑 `status='open'` 的那一種：`getDemandPost()` 對公開中的
+   許願房會回公開視圖（不丟錯），所以「這不是你的許願房」必須由**所有權檢查**擋下來。
+   少了它，任何人都能替別人的許願房填問卷（變異測試現在會殺掉這一條）。
+3. **`COUNT(*)` 在 PG 回來的是字串**（bigint → string），SQLite 是數字，而同步版把列原樣
+   往外送（admin 的 `survey_breakdown` 直接用）。所以 PG 版要 `Number(row.n)` 正規化，
+   否則前端的 `"3"` 會跟 `3` 不一樣。離線測試用「把 COUNT 轉成字串的夾具」釘住這一條。
+
+**兩個 store 都寫**：問卷列與 `rental_analytics_daily` 的計數都各寫一次
+（`bumpAnalyticsAsync()` 的 PG 分支不會碰本機 handle，所以不會重複）。
+本機那兩條線的讀者是還沒搬的 `rentalOpsSummary()`／`rentalOpsDrilldown()`（見 40.5）。
+`public_token` 兩個 store 用**同一個**（同步版是各自產生）——這樣 admin 的 drill-down
+不管從哪個 store 讀，看到的 `survey_ref` 都一樣。
+
+### 41.3 測試
+
+- `v3/test/rental-survey-async.test.js`（**9 項全綠**）：讀取（沒有／有／別人的／不存在的 404）、
+  送出（兩個 store 的列與計數「各一次」、跳過記 `survey_skipped`、不合法的值降級、
+  already 不得再寫再計數、23505 競態、非唯一鍵錯誤不得被吞、生命週期／所有權／不安全標記、
+  非 postgres 走同步路徑）、彙總（逐列相同 ＋ COUNT 型別）。變異 **12 條全殺**。
+- `v3/test/rental-survey-live-pg.test.js`（新，CI 的 PG job 會跑）：兩個唯一索引真的在 PG 上、
+  送出真的落地、already、直接插第二列會被拒、公開中的別人的許願房不得填、COUNT 是數字。
+
+### 41.4 下一個候選
+
+`rentalOpsSummary()`／`rentalOpsDrilldown()`（`rentalOpsAnalytics.js`，2 條路由）。
+⚠️ **先讀再切**：那兩支的 `medianSecondsToAccept()` 用了 **`julianday()`**（SQLite 專屬），
+所以不是「換個 runner」就好——要決定用方言分支（PG 的 `EXTRACT(EPOCH FROM …)`）還是把中位數
+搬到 JS 算。這也是「尺規看不到方言問題」的又一個實例：量測說 2 條路由、實作有一個真障礙。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2257,13 +2316,13 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十批合併後）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十一批）** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **80** |
+| MIXED | — | **78** |
 | 無直接DB | — | **20** |
-| PG | 22 | **177** |
-| **缺口（SQLite＋MIXED）** | — | **91** |
+| PG | 22 | **179** |
+| **缺口（SQLite＋MIXED）** | — | **89** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

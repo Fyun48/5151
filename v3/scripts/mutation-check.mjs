@@ -608,6 +608,96 @@ const WISHLIFECYCLE_MUTATIONS = [
   },
 ];
 
+// 完成問卷（survey）PG 分支的變異集（v3/test/rental-survey-async.test.js）。
+const SURVEY_SRC = "v3/src/rentalSurveyAsync.js";
+const SURVEY_SYNC_SRC = "v3/src/rentalSurvey.js";
+const SURVEY_MUTATIONS = [
+  {
+    name: "不補『一則許願房一則問卷』的 unique index（PG 上去重整個失效）",
+    file: SURVEY_SRC,
+    from: '  "CREATE UNIQUE INDEX IF NOT EXISTS rental_survey_wish_unique ON rental_completion_surveys(wish_id)",\n',
+    to: "",
+    expect: "索引清單",
+  },
+  {
+    name: "不補 public_token 的 unique index",
+    file: SURVEY_SRC,
+    from: '  "CREATE UNIQUE INDEX IF NOT EXISTS rental_survey_token_unique ON rental_completion_surveys(public_token)",\n',
+    to: "",
+    expect: "索引清單",
+  },
+  {
+    name: "讀取不查 PG（永遠回 submitted:false）",
+    file: SURVEY_SRC,
+    from: '    const row = one((await run(SURVEY_BY_WISH_SQL, [Number(wish.id) || 0, uid])).rows);\n    return publicSurvey(row);',
+    to: "    return publicSurvey(null);",
+    expect: "讀取：沒有問卷回",
+  },
+  {
+    name: "不檢查許願房是不是自己的（可以替別人填問卷）",
+    file: SURVEY_SRC,
+    from: "    if (!raw || Number(raw.user_id) !== uid) {\n      throw rentalNotifyHttpError(\"找不到這則許願房\", 404, \"wish_not_found\");\n    }\n",
+    to: "    if (!raw) {\n      throw rentalNotifyHttpError(\"找不到這則許願房\", 404, \"wish_not_found\");\n    }\n",
+    expect: "生命週期不是 completed",
+  },
+  {
+    name: "不檢查生命週期是不是 completed（沒找到房也能填）",
+    file: SURVEY_SRC,
+    from: '    if (String(raw.lifecycle || "") !== "completed") {\n      throw rentalNotifyHttpError("完成找房後才能填回饋", 409, "survey_not_due");\n    }\n',
+    to: "",
+    expect: "生命週期不是 completed",
+  },
+  {
+    name: "不安全標記不擋（detail 直接落地）",
+    file: SURVEY_SYNC_SRC,
+    from: '  if (containsUnsafeMarkup(detail)) throw rentalNotifyHttpError("內容包含不安全標記", 400, "unsafe_markup");\n',
+    to: "",
+    expect: "不安全標記",
+  },
+  {
+    name: "只寫 PG，不讓本機 handle 追上（admin 的 drill-down 看不到）",
+    file: SURVEY_SRC,
+    from: "    const local = sqliteHandle();\n    if (!local.prepare(SURVEY_BY_WISH_SQL).get(Number(raw.id), uid)) {\n      local.prepare(SURVEY_INSERT_SQL).run(token, Number(raw.id), uid, found, via, helpful, detail, stamp);\n    }\n",
+    to: "",
+    expect: "送出：寫入 PG 與本機 handle",
+  },
+  {
+    name: "本機的計數不記（admin 的營運數字少一筆）",
+    file: SURVEY_SRC,
+    from: '    bumpAnalytics(sqliteHandle(), surveyMetric(found), now);\n',
+    to: "",
+    expect: "送出：寫入 PG 與本機 handle",
+  },
+  {
+    name: "PG 與本機的計數鍵用錯（跳過也記成 submitted）",
+    file: SURVEY_SYNC_SRC,
+    from: 'export function surveyMetric(found) {\n  return found === "skipped" ? "survey_skipped" : "survey_submitted";\n}',
+    to: 'export function surveyMetric() {\n  return "survey_submitted";\n}',
+    expect: "送出：跳過要記成",
+  },
+  {
+    name: "彙總的 COUNT 不正規化（PG 會回字串 \"3\"）",
+    file: SURVEY_SRC,
+    from: "    return rows.map((row) => ({ ...row, n: Number(row.n) || 0 }));",
+    to: "    return rows;",
+    expect: "彙總：逐列相同",
+  },
+  {
+    name: "23505 以外的寫入錯誤也當成 already（把連線中斷吞掉）",
+    file: SURVEY_SRC,
+    from: 'function isUniqueViolation(error) {\n  if (String(error?.code || "") === "23505") return true;\n  return /UNIQUE constraint failed/i.test(String(error?.message || ""));\n}',
+    to: "function isUniqueViolation() {\n  return true;\n}",
+    expect: "送出：競態",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: SURVEY_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2233,6 +2323,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /rental-survey-async/.test(testFile) ? SURVEY_MUTATIONS
   : /wish-room-lifecycle-async/.test(testFile) ? WISHLIFECYCLE_MUTATIONS
   : /wish-example-async/.test(testFile) ? WISHEXAMPLE_MUTATIONS
   : /crm-module-async/.test(testFile) ? CRMMOD_MUTATIONS
