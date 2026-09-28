@@ -1191,6 +1191,76 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
+## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
+
+第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
+而讀取還在節點 SQLite。**這一批就是把那個前置條件做完。**
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `GET /api/demand/:id` | MIXED | **PG** |
+| `GET /api/wish-rooms/:id` | MIXED | **PG** |
+| `GET /api/public/wish-room/:id` | SQLite | MIXED（只剩 `sharePageExtrasFor`） |
+| `GET /api/demand`、`GET /api/wish-rooms` | MIXED | MIXED（本體已是 PG，剩 `getWishConditions`／`pendingInboxCount`／`wishRoomOwnerSummary`） |
+| `GET /api/wish-rooms/mine` | MIXED | 同上 |
+| `POST /api/demand/:id/share-events` 等 | — | 讀取改走 PG 入口 |
+| `POST /api/demand/:id/reply`、`/close` | ⛔ 刻意不接 | ✅ **已接線** |
+
+尺規：**PG 154→158、MIXED 102→99、SQLite 12→11、缺口 114→110**。
+
+### 31.1 `decoratePost()` 的四個條件式讀取 → loader 介面
+
+`decoratePost()` 會在四個**有條件**的地方自己伸手進 handle：
+
+| 時機 | 原本 | 介面 |
+|---|---|---|
+| 每一列 | `demand_replies` 查詢 | `replies(row)` |
+| 每一列 | `userAuthorName()` | `authorName(uid)` |
+| 只有屋主 | `collectWishActivitySignals()` | `activitySignals(row)` |
+| 只有 token 為空 | `ensurePublicToken()`（會寫入） | `ensureToken(row)` |
+| 判斷欄位存在 | `hasWishColumn()` | `hasColumn(name)` |
+
+同步版用 `syncDecorateLoader(db)` 供這五個操作（**SQL 逐字不變**），PG 版用注入式 runner 供
+同一組，兩邊共用 `decoratePostWith()` 這一段純邏輯 ⇒ 輸出形狀不可能漂移。
+PG 版把同步版「每一列各查一次」的部分**批次化**（回覆、作者、活動訊號各一批）。
+
+### 31.2 讀取時的過期掃描：又一個「兩個 store 都要寫」
+
+`expireOpenPosts()` 是**讀取時順便寫入**（收掉過期、清 match districts、跑 offer hook）。
+三句 UPDATE 與參數順序抽成共用常數，PG 版照樣**PG 先寫、本機 handle 追上**——
+理由與檢舉的隱藏完全相同（PG 是真的來源；本機 handle 追上，回退路徑才看到一致狀態）。
+
+### 31.3 🚨 這一包最重要的教訓：**parity 沒開 `strict` ⇒ PG 分支整條沒被測到**
+
+第一版讀取 parity 全部是綠的，但那些綠燈**什麼都沒證明**：PG 分支其實在丟錯
+（夾具少了兩張表），而**讀取的 fail-open 回退**默默改成回 SQLite 的答案，
+於是 `deepEqual` 永遠成立。這就是紀律 12（fallback 會掩蓋錯誤）的完整實例。
+
+- 加上 `strict: true` 之後，真正的錯誤立刻現形：`no such table: demand_match_districts`、
+  接著 `user_listing_flags`——**夾具缺少 PG 真的有的表**（同步版那兩支查詢有 try/catch，
+  所以 SQLite 缺表不會有事，夾具就漏了）。
+- ⇒ **寫讀取 parity 時，`strict` 不是選項而是必需品**；沒開的話「綠燈」等於沒跑。
+
+### 31.4 變異測試：11 條全殺，過程中修掉兩條**沒有鑑別力**的測試
+
+- **公開列表不套篩選條件**：拿掉 `matchesFilters` 之後照樣綠——因為我的測試**沒帶篩選條件**，
+  而 `matchesFilters` 在沒有條件時永遠回 true。補上 `city`／`district`／`housing_type`／
+  `rent_min` 四組之後才殺得死。
+- **公開視圖的洩漏守衛**：`expect` 原本寫的測試名不對（綠燈其實來自 parity 那兩條），
+  改成會真正失敗的那一條。
+- **刻意不放**「拿掉 `wishVisibleOnSurface()`」那一條：它只對 stage1 fixture 列有鑑別力，
+  非 fixture 列一律回 true；fixture 隔離由 `rental-match-isolation`／`stage1-fixture-*` 守著。
+  放了只會得到假 SURVIVED，所以在那組變異集上寫明理由。
+
+### 31.5 測試夾具的兩個坑（都會再遇到）
+
+1. **夾具是整份檔案共用的**：前一個測試留下的 open 貼文還在，而
+   `idx_demand_one_mutable` 是「同一人只能有一則 open／draft」的**部分唯一索引** ⇒
+   同一個 `userId` 再種一則就撞。每個測試要用**自己專屬的 userId**。
+2. **`users` 的 id 1 是 `db.js` 開檔時建的 bootstrap 管理員**，不屬於測試自己種的帳號，
+   清理時不會被刪——但前面的測試會改它的 nickname。不還原就會**跨測試汙染**
+   （「作者暱稱」那一條就是這樣紅的）。
+
 ## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
 原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
@@ -1347,11 +1417,11 @@ node v3/scripts/route-data-map.mjs
 
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
-| SQLite | 95 | **12** |
-| MIXED | — | **102** |
+| SQLite | 95 | **11** |
+| MIXED | — | **99** |
 | 無直接DB | — | **20** |
-| PG | 22 | **154** |
-| **缺口（SQLite＋MIXED）** | — | **114** |
+| PG | 22 | **158** |
+| **缺口（SQLite＋MIXED）** | — | **110** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
