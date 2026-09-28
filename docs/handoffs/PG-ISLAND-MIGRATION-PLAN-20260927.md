@@ -1191,17 +1191,18 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
-## 二之一、2026-09-28 第三十批：許願房的三個寫入（demand.js 的第一刀）
+## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
-**三個原本「只差一個同步函式」的路由，一起搬上 PG**：
+原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
+live PG 測試證明「現在接會錯」，退回同步版並寫明前置條件。這一批的重點其實是那個退回的理由。
 
-| 路由 | 舊卡點 | 新入口 |
+| 路由 | 舊卡點 | 狀態 |
 |---|---|---|
-| `POST /api/demand/:id/report` | `reportDemand` | `demandAsync.reportDemandAsync` |
-| `POST /api/demand/:id/reply` | `addDemandReply` | `demandAsync.addDemandReplyAsync` |
-| `POST /api/demand/:id/close` | `closeDemandPost` | `demandAsync.closeDemandPostAsync` |
+| `POST /api/demand/:id/report` | `reportDemand` | ✅ **已接線**（`demandAsync.reportDemandAsync`） |
+| `POST /api/demand/:id/reply` | `addDemandReply` | ⛔ 程式與測試都寫好了，**但刻意不接線**（見 30.9） |
+| `POST /api/demand/:id/close` | `closeDemandPost` | ⛔ 同上 |
 
-新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（10 項，全綠）＋
+新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（11 項，全綠）＋
 `v3/test/demand-live-pg.test.js`（真 PG，CI 的 PG job 會跑，本機沒有隔離環境時 skip）。
 
 ### 30.1 副作用刻意留在 `demand.js`（與 `closeSelfListing` 同一個處置）
@@ -1213,21 +1214,24 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 **兩個 driver 呼叫同一支**（PG 分支傳本機 handle 進去），而不是在 PG 分支重寫一份。
 好處有兩個：語意不可能漂移；hook 那條線仍留在 sqlite 集合裡，尺規不會假裝它搬完了。
 
-### 30.2 回傳封包**刻意**與同步版不同，這是這批最重要的取捨
+### 30.2 副作用要**分兩半**看，這是本批最重要的一課
 
-同步版這三支最後都回**整則許願房**（`getDemandPost()`）。那一支還沒搬上 PG，
-所以 PG 分支如果照抄去讀本機 handle，會拿到**還沒寫進去的回覆**——寫 PG、讀 SQLite 的假資料，
-比不回傳更糟。因此：
+達門檻之後的「隱藏」有兩半，第一版我把它們當成同一件事，於是 CI 的 live PG 直接紅：
 
-- `reportDemandAsync`：回 `{ ok, hidden }`（原本就是這個形狀，**沒有差異**）。
-- `addDemandReplyAsync`：回 `{ ok: true, id, replied: true }`（同步版回整則）。
-- `closeDemandPostAsync`：回 `{ ok: true, id, status: "closed" }`（同步版回整則）。
+1. **跟這張表有關的那半**（`status='hidden'`、`lifecycle='blocked'`／`'closed'`）——
+   這是**真的來源**，PG 模式下**一定要寫 PG**；只寫本機 handle 的話 PG 上那一列還是 `open`，
+   等於**完全沒有隱藏**。反過來，只寫 PG 也不夠：還沒搬完的讀取（`listDemand`／
+   `getDemandPost`／公開頁）讀的是節點 SQLite，所以**本機 handle 也要追上**，兩邊才一致。
+2. **跨模組的那半**（`syncDemandMatchDistricts`／`notifyWishOfferLifecycle`／hook）——
+   那些函式吃 handle、整支還在 SQLite 上，所以照舊只跑本機 handle。
 
-**依據（實測，不是猜測）**：客戶端 `v3/public/index.html` 的 close 流程是
-`const data = await readApi(res); if (!res.ok) {...}; await loadDemand();`——
-成功路徑只看 `res.ok`，之後一律整批重載，沒有讀取封包裡的許願房內容。
-**⇒ 下一個真正該做的是 `getDemandPost()` → PG**（它會一次解鎖 `GET /api/demand/:id`、
-`GET /api/wish-rooms/:id`、`GET /api/public/wish-room/:id` 三條，並讓上面兩個封包可以還原成整則）。
+⇒ 因此現在是「PG 先寫，本機 handle 追上」，而且**兩個 driver 的語意來自同一組語句常數**
+（`demand.js` 的 `LIFECYCLE_UPDATE_SQL` ＋ `lifecyclePatchParams`，以及
+`applyReportHideEffectsAsync`／`applyClosedPostEffectsAsync`）。
+
+> ⚠️ 這裡有一個**很容易寫出無鑑別力測試**的陷阱：第一版這條測試拿**磁碟**當「PG」，
+> 結果兩個 store 其實是同一個檔案 ⇒ 把 PG 那一半的寫入拿掉照樣綠。
+> **變異測試當場抓到（SURVIVED）**。改成「PG 走記憶體夾具、本機走磁碟」之後才殺得死。
 
 ### 30.3 這批我自己的測試寫錯了兩次（第一次整排紅燈都紅在錯的地方）
 
@@ -1263,12 +1267,12 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 `toPostgresSql`。**離線夾具看不到這個**，因為 `node:sqlite` 同時接受 `?` 與 `$1`
 ——這正是「live PG 測試不可省」的那條紀律又一次兌現。
 
-### 30.6 變異測試：7 條全殺，但前 3 條是**假 SURVIVED**
+### 30.6 變異測試：8 條全殺，但前 3 條是**假 SURVIVED**
 
 第一輪跑出 3 條 SURVIVED，實際上都**有**對應測試失敗——是我 `expect` 寫的
 **測試名字串**與真實測試名不符（紀律 6 第 N 次）。實際失敗項與預期殺手不一致時，
 工具會誠實地把它列成「沒有失敗」而不是「殺掉了」，這一點救了這批的可信度。
-改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**。
+改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**；再加上 30.2 那條分庫一致性守衛，這一組共 **8 條變異、全殺**。
 
 ### 30.7 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
 
@@ -1287,8 +1291,28 @@ PG demand_posts／demand_replies／demand_reports 只有 pkey，SQLite 定義的
 ### 30.8 這批的尺規變化
 
 ```
-PG 153 → 156　MIXED 103 → 100　缺口 115 → 112
+PG 153 → 154　MIXED 103 → 102　缺口 115 → 114
 ```
+
+（只多了一條，因為 reply／close 退回同步版——這是**刻意的**，見 30.9。
+下一批的 `getDemandPost()` 會一次解鎖三條讀取路由，並讓這兩條可以接回去。）
+
+### 30.9 ⛔ 為什麼 reply 與 close **刻意不接線**（本批最重要的決定）
+
+`addDemandReplyAsync`／`closeDemandPostAsync` 都寫好了、parity 測試也在驗、
+mutation 也殺得死，**但路由仍走同步版**。理由：
+
+> 這兩支會**改動「會被讀取」的狀態**（回覆清單、許願房狀態），而站上的讀取
+> （`listDemand`／`getDemandPost`／公開頁）**還是讀節點 SQLite**。
+> 接線的話就會變成「寫 PG、讀 SQLite」：回覆確實在 PG，但頁面上看不到——
+> 那是**雙寫分歧**，正是 `PG-ISLAND-ACTIVE-WRITES` 記的那個問題，只是換了個方向。
+
+`reportDemand` 沒有這個問題：它只**新增一列 `demand_reports`**，而且目前沒有任何讀取路徑
+在讀那張表（檢舉數是寫入時自己數的），所以接到 PG 不會造成「同一份資料兩個地方」。
+
+**⇒ 前置條件：`getDemandPost()`（含 `listDemand()`）先搬上 PG，這兩條就可以接回去。**
+那一步會一次解鎖 `GET /api/demand/:id`、`GET /api/wish-rooms/:id`、
+`GET /api/public/wish-room/:id` 三條路由。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
@@ -1303,10 +1327,10 @@ node v3/scripts/route-data-map.mjs
 | 判定 | 起點 | **現在** |
 |---|---:|---:|
 | SQLite | 95 | **12** |
-| MIXED | — | **100** |
+| MIXED | — | **102** |
 | 無直接DB | — | **20** |
-| PG | 22 | **156** |
-| **缺口（SQLite＋MIXED）** | — | **112** |
+| PG | 22 | **154** |
+| **缺口（SQLite＋MIXED）** | — | **114** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

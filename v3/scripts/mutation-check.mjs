@@ -1684,6 +1684,14 @@ const DEMAND_MUTATIONS = [
     to: "  syncDemandMatchDistricts(db, id);",
     expect: "lifecycle",
   },
+  {
+    // CI 的 live PG 就是抓到這一條：只寫本機 handle，PG 上那一列還是 open。
+    name: "隱藏不寫 PG（只寫本機 handle ⇒ PG 模式下等於沒有隱藏）",
+    file: DEMAND_SRC,
+    from: "      await applyReportHideEffectsAsync(run, kind, id, now);\n      applyReportHideEffects(sqliteHandle(), kind, id, now);",
+    to: "      applyReportHideEffects(sqliteHandle(), kind, id, now);",
+    expect: "兩邊都變成 hidden",
+  },
 ];
 
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";

@@ -117,6 +117,9 @@ function resetBoth(seedFn) {
 }
 
 const postStatus = (h, id) => h.prepare("SELECT status FROM demand_posts WHERE id = ?").get(id)?.status;
+// 副作用會**兩邊都寫**（PG 是真的來源，本機 handle 追上讓還沒搬完的讀取看到一致狀態），
+// 所以夾具要把「真的落地的 status」與「本機 handle 上的 status」分開看。
+const reportDiskStatus = (id) => handle().prepare("SELECT status FROM demand_posts WHERE id = ?").get(id)?.status;
 const replyHidden = (h, id) => h.prepare("SELECT hidden FROM demand_replies WHERE id = ?").get(id)?.hidden;
 const reportRows = (h) => h.prepare("SELECT target_type, target_id, user_id, reason FROM demand_reports ORDER BY id").all();
 
@@ -342,6 +345,33 @@ test("寫入失敗時 fail-closed：PG 丟錯就往上丟，不得靜默回退 S
   await assert.rejects(
     () => asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 510 }, { ...PG, exec: badExec, strict: true }),
     /connection terminated/,
+  );
+});
+
+test("檢舉達門檻：PG 與本機 handle 兩邊都變成 hidden（兩個 store 真的是分開的）", async () => {
+  // 這條測試來自 CI 的 live PG 失敗：第一版只把隱藏寫進本機 handle，於是 PG 上那一列
+  // 還是 `open`——在 PG 模式下等於完全沒有隱藏。反過來說，只寫 PG 也不行：
+  // 還沒搬完的讀取（`listDemand`／`getDemandPost`）讀的是節點 SQLite。
+  //
+  // ⚠️ 第一版把「PG」用**磁碟**當替身，結果兩個 store 其實是同一個檔案 ⇒ 拿掉
+  // PG 那一半的寫入也照樣綠（變異測試當場抓到）。所以這裡刻意讓兩個 store 分開：
+  // PG 走記憶體夾具，本機 handle 走磁碟，並斷言**兩邊都變了**。
+  const disk = handle();
+  const [, exec] = resetBoth((h) => seedPost(h, { id: 520, userId: 1 }));
+
+  await asyncMod.reportDemandAsync(2, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec });
+  assert.equal(postStatus(exec.raw, 520), "open", "PG：第一筆還不該隱藏");
+  assert.equal(reportDiskStatus(520), "open", "本機：第一筆還不該隱藏");
+
+  const second = await asyncMod.reportDemandAsync(3, { targetType: "post", targetId: 520, reason: "廣告" }, { ...PG, exec });
+  assert.deepEqual(second, { ok: true, hidden: true });
+  const pgRow = exec.raw.prepare("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = 520").get();
+  assert.equal(pgRow.status, "hidden", "PG 側那一列必須被隱藏（那才是真的來源）");
+  assert.equal(pgRow.lifecycle, "blocked", "PG 側的 lifecycle 必須是 blocked");
+  assert.equal(reportDiskStatus(520), "hidden", "本機 handle 也必須被隱藏（不然還沒搬完的讀取看不到）");
+  assert.equal(
+    disk.prepare("SELECT lifecycle FROM demand_posts WHERE id = 520").get()?.lifecycle, "blocked",
+    "本機 handle 的 lifecycle 也必須是 blocked",
   );
 });
 

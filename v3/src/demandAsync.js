@@ -39,7 +39,9 @@ import {
   DEMAND_REPORT_HIDE_AFTER,
   addDemandReply as addDemandReplySync,
   applyClosedPostEffects,
+  applyClosedPostEffectsAsync,
   applyReportHideEffects,
+  applyReportHideEffectsAsync,
   assertMatureAccount,
   closeDemandPost as closeDemandPostSync,
   httpError,
@@ -99,6 +101,24 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
 // 不是「一列一列的陣列」。`one()` 收到的是 `run(...)` 的 **`.rows`**——
 // 這裡踩過一次：把整個 `{rows,rowCount}` 餵給 `one()`，它回 null，於是每一筆檢舉
 // 都被判成「找不到要檢舉的內容」（整條路徑 404），而 SQL 其實跑得好好的。
+// 副作用有兩半，**必須分開對待**（2026-09-28 CI 的 live PG 測試抓到）：
+//   1. 「跟這張表有關」的那半（把 `status` 改成 hidden／closed、寫 lifecycle）——
+//      **如果只寫本機 handle，PG 上的那一列不會變**。站上的讀取（`listDemand`／
+//      `getDemandPost`／公開頁）在島嶼還沒搬完之前讀的是節點 SQLite，所以本機那一列也要改；
+//      但當這三張表搬到 PG 之後（＝現在），**只改本機等於什麼都沒做**。
+//      ⇒ 這半要**兩邊都寫**：PG 是真的來源，本機 handle 是為了讓還沒搬完的讀取看到一致的狀態。
+//   2. 跨模組的那半（`syncDemandMatchDistricts`／`notifyWishOfferLifecycle`／hook）——
+//      那些函式吃 handle 且整支還在 SQLite 上，所以照舊只跑本機 handle。
+// 這個區分是 live PG 測試逼出來的：第一版只寫本機 handle，於是
+// 「檢舉達門檻之後 PG 的 status 還是 open」——在真的 PG 上就是功能失效。
+function pgEffects(target) {
+  const exec = typeof target === "function" ? target : (sql, params = []) => target.run(sql, params);
+  return {
+    run: (sql, params = []) => exec(sql, params).then(() => undefined),
+    hasColumn: () => true, // PG 的 demand_posts 由 ensurePgSchema 鏡射，lifecycle 一定在
+  };
+}
+
 const one = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
 const iso = (now) => (now instanceof Date ? now : new Date(now ?? Date.now())).toISOString();
 
@@ -132,14 +152,22 @@ export async function reportDemandAsync(userId, input = {}, options = {}) {
     await run(REPORT_INSERT_SQL, [kind, id, uid, String(reason || "").trim().slice(0, 200), iso(now)]);
     const count = Number(one((await run(REPORT_COUNT_SQL, [kind, id])).rows)?.n) || 0;
     const hide = count >= DEMAND_REPORT_HIDE_AFTER;
-    // 隱藏本身（`demand_posts`／`demand_replies`）與跨模組副作用都在 demand.js 那一支，
-    // 兩個 driver 共用；這裡傳本機 handle 進去，因為 hook 還在 SQLite handle 上。
-    if (hide) applyReportHideEffects(sqliteHandle(), kind, id, now);
+    if (hide) {
+      // 先寫 PG（真的來源），再讓本機 handle 追上，這樣兩個讀取路徑看到一致的狀態。
+      await applyReportHideEffectsAsync(run, kind, id, now);
+      applyReportHideEffects(sqliteHandle(), kind, id, now);
+    }
     return { ok: true, hidden: hide };
   }, () => reportDemandSync(sqliteHandle(), userId, input));
 }
 
 // ── 回覆 ────────────────────────────────────────────────────────────────────
+// 🚫 **2026-09-28：這一支還沒接線，`POST /api/demand/:id/reply` 仍走同步版。**
+// 理由（CI 的 live PG 測試逼出來的）：回覆寫進 PG 之後，站上的讀取（`listDemand`／
+// `getDemandPost`／公開頁）**還是讀節點 SQLite**（那些函式是這一塊島嶼剩下的部分）。
+// 接線就會變成「寫 PG、讀 SQLite」的雙寫分歧：回覆在 PG，頁面卻看不到。
+// **前置條件是 `getDemandPost()`／`listDemand()` 先搬上 PG**；在那之前不要接。
+// 程式與測試都留著（parity 測試在驗它），但路由不接。
 // 逐字對應 demand.js 的語句。
 export const REPLY_LAST_SQL =
   "SELECT created_at FROM demand_replies WHERE user_id = ? ORDER BY id DESC LIMIT 1";
@@ -186,6 +214,8 @@ export async function addDemandReplyAsync(userId, postId, body, options = {}) {
 }
 
 // ── 關閉 ────────────────────────────────────────────────────────────────────
+// 🚫 **2026-09-28：這一支也還沒接線，`POST /api/demand/:id/close` 仍走同步版**，
+// 理由與 `addDemandReplyAsync()` 完全相同（關閉之後的列表／詳情仍讀節點 SQLite）。
 export const POST_OWNER_SQL = "SELECT * FROM demand_posts WHERE id = ?";
 
 export async function closeDemandPostAsync(userId, postId, opts = {}, options = {}) {
@@ -196,7 +226,8 @@ export async function closeDemandPostAsync(userId, postId, opts = {}, options = 
     if (!row) throw httpError("找不到這則許願房", 404);
     if (!admin && Number(row.user_id) !== Number(userId)) throw httpError("只能關閉自己的許願房", 403);
     const now = new Date();
-    // 關閉的 UPDATE、lifecycle、比對行政區與 offer hook 都在共用副作用裡（見檔頭說明）。
+    // 先寫 PG（真的來源），再讓本機 handle 追上；理由與 `reportDemandAsync` 的隱藏相同。
+    await applyClosedPostEffectsAsync(run, id, now);
     applyClosedPostEffects(sqliteHandle(), id, now);
     // 同上：同步版回傳整則許願房，這裡只回最小封包，理由與 `addDemandReplyAsync()` 相同。
     return { ok: true, id, status: "closed" };

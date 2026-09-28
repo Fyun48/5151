@@ -102,7 +102,10 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
   const second = await demandAsync.reportDemandAsync(ADMIN, { targetType: "post", targetId: POST_ID, reason: "live 廣告" }, opts);
   assert.deepEqual(second, { ok: true, hidden: true }, "第二筆必須達門檻");
   const afterReport = (await query("SELECT status, lifecycle, closed_reason FROM demand_posts WHERE id = $1", [POST_ID]))[0];
+  // CI 第一次跑就是在這裡紅的：第一版只把隱藏寫進本機 handle，PG 上那一列還是 open。
   assert.equal(afterReport.status, "hidden", "檢舉達門檻必須在 PG 上真的把 status 設成 hidden");
+  assert.equal(afterReport.lifecycle, "blocked", "lifecycle 也必須在 PG 上落地");
+  assert.equal(afterReport.closed_reason, "blocked", "closed_reason 必須在 PG 上落地");
   const reports = await query("SELECT target_type, target_id, user_id, reason FROM demand_reports WHERE target_id = $1 ORDER BY id", [POST_ID]);
   assert.equal(reports.length, 2, "兩筆檢舉都必須真的寫進 PG 的 demand_reports");
   assert.equal(reports[0].target_type, "post");

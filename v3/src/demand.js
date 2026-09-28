@@ -320,24 +320,31 @@ function publishExpiry(now) {
   return isWishLifecycleEnabled(marketplaceFlags) ? ttlExpiresAt(now) : WISH_FAR_EXPIRE;
 }
 
-function writeLifecycle(db, id, patch = {}) {
-  if (!hasWishColumn(db, "lifecycle")) return;
-  db.prepare(
-    `UPDATE demand_posts SET
+// `writeLifecycle()` 的語句與參數順序抽成常數，讓 PG 版（`demandAsync.js` 用的
+// `applyReportHideEffectsAsync`／`applyClosedPostEffectsAsync`）逐字使用同一份——
+// 兩個 driver 的 lifecycle 語意不可能漂移。
+export const LIFECYCLE_UPDATE_SQL = `UPDATE demand_posts SET
       lifecycle = COALESCE(?, lifecycle),
       last_confirmed_at = COALESCE(?, last_confirmed_at),
       last_active_at = COALESCE(?, last_active_at),
       continuous_active_from = COALESCE(?, continuous_active_from),
       closed_reason = COALESCE(?, closed_reason)
-     WHERE id = ?`,
-  ).run(
+     WHERE id = ?`;
+
+export function lifecyclePatchParams(id, patch = {}) {
+  return [
     patch.lifecycle || null,
     patch.last_confirmed_at || null,
     patch.last_active_at || null,
     patch.continuous_active_from || null,
     patch.closed_reason || null,
     id,
-  );
+  ];
+}
+
+function writeLifecycle(db, id, patch = {}) {
+  if (!hasWishColumn(db, "lifecycle")) return;
+  db.prepare(LIFECYCLE_UPDATE_SQL).run(...lifecyclePatchParams(id, patch));
 }
 
 function addWishColumns(db) {
@@ -1639,6 +1646,27 @@ export function applyReportHideEffects(db, kind, id, now = new Date()) {
   db.prepare("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?").run(iso(now), id);
   writeLifecycle(db, id, { lifecycle: "blocked", closed_reason: "blocked" });
   notifyWishOfferLifecycle(db, { wishId: id, lifecycle: "blocked", now });
+}
+
+// 上面的 PG 版：**同一組語句與同一個 lifecycle patch**，跑在 PG 上；跨模組那半
+// （`notifyWishOfferLifecycle`）仍然由呼叫端用本機 handle 觸發，因為那些函式吃 handle。
+// ⚠️ 為什麼需要它（live PG 測試抓到的）：`status='hidden'` 是**這一張表**的狀態，
+// 只寫本機 handle 的話 PG 上那一列仍然是 open ⇒ 在 PG 模式下等於完全沒有隱藏。
+export async function applyReportHideEffectsAsync(run, kind, id, now = new Date()) {
+  if (kind === "reply") {
+    await run("UPDATE demand_replies SET hidden = 1 WHERE id = ?", [id]);
+    return;
+  }
+  await run("UPDATE demand_posts SET status = 'hidden', closed_at = COALESCE(closed_at, ?) WHERE id = ?", [iso(now), id]);
+  await run(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(id, { lifecycle: "blocked", closed_reason: "blocked" }));
+}
+
+// 上面的 PG 版：關閉的 UPDATE 與同一組 lifecycle patch。`syncDemandMatchDistricts()` 與
+// offer hook 仍由呼叫端用本機 handle 觸發（理由同上）。
+export async function applyClosedPostEffectsAsync(run, id, now = new Date()) {
+  const stamp = iso(now);
+  await run("UPDATE demand_posts SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?", [stamp, stamp, id]);
+  await run(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(id, { lifecycle: "paused", closed_reason: "paused" }));
 }
 
 export function applyWishLifecycleAction(db, userId, postId, action, now = new Date()) {
