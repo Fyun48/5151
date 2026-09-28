@@ -189,9 +189,9 @@ function seedPair(db) {
   return { listing, wish };
 }
 
-function codeOf(fn) {
+async function codeOf(fn) {
   try {
-    fn();
+    await fn();
     return "";
   } catch (error) {
     return error.code || "";
@@ -214,28 +214,28 @@ test("create pending offer and public view hides IDs and tenant PII", () => {
   db.close();
 });
 
-test("accepted offer cannot reverse to pending or be accepted again", () => {
+test("accepted offer cannot reverse to pending or be accepted again", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const accepted = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-acc1" });
   const afterAccept = acceptWishOffer(db, 2, accepted.public_token);
   assert.equal(afterAccept.status, "accepted");
-  assert.equal(codeOf(() => acceptWishOffer(db, 2, accepted.public_token)), "offer_conflict");
-  assert.equal(codeOf(() => declineWishOffer(db, 2, accepted.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 2, accepted.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => declineWishOffer(db, 2, accepted.public_token)), "offer_conflict");
   db.close();
 });
 
-test("pending can decline withdraw expire and block; terminal cannot accept", () => {
+test("pending can decline withdraw expire and block; terminal cannot accept", async () => {
   const db = open();
   const a = seedPair(db);
   const pending = createWishOffer(db, 1, a.listing.post_id, a.wish.public_token, { idempotencyKey: "offer-key-d1xx" });
   assert.equal(declineWishOffer(db, 2, pending.public_token).status, "declined");
-  assert.equal(codeOf(() => acceptWishOffer(db, 2, pending.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 2, pending.public_token)), "offer_conflict");
 
   const bListing = createSelfListing(db, 1, listingInput({ title: "士林第二間套房", address: "中正路200號" }));
   const pending2 = createWishOffer(db, 1, bListing.post_id, a.wish.public_token, { idempotencyKey: "offer-key-w1xx" });
   assert.equal(withdrawWishOffer(db, 1, pending2.public_token).status, "withdrawn");
-  assert.equal(codeOf(() => acceptWishOffer(db, 2, pending2.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 2, pending2.public_token)), "offer_conflict");
 
   db.prepare("UPDATE users SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = 3").run();
   const wish2 = createDemandPost(db, 3, wishInput({ body: "另一則需求" }));
@@ -245,25 +245,25 @@ test("pending can decline withdraw expire and block; terminal cannot accept", ()
   assert.equal(tick.changed, 1);
   assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(pending3.id).status, "expired");
   assert.equal(runWishOfferExpiryTick(db, new Date("2026-09-17T00:00:00.000Z"), { flags: FLAGS_ON }).changed, 0);
-  assert.equal(codeOf(() => acceptWishOffer(db, 3, pending3.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 3, pending3.public_token)), "offer_conflict");
   db.close();
 });
 
-test("eligibility gates reject inactive wish, other owner, closed listing and stale match", () => {
+test("eligibility gates reject inactive wish, other owner, closed listing and stale match", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   db.prepare("UPDATE demand_posts SET status='closed', lifecycle='paused' WHERE id=?").run(wish.id);
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-pause" })), "match_no_longer_eligible");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-pause" })), "match_no_longer_eligible");
 
   const live = createDemandPost(db, 2, wishInput({ body: "恢復後的需求" }));
-  assert.equal(codeOf(() => createWishOffer(db, 3, listing.post_id, live.public_token, { idempotencyKey: "offer-key-other" })), "listing_not_found");
+  assert.equal(await codeOf(() => createWishOffer(db, 3, listing.post_id, live.public_token, { idempotencyKey: "offer-key-other" })), "listing_not_found");
 
   closeSelfListing(db, 1, listing.post_id);
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, live.public_token, { idempotencyKey: "offer-key-close" })), "match_no_longer_eligible");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, live.public_token, { idempotencyKey: "offer-key-close" })), "match_no_longer_eligible");
   db.close();
 });
 
-test("idempotent create and cooldown after terminal", () => {
+test("idempotent create and cooldown after terminal", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const first = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-idem01" });
@@ -272,16 +272,16 @@ test("idempotent create and cooldown after terminal", () => {
   const dbl = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-idem02" });
   assert.equal(dbl.id, first.id);
   declineWishOffer(db, 2, first.public_token);
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-cool1" })), "OFFER_COOLDOWN");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-cool1" })), "OFFER_COOLDOWN");
   db.close();
 });
 
-test("accepted contact is dedicated projection; unauthorized and pending cannot read", () => {
+test("accepted contact is dedicated projection; unauthorized and pending cannot read", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const offer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-ct01" });
-  assert.equal(codeOf(() => readOfferContact(db, 3, offer.public_token)), "offer_not_found");
-  assert.equal(codeOf(() => readOfferContact(db, 1, offer.public_token)), "contact_unavailable");
+  assert.equal(await codeOf(() => readOfferContact(db, 3, offer.public_token)), "offer_not_found");
+  assert.equal(await codeOf(() => readOfferContact(db, 1, offer.public_token)), "contact_unavailable");
   acceptWishOffer(db, 2, offer.public_token);
   const owner = readOfferContact(db, 1, offer.public_token);
   assert.equal(owner.contact.phone, "0987654321");
@@ -293,14 +293,14 @@ test("accepted contact is dedicated projection; unauthorized and pending cannot 
   db.close();
 });
 
-test("block prevents future offers, terminals pending, and hides contact", () => {
+test("block prevents future offers, terminals pending, and hides contact", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const offer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-bk01" });
   const blocked = blockOwnerFromOffer(db, 2, offer.public_token);
   assert.equal(blocked.offer.status, "blocked");
-  assert.equal(codeOf(() => readOfferContact(db, 1, offer.public_token)), "contact_unavailable");
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-bk02" })), "offer_unavailable");
+  assert.equal(await codeOf(() => readOfferContact(db, 1, offer.public_token)), "contact_unavailable");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-bk02" })), "offer_unavailable");
   const matches = ownerListingMatches(db, listing.post_id, 1);
   const card = matches.items.find((item) => item.wish_ref === wish.public_token);
   if (card) {
@@ -313,11 +313,11 @@ test("block prevents future offers, terminals pending, and hides contact", () =>
   db.close();
 });
 
-test("report is bounded, validated, and not enumerable by other users", () => {
+test("report is bounded, validated, and not enumerable by other users", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const offer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-rp01" });
-  assert.equal(codeOf(() => reportWishOffer(db, 2, offer.public_token, { reason: "zzz" })), "invalid_report_reason");
+  assert.equal(await codeOf(() => reportWishOffer(db, 2, offer.public_token, { reason: "zzz" })), "invalid_report_reason");
   const first = reportWishOffer(db, 2, offer.public_token, { reason: "spam", detail: "重複洗版" });
   const again = reportWishOffer(db, 2, offer.public_token, { reason: "spam", detail: "再檢舉" });
   assert.equal(first.already, false);
@@ -328,12 +328,12 @@ test("report is bounded, validated, and not enumerable by other users", () => {
   db.close();
 });
 
-test("flag off fail-closes mutations", () => {
+test("flag off fail-closes mutations", async () => {
   const db = open(FLAGS_OFF);
   const { listing, wish } = seedPair(db);
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-off1" })), "wish_offer_disabled");
-  assert.equal(codeOf(() => listMyBlocks(db, 1)), "wish_offer_disabled");
-  assert.equal(codeOf(() => unblockByRef(db, 1, "any-block-ref")), "wish_offer_disabled");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-off1" })), "wish_offer_disabled");
+  assert.equal(await codeOf(() => listMyBlocks(db, 1)), "wish_offer_disabled");
+  assert.equal(await codeOf(() => unblockByRef(db, 1, "any-block-ref")), "wish_offer_disabled");
   db.close();
 });
 
@@ -350,7 +350,7 @@ test("create vs pause and listing close fail-closed", () => {
   db.close();
 });
 
-test("owner and listing daily caps use indexed counts", () => {
+test("owner and listing daily caps use indexed counts", async () => {
   const db = open();
   const listingA = createSelfListing(db, 1, listingInput({ title: "士林A房整層", address: "中正路1號" }));
   const listingB = createSelfListing(db, 1, listingInput({ title: "士林B房整層", address: "中正路2號" }));
@@ -363,7 +363,7 @@ test("owner and listing daily caps use indexed counts", () => {
   const extraA = 30;
   db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')").run(extraA, "capa@example.com", "CapA");
   const wishA = createDemandPost(db, extraA, wishInput({ body: "A超過上限" }));
-  assert.equal(codeOf(() => createWishOffer(db, 1, listingA.post_id, wishA.public_token, { idempotencyKey: "offer-key-capa9" })), "RATE_LIMITED");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listingA.post_id, wishA.public_token, { idempotencyKey: "offer-key-capa9" })), "RATE_LIMITED");
   for (let i = OFFER_LISTING_DAILY_CAP; i < OFFER_OWNER_DAILY_CAP; i += 1) {
     const tenantId = 10 + i;
     db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')").run(tenantId, `t${i}@example.com`, `T${i}`);
@@ -373,18 +373,18 @@ test("owner and listing daily caps use indexed counts", () => {
   const extraB = 40;
   db.prepare("INSERT INTO users(id, email, nickname, created_at) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')").run(extraB, "capb@example.com", "CapB");
   const wishB = createDemandPost(db, extraB, wishInput({ body: "B超過上限" }));
-  assert.equal(codeOf(() => createWishOffer(db, 1, listingB.post_id, wishB.public_token, { idempotencyKey: "offer-key-capb9" })), "RATE_LIMITED");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listingB.post_id, wishB.public_token, { idempotencyKey: "offer-key-capb9" })), "RATE_LIMITED");
   const plans = explainWishOfferPlans(db);
   const text = JSON.stringify(plans);
   assert.match(text, /idx_wish_offers_owner_created|idx_wish_offers_listing_created|SEARCH/);
   db.close();
 });
 
-test("inbox and owner lists are opaque and bounded", () => {
+test("inbox and owner lists are opaque and bounded", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-in01" });
-  const inbox = listTenantWishOffers(db, 2, { limit: 20 });
+  const inbox = await listTenantWishOffers(db, 2, { limit: 20 });
   assert.equal(inbox.pending_count, 1);
   assert.equal(inbox.total, 1);
   assert.equal(inbox.items[0].viewer_role, "tenant");
@@ -394,7 +394,7 @@ test("inbox and owner lists are opaque and bounded", () => {
   assert.equal(inboxStats.pending_counted, true);
   assert.ok(inboxStats.fetched <= 21);
   assert.ok(inboxStats.projected <= 20);
-  const owner = listOwnerWishOffers(db, 1, { limit: 20 });
+  const owner = await listOwnerWishOffers(db, 1, { limit: 20 });
   assert.equal(owner.items[0].viewer_role, "owner");
   assert.equal(wishOfferQueryMemory().snapshots, 0);
   db.close();
@@ -526,13 +526,13 @@ test("concurrent create yields one pending", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("accept vs withdraw only one terminal path wins", () => {
+test("accept vs withdraw only one terminal path wins", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const offer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-aw01" });
   const accepted = acceptWishOffer(db, 2, offer.public_token);
   assert.equal(accepted.status, "accepted");
-  assert.equal(codeOf(() => withdrawWishOffer(db, 1, offer.public_token)), "offer_conflict");
+  assert.equal(await codeOf(() => withdrawWishOffer(db, 1, offer.public_token)), "offer_conflict");
   assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id=?").get(offer.id).status, "accepted");
   db.close();
 });
@@ -558,7 +558,7 @@ test("evaluateMatch still works after offer history", () => {
   db.close();
 });
 
-test("idempotency key replays same target and conflicts on different listing or wish", () => {
+test("idempotency key replays same target and conflicts on different listing or wish", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const listingB = createSelfListing(db, 1, listingInput({ title: "士林第二間套房", address: "中正路200號" }));
@@ -567,39 +567,39 @@ test("idempotency key replays same target and conflicts on different listing or 
   const replay = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" });
   assert.equal(first.id, replay.id);
   assert.equal(first.public_token, replay.public_token);
-  assert.equal(codeOf(() => createWishOffer(db, 1, listingB.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wishB.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
-  assert.equal(codeOf(() => createWishOffer(db, 1, 99999999, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, "missingwishtokenxx", { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listingB.post_id, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wishB.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, 99999999, wish.public_token, { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, "missingwishtokenxx", { idempotencyKey: "offer-key-idm-x" })), "IDEMPOTENCY_CONFLICT");
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM wish_offers").get().n, 1);
   db.close();
 });
 
-test("accept decline and withdraw fail-closed after TTL without worker", () => {
+test("accept decline and withdraw fail-closed after TTL without worker", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const acceptOffer = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-a" });
   db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", acceptOffer.id);
   const now = new Date("2026-09-17T00:00:00.000Z");
-  assert.equal(codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_expired");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_expired");
   assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(acceptOffer.id).status, "expired");
-  assert.equal(codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_conflict");
+  assert.equal(await codeOf(() => acceptWishOffer(db, 2, acceptOffer.public_token, { now })), "offer_conflict");
 
   const listingB = createSelfListing(db, 1, listingInput({ title: "士林第二間套房", address: "中正路200號" }));
   const declineOffer = createWishOffer(db, 1, listingB.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-d" });
   db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", declineOffer.id);
-  assert.equal(codeOf(() => declineWishOffer(db, 2, declineOffer.public_token, { now })), "offer_expired");
+  assert.equal(await codeOf(() => declineWishOffer(db, 2, declineOffer.public_token, { now })), "offer_expired");
   assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(declineOffer.id).status, "expired");
 
   const listingC = createSelfListing(db, 1, listingInput({ title: "士林第三間套房", address: "中正路300號" }));
   const withdrawOffer = createWishOffer(db, 1, listingC.post_id, wish.public_token, { idempotencyKey: "offer-key-ttl-w" });
   db.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", withdrawOffer.id);
-  assert.equal(codeOf(() => withdrawWishOffer(db, 1, withdrawOffer.public_token, { now })), "offer_expired");
+  assert.equal(await codeOf(() => withdrawWishOffer(db, 1, withdrawOffer.public_token, { now })), "offer_expired");
   assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(withdrawOffer.id).status, "expired");
   db.close();
 });
 
-test("accepted stays active and cannot resend after cooldown until terminalized", () => {
+test("accepted stays active and cannot resend after cooldown until terminalized", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const createdAt = new Date("2026-09-01T00:00:00.000Z");
@@ -609,11 +609,11 @@ test("accepted stays active and cannot resend after cooldown until terminalized"
     now: createdAt,
   });
   acceptWishOffer(db, 2, offer.public_token, { now: createdAt });
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
     idempotencyKey: "offer-key-actv2",
     now: createdAt,
   })), "offer_already_active");
-  assert.equal(codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
+  assert.equal(await codeOf(() => createWishOffer(db, 1, listing.post_id, wish.public_token, {
     idempotencyKey: "offer-key-actv3",
     now: later,
   })), "offer_already_active");
@@ -639,7 +639,7 @@ test("accepted stays active and cannot resend after cooldown until terminalized"
   db.close();
 });
 
-test("offer list keyset stays bounded at 10k rows", () => {
+test("offer list keyset stays bounded at 10k rows", async () => {
   const db = open();
   const { listing, wish } = seedPair(db);
   const insert = db.prepare(`
@@ -663,7 +663,7 @@ test("offer list keyset stays bounded at 10k rows", () => {
   }
   db.exec("COMMIT");
   const pending = createWishOffer(db, 1, listing.post_id, wish.public_token, { idempotencyKey: "offer-key-10k01" });
-  const owner = listOwnerWishOffers(db, 1, { limit: 20 });
+  const owner = await listOwnerWishOffers(db, 1, { limit: 20 });
   const ownerStats = lastWishOfferListStats();
   assert.equal(owner.total, 10001);
   assert.equal(owner.items.length, 20);
@@ -676,7 +676,7 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.ok(owner.next_cursor);
   assert.doesNotMatch(String(owner.next_cursor), /created_at|"id":/);
 
-  const owner2 = listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor });
+  const owner2 = await listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor });
   const owner2Stats = lastWishOfferListStats();
   assert.equal(owner2.items.length, 20);
   assert.notEqual(owner2.items[0].offer_ref, owner.items[0].offer_ref);
@@ -687,10 +687,10 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.equal(owner2Stats.counted, false);
   assert.equal(owner2Stats.pending_counted, false);
   assert.equal(owner2Stats.count_queries, 0);
-  assert.equal(codeOf(() => listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor })), "cursor_expired");
-  assert.equal(codeOf(() => listTenantWishOffers(db, 2, { limit: 20, cursor: owner2.next_cursor })), "cursor_expired");
+  assert.equal(await codeOf(() => listOwnerWishOffers(db, 1, { limit: 20, cursor: owner.next_cursor })), "cursor_expired");
+  assert.equal(await codeOf(() => listTenantWishOffers(db, 2, { limit: 20, cursor: owner2.next_cursor })), "cursor_expired");
 
-  const inbox = listTenantWishOffers(db, 2, { limit: 20 });
+  const inbox = await listTenantWishOffers(db, 2, { limit: 20 });
   const inboxStats = lastWishOfferListStats();
   assert.equal(inbox.total, 10001);
   assert.equal(inbox.pending_count, 1);
@@ -700,7 +700,7 @@ test("offer list keyset stays bounded at 10k rows", () => {
   assert.equal(inboxStats.count_queries, 2);
   assert.ok(inboxStats.fetched <= 21);
   assert.ok(inboxStats.projected <= 20);
-  const inbox2 = listTenantWishOffers(db, 2, { limit: 20, cursor: inbox.next_cursor });
+  const inbox2 = await listTenantWishOffers(db, 2, { limit: 20, cursor: inbox.next_cursor });
   const inbox2Stats = lastWishOfferListStats();
   assert.equal(inbox2.total, 10001);
   assert.equal(inbox2.pending_count, 1);

@@ -1740,6 +1740,54 @@ const DEMAND_MUTATIONS = [
   },
 ];
 
+// 許願房提案讀取（PG 島嶼）的變異集（v3/test/wish-offers-async.test.js）。
+const WOFFERS_SRC = "v3/src/wishOffersAsync.js";
+const WOFFERS_QUERIES_SRC = "v3/src/wishOfferQueries.js";
+const WOFFERS_MUTATIONS = [
+  {
+    name: "可見性不檢查當事人（任何人都能看別人的提案）",
+    file: WOFFERS_SRC,
+    from: "    if (Number(row.owner_user_id) !== uid && Number(row.tenant_user_id) !== uid) return null;",
+    to: "    if (false) return null;",
+    expect: "非當事人",
+  },
+  {
+    name: "刊登列不從 PG 讀（投影只剩 listing_ref）",
+    file: WOFFERS_SRC,
+    from: "    const listingRow = offer.listing_id\n      ? await getSelfRowAsync(offer.listing_id, { ...options, driver: \"postgres\" })\n      : null;",
+    to: "    const listingRow = null;",
+    expect: "投影與同步版逐鍵相同",
+  },
+  {
+    name: "分頁的 LIMIT 少 1（最後一頁會少一筆）",
+    file: WOFFERS_SRC,
+    from: "      params.push(Number(limit) + 1);",
+    to: "      params.push(Number(limit));",
+    expect: "分頁、統計、游標兩邊一致",
+  },
+  {
+    name: "列表的 status 篩選只套在 count、沒套在查詢（回傳不符條件的列）",
+    file: WOFFERS_SRC,
+    from: "      if (status) params.push(String(status));\n      if (keyset)",
+    to: "      if (false) params.push(String(status));\n      if (keyset)",
+    expect: "status 篩選與空集合",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: WOFFERS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  {
+    name: "投影不套洩漏守衛（只回原始列）",
+    file: WOFFERS_SRC,
+    from: "    queries.project = (row, viewerId) => publicOfferViewAsync(row, viewerId, {}, options);",
+    to: "    queries.project = (row) => row;",
+    expect: "分頁、統計、游標兩邊一致",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -1762,6 +1810,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS
   : /demand-async/.test(testFile) ? DEMAND_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
