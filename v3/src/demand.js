@@ -749,33 +749,48 @@ export function userCreatedAt(db, userId) {
   }
 }
 
-export function expireOpenPosts(db, now = new Date()) {
-  const stamp = iso(now);
-  if (isWishLifecycleEnabled(marketplaceFlags) && hasWishColumn(db, "lifecycle")) {
-    const confirm = db.prepare(
-      `UPDATE demand_posts
+// 過期掃描的三句 UPDATE。抽成常數讓 PG 版（demandAsync.js）用**逐字相同的語句**，
+// 只換跑語句的人——三個 mode 的判斷與參數順序都留在下面兩支共用函式裡。
+export const EXPIRE_CONFIRM_SQL = `UPDATE demand_posts
        SET lifecycle = 'needs_confirmation', updated_at = ?
        WHERE status = 'open'
          AND (lifecycle IS NULL OR lifecycle = '' OR lifecycle = 'active')
-         AND expires_at <= ? AND expires_at < ?`,
-    ).run(stamp, stamp, WISH_FAR_EXPIRE);
-    const graceCutoff = new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
-    const paused = db.prepare(
-      `UPDATE demand_posts
+         AND expires_at <= ? AND expires_at < ?`;
+export const EXPIRE_PAUSE_SQL = `UPDATE demand_posts
        SET status = 'closed', lifecycle = 'paused', closed_at = COALESCE(closed_at, ?),
            closed_reason = 'paused', updated_at = ?
        WHERE status = 'open'
          AND lifecycle = 'needs_confirmation'
-         AND expires_at <= ? AND expires_at < ?`,
-    ).run(stamp, stamp, graceCutoff, WISH_FAR_EXPIRE);
+         AND expires_at <= ? AND expires_at < ?`;
+export const EXPIRE_LEGACY_SQL = `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
+     WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`;
+export const PRUNE_MATCH_DISTRICTS_SQL = `DELETE FROM demand_match_districts
+      WHERE wish_id NOT IN (SELECT id FROM demand_posts WHERE status = 'open')`;
+
+// 三個 mode 的參數（同步版與 PG 版共用；順序就是語句裡 `?` 的順序）。
+export const EXPIRE_CONFIRM_PARAMS = (stamp) => [stamp, stamp, WISH_FAR_EXPIRE];
+export const EXPIRE_PAUSE_PARAMS = (stamp, graceCutoff) => [stamp, stamp, graceCutoff, WISH_FAR_EXPIRE];
+export const EXPIRE_LEGACY_PARAMS = (stamp) => [stamp, stamp, WISH_FAR_EXPIRE];
+export const expireGraceCutoff = (now) =>
+  new Date(nowMs(now) - WISH_CONFIRM_GRACE_DAYS * 86400000).toISOString();
+
+// 生命週期模式是否啟用（同步版另外要求 handle 上真的有 lifecycle 欄位；PG 由
+// ensurePgSchema 鏡射，一定有）。PG 版呼叫這一支，判斷只有一份。
+export function isWishLifecycleExpiryEnabled() {
+  return isWishLifecycleEnabled(marketplaceFlags);
+}
+
+export function expireOpenPosts(db, now = new Date()) {
+  const stamp = iso(now);
+  if (isWishLifecycleExpiryEnabled() && hasWishColumn(db, "lifecycle")) {
+    const confirm = db.prepare(EXPIRE_CONFIRM_SQL).run(...EXPIRE_CONFIRM_PARAMS(stamp));
+    const paused = db.prepare(EXPIRE_PAUSE_SQL)
+      .run(...EXPIRE_PAUSE_PARAMS(stamp, expireGraceCutoff(now)));
     pruneDemandMatchDistricts(db);
     notifyWishOfferLifecycle(db, { sweep: true, now });
     return (Number(confirm.changes) || 0) + (Number(paused.changes) || 0);
   }
-  const result = db.prepare(
-    `UPDATE demand_posts SET status = 'expired', closed_at = COALESCE(closed_at, ?)
-     WHERE status = 'open' AND expires_at <= ? AND expires_at < ?`,
-  ).run(stamp, stamp, WISH_FAR_EXPIRE);
+  const result = db.prepare(EXPIRE_LEGACY_SQL).run(...EXPIRE_LEGACY_PARAMS(stamp));
   pruneDemandMatchDistricts(db);
   notifyWishOfferLifecycle(db, { sweep: true, now });
   return Number(result.changes) || 0;
@@ -943,7 +958,34 @@ function recencyStamp(row) {
   return row.updated_at || row.published_at || row.created_at || "";
 }
 
-function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
+// 一列的「裝飾」需要四種**條件式**的資料庫讀取。把它們抽成介面，讓同步版（吃 handle）與
+// PG 版（吃注入式 runner，見 demandAsync.js）共用**同一段純邏輯**——否則兩個 driver 的
+// 輸出形狀一定會漂移。介面上的每個方法都對應原本那一句 SQL，語句文字不變：
+//   replies(row)      ← decoratePost 內的 demand_replies 查詢（本來每一列都查一次）
+//   authorName(uid)   ← userAuthorName()（nickname，取不到就「會員」）
+//   activitySignals() ← collectWishActivitySignals()（只有 mine 會用到）
+//   ensureToken()     ← ensurePublicToken()（只有 public_token 是空的時候才寫入）
+//   hasColumn(name)   ← hasWishColumn()（決定要不要碰某個欄位）
+export function syncDecorateLoader(db) {
+  return {
+    replies: (row) => db.prepare(
+      `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
+       FROM demand_replies r
+       WHERE r.post_id = ?
+       ORDER BY r.id ASC`,
+    ).all(row.id),
+    authorName: (userId) => userAuthorName(db, userId),
+    activitySignals: (row) => collectWishActivitySignals(db, row.user_id, row),
+    ensureToken: (row) => ensurePublicToken(db, row.id),
+    hasColumn: (name) => hasWishColumn(db, name),
+  };
+}
+
+function decoratePost(db, row, opts = {}) {
+  return decoratePostWith(syncDecorateLoader(db), row, opts);
+}
+
+export function decoratePostWith(loader, row, { viewerId = 0, includeHiddenReplies = false, owner = false } = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
   const storedChoices = parseJsonObject(row.condition_choices);
   let groups;
@@ -962,12 +1004,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
       ? storedChoices
       : wishChoicesFromLegacy(groups.must_have, groups.nice_to_have, groups.avoid).choices;
   }
-  const replies = db.prepare(
-    `SELECT r.id, r.user_id, r.body, r.created_at, r.hidden
-     FROM demand_replies r
-     WHERE r.post_id = ?
-     ORDER BY r.id ASC`,
-  ).all(row.id);
+  const replies = loader.replies(row);
   const visible = replies.filter((item) => !item.hidden || includeHiddenReplies || Number(item.user_id) === viewerId);
   const mine = Number(row.user_id) === Number(viewerId);
   const publicContact = {
@@ -976,10 +1013,10 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     line_url: String(row.line_url || ""),
   };
   const hasContact = Boolean(publicContact.contact_name || publicContact.phone || publicContact.line_url);
-  const token = String(row.public_token || "") || ensurePublicToken(db, row.id);
+  const token = String(row.public_token || "") || loader.ensureToken(row);
   const lifecycle = mapLegacyLifecycle(row);
   const activitySignals = mine
-    ? collectWishActivitySignals(db, row.user_id, row)
+    ? loader.activitySignals(row)
     : { last_confirmed_at: row.last_confirmed_at, wish_edited_at: row.updated_at };
   const scored = activityScoreFromSignals(activitySignals);
   const lastActive = scored.last_active_at || row.last_active_at || row.last_confirmed_at || row.updated_at || row.created_at;
@@ -988,7 +1025,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     id: Number(row.id),
     product: WISH_PRODUCT_NAME,
     headline: "租屋需求",
-    author: userAuthorName(db, row.user_id),
+    author: loader.authorName(row.user_id),
     mine,
     city: String(row.city || "") || cityFromDistricts(districts),
     districts,
@@ -1039,7 +1076,7 @@ function decoratePost(db, row, { viewerId = 0, includeHiddenReplies = false, own
     contact: hasContact ? publicContact : null,
     replies: visible.map((item) => ({
       id: Number(item.id),
-      author: userAuthorName(db, item.user_id),
+      author: loader.authorName(item.user_id),
       mine: Number(item.user_id) === Number(viewerId),
       body: String(item.body || ""),
       created_at: item.created_at,
@@ -1094,7 +1131,9 @@ export function publicWishRoomView(post) {
   };
 }
 
-function assertPublicFields(view) {
+// 匯出給 driver-aware 版用：這是**公開視圖的洩漏守衛**（有禁欄位就直接 500），
+// 兩個 driver 必須套用同一支，不能各寫一份。
+export function assertPublicFields(view) {
   const banned = ["user_id", "email", "contact_profile_id", "example", "ip", "consent", "admin", "author", "contact", "phone", "line_url", "location_note", "destination_note", "replies"];
   for (const key of banned) {
     if (Object.prototype.hasOwnProperty.call(view, key)) {
@@ -1108,7 +1147,8 @@ function rowById(db, postId) {
   return db.prepare("SELECT * FROM demand_posts WHERE id = ?").get(Number(postId) || 0);
 }
 
-function matchesFilters(row, filters = {}) {
+// 匯出給 driver-aware 版用（`listDemandPostsAsync` 要在 PG 取回的列上套同一組公開篩選條件）。
+export function matchesFilters(row, filters = {}) {
   const districts = normalizeWatchDistricts(parseJsonArray(row.districts));
   const city = String(row.city || "") || cityFromDistricts(districts);
   if (filters.city) {

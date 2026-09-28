@@ -1631,7 +1631,11 @@ const REJECT_MUTATIONS = [
   },
 ];
 
-// 許願房寫入（檢舉／回覆／關閉）PG 分支的變異集（v3/test/demand-async.test.js）。
+// 許願房（檢舉／回覆／關閉／讀取）PG 分支的變異集（v3/test/demand-async.test.js）。
+//
+// ⚠️ 刻意**沒有**「拿掉 `wishVisibleOnSurface()` 可見性判斷」這一條：那一支只對 stage1
+// fixture 列有鑑別力（非 fixture 列一律回 true），而 fixture 隔離由
+// `rental-match-isolation`／`stage1-fixture-*` 那幾組測試守著。放了只會得到假 SURVIVED。
 const DEMAND_SRC = "v3/src/demandAsync.js";
 const DEMAND_EFFECTS_SRC = "v3/src/demand.js";
 const DEMAND_MUTATIONS = [
@@ -1691,6 +1695,27 @@ const DEMAND_MUTATIONS = [
     from: "      await applyReportHideEffectsAsync(run, kind, id, now);\n      applyReportHideEffects(sqliteHandle(), kind, id, now);",
     to: "      applyReportHideEffects(sqliteHandle(), kind, id, now);",
     expect: "兩邊都變成 hidden",
+  },
+  {
+    name: "公開視圖不套洩漏守衛（contacts／replies 會跟著出去）",
+    file: DEMAND_SRC,
+    from: "      const view = assertPublicFields(publicWishRoomView(decorated));",
+    to: "      const view = { ...publicWishRoomView(decorated), replies: decorated.replies };",
+    expect: "詳情的形狀與可見性判斷",
+  },
+  {
+    name: "過期掃描只寫 PG（本機 handle 不追 ⇒ 回退路徑看到舊狀態）",
+    file: DEMAND_SRC,
+    from: "  expireOpenPosts(sqliteHandle(), now);\n",
+    to: "",
+    expect: "兩個 store 都改",
+  },
+  {
+    name: "公開列表不套公開篩選條件（city／district 篩選失效）",
+    file: DEMAND_SRC,
+    from: "    const filtered = mine ? rows : rows.filter((row) => matchesFilters(row, rest));",
+    to: "    const filtered = rows;",
+    expect: "含篩選條件",
   },
 ];
 
