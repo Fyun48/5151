@@ -2420,6 +2420,46 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 - CI 這一條抓到的兩個**測試自己**的錯：`syncSequence()` 寫死 `id`（`listings` 的主鍵是
   `post_id`），以及上面的 `settingsKvAsync` 形狀問題。
 
+## 二之負十三、2026-09-28 量測筆記：迴避回饋／Ops 遞送那一叢（**需要 Owner 決定**）
+
+第四十三批之後，用「移植單元」重量缺口（82 條），下一個看起來最順的是
+**回饋 ＋ Ops 遞送**那一叢（5 條路由，模組都很小：`feedback.js` 306 行、
+`feedbackOutbox.js` 188 行、`opsDelivery.js` 176 行）：
+
+```
+GET   /api/admin/ops-delivery                  deliveryControl, outboxCapacityAlert
+PUT   /api/admin/ops-delivery                  ＋ setLocalDeliveryStopped
+POST  /api/admin/ops-delivery/compact-outbox   compactSentOutboxPayloads
+POST  /api/feedback                            createFeedbackWithOutbox, enqueueFeedbackOutbox
+GET   /api/admin/feedback                      deliveryControl, feedbackStats, listFeedback, outboxCapacityAlert
+```
+
+**但實際讀完之後，這一叢有很高機率是「刻意節點本機」而不是「還沒搬」**（與
+`stage1FixtureIsolation`／`tableColumns` 那些屬於同一類：尺規看得到，但不是待辦）：
+
+- `opsDelivery.js` 檔頭自己寫著「背景遞送 worker（Product 端）……由 server 以 setInterval
+  週期驅動」，`claimOutboxBatch()` 是**本機**的 outbox 佇列；`OPS_INGEST_URL`／
+  `OPS_INGEST_SECRET`／`OPS_FEEDBACK_DELIVERY` 都是**每台節點各自的環境變數**。
+- `isLocalDeliveryStopped()`／`setLocalDeliveryStopped()` 的註解寫得很明白：
+  「本機 `settings.ops_feedback_stop=1` 可在不重啟、OPS 不在線時立刻停送」——那是**這一台**
+  的緊急切斷開關，搬到 PG 就變成全站一起停。
+- `compactSentOutboxPayloads()` 壓縮的是**本機已經送出的** payload；
+  `deliveryControl()` 是「env ＋ 本機停止旗標 ＋ 本機 outbox 容量」的組合。
+- `createFeedbackWithOutbox()` 用 `BEGIN IMMEDIATE` 維持
+  「一筆 feedback ⇔ 一筆初始 outbox 事件」的不變式，而那個 outbox 事件是**本機 worker**
+  要認領的；把 feedback 搬到 PG、outbox 留在本機，這個不變式就跨了兩個 store、無法原子。
+
+⇒ **兩個選項，需要 Owner 決定**：
+
+- **A（建議）**：把這一叢登記為「刻意節點本機」，在尺規上加一類例外（像 fixture 隔離那樣），
+  文件寫明理由。缺口數字會少 5 條，但**不是**靠搬遷達成的，要誠實標註。
+- **B**：把 `feedback` 與 outbox 一起搬上 PG，同時重新設計 worker（共享佇列要
+  `FOR UPDATE SKIP LOCKED`；「本機停止」的語意要改成每節點旗標或全站開關），
+  並接受「一筆 feedback 與它的 outbox 事件不再同一個交易」或改用 PG 交易。
+  這是一個**功能語意**的改變，不是機械搬遷。
+
+在 Owner 決定之前，這一叢**不要**列進「剩下的工作」，以免下一個 session 又量到同一個結論。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
