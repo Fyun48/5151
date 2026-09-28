@@ -26,12 +26,10 @@ const skip = !RAW ? "PG_LIVE_REPRO_URL 未設定（live PG 驗證需要隔離環
   : REFUSED ? `拒絕執行：資料庫 "${DB}" 不在允許清單 ${[...ALLOWED_DB].join("/")}（正式庫 5151_shadow 一律拒絕）`
     : false;
 
-// 測試專用的識別碼，與正式資料不可能撞。
-const UID = 900000000301;
-const OTHER = 900000000302;
-const ADMIN = 900000000303;
-const POST_ID = 900000000401;
-const REPLY_ID = 900000000501;
+// ⚠️ 刻意**不**自己指定 id：正式站的 INSERT 一律讓 identity 產生，測試也照做。
+// 第一版用了 900000000x 這種很大的顯式 id，結果**把 identity 序列留在後面**
+// （next=1、max=9e8），下一個跑到的 live 測試（reject-match-live-pg）就紅在
+// 「identity 序列落後」那道守衛上。CI 就是這樣抓到的。
 const TOKEN = "livetest-demand-token-0001";
 const OLD = "2026-01-01T00:00:00.000Z";
 const EXPIRES = "2099-01-01T00:00:00.000Z";
@@ -50,36 +48,62 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
   const who = (await query("SELECT current_database() AS db"))[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
 
-  const cleanup = async () => {
-    await query("DELETE FROM demand_reports WHERE user_id = ANY($1)", [[UID, OTHER, ADMIN]]);
-    await query("DELETE FROM demand_replies WHERE post_id = $1", [POST_ID]);
-    await query("DELETE FROM demand_posts WHERE id = $1", [POST_ID]);
-    await query("DELETE FROM users WHERE id = ANY($1)", [[UID, OTHER, ADMIN]]);
+  // 讓序列至少追過目前的 max：上一次執行若中途失敗，identity 可能還是舊值。
+  // `setval(seq, max)` 之後 next = max+1，所以後續不指定 id 的 INSERT 一定不會撞。
+  const syncSequence = async (table) => {
+    await query(
+      `SELECT setval(pg_get_serial_sequence($1, 'id'), GREATEST((SELECT COALESCE(MAX(id),0) FROM ${table}), 1))`,
+      [table],
+    );
   };
-  await cleanup();
 
-  // 使用者與許願房用原生 SQL 種（本批還沒把建立許願房搬上 PG）。
-  await query(
-    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'屋主', 'member','free',$3)",
-    [UID, `live-demand-${UID}@example.com`, OLD],
-  );
-  await query(
-    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'路人甲','member','free',$3)",
-    [OTHER, `live-demand-${OTHER}@example.com`, OLD],
-  );
-  await query(
-    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES ($1,$2,'管理員','admin','free',$3)",
-    [ADMIN, `live-demand-${ADMIN}@example.com`, OLD],
-  );
-  await query(
-    `INSERT INTO demand_posts(id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token)
-     VALUES ($1,$2,'[]',0,'any',0,'live PG 驗證用的許願房','open',$3,$4,$5)`,
-    [POST_ID, UID, OLD, EXPIRES, TOKEN],
-  );
-  await query(
-    "INSERT INTO demand_replies(id, post_id, user_id, body, created_at, hidden) VALUES ($1,$2,$3,'live 回覆',$4,0)",
-    [REPLY_ID, POST_ID, UID, OLD],
-  );
+  // 依「測試自己種的帳號」清理：先用郵箱找出所有殘留，再刪它們的貼文與回覆。
+  // 這樣不論上一次是成功還是中途失敗，起點都一樣（並且不靠任何寫死的 id）。
+  const cleanup = async () => {
+    const users = await query("SELECT id FROM users WHERE email LIKE 'live-demand-%@example.com'");
+    if (!users.length) return;
+    const ids = users.map((r) => Number(r.id));
+    const posts = await query("SELECT id FROM demand_posts WHERE user_id = ANY($1)", [ids]);
+    const postIds = posts.map((r) => Number(r.id));
+    if (postIds.length) {
+      await query("DELETE FROM demand_reports WHERE target_id = ANY($1)", [postIds]);
+      await query("DELETE FROM demand_replies WHERE post_id = ANY($1)", [postIds]);
+      await query("DELETE FROM demand_posts WHERE id = ANY($1)", [postIds]);
+    }
+    await query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  };
+
+  await cleanup();
+  // 讓序列至少追過目前的 max：上一次執行若中途失敗，identity 可能還是舊值。
+  // `setval(seq, max)` 之後 next = max+1，所以後續不指定 id 的 INSERT 一定不會撞。
+  await syncSequence("users");
+  await syncSequence("demand_posts");
+  await syncSequence("demand_replies");
+  await syncSequence("demand_reports");
+
+  const [UID] = (await query(
+    "INSERT INTO users(email, nickname, role, plan, created_at) VALUES ($1,'屋主','member','free',$2) RETURNING id",
+    [`live-demand-owner@example.com`, OLD],
+  )).map((r) => Number(r.id));
+  const [OTHER] = (await query(
+    "INSERT INTO users(email, nickname, role, plan, created_at) VALUES ($1,'路人甲','member','free',$2) RETURNING id",
+    [`live-demand-reporter@example.com`, OLD],
+  )).map((r) => Number(r.id));
+  const [ADMIN] = (await query(
+    "INSERT INTO users(email, nickname, role, plan, created_at) VALUES ($1,'管理員','admin','free',$2) RETURNING id",
+    [`live-demand-second@example.com`, OLD],
+  )).map((r) => Number(r.id));
+  assert.ok(UID && OTHER && ADMIN, "三個使用者必須真的被建立");
+
+  const POST_ID = Number((await query(
+    `INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token)
+     VALUES ($1,'[]',0,'any',0,'live PG 驗證用的許願房','open',$2,$3,$4) RETURNING id`,
+    [UID, OLD, EXPIRES, TOKEN],
+  ))[0].id);
+  const REPLY_ID = Number((await query(
+    "INSERT INTO demand_replies(post_id, user_id, body, created_at, hidden) VALUES ($1,$2,'live 回覆',$3,0) RETURNING id",
+    [POST_ID, UID, OLD],
+  ))[0].id);
 
   // 注入式 exec 走的是**真的 PG**。⚠️ 但 `withFallback()` 在 `options.exec` 有值時
   // **不會**再包 `toPostgresSql`（見 `demandAsync.js` 的 `withFallback`），而 `pgDriver.query()`
@@ -120,7 +144,10 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
 
   // 把貼文還原成 open，繼續驗回覆與關閉
   await query("UPDATE demand_posts SET status = 'open', closed_at = NULL WHERE id = $1", [POST_ID]);
-  await query("DELETE FROM demand_replies WHERE id <> $1 AND post_id = $1", [REPLY_ID, POST_ID]);
+  // ⚠️ 這一句第一版寫成 `id <> $1 AND post_id = $1` 卻傳兩個參數 ⇒
+  // PG 回「bind message supplies 2 parameters, but prepared statement requires 1」。
+  // 參數編號要各自獨立（`?` 轉 `$n` 是**逐個出現**編號，不是依值去重）。
+  await query("DELETE FROM demand_replies WHERE id <> $1 AND post_id = $2", [REPLY_ID, POST_ID]);
 
   // 2) 回覆：真的寫進 PG，而且 20 秒間隔在真 PG 的資料上也擋得住
   const replied = await demandAsync.addDemandReplyAsync(OTHER, POST_ID, "live PG 的回覆", opts);
@@ -160,6 +187,9 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
   assert.ok(partial, `必須有『同一人只能有一則 open』的部分唯一索引（實際索引：${names.join(",")}）`);
 
   await cleanup();
+  // 收尾不再 setval：這一輪的列是用 identity 產生的，刪掉之後 `max` 下降，
+  // 而序列本來就已經追過它們（identity 每產生一個值就前進一次）⇒ 序列一定 > max，
+  // 對下一個測試而言是健康的。反過來在這裡 setval 只會把 next 硬拉回 max+1。
   await pgDriver.close();
   try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 檔案被鎖住就算了 */ }
   void sqliteHandle;
