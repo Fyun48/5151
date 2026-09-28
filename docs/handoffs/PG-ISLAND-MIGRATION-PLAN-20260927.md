@@ -1343,6 +1343,49 @@ throws 只可能發生在「呼叫端已 await」或「參數已備好」的情�
 **下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
 再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
 
+## 二之負八、2026-09-28 第三十九批：個人旗標讀取（`loadFlags`／`loadFlagMap`）
+
+### 39.1 先做了「模組 × 卡點 × 影響路由」的量測，才挑這一包
+
+38.6 的結論是「要找一組共同卡點」，所以我把 95 條缺口路由的 207 個卡點
+**依定義模組分組**，再看哪個模組的「卡點數 ÷ 影響路由數」最好：
+
+| 模組 | 卡點數 | 影響路由數 |
+|---|---:|---:|
+| `db.js`（都是包裝層） | 97 | 78 |
+| `selfListings.js` | 8 | 16 |
+| `demand.js` | 12 | 16 |
+| **`personalFlags.js`** | **2** | **13** |
+| `rentalNotify.js` | 7 | 13 |
+| `contentDocuments.js` | 7 | 12 |
+
+⇒ **`personalFlags.js` 只有 2 個卡點（`loadFlags` 9 條 ＋ `loadFlagMap` 8 條，重疊後 13 條）**，
+是投報率最高的一組。
+
+### 39.2 做法
+
+兩支都只是**一個 SELECT**，而且 `personalFlagsAsync.js` 裡**已經有**
+`FLAGS_BY_USER_POST_SQL`（`setFlags` 在用），所以只補了 `FLAGS_BY_USER_SQL`：
+
+- `loadFlagsAsync()`：查不到（或 `uid`／`pid` 為 0）回 **`emptyFlags()`**——不是 null／undefined。
+  呼叫端 `overlayPersonal()` 會直接讀欄位，形狀不對就會出現 `undefined` 而不是 0。
+- `loadFlagMapAsync()`：回 **`Map`**，鍵是**數字** `post_id`
+  （`overlayRowsPersonal()` 用 `flagMap?.get(Number(row.post_id))` 查，鍵型別錯了永遠查不到）。
+- `uid`／`pid` 為 0 時**直接早退、不送查詢**（同步版同義）。
+
+⚠️ 這個模組的 `pgExec()` 回的是 **rows 陣列**，不是 `{ rows, rowCount }`
+（與 `demandAsync.js`／`wishOffersAsync.js` 的契約不同）——寫新函式時要看清楚，別套錯樣板。
+
+### 39.3 測試
+
+`v3/test/personal-flags-read-async.test.js`（**7 項全綠**）：逐鍵 parity、查不到的形狀
+（含「每個鍵都要在」的斷言）、只讀自己的、Map 的鍵型別、空集合、fail-closed、sqlite 回退
+（用**計數的 exec** 證明回退時完全不碰 PG runner）。變異 **6 條全殺**。
+
+順手踩到兩個夾具問題（都已寫進測試註解）：`user_listing_flags` 有 **FK 到 `users`**，
+所以測試使用者要先種、夾具也要鏡射 `users` 的表定義，否則會是
+`FOREIGN KEY constraint failed`／`no such table: main.users`。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，

@@ -2058,6 +2058,53 @@ const USERS_MUTATIONS = [
   },
 ];
 
+// 個人旗標讀取（loadFlags／loadFlagMap）PG 分支的變異集。
+const PFLAGS_SRC = "v3/src/personalFlagsAsync.js";
+const PFLAGS_MUTATIONS = [
+  {
+    name: "loadFlags 查不到時回 null 而不是 emptyFlags()（呼叫端會讀到 undefined）",
+    file: PFLAGS_SRC,
+    from: "    return one(await exec(FLAGS_BY_USER_POST_SQL, [uid, pid])) || emptyFlags();",
+    to: "    return one(await exec(FLAGS_BY_USER_POST_SQL, [uid, pid]));",
+    expect: "查不到時回 emptyFlags",
+  },
+  {
+    name: "loadFlags 不帶 post_id（會讀到別筆的旗標）",
+    file: PFLAGS_SRC,
+    from: "export const FLAGS_BY_USER_POST_SQL = \"SELECT * FROM user_listing_flags WHERE user_id = ? AND post_id = ?\";",
+    to: "export const FLAGS_BY_USER_POST_SQL = \"SELECT * FROM user_listing_flags WHERE user_id = ?\";",
+    expect: "loadFlags",
+  },
+  {
+    name: "loadFlagMap 的鍵不做 Number（呼叫端用數字查就永遠查不到）",
+    file: PFLAGS_SRC,
+    from: "    for (const row of (await exec(FLAGS_BY_USER_SQL, [uid])) || []) map.set(Number(row.post_id), row);",
+    to: "    for (const row of (await exec(FLAGS_BY_USER_SQL, [uid])) || []) map.set(String(row.post_id), row);",
+    expect: "鍵是數字",
+  },
+  {
+    name: "loadFlagMap 不帶 user_id（把所有人的旗標都撈進來）",
+    file: PFLAGS_SRC,
+    from: "export const FLAGS_BY_USER_SQL = \"SELECT * FROM user_listing_flags WHERE user_id = ?\";",
+    to: "export const FLAGS_BY_USER_SQL = \"SELECT * FROM user_listing_flags\";",
+    expect: "回 Map",
+  },
+  {
+    name: "uid／pid 為 0 時照樣查（送出無意義的查詢）",
+    file: PFLAGS_SRC,
+    from: "  if (!uid || !pid) return emptyFlags();",
+    to: "  if (false) return emptyFlags();",
+    expect: "查不到時回 emptyFlags",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: PFLAGS_SRC,
+    from: "  if (!isPg(options)) return loadFlagsSync(sqliteHandle(), uid, pid) || emptyFlags();",
+    to: "  if (false) return loadFlagsSync(sqliteHandle(), uid, pid) || emptyFlags();",
+    expect: "非 postgres 必須回退",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -2080,6 +2127,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /personal-flags-read-async/.test(testFile) ? PFLAGS_MUTATIONS
   : /users-async/.test(testFile) ? USERS_MUTATIONS
   : /rental-notify-write-async/.test(testFile) ? NWRITE_MUTATIONS
   : /rental-notify-reads-async/.test(testFile) ? NPREFS_MUTATIONS
