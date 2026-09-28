@@ -128,9 +128,6 @@ import {
   writeHousingData,
   getCrawlSources,
   saveCrawlSources,
-  getSystemCrawl,
-  saveSystemCrawl,
-  refreshSiteCatalogStats,
   armMemberExternalFetch,
   touchLastLogin,
   resumeIdleIfNeeded,
@@ -175,7 +172,6 @@ import {
   reportWishOfferFor,
   runWishOfferExpiryWorkerTick,
   recordShareEventFor,
-  sharePageExtrasFor,
   runRentalNotifyWorkerTick,
   createSelfListing,
   listingToolsInfo,
@@ -535,7 +531,7 @@ import {
   updateSupportTransaction,
   verifySupportWebhook,
 } from "./support.js";
-import { crawlSourceHealth, getAdminDataHealthAsync, getAdminOverviewAsync, searchAdminListings } from "./adminOverview.js";
+import { crawlSourceHealth, getAdminDataHealthAsync, getAdminOverviewAsync } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
@@ -1138,7 +1134,7 @@ app.get("/api/wish-rooms/:id", async (req, res) => {
 app.get("/api/public/wish-room/:id", async (req, res) => {
   try {
     const post = await getDemandPostAsync(req.params.id, { viewerId: 0, publicOnly: true });
-    const extras = sharePageExtrasFor();
+    const extras = await sharePageExtrasAsync();
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json({ ...(publicWishRoomView(post) || post), ...extras });
   } catch (error) {
@@ -1148,7 +1144,9 @@ app.get("/api/public/wish-room/:id", async (req, res) => {
 
 app.post("/api/public/wish-room/:id/share-events", async (req, res) => {
   try {
-    const extras = sharePageExtrasFor();
+    // 同一組旗標就該同一個來源：分享頁與分享事件都用 PG 的 settings
+    // （這一條路由本身還有 `recordShareEvent`／`bumpAnalytics` 兩個同步卡點，不在這一批）。
+    const extras = await sharePageExtrasAsync();
     if (!extras.share_v2) {
       res.status(404).json({ error: "分享追蹤尚未開放", code: "share_disabled" });
       return;
@@ -2596,13 +2594,16 @@ app.put("/api/admin/crawl-sources", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/system-crawl", requireAdminApi, (_req, res) => {
-  res.json({ ...getSystemCrawl(), catalog: refreshSiteCatalogStats() });
+app.get("/api/admin/system-crawl", requireAdminApi, async (_req, res) => {
+  res.json({
+    ...(await getSystemCrawlAsync()),
+    catalog: await refreshSiteCatalogStatsAsync(),
+  });
 });
 
-app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
+app.put("/api/admin/system-crawl", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveSystemCrawl(req.body || {}));
+    res.json(await saveSystemCrawlAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2652,8 +2653,8 @@ app.get("/api/admin/audit", requireAdminApi, async (req, res) => {
   res.json({ items: await listAdminAuditAsync({ limit: Number(req.query?.limit) || 80 }) });
 });
 
-app.get("/api/admin/listings/search", requireAdminApi, (req, res) => {
-  res.json({ items: searchAdminListings(req.query?.q, Number(req.query?.limit) || 20) });
+app.get("/api/admin/listings/search", requireAdminApi, async (req, res) => {
+  res.json({ items: await searchAdminListingsAsync(req.query?.q, Number(req.query?.limit) || 20) });
 });
 
 app.post("/api/admin/same-house/confirm", requireAdminApi, async (req, res) => {

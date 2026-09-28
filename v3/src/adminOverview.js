@@ -282,25 +282,31 @@ export function getAdminDataHealthAsync() {
   return listingPrepAdminStatsAsync(db).then(buildAdminDataHealth);
 }
 
-export function searchAdminListings(q, limit = 20) {
+// 後台搜尋的兩個查詢與「needle／上限」的規則抽成共用零件（PG 版逐字共用）。
+// ⚠️ `IFNULL` 是 SQLite 專屬、PG 沒有 ⇒ 這裡用兩邊都有的 `COALESCE`（行為相同）。
+export const ADMIN_LISTING_SEARCH_BY_ID_SQL = `SELECT post_id, title, address, source, price, url
+       FROM listings WHERE post_id = ?`;
+export const ADMIN_LISTING_SEARCH_LIKE_SQL = `SELECT post_id, title, address, source, price, url
+     FROM listings
+     WHERE title LIKE ? OR COALESCE(address, '') LIKE ?
+     ORDER BY last_seen_at DESC, post_id DESC
+     LIMIT ?`;
+
+export function adminSearchNeedle(q, limit = 20) {
   const needle = String(q || "").trim();
   const cap = Math.max(1, Math.min(40, Number(limit) || 20));
+  return { needle, cap };
+}
+
+export function searchAdminListings(q, limit = 20) {
+  const { needle, cap } = adminSearchNeedle(q, limit);
   if (!needle) return [];
   if (/^\d+$/.test(needle)) {
-    const row = db.prepare(
-      `SELECT post_id, title, address, source, price, url
-       FROM listings WHERE post_id = ?`,
-    ).get(Number(needle));
+    const row = db.prepare(ADMIN_LISTING_SEARCH_BY_ID_SQL).get(Number(needle));
     return row ? [row] : [];
   }
   const like = `%${needle.replace(/[%_]/g, "")}%`;
-  return db.prepare(
-    `SELECT post_id, title, address, source, price, url
-     FROM listings
-     WHERE title LIKE ? OR IFNULL(address, '') LIKE ?
-     ORDER BY last_seen_at DESC
-     LIMIT ?`,
-  ).all(like, like, cap);
+  return db.prepare(ADMIN_LISTING_SEARCH_LIKE_SQL).all(like, like, cap);
 }
 
 export { RAKUYA_OWNER_OFF };

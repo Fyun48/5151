@@ -11,6 +11,12 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sourceHealthFromRow, todayStartIso } from "./adminOverview.js";
+import {
+  ADMIN_LISTING_SEARCH_BY_ID_SQL,
+  ADMIN_LISTING_SEARCH_LIKE_SQL,
+  adminSearchNeedle,
+  searchAdminListings as searchAdminListingsSync,
+} from "./adminOverview.js";
 import { getCrawlSourcesAsync } from "./siteContentAsync.js";
 
 const LAST_SEEN_SQL =
@@ -55,4 +61,23 @@ export async function crawlSourceHealthAsync(options = {}) {
     lastSeen: lastSeen.get(row.id) || "",
     todayNew: todayNew.get(row.id) || 0,
   }));
+}
+
+// `adminOverview.searchAdminListings()` 的 PG 版（`GET /api/admin/listings/search`）。
+//
+// ⚠️ 同步版的 LIKE 那一段用 `IFNULL(address, '')`——**PG 沒有 `IFNULL`**。共用常數改成
+// `COALESCE`（SQLite 也有），兩個 driver 才會跑同一句；`%`／`_` 的過濾與 limit 上限
+// 都在 `adminSearchNeedle()` 裡（純函式，兩個 driver 共用）。
+export async function searchAdminListingsAsync(q, limit = 20, options = {}) {
+  const { needle, cap } = adminSearchNeedle(q, limit);
+  if (!needle) return [];
+  // 非 PG 模式走同步版：SQLite 站不該去碰 PG runner（與其他島嶼模組同一個紀律）。
+  if ((options.driver || resolveDbDriver()) !== "postgres") return searchAdminListingsSync(q, limit);
+  const exec = await pgExec(options);
+  if (/^\d+$/.test(needle)) {
+    const row = (await exec(ADMIN_LISTING_SEARCH_BY_ID_SQL, [Number(needle)]))[0];
+    return row ? [row] : [];
+  }
+  const like = `%${needle.replace(/[%_]/g, "")}%`;
+  return exec(ADMIN_LISTING_SEARCH_LIKE_SQL, [like, like, cap]);
 }
