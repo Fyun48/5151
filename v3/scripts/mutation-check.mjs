@@ -1906,6 +1906,63 @@ const NPREFS_MUTATIONS = [
   },
 ];
 
+// 租屋通知寫入 PG 分支的變異集（v3/test/rental-notify-write-async.test.js）。
+const NWRITE_SRC = "v3/src/rentalNotifyWriteAsync.js";
+const NWRITE_MUTATIONS = [
+  {
+    name: "事件寫入拿掉 ON CONFLICT（撞唯一鍵就整筆交易失敗）",
+    file: NWRITE_SRC,
+    from: " VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(event_key) DO NOTHING`;",
+    to: " VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;",
+    expect: "去重",
+  },
+  {
+    name: "遞送寫入拿掉 ON CONFLICT（同通道會重複寫）",
+    file: NWRITE_SRC,
+    from: "      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?) ON CONFLICT(event_id, channel) DO NOTHING`;",
+    to: "      VALUES (?, ?, ?, ?, 0, ?, '', ?, ?)`;",
+    expect: "同一事件同一通道",
+  },
+  {
+    name: "不檢查旗標（關閉時照樣發通知）",
+    file: NWRITE_SRC,
+    from: "  if (!isRentalNotificationsEnabled(flags)) return { emitted: false, reason: \"flag_off\" };",
+    to: "  if (false) return { emitted: false, reason: \"flag_off\" };",
+    expect: "旗標關閉",
+  },
+  {
+    name: "不檢查事件白名單（未知型別照樣寫）",
+    file: NWRITE_SRC,
+    from: "  if (!RENTAL_NOTIFY_EVENT_TYPES.includes(eventType)) return { emitted: false, reason: \"unknown_type\" };",
+    to: "  if (false) return { emitted: false, reason: \"unknown_type\" };",
+    expect: "未知事件型別",
+  },
+  {
+    name: "queueDeliveries 不套 prefs（被關掉的通知照樣排遞送）",
+    file: NWRITE_SRC,
+    from: "  if (!preferenceAllows(prefs, event.event_type)) {",
+    to: "  if (false) {",
+    expect: "prefs 關掉",
+  },
+  {
+    name: "通知 payload 不套 PII 過濾（電話會落庫）",
+    file: NWRITE_SRC,
+    from: "      JSON.stringify(safePayload(payload)), stamp,",
+    to: "      JSON.stringify(payload), stamp,",
+    expect: "發通知",
+  },
+  {
+    name: "非 postgres 不回退（SQLite 站會壞）",
+    file: NWRITE_SRC,
+    from: "  if (!isPg(options)) return runSqlite();",
+    to: "  if (false) return runSqlite();",
+    expect: "非 postgres 必須回退",
+  },
+  // ⚠️ 刻意**沒有**「PG 上不補唯一索引」這一條：那個迴圈只在**沒有注入 exec** 時才會跑
+  // （它要真的 `pgDriver.exec`），離線夾具碰不到，所以放進變異集只會得到假 SURVIVED。
+  // 改由 live PG 測試驗證：`ensureRentalNotifyWriteOnce()` 之後那兩條索引必須真的存在。
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -1928,6 +1985,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /rental-notify-write-async/.test(testFile) ? NWRITE_MUTATIONS
   : /rental-notify-reads-async/.test(testFile) ? NPREFS_MUTATIONS
   : /rental-analytics-async/.test(testFile) ? RANALYTICS_MUTATIONS
   : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS

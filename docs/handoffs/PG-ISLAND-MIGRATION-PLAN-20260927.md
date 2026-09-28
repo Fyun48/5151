@@ -1298,6 +1298,46 @@ POST /api/demand                              POST /api/self-listings/:id/matche
 | `queueDeliveriesAsync()` | `preferenceAllows()`／`channelAllowed()`／`isRentalDigestEnabled()` 都是**純函式可直接重用**；寫 `rental_notify_deliveries` |
 | `insertDeliveryAsync()` | **`UNIQUE(event_id, channel)` 是表約束（隱式索引）⇒ 這是第 N 次「PG 沒有 CREATE TABLE 的 UNIQUE」**：`ensurePgSchema` 鏡射不到它，要先自己 `CREATE UNIQUE INDEX IF NOT EXISTS`（並確認既有資料沒有重複，否則會失敗） |
 
+### 36.7 第 2 步主體完成：通知寫入端（`v3/src/rentalNotifyWriteAsync.js`）
+
+`emitRentalNotifyEventAsync()` ＋ `queueDeliveriesAsync()` ＋ `insertDeliveryAsync()` 完成。
+
+**重用**（不重寫）：`preferenceAllows()`／`channelAllowed()`（本輪從 `rentalNotify.js` 匯出，
+這兩個是**政策**不是 SQL）、`safePayload()`（PII 過濾）、`currentRentalNotifyFlags()`、
+`isRentalDigestEnabled()`／`isRentalNotificationsEnabled()`、`getRentalNotifyPrefsAsync()`（上一輪）、
+`bumpAnalyticsAsync()`（上上輪）。
+
+#### 🚨 兩個「PG 不能用同步版做法」的實例
+
+1. **去重不能靠例外**：同步版是 `try { INSERT } catch (UNIQUE) { 回 deduped }`。
+   在 PG 上撞唯一鍵會讓**整筆交易進入 aborted 狀態**，後續語句全部失敗 ⇒
+   改用 `ON CONFLICT(event_key) DO NOTHING` ＋ `rowCount === 0` 判斷。
+   遞送的 `(event_id, channel)` 同理。
+2. **表約束的唯一鍵鏡射不到（本系列第 N 次）**：`UNIQUE(event_id, channel)` 與 `event_key UNIQUE`
+   在 SQLite 是表約束／隱式索引，`pgSchema` 只鏡射有 `sql` 的索引 ⇒
+   新增 `RENTAL_NOTIFY_UNIQUE_INDEXES` 兩句 `CREATE UNIQUE INDEX IF NOT EXISTS`。
+   **建之前先查過正式影子庫**：兩張表在 PG 上都只有 pkey，
+   且 `(event_id, channel)` **0 筆重複** ⇒ 建得起來（與 `demand_posts` 那次的處置相同）。
+
+#### 測試
+
+- `v3/test/rental-notify-write-async.test.js`（**11 項全綠**）：事件／遞送／分析三張表逐列比對、
+  去重、prefs 關閉 ⇒ suppressed、通道組合、旗標關閉早退、未知型別／無 user 早退、
+  同 `(event_id, channel)` 不重複寫、fail-closed、sqlite 回退、唯一索引語句本身。
+- 變異 **7 條全殺**。
+- **刻意移除一條殺不死的變異**（「PG 上不補唯一索引」）：那個迴圈只在**沒有注入 exec** 時才會跑，
+  離線夾具碰不到 ⇒ 放著只會得到假 SURVIVED。改由 **live PG 測試**驗：
+  `v3/test/rental-notify-live-pg.test.js` 在 `ensureRentalNotifyWriteOnce()` 之後
+  斷言那兩條索引真的存在（CI 的 PG job 會跑）。
+- 又一次踩到「**跨 store 不要比 id**」：遞送列的 `event_id` 是各自 AUTOINCREMENT／IDENTITY
+  序號，本來就會不同 ⇒ 比對改成 `(user_id, channel, status)`。
+
+#### 第 3 步（狀態機）現在可以開始了
+
+`accept`／`block` 需要的通知寫入端已經就位。剩下的狀態機本體
+（`transitionOffer`／`expirePendingIfDue`／`terminalizeOffers`／`recheckAcceptable`）
+可以照既有的 loader 模式搬，接線時 `emitRentalNotifyEventAsync()` 直接可用。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |

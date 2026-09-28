@@ -502,7 +502,9 @@ export function bumpAnalytics(db, metric, now = new Date(), n = 1) {
   `).run(day, String(metric), Number(n) || 1);
 }
 
-function preferenceAllows(prefs, eventType) {
+// 匯出給 PG 版逐字重用：這兩個是**政策**（誰收得到、走哪個通道），不是 SQL。
+// 兩個 driver 必須用同一份判斷，否則「PG 站多寄一封信」這種事不會有任何錯誤訊息。
+export function preferenceAllows(prefs, eventType) {
   if (["wish_lifecycle_due_3d", "wish_lifecycle_due_1d", "wish_needs_confirmation", "wish_paused_inactive", "tenant_retention_quiet"].includes(eventType)) {
     return prefs.lifecycle_reminder;
   }
@@ -517,7 +519,7 @@ function preferenceAllows(prefs, eventType) {
   return true;
 }
 
-function channelAllowed(prefs, channel, flags) {
+export function channelAllowed(prefs, channel, flags) {
   if (channel === "dock") return prefs.channel_dock;
   if (channel === "mail") return prefs.channel_mail && isRentalOutboundMailEnabled(flags);
   if (channel === "push") return prefs.channel_push && isRentalOutboundPushEnabled(flags);
