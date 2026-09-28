@@ -43,6 +43,7 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const demandAsync = await import("../src/demandAsync.js");
   const { sqliteHandle } = await import("../src/db.js");
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
 
   const pgDriver = await createPostgresDriver({ connectionString: RAW });
   const query = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
@@ -80,9 +81,14 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
     [REPLY_ID, POST_ID, UID, OLD],
   );
 
-  // 注入式 exec 走的是**真的 PG**，而且不經過 toPostgresSql——與離線夾具的差別就在這裡。
+  // 注入式 exec 走的是**真的 PG**。⚠️ 但 `withFallback()` 在 `options.exec` 有值時
+  // **不會**再包 `toPostgresSql`（見 `demandAsync.js` 的 `withFallback`），而 `pgDriver.query()`
+  // **不翻譯 `?`**（這是既有紀律：方言陷阱清單裡的那一條）。所以這裡必須自己套
+  // `toPostgresSql`，否則送進 PG 的會是 `SELECT id FROM demand_posts WHERE id = ?`
+  // ⇒ `syntax error at end of input`。正式站走的是 `pgDriver.query(toPostgresSql(sql), …)`，
+  // 這裡刻意做成一模一樣——第一次跑 CI 就是少了這一步才紅的。
   const exec = async (sql, params = []) => {
-    const res = await pgDriver.query(sql, params);
+    const res = await pgDriver.query(toPostgresSql(sql), params);
     return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
   };
   const opts = { driver: "postgres", pgDriver, exec, strict: true };
