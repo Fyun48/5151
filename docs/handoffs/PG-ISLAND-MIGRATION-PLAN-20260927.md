@@ -1313,6 +1313,36 @@ res.json(buildDemoState({ listUserIds, getSettings, defaultUserId, listListings,
 `settings.enabled` 分支、啟動流程）不會爆——它體內的 DB 讀取已移到最前面並由呼叫端提供，
 throws 只可能發生在「呼叫端已 await」或「參數已備好」的情況下。
 
+#### 38.6 ⚠️ 動手前的量測：為什麼「先轉低難度那三支」其實不會解鎖路由
+
+第 38.4 節建議「先處理低難度那三支（`listingToolsInfo`／`createDescriptionTemplateFor`／
+`armMemberExternalFetch`）」。**實測之後要修正這個建議**：
+
+| 函式 | 目前單獨卡幾條路由 |
+|---|---:|
+| `getUserById` | **24** |
+| `ensureUser` | **22** |
+| `sqlExcludeFixtureRows` | 13 |
+| `countWatched` | 12 |
+| `listingToolsInfo` | **0** |
+| `armMemberExternalFetch` | **0** |
+
+而且**沒有任何一條路由是「只差 `getUserById`」**（`(r.sqlite||[]).length === 1` 且該項為
+`getUserById` ⇒ **0 條**）。
+
+⇒ 兩個結論：
+
+1. **`getUserById` 是一整群的共同卡點，不是終點。** 它出現的 24 條路由每一條都還有別的卡點
+   （`ensureUser`、`countWatched`、`sqlExcludeFixtureRows`、`collectCommuteSettings`…）。
+   所以要看到數字下降，得**成組清掉這些共同卡點**，而不是一次轉一個。
+2. **`listingToolsInfo` 與 `armMemberExternalFetch` 不是「低難度捷徑」。** 它們目前單獨卡 0 條
+   ⇒ 轉了它們**不會改變任何路由的判定**，而且 `/api/self-listings` 還有
+   `getRentalCatalog`／`listMineSelfListings`／`getRentalMarketplaceFlags` 等同步依賴
+   （其中 `getRentalCatalog` 就是第 31.2 節提到的「PG 版快取沒補」那條線）。
+
+**下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
+再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
