@@ -2521,6 +2521,49 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
      （live PG 測試抓到）。兩個 runner 都統一成裸陣列（與 `settingsKvAsync`／
      `wishExampleAsync` 的修法相同）。
 
+## 二之負十五、2026-09-28 第四十五批：匯入清單（listing imports）
+
+### 45.1 範圍與投報率
+
+第四十四批之後重跑「移植單元」量測，缺口 78 條裡可單獨放掉路由的只剩十來個 1 條的單元
+（其餘都牽涉決策或大模組）。這一包挑的是**同一個模組、同一個形狀**的兩條讀取：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET /api/listing-imports` | `listMineListingImportsAsync` |
+| `GET /api/admin/listing-imports` | `listAdminListingImportsAsync` |
+
+尺規：缺口 **78 → 76**，PG **190 → 192**。
+
+### 45.2 做法
+
+兩條都只是**一句 SELECT**（後台那句多一個 `LEFT JOIN users` 取會員 email），所以
+「列 → 物件」與「上限」這兩件**政策**先抽成共用零件，PG 版只負責換 runner：
+
+- `rowToImport()` 匯出（`listing_id == null`、`photo_errors`／`media_ids` 的 JSON 還原、
+  缺欄位時的空字串都在裡面）。
+- `importListLimit(limit, {cap, fallback})`：會員 50／後台 200 的上限與預設值（20／50）。
+- `importAdminView(row)`：`member_email` 的 `|| ""`。
+- `IMPORT_MINE_SQL`／`IMPORT_ADMIN_SQL` 兩句共用。
+
+⚠️ 路由**行為保持與原樣完全相同**：`GET /api/listing-imports` 原本不吃 `?limit`，
+所以就連「順手支援 ?limit」這種看起來無害的加值也不做——這一包的定義是「只換 driver」。
+
+### 45.3 測試
+
+- `v3/test/listing-imports-async.test.js`（**5 項全綠**）：會員清單（只看自己的／新到舊／
+  列的形狀逐鍵相同）、後台清單（`LEFT JOIN` 的 email＋查不到使用者時的空字串）、
+  上限的**值本身**（parity 抓不到共用政策的變異）、上限真的生效（`limit 3` 只回 3 列、
+  超額請求被夾住）、非 postgres 走同步路徑。變異 **7 條全殺**。
+- `v3/test/listing-imports-live-pg.test.js`（新，CI 的 PG job 會跑）：`LEFT JOIN` 與
+  `LIMIT ?` 在真 PG 上可用、`id` 是數字（PG 的 bigint 是字串，靠 `rowToImport` 轉）、
+  孤兒列的 `member_email` 是空字串。
+
+⚠️ 測試夾具的兩個老坑又出現一次（都已寫進註解）：**不要動 user 1**
+（它是 bootstrap 管理員，磁碟與 PG 夾具的 email 不同，而且被其他表以 FK 引用——
+第一版把它的 email 改掉，`DELETE FROM users` 立刻 `FOREIGN KEY constraint failed`）；
+`listing_import` **沒有** FK，所以「帳號已被刪除」的孤兒列可以照種。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2531,13 +2574,13 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十四批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十五批）** |
 |---|---:|---:|
 | SQLite | 95 | **10** |
-| MIXED | — | **68** |
+| MIXED | — | **66** |
 | 無直接DB | — | **20** |
-| PG | 22 | **190** |
-| **缺口（SQLite＋MIXED）** | — | **78** |
+| PG | 22 | **192** |
+| **缺口（SQLite＋MIXED）** | — | **76** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
