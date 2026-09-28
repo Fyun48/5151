@@ -1275,6 +1275,44 @@ wishOffers 群：0 條
 
 ⇒ 建議**先接 `getSettingsAsync`**（零新程式、單獨卡 8 條），再處理低難度那三支。
 
+### 38.5 第 1 步（38.2 的順序）：`getSettings` 接上既有的 `getSettingsAsync()`
+
+**零新程式**——`getSettingsAsync()` 早就寫好了，只是呼叫端沒接（與 `getWishConditions`／
+`stats` 同一類）。這一輪把 `server.js` 裡剩下的同步呼叫全部改掉：
+
+| 位置 | 原本 | 現在 |
+|---|---|---|
+| `queueGeoBackfill()` 的同步預設值 | `settings = getSettings()` | `settings = null` ⇒ `await getSettingsAsync(0)` |
+| `GET /api/state` | `getSettings(uid)`（在 try 裡） | `await getSettingsAsync(uid)`（**保留原本的 500 處理**） |
+| `POST /api/commute/focus` | handler 同步 ＋ `queueGeoBackfill(getSettings(uid))` | handler 改 async ＋ `await queueGeoBackfill(await getSettingsAsync(uid))` |
+| `GET /api/commute/snapshot` | handler 同步 | handler 改 async |
+| 已在 async 內的一處（`resolveWorkPointForSave` 之前） | `getSettings(uid)` | `await getSettingsAsync(uid)` |
+
+結果：**`getSettings` 從這三條路由的卡點清單消失**（`/api/state`、`/api/commute/focus`、
+`/api/commute/snapshot`）。
+
+#### ⚠️ 但**尺規沒動**（缺口仍 95）——這是對的
+
+那三條路由各自還有別的卡點（`ensureUser`、`getUserById`、`countWatched`、
+`collectCommuteSettings`… 都在清單上），所以只換掉一個函式不會改變判定。
+`GET /api/settings` 本來就已經是 PG（它用的是 `getSettingsAsync`）。
+
+`GET /api/demo` 仍把 `getSettings` **以參考傳遞**給 `buildDemoState()`：
+
+```js
+res.json(buildDemoState({ listUserIds, getSettings, defaultUserId, listListings, stats }));
+```
+
+那是「以參考傳遞的函式」那一類（尺規現在看得到它，見第三十一批的缺陷 (2) 修正），
+要改成注入值而不是注入函式才算真的搬完——留給 `/api/demo` 那一包。
+
+#### 測試
+
+57 項相關測試全綠（commute／demo／settings／profile／route-data-map／module-imports／boot）。
+`queueGeoBackfill()` 改成 async 之後，三個仍以同步方式呼叫它的地方（`reason !== "startup"`、
+`settings.enabled` 分支、啟動流程）不會爆——它體內的 DB 讀取已移到最前面並由呼叫端提供，
+throws 只可能發生在「呼叫端已 await」或「參數已備好」的情況下。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
