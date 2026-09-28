@@ -1241,6 +1241,40 @@ wishOffers 群：0 條
 
 **已部署**：master `af21275`、image `sha256:8b587364…`（deploy evidence `passed: true`）。
 
+### 38.4 第 2 步的第一塊：`getUserByIdAsync()`（`v3/src/usersAsync.js`）
+
+缺口的**頭號卡點**（25 條路由）現在有 PG 版了：
+
+- 語句 `SELECT * FROM users WHERE id = ?`，與 `members.getUserById()` 逐字相同。
+- **查不到回 `null` 而不是 `undefined`**——呼叫端（`adminPatchMember`、`getSettings`、
+  `saveSettings`…）靠 `if (!user)` 判斷，形狀不能變。
+- `uid` 為 0／非數字時**直接早退、不送查詢**（同步版同義）。
+- 測試 `v3/test/users-async.test.js`（5 項全綠）＋變異 **4 條全殺**。
+
+**變異測試又抓到我兩個問題，都不是程式的錯：**
+
+1. **斷言用了 `assert.equal` 而不是 `assert.strictEqual`**：`assert.equal(undefined, null)` 是**通過的**
+   （`node:assert` 的非嚴格版本用 `==`）。所以「回 undefined 而不是 null」的變異原本殺不死。
+   已全部改成 `strictEqual`。
+2. **一句多餘的 `|| null`**：`one()` 本身就保證查不到回 `null`，所以在它後面再接 `|| null`
+   是**等價**的——拿掉測試照樣過。已把那一句從原始碼移除，並在變異集寫明「刻意不放這條變異」，
+   免得留下「看起來有守衛、其實沒作用」的程式碼。
+
+#### ⚠️ 第 2 步的**另一半還沒做**（下一次）
+
+`getUserById` 的 7 個私有呼叫端（見 38.1）還沒轉成 async／loader。它們**不是同一種難度**：
+
+| 呼叫端 | 難度 | 說明 |
+|---|---|---|
+| `listingToolsInfo()` | 低 | 只讀 `plan`／`role` 交給 `listingToolsMeta()`；但它所在的 `/api/self-listings` 還有 `getRentalCatalog`／`listMineSelfListings` 等同步依賴 |
+| `createDescriptionTemplateFor()` | 低 | 只傳 `plan`／`role` 給 `createDescriptionTemplateOn()` |
+| `armMemberExternalFetch()` | 低 | 只讀 `plan` 算間隔 |
+| `getSettings()` | 中 | **`getSettingsAsync` 早就存在**（第三十八批 38.2 的第 1 步），應先接它 |
+| `saveSettings()`／`saveAsProfile()` | 中 | 依賴 `getSettings()`／`getUserById()` 兩者 |
+| `adminPatchMember()` | 高 | 完整的會員修改流程，牽涉多張表與稽核 |
+
+⇒ 建議**先接 `getSettingsAsync`**（零新程式、單獨卡 8 條），再處理低難度那三支。
+
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
 第三十批刻意把 reply／close 留在同步版，理由寫在 30.9：那兩支會改「會被讀回來」的狀態，
