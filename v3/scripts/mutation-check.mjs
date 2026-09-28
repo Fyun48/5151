@@ -1829,6 +1829,41 @@ const WOFFERS_MUTATIONS = [
   // 拿掉封鎖查詢之後錯誤碼與 status 完全一樣（可觀察行為等價）。放著只會得到假 SURVIVED。
   // 「封鎖之後拿不到」這個**契約**仍有一條測試守著（`wish-offers-async.test.js`）。
   {
+    name: "樂觀鎖不帶 version（併發時覆蓋別人的變更）",
+    file: WOFFERS_SRC,
+    from: "     WHERE id = ? AND status = ? AND version = ?`,\n    [toStatus, stamp, stamp, Number(offerId), fromStatus, Number(version)],",
+    to: "     WHERE id = ? AND status = ? AND (? IS NOT NULL)`,\n    [toStatus, stamp, stamp, Number(offerId), fromStatus, Number(version)],",
+    expect: "樂觀鎖",
+  },
+  {
+    name: "樂觀鎖用 changes 而不是 rowCount（PG 上永遠是 undefined ⇒ 衝突被誤判）",
+    file: WOFFERS_SRC,
+    from: "  return Number(res?.rowCount) || 0;\n}\n\n// `expirePendingIfDue()` 的 PG 版。",
+    to: "  return Number(res?.changes) || 0;\n}\n\n// `expirePendingIfDue()` 的 PG 版。",
+    expect: "樂觀鎖",
+  },
+  {
+    name: "接受提案不檢查租客身分（屋主也能接受自己的提案）",
+    file: WOFFERS_SRC,
+    from: "    const mine = offer && (role === \"tenant\"\n      ? Number(offer.tenant_user_id) === Number(userId)\n      : Number(offer.owner_user_id) === Number(userId));",
+    to: "    const mine = Boolean(offer);",
+    expect: "拒絕／撤回",
+  },
+  {
+    name: "終結提案不寫事件（事後查不到）",
+    file: WOFFERS_SRC,
+    from: "  for (const row of rows) {\n    await writeOfferEventAsync(run, {\n      offerId: row.id,",
+    to: "  for (const row of []) {\n    await writeOfferEventAsync(run, {\n      offerId: row.id,",
+    expect: "封鎖屋主",
+  },
+  {
+    name: "封鎖不建立封鎖列（只終結提案）",
+    file: WOFFERS_SRC,
+    from: "    const block = await insertUserBlockAsync(run, {",
+    to: "    const block = await (async () => null)({",
+    expect: "封鎖屋主",
+  },
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",

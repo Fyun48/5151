@@ -23,11 +23,15 @@ import {
   OFFER_REPORT_DETAIL_MAX,
   ADMIN_REPORTS_SQL,
   OFFER_REPORT_REASONS,
+  OFFER_TERMINAL_STATUSES,
   assertContactReadable,
   assertOfferBurst,
   assertWishOfferEnabled,
   contactFieldsFor,
   contactProjection,
+  liveMatchEligible,
+  offerHasExpired,
+  recordOfferFail,
   createOfferReport as createOfferReportSync,
   loadFreshOffer as loadFreshOfferSync,
   loadVisibleOffer as loadVisibleOfferSync,
@@ -251,6 +255,8 @@ export const OFFER_EVENT_INSERT_SQL =
   "INSERT INTO wish_offer_events(offer_id, actor_user_id, event_type, created_at, meta_json) VALUES (?, ?, ?, ?, ?)";
 
 const isoOf = (now) => (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+// 狀態機那一段沿用同步版的命名（`iso`），與上面的 `isoOf` 同義。
+const iso = isoOf;
 const rollingWindowStart = (now, ms) => isoOf(new Date((now instanceof Date ? now.getTime() : Date.now()) - ms));
 
 // `writeOfferEvent()` 的 PG 版：沿用同一組「敏感欄位不落庫」的過濾清單。
@@ -425,5 +431,271 @@ export async function projectOfferContactAsync(offerRef, userId, { now = new Dat
   }, async () => {
     const mod = await import("./wishOfferTransitions.js");
     return mod.readOfferContact(sqliteHandle(), userId, offerRef, { now, actorKey });
+  });
+}
+
+// ── 提案狀態機（accept／decline／withdraw／block）──────────────────────────────
+//
+// 這是第三十六批那份順序的第 3 步，也是 wishOffers 群的最後四條路由。
+// 前置條件都已在前面幾輪備齊：通知寫入端（第 2 步）、`wish_offer_events`（第 33 批）、
+// `loadVisibleOfferAsync`／`loadFreshOfferAsync`／`getSelfRowAsync`／`insertUserBlock` 的 PG 路徑。
+//
+// ⚠️ 這一支比前面幾支更需要注意**交易**：同步版用 `withImmediate(db, …)`（BEGIN IMMEDIATE）
+// 把「讀 → 樂觀鎖 UPDATE → 寫事件」包成一個原子單位。PG 版對應的是
+// `pgDriver.withTransaction()`，只有真的 driver 有；注入式夾具沒有交易，
+// 但**測試是單執行緒序列執行**，所以沒有交易也不會觀察到差異（正式站有）。
+export const OFFER_BY_ID_FOR_UPDATE_SQL = "SELECT * FROM wish_offers WHERE id = ?";
+export const OFFER_STATUS_SQL = "SELECT status FROM wish_offers WHERE id = ?";
+export const OFFER_TERMINAL_BY_ID_SQL = `UPDATE wish_offers
+     SET status = ?, ${"${field}"} = COALESCE(${"${field}"}, ?), updated_at = ?, version = version + 1
+     WHERE id = ? AND status IN ('pending', 'accepted')`;
+export const OFFER_IDS_BY_SCOPE_SQL = (clauses) => `SELECT id FROM wish_offers WHERE ${clauses}`;
+export const OFFER_TERMINAL_BY_SCOPE_SQL = (clauses, field) => `UPDATE wish_offers
+     SET status = ?, ${field} = COALESCE(${field}, ?), updated_at = ?, version = version + 1
+     WHERE ${clauses}`;
+export const BLOCK_INSERT_SQL = `INSERT INTO user_blocks(public_token, blocker_user_id, blocked_user_id, context, offer_id, listing_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`;
+export const BLOCK_EXISTING_SQL =
+  "SELECT * FROM user_blocks WHERE blocker_user_id = ? AND blocked_user_id = ?";
+
+// `STAMP_FIELD` 只允許這三個（同步版的 `stampField` 也是這幾個；這裡做成白名單，
+// 因為它會被**拼進 SQL**，不能讓外部字串進來）。
+const STAMP_FIELDS = new Set(["accepted_at", "declined_at", "withdrawn_at", "expired_at", "blocked_at"]);
+export const stampFieldFor = (toStatus, stampField) => {
+  const field = stampField || `${toStatus}_at`;
+  if (!STAMP_FIELDS.has(field)) throw new Error(`unsupported stamp field: ${field}`);
+  return field;
+};
+
+// `transitionOffer()` 的 PG 版：樂觀鎖。
+// ⚠️ 同步版看 `result.changes`、PG 看 `rowCount`——**兩個都要當成「有沒有改到」**，
+// 用 `undefined` 或錯誤的欄位會讓「衝突」被誤判成「成功」（狀態機的核心不變式）。
+export async function transitionOfferAsync(run, offerId, {
+  fromStatus,
+  toStatus,
+  version,
+  stampField,
+  now = new Date(),
+} = {}) {
+  const stamp = iso(now);
+  const field = stampFieldFor(toStatus, stampField);
+  const res = await run(
+    `UPDATE wish_offers
+     SET status = ?, ${field} = ?, updated_at = ?, version = version + 1
+     WHERE id = ? AND status = ? AND version = ?`,
+    [toStatus, stamp, stamp, Number(offerId), fromStatus, Number(version)],
+  );
+  return Number(res?.rowCount) || 0;
+}
+
+// `expirePendingIfDue()` 的 PG 版。
+export async function expirePendingIfDueAsync(run, offer, now = new Date(), options = {}) {
+  if (!offer || offer.status !== "pending" || !offerHasExpired(offer, now)) {
+    return { expired: false, offer };
+  }
+  const changed = await transitionOfferAsync(run, offer.id, {
+    fromStatus: "pending", toStatus: "expired", version: offer.version, stampField: "expired_at", now,
+  });
+  const fresh = one((await run(OFFER_BY_ID_FOR_UPDATE_SQL, [Number(offer.id)])).rows) || offer;
+  if (changed) {
+    await writeOfferEventAsync(run, {
+      offerId: offer.id, actorUserId: null, eventType: "offer_expired", meta: { reason: "ttl" }, now,
+    });
+  }
+  return { expired: fresh.status === "expired", offer: fresh };
+}
+
+// `terminalizeOffers()` 的 PG 版：把某個範圍內所有 pending／accepted 一次終結，逐筆寫事件。
+export async function terminalizeOffersAsync(run, {
+  wishId = null,
+  listingId = null,
+  ownerUserId = null,
+  tenantUserId = null,
+  toStatus = "expired",
+  now = new Date(),
+} = {}) {
+  if (!OFFER_TERMINAL_STATUSES.includes(toStatus) && toStatus !== "blocked") return 0;
+  const clauses = ["status IN ('pending', 'accepted')"];
+  const params = [];
+  for (const [column, value] of [["wish_id", wishId], ["listing_id", listingId], ["owner_user_id", ownerUserId], ["tenant_user_id", tenantUserId]]) {
+    if (value) {
+      clauses.push(`${column} = ?`);
+      params.push(Number(value));
+    }
+  }
+  if (clauses.length === 1) return 0;
+  const where = clauses.join(" AND ");
+  const rows = (await run(OFFER_IDS_BY_SCOPE_SQL(where), params)).rows || [];
+  if (!rows.length) return 0;
+  const stamp = iso(now);
+  const field = toStatus === "blocked" ? "blocked_at" : toStatus === "withdrawn" ? "withdrawn_at" : "expired_at";
+  await run(OFFER_TERMINAL_BY_SCOPE_SQL(where, field), [toStatus, stamp, stamp, ...params]);
+  for (const row of rows) {
+    await writeOfferEventAsync(run, {
+      offerId: row.id,
+      eventType: toStatus === "blocked" ? "offer_blocked" : toStatus === "withdrawn" ? "offer_withdrawn" : "offer_expired",
+      now,
+    });
+  }
+  return rows.length;
+}
+
+// `insertUserBlock()` 的 PG 版：先查再寫（`UNIQUE(blocker, blocked)` 是表約束，PG 上沒有索引，
+// 所以不能靠 ON CONFLICT；先查再寫與同步版的語意相同）。
+export async function insertUserBlockAsync(run, {
+  blockerUserId, blockedUserId, context = "wish_offer", offerId = null, listingId = null, now = new Date(),
+} = {}) {
+  const blocker = Number(blockerUserId) || 0;
+  const blocked = Number(blockedUserId) || 0;
+  if (!blocker || !blocked || blocker === blocked) return null;
+  const existing = one((await run(BLOCK_EXISTING_SQL, [blocker, blocked])).rows);
+  if (existing) return existing;
+  await run(BLOCK_INSERT_SQL, [
+    newOfferToken(), blocker, blocked, String(context || "wish_offer"),
+    offerId || null, listingId || null, iso(now),
+  ]);
+  return one((await run(BLOCK_EXISTING_SQL, [blocker, blocked])).rows);
+}
+
+// `recheckAcceptable()` 的 PG 版：過期 → 封鎖 → 條件是否仍相符。
+async function recheckAcceptableAsync(run, offer, now, options) {
+  if (offerHasExpired(offer, now)) {
+    await expirePendingIfDueAsync(run, offer, now, options);
+    return { ok: false, code: "offer_expired" };
+  }
+  if (await tenantBlocksOwnerAsync(run, offer.tenant_user_id, offer.owner_user_id)) {
+    await terminalizeOffersAsync(run, {
+      ownerUserId: offer.owner_user_id, tenantUserId: offer.tenant_user_id, toStatus: "blocked", now,
+    });
+    return { ok: false, code: "offer_unavailable" };
+  }
+  const wishRow = one((await run(WISH_BY_ID_SQL, [Number(offer.wish_id)])).rows);
+  const listingRow = offer.listing_id ? await getSelfRowAsync(offer.listing_id, { ...options, driver: "postgres" }) : null;
+  const live = wishRow && listingRow ? liveMatchEligible(null, listingRow, wishRow, now) : { eligible: false };
+  if (!live.eligible) {
+    await transitionOfferAsync(run, offer.id, {
+      fromStatus: "pending", toStatus: "expired", version: offer.version, stampField: "expired_at", now,
+    });
+    return { ok: false, code: "match_no_longer_eligible" };
+  }
+  return { ok: true };
+}
+
+// 四條路由共用的主體：可見性 → 角色 → 過期／衝突 → 樂觀鎖轉移 → 事件。
+// `denied` 的處理（`recordOfferFail()` ＋ 丟 409）與同步版逐條相同。
+async function transitionRoute({
+  offerRef, userId, now, actorKey, role, toStatus, stampField, eventType, extraGates = null,
+}, options) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    if (actorKey) assertOfferBurst(actorKey, now);
+    const offer = await loadVisibleOfferAsync(offerRef, userId, options);
+    const mine = offer && (role === "tenant"
+      ? Number(offer.tenant_user_id) === Number(userId)
+      : Number(offer.owner_user_id) === Number(userId));
+    if (!offer || !mine) throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
+
+    let denied = "";
+    // `expirePendingOrConflict()`：pending 且過期 ⇒ 先過期；不是 pending ⇒ 衝突。
+    if (offer.status === "pending" && offerHasExpired(offer, now)) {
+      const ttl = await expirePendingIfDueAsync(run, offer, now, options);
+      denied = "offer_expired";
+      void ttl;
+    } else if (offer.status !== "pending") {
+      throw offerHttpError("這筆提案狀態已變更", 409, "offer_conflict", {
+        current_status: offer.status || "",
+      });
+    }
+    if (denied) {
+      recordOfferFailAsync(actorKey || `${role}:${userId}`, now);
+      throw offerHttpError("目前無法接受這筆提案", 409, denied);
+    }
+    if (extraGates) {
+      const check = await extraGates(run, offer);
+      if (!check.ok) {
+        recordOfferFailAsync(actorKey || `${role}:${userId}`, now);
+        throw offerHttpError("目前無法接受這筆提案", 409, check.code);
+      }
+    }
+    const changed = await transitionOfferAsync(run, offer.id, {
+      fromStatus: "pending", toStatus, version: offer.version, stampField, now,
+    });
+    if (!changed) {
+      const fresh = one((await run(OFFER_BY_ID_FOR_UPDATE_SQL, [Number(offer.id)])).rows);
+      throw offerHttpError("這筆提案狀態已變更", 409, "offer_conflict", {
+        current_status: fresh?.status || "",
+      });
+    }
+    await writeOfferEventAsync(run, { offerId: offer.id, actorUserId: userId, eventType, now });
+    return one((await run(OFFER_BY_ID_FOR_UPDATE_SQL, [Number(offer.id)])).rows);
+  }, async () => {
+    const mod = await import("./wishOfferTransitions.js");
+    const db = sqliteHandle();
+    if (toStatus === "accepted") return mod.acceptWishOffer(db, userId, offerRef, { now, actorKey });
+    if (toStatus === "declined") return mod.declineWishOffer(db, userId, offerRef, { now, actorKey });
+    return mod.withdrawWishOffer(db, userId, offerRef, { now, actorKey });
+  });
+}
+
+// `recordOfferFail()` 是行程內節流，與 driver 無關；同步版會在失敗時記一筆。
+// 這裡直接重用（它不碰 DB）。
+function recordOfferFailAsync(actorKey, now) {
+  try {
+    recordOfferFail(actorKey, now);
+  } catch {
+    /* 與同步版相同：記錄失敗本身不該掩蓋原本的錯誤 */
+  }
+}
+
+export async function acceptWishOfferAsync(userId, offerRef, { now = new Date(), actorKey = "" } = {}, options = {}) {
+  return transitionRoute({
+    offerRef, userId, now, actorKey, role: "tenant",
+    toStatus: "accepted", stampField: "accepted_at", eventType: "offer_accepted",
+    extraGates: (run, offer) => recheckAcceptableAsync(run, offer, now, options),
+  }, options);
+}
+
+export async function declineWishOfferAsync(userId, offerRef, { now = new Date(), actorKey = "" } = {}, options = {}) {
+  return transitionRoute({
+    offerRef, userId, now, actorKey, role: "tenant",
+    toStatus: "declined", stampField: "declined_at", eventType: "offer_declined",
+  }, options);
+}
+
+export async function withdrawWishOfferAsync(userId, offerRef, { now = new Date(), actorKey = "" } = {}, options = {}) {
+  return transitionRoute({
+    offerRef, userId, now, actorKey, role: "owner",
+    toStatus: "withdrawn", stampField: "withdrawn_at", eventType: "offer_withdrawn",
+  }, options);
+}
+
+// `blockOwnerFromOffer()` 的 PG 版：房客封鎖屋主 ⇒ 建立封鎖 ＋ 終結該對之間所有提案。
+export async function blockOwnerFromOfferAsync(userId, offerRef, { now = new Date(), actorKey = "" } = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    if (actorKey) assertOfferBurst(actorKey, now);
+    const offer = await loadVisibleOfferAsync(offerRef, userId, options);
+    if (!offer || Number(offer.tenant_user_id) !== Number(userId)) {
+      throw offerHttpError("找不到這筆提案", 404, "offer_not_found");
+    }
+    const block = await insertUserBlockAsync(run, {
+      blockerUserId: userId,
+      blockedUserId: offer.owner_user_id,
+      context: "wish_offer",
+      offerId: offer.id,
+      listingId: offer.listing_id,
+      now,
+    });
+    await terminalizeOffersAsync(run, {
+      ownerUserId: offer.owner_user_id, tenantUserId: userId, toStatus: "blocked", now,
+    });
+    return {
+      ok: true,
+      block_ref: block?.public_token || "",
+      offer: one((await run(OFFER_BY_ID_FOR_UPDATE_SQL, [Number(offer.id)])).rows),
+    };
+  }, async () => {
+    const mod = await import("./wishOfferTransitions.js");
+    return mod.blockOwnerFromOffer(sqliteHandle(), userId, offerRef, { now, actorKey });
   });
 }

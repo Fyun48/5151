@@ -1410,6 +1410,51 @@ CI 的 PG job 連兩次紅，兩次都是我自己的錯，而且**都只有真 
 本分支的 18 個改動檔案裡**沒有任何一個**是 `commute`／`listing-search` 相關。
 判讀規則：**先看 PG job**（它才是島嶼改動的守門員），再用 base worktree 比對一般 Tests job 的紅燈。
 
+### 36.11 第 3 步完成：提案狀態機（**wishOffers 群清空**）
+
+| 路由 | 之前 | 現在 |
+|---|---|---|
+| `POST /api/wish-offers/:offerRef/accept` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/decline` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/withdraw` | MIXED | **PG** |
+| `POST /api/wish-offers/:offerRef/block` | MIXED | **PG** |
+
+尺規（master `7a150e4`）：**PG 158→170、MIXED 99→87、缺口 110→98**。
+**wishOffers 群已經沒有任何缺口路由**（`route-data-map` 過濾 `wish-offer` ⇒ 0 條）。
+
+#### 做法
+
+- 葉節點 helper 全部搬過來：`transitionOfferAsync()`（樂觀鎖）、`expirePendingIfDueAsync()`、
+  `terminalizeOffersAsync()`、`insertUserBlockAsync()`、`recheckAcceptableAsync()`。
+- 四條路由共用一個主體 `transitionRoute()`：可見性 → 角色 → 過期／衝突 → 樂觀鎖 → 事件，
+  順序與同步版逐條相同；`denied` 的處置（`recordOfferFail()` ＋ 409）也相同。
+- 契約（`accept` 之後發通知）留在 `db.js` 的 `acceptWishOfferFor()`，所以**路由層沒有動它**；
+  通知寫入端在前一輪已具備 PG 版。
+
+#### 🚨 這一包最關鍵的一行：`rowCount` 不是 `changes`
+
+```js
+// 同步版
+return Number(result.changes) || 0;
+// PG 版
+return Number(res?.rowCount) || 0;
+```
+
+樂觀鎖靠「改到 0 列」判斷衝突。PG 的 `pg` 回的是 `rowCount`，用 `changes` 會得到 `undefined`
+⇒ `|| 0` 一樣是 0…**但 `transitionOfferAsync()` 的呼叫端若拿 `undefined` 去做真值判斷，
+就會把衝突誤判成成功**。變異集裡放了一條「改用 changes」的變異，由
+「樂觀鎖：version 不對必須是衝突」那條測試殺掉。
+
+#### 測試
+
+- `wish-offers-async.test.js` **24 項全綠**（新增 5 項：接受、樂觀鎖、拒絕／撤回、封鎖、過期）。
+- 變異 **21 條全殺**。過程中修掉三條沒有鑑別力的地方：
+  1. 「封鎖屋主」原本只比 `status`，所以**把終結時的事件拿掉也照樣過關** ⇒ 補上
+     `offer_blocked` 事件的斷言。
+  2. `block_ref` 是**隨機 token**（每個 store 各自產生）⇒ 不能比字串，只能比「兩邊都有值」。
+  3. 過期那條測試**忘了先 `copyRows()`**，夾具還是空的 ⇒ PG 分支回 `offer_not_found` 而不是
+     `offer_expired`。這一條是「測試要先確認兩邊起點相同」的又一次實例。
+
 ## 二之負四、2026-09-28 第三十五批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |

@@ -609,3 +609,126 @@ test("聯絡方式：房客封鎖屋主之後就拿不到（兩邊一致）", as
   ).get().n;
   assert.equal(events, 0, "被拒絕時不得留下存取紀錄");
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 狀態機（accept／decline／withdraw／block）——wishOffers 群的最後四條路由。
+
+test("接受提案：狀態、事件與回傳的提案，PG 與同步版相同", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  const sync = transitions.acceptWishOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  const asyncRes = await offerAsync.acceptWishOfferAsync(1, offer.public_token, { actorKey: "tenant:1" }, { ...PG, exec, strict: true });
+  assert.equal(asyncRes.status, sync.status, "狀態必須相同");
+  assert.equal(asyncRes.status, "accepted");
+  assert.equal(Number(asyncRes.version), Number(sync.version), "version 必須同步遞增");
+  assert.ok(asyncRes.accepted_at, "accepted_at 必須落地");
+  // 事件
+  const events = exec.raw.prepare("SELECT event_type FROM wish_offer_events WHERE event_type = 'offer_accepted'").all();
+  assert.equal(events.length, 1, "必須寫 offer_accepted 事件");
+  const syncEvents = db.prepare("SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = 'offer_accepted'").get().n;
+  assert.equal(events.length, syncEvents, "兩邊的事件數必須相同");
+});
+
+test("樂觀鎖：version 不對時必須是衝突（不得誤判成成功）", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  // 直接呼叫底層：version 故意給錯 ⇒ 必須回 0（同步版看 changes、PG 看 rowCount）
+  const syncChanged = offers.transitionOffer(db, offer.id, {
+    fromStatus: "pending", toStatus: "accepted", version: Number(offer.version) + 99, stampField: "accepted_at", now: new Date(),
+  });
+  const pgChanged = await offerAsync.transitionOfferAsync(
+    exec, offer.id,
+    { fromStatus: "pending", toStatus: "accepted", version: Number(offer.version) + 99, stampField: "accepted_at", now: new Date() },
+  );
+  assert.equal(syncChanged, 0, "同步版：version 不對必須改 0 列");
+  assert.equal(pgChanged, 0, "PG 版：version 不對必須改 0 列（用 rowCount 判斷）");
+  // 正確的 version 則必須改到
+  assert.equal(await offerAsync.transitionOfferAsync(
+    exec, offer.id,
+    { fromStatus: "pending", toStatus: "accepted", version: Number(offer.version), stampField: "accepted_at", now: new Date() },
+  ), 1, "version 正確時必須改到 1 列");
+});
+
+test("拒絕／撤回：狀態與事件兩邊一致，且角色不能互換", async () => {
+  for (const [action, role, toStatus, eventType, callerId] of [
+    ["declineWishOfferAsync", "tenant", "declined", "offer_declined", 1],
+    ["withdrawWishOfferAsync", "owner", "withdrawn", "offer_withdrawn", 2],
+  ]) {
+    const [db, mem, exec] = resetWorld();
+    const { offer } = seedPairWithOffer(db);
+    copyRows(db, mem);
+    const syncFn = action === "declineWishOfferAsync" ? transitions.declineWishOffer : transitions.withdrawWishOffer;
+    const sync = syncFn(db, callerId, offer.public_token, { actorKey: `${role}:${callerId}` });
+    const asyncRes = await offerAsync[action](callerId, offer.public_token, { actorKey: `${role}:${callerId}` }, { ...PG, exec, strict: true });
+    assert.equal(asyncRes.status, sync.status, `${action}：狀態必須相同`);
+    assert.equal(asyncRes.status, toStatus);
+    assert.equal(
+      exec.raw.prepare(`SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = '${eventType}'`).get().n,
+      db.prepare(`SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = '${eventType}'`).get().n,
+      `${action}：事件數必須相同`,
+    );
+    // 另一個角色（不是本人）必須 404
+    const wrong = role === "tenant" ? 2 : 1;
+    let syncErr = null;
+    try { syncFn(db, wrong, offer.public_token, { actorKey: `x:${wrong}` }); } catch (e) { syncErr = e; }
+    let asyncErr = null;
+    try { await offerAsync[action](wrong, offer.public_token, { actorKey: `x:${wrong}` }, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+    assert.ok(syncErr && asyncErr, `${action}：非本人必須被拒`);
+    assert.equal(asyncErr.code, syncErr.code, `${action}：錯誤碼必須相同`);
+    assert.equal(asyncErr.status, syncErr.status, `${action}：status 必須相同`);
+  }
+});
+
+test("封鎖屋主：建立封鎖列、終結提案、回傳形狀，兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  const sync = transitions.blockOwnerFromOffer(db, 1, offer.public_token, { actorKey: "tenant:1" });
+  const asyncRes = await offerAsync.blockOwnerFromOfferAsync(1, offer.public_token, { actorKey: "tenant:1" }, { ...PG, exec, strict: true });
+  assert.equal(asyncRes.ok, sync.ok);
+  // ⚠️ block_ref 是**隨機產生的 token**（每個 store 各自產生）⇒ 不能比字串，
+  // 只能比「兩邊都有值」。這是跨 store 不比隨機識別碼的同一條紀律。
+  assert.ok(sync.block_ref, "同步版必須回 block_ref");
+  assert.ok(asyncRes.block_ref, "PG 版必須回 block_ref");
+  assert.equal(asyncRes.offer.status, sync.offer.status, "提案狀態必須相同");
+  assert.equal(asyncRes.offer.status, "blocked");
+  const blocks = exec.raw.prepare("SELECT COUNT(*) AS n FROM user_blocks WHERE blocker_user_id = 1").get().n;
+  assert.equal(blocks, 1, "封鎖列必須寫進 PG");
+  assert.equal(blocks, db.prepare("SELECT COUNT(*) AS n FROM user_blocks WHERE blocker_user_id = 1").get().n, "兩邊封鎖列數必須相同");
+  // ⚠️ 一定要驗「終結時寫的事件」：只比 status 的話，把 `terminalizeOffersAsync()` 裡的事件
+  // 拿掉也照樣過關（變異測試抓到的）。
+  const blockedEvents = exec.raw.prepare(
+    "SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = 'offer_blocked'",
+  ).get().n;
+  assert.equal(blockedEvents, 1, "終結提案必須寫 offer_blocked 事件");
+  assert.equal(
+    blockedEvents,
+    db.prepare("SELECT COUNT(*) AS n FROM wish_offer_events WHERE event_type = 'offer_blocked'").get().n,
+    "兩邊的 offer_blocked 事件數必須相同",
+  );
+});
+
+test("過期：pending 且 TTL 過了 ⇒ 先過期再回 409，兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  // ⚠️ 一定要先鏡射再改 `expires_at`：`resetWorld()` 之後夾具還是空的，
+  // 少了這一步 PG 分支會查不到提案而回 `offer_not_found`（第一版就是這樣紅的）。
+  copyRows(db, mem);
+  // 把 expires_at 移到過去（提案 TTL 是相對現在算的）
+  const past = "2020-01-01T00:00:00.000Z";
+  for (const h of [db, mem]) h.prepare("UPDATE wish_offers SET expires_at = ? WHERE id = ?").run(past, offer.id);
+
+  let syncErr = null;
+  try { transitions.acceptWishOffer(db, 1, offer.public_token, { actorKey: "tenant:1" }); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try { await offerAsync.acceptWishOfferAsync(1, offer.public_token, { actorKey: "tenant:1" }, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr, "同步版：過期必須被拒");
+  assert.ok(asyncErr, `PG 版：過期必須被拒（同步=${syncErr?.code} PG=${asyncErr?.code}）`);
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同");
+  // 而且兩邊都必須把提案標成 expired（不是只回錯誤）
+  assert.equal(exec.raw.prepare("SELECT status FROM wish_offers WHERE id = ?").get(offer.id).status, "expired");
+  assert.equal(db.prepare("SELECT status FROM wish_offers WHERE id = ?").get(offer.id).status, "expired");
+});

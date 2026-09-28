@@ -179,10 +179,6 @@ import {
   rentalMatchOwnerMeta,
   createWishOfferFor,
   getWishOfferFor,
-  acceptWishOfferFor,
-  declineWishOfferFor,
-  withdrawWishOfferFor,
-  blockWishOfferFor,
   reportWishOfferFor,
   runWishOfferExpiryWorkerTick,
   getRentalNotifyPrefsFor,
@@ -3045,14 +3041,14 @@ app.get("/api/wish-offers/:offerRef", async (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/accept", (req, res) => {
+app.post("/api/wish-offers/:offerRef/accept", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(acceptWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await acceptWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
@@ -3060,14 +3056,14 @@ app.post("/api/wish-offers/:offerRef/accept", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/decline", (req, res) => {
+app.post("/api/wish-offers/:offerRef/decline", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(declineWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await declineWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
@@ -3075,14 +3071,14 @@ app.post("/api/wish-offers/:offerRef/decline", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/withdraw", (req, res) => {
+app.post("/api/wish-offers/:offerRef/withdraw", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(withdrawWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await withdrawWishOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `owner:${session.userId}`,
     }));
   } catch (error) {
@@ -3090,14 +3086,14 @@ app.post("/api/wish-offers/:offerRef/withdraw", (req, res) => {
   }
 });
 
-app.post("/api/wish-offers/:offerRef/block", (req, res) => {
+app.post("/api/wish-offers/:offerRef/block", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(blockWishOfferFor(session.userId, req.params.offerRef, {
+    res.json(await blockOwnerFromOfferAsync(session.userId, req.params.offerRef, {
       actorKey: `tenant:${session.userId}`,
     }));
   } catch (error) {
