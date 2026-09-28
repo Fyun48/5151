@@ -203,7 +203,7 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
 //   2. 「同一人只能有一則 open／draft」的**部分唯一索引在 PG 上真的存在**——同步版靠
 //      `BEGIN IMMEDIATE` ＋ 這個索引，PG 版沒有交易，只剩這個索引可以擋。
 //   3. `wish_room_example` 的「先查再寫」在 PG 上真的能寫第二次（INSERT 之後 UPDATE）。
-test("live PG：更新／刊登／重開與範例儲存真的生效，且部分唯一索引在 PG 上擋得住", { skip }, async () => {
+test("live PG：更新／刊登／重開與範例儲存真的生效，且部分唯一索引在 PG 上擋得住", { skip }, async (t) => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const demandAsync = await import("../src/demandAsync.js");
   const wishExampleAsync = await import("../src/wishExampleAsync.js");
@@ -230,6 +230,13 @@ test("live PG：更新／刊登／重開與範例儲存真的生效，且部分�
     await query("DELETE FROM wish_room_example WHERE user_id = ANY($1)", [ids]);
     await query("DELETE FROM users WHERE id = ANY($1)", [ids]);
   };
+
+  // ⚠️ 一定要註冊在 `t.after`：這是**共用**的測試資料庫，中途失敗若留下殘骸，
+  // 後面依賴「identity 序列健康」與乾淨起點的 live 測試會跟著紅（CI 一次紅兩條就是這樣）。
+  t.after(async () => {
+    try { await cleanup(); } catch { /* 盡力而為 */ }
+    try { await pgDriver.close(); } catch { /* 已關就算了 */ }
+  });
 
   await cleanup();
   await syncSequence("users");
@@ -301,6 +308,17 @@ test("live PG：更新／刊登／重開與範例儲存真的生效，且部分�
   assert.equal(row.closed_at, null, "重開必須清掉 closed_at");
 
   // 5) 範例：第一次 INSERT、第二次 UPDATE，兩次都要在 PG 上真的落地
+  //    ⚠️ 先跑模組自己的 ensure：`wish_room_example.user_id` 若由 `ensurePgSchema()` 從
+  //    SQLite 鏡射而來，會變成 identity 欄位，而這個欄位是**使用者帶進來的**
+  //    ⇒ 明確寫入不會推進序列，`pg-identity-sequences` 的健檢會永遠紅著。
+  //    這一步就是把它拿掉（正式路徑的第一個請求也會跑）。
+  await wishExampleAsync.ensureWishExampleStoreOnce(pgDriver);
+  const identity = (await query(
+    `SELECT is_identity FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'wish_room_example' AND column_name = 'user_id'`,
+  ))[0];
+  assert.equal(identity?.is_identity, "NO", "user_id 不該是 identity 欄位（否則健檢會永遠紅著）");
+
   const firstExample = await wishExampleAsync.saveWishExampleAsync(UID, { districts: ["1-5"], rent_max: 20000, body: "live 範例一" }, opts);
   const afterFirst = (await query("SELECT created_at FROM wish_room_example WHERE user_id = $1", [UID]))[0];
   const secondExample = await wishExampleAsync.saveWishExampleAsync(UID, { districts: ["1-7"], rent_max: 26000, body: "live 範例二" }, opts);

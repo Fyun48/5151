@@ -458,3 +458,30 @@ test("範例：注入式 exec 的兩種形狀（裸陣列／{ rows, rowCount }�
   assert.equal(asArray.updated_at, stored.updated_at, "回傳的 updated_at 必須是落地的那一列");
   assert.equal(disk.prepare("SELECT COUNT(*) AS n FROM wish_room_example").get().n, 1, "本機 handle 也要有一列");
 });
+
+test("範例：本機沒有這個帳號時仍要成功（PG 已寫入，不得被本機 FK 變成 500）", async () => {
+  // 這一條是 CI 的 PG job 抓到的：本機 `wish_room_example` 有
+  // `FOREIGN KEY(user_id) REFERENCES users(id)`，但 PG 模式的帳號可能是在**別的節點**
+  // 建立的。第一版無條件寫本機 → 一個已經在 PG 寫成功的請求變成
+  // `FOREIGN KEY constraint failed` 的 500。
+  const [disk, exec] = resetBoth();
+  const stranger = 4242; // 只存在於 PG 夾具，本機 users 沒有這一列
+  exec.raw.prepare(
+    "INSERT INTO users(id, email, nickname, role, plan, created_at) VALUES (?, ?, ?, 'member', 'free', ?)",
+  ).run(stranger, `lifecycle${stranger}@example.com`, "別節點的會員", OLD);
+  assert.equal(
+    disk.prepare("SELECT COUNT(*) AS n FROM users WHERE id = ?").get(stranger).n, 0,
+    "起點：本機必須沒有這個帳號（否則這條測試沒有鑑別力）",
+  );
+
+  const saved = await exampleMod.saveWishExampleAsync(stranger, { districts: ["1-5"], body: "別節點的範例" }, { ...PG, exec, strict: true, now: NOW });
+  assert.equal(saved.body, "別節點的範例", "PG 寫入必須成功");
+  assert.equal(
+    exec.raw.prepare("SELECT COUNT(*) AS n FROM wish_room_example WHERE user_id = ?").get(stranger).n, 1,
+    "PG 上必須有一列",
+  );
+  assert.equal(
+    disk.prepare("SELECT COUNT(*) AS n FROM wish_room_example WHERE user_id = ?").get(stranger).n, 0,
+    "本機沒有這個帳號時不必（也不能）寫本機那一份",
+  );
+});

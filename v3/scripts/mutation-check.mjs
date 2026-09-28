@@ -581,8 +581,8 @@ const WISHLIFECYCLE_MUTATIONS = [
   {
     name: "範例只寫 PG，不讓本機 handle 追上",
     file: WEX_SRC,
-    from: "    sqliteHandle().prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);\n",
-    to: "",
+    from: "    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {",
+    to: "    if (false) {",
     expect: "兩個 store 的 payload",
   },
   {
@@ -591,6 +591,13 @@ const WISHLIFECYCLE_MUTATIONS = [
     from: "const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));",
     to: "const rowsOf = (raw) => raw;",
     expect: "兩種形狀",
+  },
+  {
+    name: "本機沒有這個帳號也硬寫本機那一份（PG 寫成功卻回 500：本機 FK）",
+    file: WEX_SRC,
+    from: "    const local = sqliteHandle();\n    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {\n      local.prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);\n    }",
+    to: "    sqliteHandle().prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);",
+    expect: "本機沒有這個帳號時仍要成功",
   },
   {
     name: "範例的聯絡人快照不查 PG（用自己的聯絡人會變空白）",
