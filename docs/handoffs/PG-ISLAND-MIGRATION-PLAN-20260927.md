@@ -1191,7 +1191,7 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
-## 二之負七、2026-09-28 第三十八批（**只做範圍界定，尚未實作**）：`getUserById` 與 `ensureUser`
+## 二之負一、2026-09-28 第三十八批：`getUserById`／`ensureUser` 的範圍界定（第三十八批本身是文件）
 
 合併 #531～#533 之後，缺口的前兩大卡點換人了：
 
@@ -1343,7 +1343,7 @@ throws 只可能發生在「呼叫端已 await」或「參數已備好」的情�
 **下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
 再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
 
-## 二之負八、2026-09-28 第三十九批：個人旗標讀取（`loadFlags`／`loadFlagMap`）
+## 二之負二、2026-09-28 第三十九批：個人旗標讀取（`loadFlags`／`loadFlagMap`）
 
 ### 39.1 先做了「模組 × 卡點 × 影響路由」的量測，才挑這一包
 
@@ -1385,6 +1385,43 @@ throws 只可能發生在「呼叫端已 await」或「參數已備好」的情�
 順手踩到兩個夾具問題（都已寫進測試註解）：`user_listing_flags` 有 **FK 到 `users`**，
 所以測試使用者要先種、夾具也要鏡射 `users` 的表定義，否則會是
 `FOREIGN KEY constraint failed`／`no such table: main.users`。
+
+### 38.7 🚨 量測推翻了 `ensureUser` 那一項：它是**尺規的偽陽性**（不必移植）
+
+第 38.1／38.2 節把 `ensureUser`（22 條路由）列為第二個要處理的卡點，並說它需要政策決定
+（「PG 模式要不要建帳號」）。**實際追完之後，它根本不需要移植。**
+
+#### 可重跑的證據
+
+`ensureUser` 在全站的呼叫點只有三個，**沒有任何一個在路由路徑上**：
+
+```
+personalFlags.js:23        export function ensureUser(conn, email, …)   ← 定義（吃 handle）
+db.js:430                  ensureUser as ensureUserOn                  ← 匯入
+db.js:836                  ensureUserOn(db, email, opts)               ← db.js 的同步包裝（無人呼叫）
+db.js:841                  cachedDefaultUserId = ensureUserOn(db, …)   ← **只在 defaultUserId() 內**
+db.js:8530                 bootstrapAdminUserOn(db, …, { ensureUser: ensureUserOn })  ← 當參數傳
+members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只在 bootstrap 且由參數傳入時
+```
+
+- `db.js:841` 是**模組層 `defaultUserId()`** 裡的一行；`ensureUser(email)`（`:836`）**沒有呼叫端**。
+- 那 22 條路由一條都沒有直接呼叫 `ensureUser`；其中 3 條被列成「唯一卡點」
+  （`POST /api/admin/crm/contacts`、`…/contacts/:id/notes`、`POST /api/admin/similarity/:id/review`），
+  但三條的 handler 都是 **async**、走 `crmAsync`／`*Async` 路徑，
+  而 `actorUserId` 是**由 session 帶進來的參數**——它們從來不會碰到 `ensureUser`。
+
+⇒ 尺規把它算成那 3 條的卡點，是因為它掃到 **`db.js` 內有一個 `ensureUser(` 呼叫**，
+再沿 db.js 的模組層邊傳遞出去——與第三十批那個
+`saveSiteBudget`／`budgetStore()` 的偽陽性是**同一類（經過一層 facade／模組層）**。
+
+#### 結論
+
+1. **不要為 `ensureUser` 做 PG 版**，也不需要 Owner 決定「PG 要不要建帳號」——
+   那條路徑在正式站（PG 模式）根本不會被走到。
+2. 缺口的 22 條**含 `ensureUser`** 的路由，真正要清的是它們**其他的**卡點
+   （`countWatched`／`getUserById`／`sqlExcludeFixtureRows`…）。
+3. **第三十八批 38.2 的順序建議據此修正**：第 3 步（`ensureUser`）**刪除**；
+   力氣應該放在「一起清掉 `getUserById`＋`countWatched`＋`sqlExcludeFixtureRows` 這組共同卡點」。
 
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
