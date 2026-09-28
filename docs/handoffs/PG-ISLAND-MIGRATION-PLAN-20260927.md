@@ -1229,7 +1229,7 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 **⇒ 下一個真正該做的是 `getDemandPost()` → PG**（它會一次解鎖 `GET /api/demand/:id`、
 `GET /api/wish-rooms/:id`、`GET /api/public/wish-room/:id` 三條，並讓上面兩個封包可以還原成整則）。
 
-### 30.3 這批抓到的兩個「測試自己的錯」
+### 30.3 這批我自己的測試寫錯了兩次（第一次整排紅燈都紅在錯的地方）
 
 1. **回傳封包被拿來當 parity 的對照組，會掩蓋真正的差異。** 第一版測試斷言
    `deepEqual(async結果, 同步結果)`，於是紅在 `public_token`（隨機產生，兩邊不同）與
@@ -1252,14 +1252,25 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 - 已把這個錯誤類別寫成**夾具守衛**：`demand-async.test.js` 的 PG 替身現在會拒絕
   「不是 SQL 字串」的輸入，同型 bug 下次會直接紅在夾具，而不是紅在一個看起來像業務邏輯的 404。
 
-### 30.5 變異測試：7 條全殺，但前 3 條是**假 SURVIVED**
+### 30.5 兩個測試（不是人）抓到我的錯，第二次是 CI 的 live PG job
+
+**（a）離線 parity 抓到「參數遮住 `options.exec`」**（見 30.4）。
+**（b）CI 的 PostgreSQL job 抓到 live 測試自己的錯**：注入式 `exec` 直接呼叫
+`pgDriver.query(sql, …)`，但 `withFallback()` 在 `options.exec` 有值時**不會**再包
+`toPostgresSql`，而 `pgDriver.query()` **不翻譯 `?`** ⇒ PG 收到
+`SELECT id FROM demand_posts WHERE id = ?`，回 `syntax error at end of input`。
+正式站走的是 `pgDriver.query(toPostgresSql(sql), …)`，所以 live 測試現在自己套
+`toPostgresSql`。**離線夾具看不到這個**，因為 `node:sqlite` 同時接受 `?` 與 `$1`
+——這正是「live PG 測試不可省」的那條紀律又一次兌現。
+
+### 30.6 變異測試：7 條全殺，但前 3 條是**假 SURVIVED**
 
 第一輪跑出 3 條 SURVIVED，實際上都**有**對應測試失敗——是我 `expect` 寫的
 **測試名字串**與真實測試名不符（紀律 6 第 N 次）。實際失敗項與預期殺手不一致時，
 工具會誠實地把它列成「沒有失敗」而不是「殺掉了」，這一點救了這批的可信度。
 改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**。
 
-### 30.6 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
+### 30.7 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
 
 ```
 PG demand_posts 欄位 41 個（與節點 SQLite 相同）✓
@@ -1273,7 +1284,7 @@ PG demand_posts／demand_replies／demand_reports 只有 pkey，SQLite 定義的
 **補建前已先查過資料**：PG 上 `>1 open`＝0 人、重複 `public_token`＝0、`>1 draft`＝0，
 所以索引建得起來（現況 35 列：draft 2／closed 33）。live 測試會斷言這個索引真的存在。
 
-### 30.7 這批的尺規變化
+### 30.8 這批的尺規變化
 
 ```
 PG 153 → 156　MIXED 103 → 100　缺口 115 → 112
