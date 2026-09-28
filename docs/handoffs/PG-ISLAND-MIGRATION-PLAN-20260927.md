@@ -1204,6 +1204,7 @@ live PG 測試證明「現在接會錯」，退回同步版並寫明前置條件
 
 新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（11 項，全綠）＋
 `v3/test/demand-live-pg.test.js`（真 PG，CI 的 PG job 會跑，本機沒有隔離環境時 skip）。
+**CI 四個 check 全綠**（含 PostgreSQL integration）。
 
 ### 30.1 副作用刻意留在 `demand.js`（與 `closeSelfListing` 同一個處置）
 
@@ -1256,16 +1257,36 @@ live PG 測試證明「現在接會錯」，退回同步版並寫明前置條件
 - 已把這個錯誤類別寫成**夾具守衛**：`demand-async.test.js` 的 PG 替身現在會拒絕
   「不是 SQL 字串」的輸入，同型 bug 下次會直接紅在夾具，而不是紅在一個看起來像業務邏輯的 404。
 
-### 30.5 兩個測試（不是人）抓到我的錯，第二次是 CI 的 live PG job
+### 30.5 三個測試（不是人）抓到我的錯，其中兩個來自 CI 的 live PG job
 
 **（a）離線 parity 抓到「參數遮住 `options.exec`」**（見 30.4）。
-**（b）CI 的 PostgreSQL job 抓到 live 測試自己的錯**：注入式 `exec` 直接呼叫
-`pgDriver.query(sql, …)`，但 `withFallback()` 在 `options.exec` 有值時**不會**再包
-`toPostgresSql`，而 `pgDriver.query()` **不翻譯 `?`** ⇒ PG 收到
+
+**（b）CI 抓到 live 測試自己的錯（1）：注入式 runner 不翻譯 `?`。**
+注入式 `exec` 直接呼叫 `pgDriver.query(sql, …)`，但 `withFallback()` 在 `options.exec`
+有值時**不會**再包 `toPostgresSql`，而 `pgDriver.query()` **不翻譯 `?`** ⇒ PG 收到
 `SELECT id FROM demand_posts WHERE id = ?`，回 `syntax error at end of input`。
 正式站走的是 `pgDriver.query(toPostgresSql(sql), …)`，所以 live 測試現在自己套
 `toPostgresSql`。**離線夾具看不到這個**，因為 `node:sqlite` 同時接受 `?` 與 `$1`
 ——這正是「live PG 測試不可省」的那條紀律又一次兌現。
+
+**（c）CI 抓到 live 測試自己的錯（2）：我用了很大的顯式 id，把 identity 序列留在後面。**
+第一版用 `900000000x` 當測試 id，於是序列的 `max` 變成 9 億而 `next` 還是 1；
+**下一個跑到的 live 測試**（`reject-match-live-pg`）就紅在它的守衛上：
+
+```
+identity 序列落後：demand_posts.id (next=1 max=900000000401)、
+                  demand_replies.id (next=1 max=900000000501)、users.id (next=2 max=900000000303)
+```
+
+那道守衛是對的——序列落後會讓所有「不指定 id 的 INSERT」撞主鍵。
+⇒ **live 測試不要自己發明 id**：讓 identity 產生、用 `RETURNING` 取回（正式站的 INSERT 就是這樣），
+並在進入測試時 `setval` 把序列修到 `max`（上一次中途失敗也不會污染）。
+收尾刻意**不**再 `setval`：這輪的列是 identity 產生的，序列本來就前進過，刪掉列之後
+序列仍然 > max，那才是守衛要的健康狀態。
+
+**（d）另外那個 `$1` 用兩次**：`DELETE FROM demand_replies WHERE id <> $1 AND post_id = $1`
+卻傳兩個參數 ⇒ PG 回 `bind message supplies 2 parameters, but prepared statement requires 1`。
+**`?` → `$n` 是逐個出現編號，不是依值去重**——同一個值要寫兩次就要兩個編號。
 
 ### 30.6 變異測試：8 條全殺，但前 3 條是**假 SURVIVED**
 
