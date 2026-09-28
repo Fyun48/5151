@@ -1830,11 +1830,18 @@ const WOFFERS_MUTATIONS = [
 const RANALYTICS_SRC = "v3/src/rentalAnalyticsAsync.js";
 const RANALYTICS_MUTATIONS = [
   {
-    name: "upsert 改成覆蓋（不是累加）",
+    name: "累加改成覆蓋（不是 value + n）",
     file: RANALYTICS_SRC,
-    from: "    ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`;",
-    to: "    ON CONFLICT(day, metric) DO UPDATE SET value = excluded.value`;",
+    from: "      await run(ANALYTICS_UPDATE_SQL, [Number(existing.value || 0) + value, day, key]);",
+    to: "      await run(ANALYTICS_UPDATE_SQL, [value, day, key]);",
     expect: "累加",
+  },
+  {
+    name: "UPDATE 的 WHERE 不帶 metric（不同指標會互相覆蓋）",
+    file: RANALYTICS_SRC,
+    from: "export const ANALYTICS_UPDATE_SQL = \"UPDATE rental_analytics_daily SET value = ? WHERE day = ? AND metric = ?\";",
+    to: "export const ANALYTICS_UPDATE_SQL = \"UPDATE rental_analytics_daily SET value = ? WHERE day = ?\";",
+    expect: "同一天的不同指標",
   },
   {
     name: "日界線自己算（不用 taipeiDay ⇒ 跨時區會落在不同天）",

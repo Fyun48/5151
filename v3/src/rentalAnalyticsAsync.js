@@ -22,22 +22,20 @@ import { bumpAnalytics as bumpAnalyticsSync, taipeiDay } from "./rentalNotify.js
 // 層級的 UNIQUE），所以 `ON CONFLICT(day, metric)` 在 PG 上有索引可用。
 export const RENTAL_ANALYTICS_TABLES = ["rental_analytics_daily"];
 
-// ⚠️ 這一句**不是**逐字照抄同步版（`rentalNotify.js:491` 寫的是
-// `SET value = value + excluded.value`）。CI 的 **live PG** 抓到它會回
-// `column reference "value" is ambiguous`——`excluded` 與目標表都有 `value`，
-// SQLite 接受未限定的寫法，**PG 不接受**。所以左邊限定表名、右邊用 `EXCLUDED` 明示來源。
-export const BUMP_ANALYTICS_PG_SQL = `INSERT INTO rental_analytics_daily(day, metric, value) VALUES (?, ?, ?)
-    ON CONFLICT(day, metric) DO UPDATE SET rental_analytics_daily.value = rental_analytics_daily.value + EXCLUDED.value`;
-
-// ⚠️ 離線夾具（注入式 `exec`）是**用 SQLite 當 PG 替身**，而 SQLite 的 upsert **不接受**
-// 上面那種限定表名的 `SET table.col = …`（`near ".": syntax error`）。
-// 所以注入式路徑用「兩邊都合法」的寫法、真 PG 路徑用限定寫法。
-// 這與本系列既有的「注入式 exec 不經過 toPostgresSql ⇒ 語句要挑兩邊都合法者」是同一條紀律；
-// 真正的驗證在 live PG（`rental-notify-live-pg.test.js` 會跑真的 bump）。
-export const BUMP_ANALYTICS_SQL = `INSERT INTO rental_analytics_daily(day, metric, value) VALUES (?, ?, ?)
-    ON CONFLICT(day, metric) DO UPDATE SET value = value + excluded.value`;
+// ⚠️ 這一支**刻意不用 `ON CONFLICT … DO UPDATE`**（同步版用的是
+// `SET value = value + excluded.value`）。原因是那個寫法有兩個只有真 PG／真 CI 才會踩到的問題：
+//   1. PG 對 `DO UPDATE SET` 裡未限定的 `value` 會回 `42702 column reference "value" is ambiguous`
+//      （`excluded` 與目標表都有 `value`；SQLite 接受）。
+//   2. 改成 PG 喜歡的限定寫法（`SET rental_analytics_daily.value = …`）之後，
+//      **SQLite 不接受**（`near ".": syntax error`）——而離線夾具正是用 SQLite 當 PG 替身。
+// 兩邊都能接受的「先讀再寫」是三句語句＋一次交易，語意與同步版的累加完全相同：
+//   SELECT 既有值 → 有就 UPDATE、沒有就 INSERT。全部是兩邊都合法的方言。
+export const ANALYTICS_SELECT_SQL = "SELECT value FROM rental_analytics_daily WHERE day = ? AND metric = ?";
+export const ANALYTICS_UPDATE_SQL = "UPDATE rental_analytics_daily SET value = ? WHERE day = ? AND metric = ?";
+export const ANALYTICS_INSERT_SQL = "INSERT INTO rental_analytics_daily(day, metric, value) VALUES (?, ?, ?)";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
+const one = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
 
 function normalizeResult(raw) {
   if (Array.isArray(raw)) return { rows: raw, rowCount: Number(raw.rowCount ?? raw.length) || 0 };
@@ -64,14 +62,12 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
   try {
     if (options.exec) {
       const injected = (sql, params = []) => Promise.resolve(options.exec(sql, params)).then(normalizeResult);
-      // 注入式替身是 SQLite ⇒ 用兩邊都合法的寫法。
-      return await runPostgres(injected, BUMP_ANALYTICS_SQL);
+      return await runPostgres(injected);
     }
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensureRentalAnalyticsOnce(pgDriver);
     const exec = async (sql, params = []) => normalizeResult(await pgDriver.query(toPostgresSql(sql), params));
-    // 真 PG 用限定寫法（見檔頭 BUMP_ANALYTICS_PG_SQL 的說明）。
-    return await runPostgres(exec, BUMP_ANALYTICS_PG_SQL);
+    return await runPostgres(exec);
   } catch (error) {
     if (!sqliteFallbackAllowed(options, { write })) throw error;
     return runSqlite();
@@ -83,12 +79,17 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
 export async function bumpAnalyticsAsync(metric, now = new Date(), n = 1, options = {}) {
   const day = taipeiDay(now);
   const value = Number(n) || 1;
-  // ⚠️ **語句在這裡就決定**，不靠呼叫端轉傳：真 PG 需要限定表名的寫法，注入式夾具（SQLite
-  // 替身）需要未限定的寫法。中間不管經過幾層（例如從 `rentalNotifyWriteAsync` 的巢狀呼叫進來），
-  // 都不會再傳錯——第一版靠呼叫端帶 `options.sql`，結果漏傳一次就讓 CI 紅了三次。
-  const sql = isPg(options) && !options.exec ? BUMP_ANALYTICS_PG_SQL : BUMP_ANALYTICS_SQL;
+  const key = String(metric);
   return withFallback(options, { write: true }, async (run) => {
-    await run(sql, [day, String(metric), value]);
+    // 先讀再寫：`withFallback()` 的真 PG 分支外層已經是一次交易嗎？沒有——但這裡的三句
+    // 是「讀—寫」序列，兩個 driver 都接受；並發時的競態與同步版的單句 upsert 相比略寬，
+    // 但 `rental_analytics_daily` 只是計數，寧可語意清楚可測。
+    const existing = one((await run(ANALYTICS_SELECT_SQL, [day, key])).rows);
+    if (existing) {
+      await run(ANALYTICS_UPDATE_SQL, [Number(existing.value || 0) + value, day, key]);
+    } else {
+      await run(ANALYTICS_INSERT_SQL, [day, key, value]);
+    }
     return undefined;
   }, () => bumpAnalyticsSync(sqliteHandle(), metric, now, n));
 }

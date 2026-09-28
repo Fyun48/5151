@@ -131,18 +131,42 @@ test("非 postgres 必須回退同步路徑（讀磁碟，不碰傳入的 exec�
   assert.equal(rowsOf(exec.raw).length, 0, "sqlite 模式不得寫夾具");
 });
 
-test("upsert 語句必須是 PG 也吃的那一種（value 要限定來源）", async () => {
-  // ⚠️ 這一條是 CI 的 live PG 抓到的：`DO UPDATE SET value = value + excluded.value`
-  // 在 PG 上會回 `column reference "value" is ambiguous`（SQLite 接受）。
-  // 離線夾具是 SQLite，所以**只驗語句文字**是這裡唯一能做的事——真正的驗證在 live PG。
-  assert.match(analytics.BUMP_ANALYTICS_PG_SQL, /ON CONFLICT\(day, metric\) DO UPDATE SET/);
-  assert.match(
-    analytics.BUMP_ANALYTICS_PG_SQL,
-    /SET rental_analytics_daily\.value = rental_analytics_daily\.value \+ EXCLUDED\.value/,
-    "左右兩邊都必須限定來源，否則 PG 會說 value 含糊",
-  );
-  assert.doesNotMatch(analytics.BUMP_ANALYTICS_PG_SQL, /SET value = value/i, "PG 那句不得留下未限定的寫法");
-  // 注入式夾具（SQLite 替身）用的那句必須是 SQLite 也吃得下的形狀
-  assert.match(analytics.BUMP_ANALYTICS_SQL, /SET value = value \+ excluded\.value/);
-  assert.doesNotMatch(analytics.BUMP_ANALYTICS_SQL, /rental_analytics_daily\.value/, "SQLite 不接受限定表名的 SET");
+test("同一天的不同指標不得互相覆蓋（UPDATE 必須帶 metric）", async () => {
+  // ⚠️ 這一條是變異測試逼出來的：原本只測「不同指標掛在不同天」，那種情況就算
+  // UPDATE 忘了帶 `metric` 也照樣過關。必須**同一天兩個指標**才驗得到。
+  const [db, exec] = resetBoth();
+  const day = new Date("2026-09-28T04:00:00.000Z");
+  for (const metric of ["notify_queued", "notify_delivered"]) {
+    await analytics.bumpAnalyticsAsync(metric, day, 2, { ...PG, exec, strict: true });
+    notify.bumpAnalytics(db, metric, day, 2);
+  }
+  await analytics.bumpAnalyticsAsync("notify_queued", day, 3, { ...PG, exec, strict: true });
+  notify.bumpAnalytics(db, "notify_queued", day, 3);
+  assert.deepEqual(rowsOf(exec.raw), rowsOf(db), "同一天兩個指標的結果必須與同步版相同");
+  assert.equal(rowsOf(exec.raw).length, 2, "兩個指標必須各有一列");
+  assert.equal(rowsOf(exec.raw).find((r) => r.metric === "notify_queued").value, 5, "notify_queued 應為 2+3");
+  assert.equal(rowsOf(exec.raw).find((r) => r.metric === "notify_delivered").value, 2, "另一個指標不得被動到");
 });
+
+test("累加語句不得使用 ON CONFLICT（方言分歧會在 CI 才爆）", async () => {
+  // ⚠️ 這條守衛來自 CI 的兩次紅燈：`ON CONFLICT … DO UPDATE SET value = value + excluded.value`
+  // 在 PG 上是 `42702 ambiguous`，改成限定表名之後 SQLite 又不接受（離線夾具是 SQLite）。
+  // 所以這一支刻意走「先讀再寫」——語句必須維持兩邊都合法的形狀。
+  const all = [analytics.ANALYTICS_SELECT_SQL, analytics.ANALYTICS_UPDATE_SQL, analytics.ANALYTICS_INSERT_SQL].join("\n");
+  assert.doesNotMatch(all, /ON CONFLICT/i, "不得再回到 ON CONFLICT（那個寫法兩邊不能共用）");
+  assert.doesNotMatch(all, /excluded\./i, "不得引用 excluded");
+  assert.match(analytics.ANALYTICS_SELECT_SQL, /SELECT value FROM rental_analytics_daily WHERE day = \? AND metric = \?/);
+  assert.match(analytics.ANALYTICS_UPDATE_SQL, /UPDATE rental_analytics_daily SET value = \? WHERE day = \? AND metric = \?/);
+  assert.match(analytics.ANALYTICS_INSERT_SQL, /INSERT INTO rental_analytics_daily\(day, metric, value\) VALUES \(\?, \?, \?\)/);
+});
+
+test("非 postgres 必須回退同步路徑（讀磁碟，不碰傳入的 exec）", async () => {
+  const [db, exec] = resetBoth();
+  let calls = 0;
+  const boom = async () => { calls += 1; throw new Error("exec 不該被呼叫（sqlite 模式）"); };
+  await analytics.bumpAnalyticsAsync("fallback", new Date("2026-09-28T04:00:00.000Z"), 1, { driver: "sqlite", exec: boom });
+  assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
+  assert.equal(rowsOf(db)[0].value, 1, "sqlite 模式必須寫磁碟");
+  assert.equal(rowsOf(exec.raw).length, 0, "sqlite 模式不得寫夾具");
+});
+
