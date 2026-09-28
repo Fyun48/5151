@@ -2564,6 +2564,55 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 第一版把它的 email 改掉，`DELETE FROM users` 立刻 `FOREIGN KEY constraint failed`）；
 `listing_import` **沒有** FK，所以「帳號已被刪除」的孤兒列可以照種。
 
+## 二之負十六、2026-09-28 第四十六批：檢舉站內刊登／後台隱藏
+
+### 46.1 範圍與投報率
+
+第四十五批之後重跑量測，這一包是剩下的 1 條單元裡**同一組功能**的兩條路由：
+
+| 路由 | 進入點 |
+|---|---|
+| `POST /api/self-listings/:id/report` | `reportSelfListingAsync` |
+| `POST /api/admin/self-listings/:id/hide` | `hideSelfListingAsync` |
+
+尺規：缺口 **76 → 74**，PG **192 → 194**。
+
+### 46.2 這一包的四個坑
+
+1. **達門檻才隱藏**（`SELF_REPORT_HIDE_AFTER = 2`）：門檻是**共用政策**，parity 抓不到
+   「兩邊一起被改壞」，所以測試除了比對兩個 driver，還對門檻值本身下斷言
+   （變異：門檻改成 1 或 9999 都要被殺掉）。
+2. **PG 的 `listing_reports` 沒有唯一鍵**（SQLite 的 DDL 只有一般索引）⇒「同一人不重複檢舉」
+   只能靠**先查再寫**；把那段查詢拿掉不會有任何錯誤，只會多一列，所以要單獨驗。
+3. **停權寫的是 `users.self_ban_until`，而讀它的是同步路徑**：`assertCanPublish()`（由仍在本機的
+   `createSelfListing()` 呼叫）讀**本機** handle ⇒ 兩個 store 都要寫，否則「被停權的人換一台
+   節點就又能上傳」。測試直接呼叫同步的建立函式驗「本機真的被停權」，並補一組對照
+   （沒被停權的人必須仍可上傳）。
+4. 🚨 **`selfBanStamp()` 的時間解析**：模組內的 `nowMs()` 只認 `Date` 與數字，
+   餵 ISO **字串**時 `Number("2026-…")` 是 NaN ⇒ 靜默退回 `Date.now()`
+   ⇒ PG 版與同步版的停權時間差了好幾個小時（parity 測試當場紅）。
+   已改成先 `Date.parse()`、解析不出來才用當下（同步路徑一向傳 `Date`，所以行為不變）。
+
+**順手修掉一個既有的同類缺陷**：`closeSelfListingAsync()` 原本**只寫 PG**
+（`listings` 的狀態是本機同步瀏覽路徑 `keepSelfListingForViewer()` 在讀的）⇒ 補上本機鏡射。
+⚠️ 那個測試檔原本「先跑 async、再跑同步版」，所以本機的 `closed` 其實是**同步版**寫的
+——把 async 版的本機鏡射拿掉也照樣綠。已加一條「只跑 async 版」的測試，變異才殺得死
+（這一條是變異測試逼出來的，不是為了覆蓋率）。
+
+**檢舉列本身不需要本機鏡射**：`listing_reports` 在島上沒有任何同步讀者（唯一的讀者是這一支的
+門檻計數，而它已經在 PG 上跑）——「兩個 store 都寫」的紀律要按**讀者在哪**決定，不是無條件套用。
+
+### 46.3 測試
+
+- `v3/test/self-listing-report-async.test.js`（**6 項全綠**）：第一筆不隱藏／第二筆達門檻
+  （檢舉列、`listings` 狀態、停權時間三者在兩個 store 都相同）、重複檢舉不得寫第二列、
+  自己的刊登／找不到／未登入的錯誤形狀、後台隱藏（含 404）、**停權後同步的建立路徑必須擋**
+  （含對照組）、非 postgres 走同步路徑。變異 **8 條全殺**。
+- `v3/test/close-self-listing-async.test.js` 追加「PG 分支自己就要把本機那一列關掉」，
+  該檔變異 **4 條全殺**。
+- `v3/test/self-listing-report-live-pg.test.js`（新，CI 的 PG job 會跑）：真 PG 上的門檻、
+  重複檢舉、隱藏與 `hidden`／`hidden_at`、停權時間（由注入的 now 算出 2026-10-12）、後台隱藏。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2574,14 +2623,20 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十五批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十六批）** |
 |---|---:|---:|
 | SQLite | 95 | **10** |
-| MIXED | — | **66** |
+| MIXED | — | **64** |
 | 無直接DB | — | **20** |
-| PG | 22 | **192** |
-| **缺口（SQLite＋MIXED）** | — | **76** |
+| PG | 22 | **194** |
+| **缺口（SQLite＋MIXED）** | — | **74** |
 
+> 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
+> 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`
+> 給子程序 **30 秒**上限（2105 列 ＋ 路線計算），超時時 `result.status` 是 `null`
+> ⇒ 斷言 `null !== 0`。本機與 CI 都會中，重跑就好（`gh run rerun <id> --failed`）；
+> 不是程式缺陷，但**看到它紅時不要往程式面找**。
+>
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
 >   ＋ `resolveSession()` 中介層每請求解析一次，`readSession()` 改讀 `req` 上的快取）。

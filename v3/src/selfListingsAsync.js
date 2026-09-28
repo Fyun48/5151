@@ -23,12 +23,19 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import {
+  BAN_SELF_PUBLISHER_SQL,
+  HIDE_SELF_LISTING_SQL,
+  REPORT_COUNT_SQL,
+  REPORT_EXISTS_SQL,
+  REPORT_INSERT_SQL,
+  SELF_REPORT_HIDE_AFTER,
   decorateSelfListing,
   getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
   getSelfListing as getSelfListingSync,
   getSelfRow as getSelfRowSync,
   httpError,
+  selfBanStamp,
 } from "./selfListings.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
@@ -110,8 +117,6 @@ export async function getSelfListingAsync(postId, { viewerId = 0, now = new Date
 // 而且同步版也是 try/catch 包住（清掃失敗不得擋住關閉）。等 wishOffers 移植時再一起改。
 export const CLOSE_SELF_LISTING_SQL =
   "UPDATE listings SET self_status = 'closed', last_event = 'offline', last_seen_at = ? WHERE post_id = ?"; // selfListings.js:1226
-export const HIDE_SELF_LISTING_SQL =
-  "UPDATE listings SET self_status = 'hidden', hidden = 1, hidden_at = ? WHERE post_id = ?"; // selfListings.js:1236
 
 export async function closeSelfListingAsync(userId, postId, { admin = false, now = new Date(), ...options } = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") {
@@ -126,6 +131,61 @@ export async function closeSelfListingAsync(userId, postId, { admin = false, now
   }
   const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
   await exec(CLOSE_SELF_LISTING_SQL, [stamp, row.post_id]);
+  // 與 `hideSelfListingAsync()` 同一個理由：本機的同步瀏覽路徑讀的是本機 `listings`。
+  sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);
   try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住關閉 */ }
   return getSelfListingAsync(row.post_id, { viewerId: userId, ...options, exec });
+}
+
+// ---- 檢舉站內刊登／後台隱藏（第四十六批）----
+//
+// 對應 `selfListings.js` 的 `reportSelfListing()`（1249）與 `hideSelfListing()`（1238）。
+// 兩支都只碰 `listings` 與 `listing_reports`，語句與政策（達門檻才隱藏、停權幾天）全部共用。
+//
+// ⚠️ **停權寫的是 `users.self_ban_until`**（`banSelfPublisher()`）。PG 模式下 users 在 PG，
+// 但**同步**的建立路徑（`createSelfListing()` → `assertCanPublish()`）讀的是本機 handle
+// ⇒ 兩個 store 都要寫；只寫 PG 會讓被停權的人換一台節點就又能上傳。
+export async function hideSelfListingAsync(postId, { now = new Date(), ...options } = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    return (await import("./db.js")).hideSelfListing(postId);
+  }
+  const exec = await pgExec(options);
+  const row = await getSelfRowAsync(postId, { ...options, exec });
+  if (!row) throw httpError("找不到這則站內刊登", 404);
+  const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
+  await exec(HIDE_SELF_LISTING_SQL, [stamp, row.post_id]);
+  // **兩個 store 都寫**：`listings` 的狀態是本機**同步**瀏覽路徑（`keepSelfListingForViewer()`）
+  // 在讀的，只寫 PG 會讓「已隱藏」的刊登還留在本機的清單裡。
+  sqliteHandle().prepare(HIDE_SELF_LISTING_SQL).run(stamp, row.post_id);
+  // 跨模組的 hook（許願出價清掃）仍用本機 handle：那個模組還沒移植（與 closeSelfListingAsync 同）。
+  try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住隱藏 */ }
+  const until = selfBanStamp(now);
+  await exec(BAN_SELF_PUBLISHER_SQL, [until, row.listed_by_user_id]);
+  try { sqliteHandle().prepare(BAN_SELF_PUBLISHER_SQL).run(until, row.listed_by_user_id); } catch { /* 本機可能還沒有這一欄 */ }
+  return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };
+}
+
+export async function reportSelfListingAsync(userId, postId, reason = "", { now = new Date(), ...options } = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    return (await import("./db.js")).reportSelfListing(userId, postId, reason);
+  }
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能檢舉", 401);
+  const exec = await pgExec(options);
+  const row = await getSelfRowAsync(postId, { ...options, exec });
+  if (!row) throw httpError("找不到這則站內刊登", 404);
+  if (Number(row.listed_by_user_id) === uid) throw httpError("不能檢舉自己的刊登");
+  const already = await exec(REPORT_EXISTS_SQL, [row.post_id, uid]);
+  const alreadyRows = Array.isArray(already) ? already : (already?.rows || []);
+  if (alreadyRows[0]) return { ok: true, already: true };
+  const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
+  await exec(REPORT_INSERT_SQL, [row.post_id, uid, String(reason || "").trim().slice(0, 200), stamp]);
+  const counted = await exec(REPORT_COUNT_SQL, [row.post_id]);
+  const countRows = Array.isArray(counted) ? counted : (counted?.rows || []);
+  const count = Number(countRows[0]?.n) || 0;
+  const hide = count >= SELF_REPORT_HIDE_AFTER;
+  // 達門檻才隱藏（與同步版同一個門檻常數）；`hideSelfListingAsync` 內部再讀一次列，
+  // 多一次查詢但語意與同步版完全相同（同步版也是 `hideSelfListing()` 自己再取列）。
+  if (hide) await hideSelfListingAsync(row.post_id, { now, ...options, exec });
+  return { ok: true, hidden: hide };
 }
