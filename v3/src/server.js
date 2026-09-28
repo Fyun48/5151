@@ -180,8 +180,6 @@ import {
   saveMatchSubscriptionFor,
   applyUnsubscribeTokenFor,
   recordShareEventFor,
-  getCompletionSurveyFor,
-  submitCompletionSurveyFor,
   rentalOpsSummaryFor,
   rentalOpsDrilldownFor,
   sharePageExtrasFor,
@@ -314,6 +312,11 @@ import {
 } from "./wishOffersAsync.js";
 import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
 import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
+// 完成問卷（survey）的 PG 島嶼入口：讀取、送出，以及 admin 的 survey_breakdown 零件。
+import {
+  getCompletionSurveyAsync,
+  submitCompletionSurveyAsync,
+} from "./rentalSurveyAsync.js";
 // 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
 import {
   applyRentalCatalogTemplateAsync,
@@ -2919,20 +2922,20 @@ app.put("/api/self-listings/:id/match-subscription", (req, res) => {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.get("/api/wish-rooms/:id/survey", (req, res) => {
+app.get("/api/wish-rooms/:id/survey", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getCompletionSurveyFor(session.userId, req.params.id));
+    res.json(await getCompletionSurveyAsync(session.userId, req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.post("/api/wish-rooms/:id/survey", (req, res) => {
+app.post("/api/wish-rooms/:id/survey", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(submitCompletionSurveyFor(session.userId, req.params.id, req.body || {}));
+    res.json(await submitCompletionSurveyAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
