@@ -36,7 +36,7 @@ export const ACTIVE_IMPORT_STATUSES = [
   IMPORT_STATUSES.READY_FOR_REVIEW,
 ];
 
-const IMPORT_DECLARATION_TYPE = "external_import_declaration";
+export const IMPORT_DECLARATION_TYPE = "external_import_declaration";
 
 function httpError(message, status = 400, code = "") {
   const err = new Error(message);
@@ -155,8 +155,8 @@ export function findActiveImportBySource(db, userId, normalizedUrl) {
   ).get(Number(userId), normalizedUrl, ...ACTIVE_IMPORT_STATUSES));
 }
 
-export function importMeta(db, { plan = "free", now = new Date() } = {}) {
-  const doc = getEffectiveDocument(db, IMPORT_DECLARATION_TYPE, { now });
+// 純組裝：PG 分支（listingImportAsync.js）用同一份，所以形狀不可能漂移。
+export function importMetaShape(doc, { plan = "free" } = {}) {
   return {
     sponsor: isSponsorPlan(plan),
     declaration: publicDocumentView(doc),
@@ -167,6 +167,10 @@ export function importMeta(db, { plan = "free", now = new Date() } = {}) {
       { id: "5168", hosts: ["rent.houseprice.tw"], url_hint: "https://rent.houseprice.tw/house/16705651" },
     ],
   };
+}
+
+export function importMeta(db, { plan = "free", now = new Date() } = {}) {
+  return importMetaShape(getEffectiveDocument(db, IMPORT_DECLARATION_TYPE, { now }), { plan });
 }
 
 function assertOwner(row, userId) {

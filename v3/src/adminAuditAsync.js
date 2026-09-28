@@ -12,6 +12,7 @@
 //     SELECT id FROM admin_audit ORDER BY id DESC LIMIT -1 OFFSET ?
 //   `LIMIT -1` 是 SQLite 的「無上限」寫法，**PostgreSQL 不接受**，而 toPostgresSql 不會轉譯它。
 //   所以 PG 分支用不帶 LIMIT 的版本（PG 的 OFFSET 語意相同）。
+import { noteAuditFailure } from "./adminAuditHealth.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -46,6 +47,16 @@ async function pgExec(options = {}) {
 // ADMIN_AUDIT_MAX_ENTRIES 的舊資料刪掉。
 export async function appendAdminAuditAsync(params = {}, options = {}) {
   if (!isPg(options)) return appendAdminAuditSync(params);
+  try {
+    return await writeAdminAuditPg(params, options);
+  } catch (error) {
+    // 契約不變（仍然往外丟，由呼叫端決定要不要擋管理操作），但失敗一定留下痕跡。
+    noteAuditFailure(error);
+    throw error;
+  }
+}
+
+async function writeAdminAuditPg(params, options) {
   const entry = buildAuditEntry(params);
   const exec = await pgExec(options);
   await exec(INSERT_SQL, [

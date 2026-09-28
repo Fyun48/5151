@@ -81,7 +81,9 @@ test("支持本站 entry and sponsor ways come from comms instead of a dead-ende
   // 後台「贊助連結」是公開資訊：訪客也要拿得到，否則「支持本站」點進去只有說明沒有出口。
   assert.match(comms, /sponsor_links: Array\.isArray\(sponsorLinks\)/);
   assert.match(comms, /supportPresentation\(cfg, sponsorOffer, \{ \.\.\.\(user \|\| \{\}\), sponsorLinks \}\)/);
-  assert.match(server, /const publicSponsorOffer = publicSponsorSettings\(\{\}\);/);
+  // 2026-09-27：改為 driver-aware 的 `publicSponsorSettingsAsync`（PG 模式下讀 PG）。
+  // 意圖不變——公開贊助資訊仍然來自通訊設定、訪客也拿得到；只是換成不會讀節點本機檔案的那個入口。
+  assert.match(server, /const publicSponsorOffer = await publicSponsorSettingsAsync\(\{\}\);/);
   assert.match(server, /sponsorLinks: publicSponsorOffer\.links/);
   // 前台把連結畫進帳號區，並由通訊設定的入口開關決定桌機 header 的「支持本站」。
   assert.match(html, /support\.sponsor_links/);

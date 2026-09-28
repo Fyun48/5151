@@ -67,7 +67,7 @@ export function assertSupportCheckoutAllowed(ip, now = Date.now()) {
   }
 }
 
-function parseJson(text, fallback) {
+export function parseJson(text, fallback) {
   if (!text) return fallback;
   try {
     const value = JSON.parse(text);
@@ -87,7 +87,7 @@ function publicSponsorWays(db) {
   }
 }
 
-function cleanText(value, max) {
+export function cleanText(value, max) {
   const text = sanitizeDocumentText(value, max);
   if (containsUnsafeMarkup(text)) {
     throw httpError("內容含有不安全標記");
@@ -95,13 +95,13 @@ function cleanText(value, max) {
   return text;
 }
 
-function bool01(value, fallback = 0) {
+export function bool01(value, fallback = 0) {
   if (value === true || value === 1 || value === "1") return 1;
   if (value === false || value === 0 || value === "0") return 0;
   return fallback;
 }
 
-function defaultDraft() {
+export function defaultDraft() {
   return {
     copy: { ...DEFAULT_PAGE_COPY },
     show_goal: true,
@@ -278,7 +278,7 @@ export function publishSupportConfig(db, now = new Date()) {
   return adminSupportConfig(db);
 }
 
-function costRow(row) {
+export function costRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -296,7 +296,7 @@ function costRow(row) {
   };
 }
 
-function costActiveInMonth(row, monthStart, monthEnd) {
+export function costActiveInMonth(row, monthStart, monthEnd) {
   const start = row.start_date || row.start_at || "";
   const end = row.end_date || row.end_at || "";
   if (start && start > monthEnd) return false;
@@ -379,7 +379,7 @@ export function updateSupportCost(db, id, body = {}, now = new Date()) {
   return costRow(db.prepare("SELECT * FROM support_operating_cost WHERE id=?").get(id));
 }
 
-function tierRow(row) {
+export function tierRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -487,12 +487,12 @@ export function updateSupportProvider(db, id, body = {}, now = new Date()) {
   return adminProviderView(db.prepare("SELECT * FROM support_provider WHERE id=?").get(id));
 }
 
-function activeCheckoutProvider(db) {
+export function activeCheckoutProvider(db) {
   return db.prepare("SELECT * FROM support_provider WHERE is_active=1 AND page_url!='' ORDER BY is_default DESC, id ASC LIMIT 1").get()
     || db.prepare("SELECT * FROM support_provider WHERE is_active=1 ORDER BY is_default DESC, id ASC LIMIT 1").get();
 }
 
-function txRow(row) {
+export function txRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -515,7 +515,7 @@ function txRow(row) {
   };
 }
 
-function publicThanksRow(row) {
+export function publicThanksRow(row) {
   if (!row || Number(row.anonymous) === 1) {
     return { name: "匿名支持者", amount: null, message: "" };
   }
@@ -603,7 +603,7 @@ export function updateSupportTransaction(db, id, body = {}, now = new Date()) {
   return txRow(db.prepare("SELECT * FROM support_transaction WHERE id=?").get(id));
 }
 
-function sponsorRow(row, now = new Date()) {
+export function sponsorRow(row, now = new Date()) {
   if (!row) return null;
   const resolved = resolveSponsorStatus(row, now);
   return {
@@ -698,7 +698,7 @@ export function publicActiveSponsors(db, now = new Date()) {
     }));
 }
 
-function ctaRow(row) {
+export function ctaRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -866,7 +866,7 @@ export function recordSupportEvent(db, kind, { userId = null, guestKey = "", met
   return { ok: true };
 }
 
-function eventCounts(db, from, to) {
+export function eventCounts(db, from, to) {
   const rows = db.prepare(`
     SELECT kind, COUNT(*) AS n
     FROM support_event
@@ -878,7 +878,7 @@ function eventCounts(db, from, to) {
   return out;
 }
 
-function periodBounds(period, now = new Date(), custom = {}) {
+export function periodBounds(period, now = new Date(), custom = {}) {
   const ts = new Date(now).getTime();
   if (period === "7d") return { from: iso(new Date(ts - 7 * 86400000)), to: iso(now) };
   if (period === "30d") return { from: iso(new Date(ts - 30 * 86400000)), to: iso(now) };
@@ -924,7 +924,7 @@ export function supportDashboard(db, { period = "month", from, to, now = new Dat
   };
 }
 
-function dailyBars(txs, from, to) {
+export function dailyBars(txs, from, to) {
   const start = new Date(from);
   const end = new Date(to);
   const days = [];

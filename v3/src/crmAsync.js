@@ -483,3 +483,26 @@ export function setTodoDoneAsync(todoId, done, opts = {}, options = {}) {
   );
 }
 
+
+// 對應 `db.js:1999 setCrmModuleEnabled()` → `crm.js:132 setCrmEnabled()`。
+//
+// 🚨 **不能用 `settingsKvAsync`**：`crm.js` 的 `setting()`／`setSetting()` 走原生 SQL，
+// 值是**原始字串** `"1"`／`"0"`（`isCrmEnabled()` 就是比對 `!== "0"`），
+// 而 `setSiteSettingAsync` 會 `JSON.stringify`，存進去會變成含引號的字串 ⇒ 開關永遠無效。
+// 這與 remote-cs 那個鍵是同一個坑（見交接紀律 11）。
+export const CRM_ENABLED_UPSERT_SQL =
+  "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
+export async function setCrmEnabledAsync(enabled, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    const { setCrmModuleEnabled } = await import("./db.js");
+    return setCrmModuleEnabled(Boolean(enabled));
+  }
+  return withFallback(options, async (exec) => {
+    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "1" : "0"]);
+    return crmModuleAsync(options);
+  }, async () => {
+    const { setCrmModuleEnabled } = await import("./db.js");
+    return setCrmModuleEnabled(Boolean(enabled));
+  });
+}

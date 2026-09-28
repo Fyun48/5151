@@ -41,7 +41,6 @@ import {
   countOpenSelfListings,
   issueVerifyToken,
   confirmVerifyToken,
-  rejectSuspectedMatch,
   confirmSuspectedMatch,
   listPublicListings,
   listPublicListingsFast,
@@ -141,7 +140,6 @@ import {
   createDemand,
   closeDemand,
   replyDemand,
-  reportDemandItem,
   updateWishRoomFor,
   publishWishRoomFor,
   reopenWishRoomFor,
@@ -294,7 +292,96 @@ import {
   updateCampaign,
 } from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
-import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, sessionCookie, verifyLogin } from "./auth.js";
+import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin } from "./auth.js";
+// 刊登生產力工具（說明範本／聯絡人）的 PG 島嶼入口。
+// `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
+// 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
+import { listingToolsMeta } from "./listingTools.js";
+import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
+import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+import { importMetaAsync } from "./listingImportAsync.js";
+import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
+import { setCrmEnabledAsync } from "./crmAsync.js";
+import { deleteWishExampleAsync, getWishExampleAsync } from "./wishExampleAsync.js";
+import { closeSelfListingAsync } from "./selfListingsAsync.js";
+// 許願房檢舉的 PG 島嶼入口。`demandAsync.js` 另有 `addDemandReplyAsync`／`closeDemandPostAsync`，
+// 但這兩條路由**還沒接線**（要等 `getDemandPost()` 先搬上 PG，理由寫在 server.js 的 handler 上）。
+import { reportDemandAsync } from "./demandAsync.js";
+import { getRemoteCsControlAsync, setRemoteCsStopAsync } from "./siteCommandAsync.js";
+import { getWishConditionsAsync, saveWishConditionsAsync } from "./rentalCatalogAsync.js";
+// 租屋目錄的 PG 島嶼入口（目錄本體是 settings 裡的 JSON blob）。
+import {
+  applyRentalCatalogTemplateAsync,
+  deleteRentalCatalogTemplateAsync,
+  getRentalCatalogAsync,
+  getRentalCatalogDraftAsync,
+  getRentalCatalogTemplatesAsync,
+  getRentalMarketplaceFlagsAsync,
+  mutateRentalCatalogAsync,
+  publishRentalCatalogDraftAsync,
+  renameRentalCatalogTemplateAsync,
+  rentalMatchAdminRulesAsync,
+  saveRentalCatalogAsync,
+  saveRentalCatalogTemplateAsync,
+} from "./rentalCatalogAsync.js";
+// 站內公告與贊助活動的 PG 島嶼入口。
+import {
+  announcementInboxForUserAsync,
+  bannerAnnouncementsAsync,
+  createAnnouncementAsync,
+  createCampaignAsync,
+  dismissAnnouncementAsync,
+  listAnnouncementsAdminAsync,
+  listCampaignsAdminAsync,
+  listingCampaignsAsync,
+  markAnnouncementReadAsync,
+  publicActiveAnnouncementsAsync,
+  publicCommsBundleAsync,
+  publishAnnouncementAsync,
+  recordSponsoredEventAsync,
+  updateAnnouncementAsync,
+  updateCampaignAsync,
+} from "./commsAsync.js";
+// 內容文件（條款／隱私權）的 PG 島嶼入口。
+// `legalCopyFromDocumentsAsync` 是很多條路由的共用卡點（/api/disclaimer、/api/me、註冊流程…）。
+import {
+  createDraftAsync as createContentDraftAsync,
+  createDraftFromPublishedAsync as newContentVersionAsync,
+  getDocumentByIdAsync as getContentDocumentAsync,
+  getEffectiveDocumentAsync,
+  getRequiredRegistrationDocumentsAsync,
+  legalCopyFromDocumentsAsync,
+  listDocumentEventsAsync as listContentEventsAsync,
+  listDocumentsAsync as listContentDocumentsAsync,
+  publishDocumentAsync as publishContentDocumentAsync,
+  updateDraftAsync as updateContentDraftAsync,
+} from "./contentDocumentsAsync.js";
+// 會員照片素材庫的 PG 島嶼入口（8 條 /api/media* 路由）。
+// ⚠️ 不含 `POST /api/media`（上傳）：`saveMemberMedia()` 的交易橫跨影像處理與 R2 上傳，
+// 那是獨立一批（見 memberMediaAsync.js 檔頭）。
+import {
+  createMediaTagAsync,
+  deleteMediaTagAsync,
+  deleteMemberMediaAsync,
+  listMediaTagsAsync,
+  listMemberMediaAsync,
+  mediaUrlsForTagIdsAsync,
+  renameMediaTagAsync,
+  setMediaTagsAsync,
+} from "./memberMediaAsync.js";
+
+import {
+  createContactProfileAsync,
+  createDescriptionTemplateAsync,
+  deleteContactProfileAsync,
+  deleteDescriptionTemplateAsync,
+  getOwnedContactProfileAsync,
+  getOwnedDescriptionTemplateAsync,
+  listContactProfilesAsync,
+  listDescriptionTemplatesAsync,
+  updateContactProfileAsync,
+  updateDescriptionTemplateAsync,
+} from "./listingToolsAsync.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
@@ -313,11 +400,19 @@ import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
 import {
-  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync, getSpiritAsync,
+  getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync,
+  getHousingDataRawAsync, writeHousingDataAsync, getSpiritAsync,
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
-import { confirmSuspectedMatchAsync, mergeSameHouseForUserAsync } from "./sameHouseAsync.js";
+import {
+  confirmSuspectedMatchAsync,
+  mergeSameHouseForUserAsync,
+  rejectSuspectedMatchAsync,
+} from "./sameHouseAsync.js";
+// 後台總覽的統計在 PG 模式下必須走 listingStatsAsync（已是既有的 PG 路徑，
+// 內部會 resolveDbDriver 並在有快照的情況下回同一組計數）。
+import { listingStatsAsync } from "./listingStatsAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -349,6 +444,51 @@ import {
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
 import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
+import { auditFailureStats } from "./adminAuditHealth.js";
+// 後台設定（郵件／OAuth／贊助／品牌）的 driver-aware 入口。寫入的兩個
+// （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
+import {
+  getAdminMailSettingsAsync,
+  getStoredSmtpAsync,
+  getAdminOauthSettingsAsync,
+  getAdminSponsorSettingsAsync,
+  getBrandMascotAsync,
+  publicSponsorSettingsAsync,
+  saveAdminSponsorSettingsAsync,
+  saveBrandMascotAsync,
+} from "./adminSettingsAsync.js";
+// Support 後台列表（卡點全在 handler 內的那一群）。
+import {
+  adminSupportConfigAsync,
+  createManualTransactionAsync,
+  getSupportFlagsAsync,
+  previewSupportConfigAsync,
+  publicSupportConfigAsync,
+  createSupportCheckoutAsync,
+  dismissSupportCtaAsync,
+  handleSupportCtaRequestAsync,
+  createSupportCostAsync,
+  createSupportSponsorAsync,
+  createSupportTierAsync,
+  listCtaRulesAsync,
+  listSupportCostsAsync,
+  listSupportProvidersAsync,
+  listSupportSponsorsAsync,
+  listSupportTiersAsync,
+  listSupportTransactionsAsync,
+  publishSupportConfigAsync,
+  recordSupportEventAsync,
+  saveSupportConfigAsync,
+  supportDashboardAsync,
+  updateCtaRuleAsync,
+  updateSupportCostAsync,
+  updateSupportProviderAsync,
+  updateSupportSponsorAsync,
+  updateSupportTierAsync,
+  updateSupportTransactionAsync,
+} from "./supportAsync.js";
+// 站內刊登讀取（含過期清理）。同步版被 listingImport.js／listingTools.js 深層呼叫的部分仍未移植。
+import { getSelfListingAsync } from "./selfListingsAsync.js";
 import {
   adminSupportConfig,
   assertSupportCheckoutAllowed,
@@ -435,6 +575,11 @@ app.use(express.json({
   },
 }));
 
+// Session 解析必須在**任何**路由之前（本檔第一條路由在下面幾行就註冊了），
+// 而且要在 requireAuth 之前，讓 `readSession()` 一率讀到已解析的快取。
+// 這一條同時解掉「187 條路由的 session 讀的是節點本機 SQLite」這個步驟 3 的卡點。
+app.use(resolveSession());
+
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {
     res.setHeader("Cache-Control", "no-store");
@@ -443,7 +588,12 @@ app.use((req, res, next) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, version: APP_VERSION });
+  // audit_failures：PG 稽核寫入的累計失敗數。正常應該是 0。
+  // 2026-09-27 之所以加這個欄位：稽核的 fire-and-forget 契約讓「每一筆都失敗」
+  // 完全隱形（序列落後造成，見 docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）。
+  // 契約仍然是「稽核失敗不得擋住管理操作」，所以 `ok` 不因此變成 false——
+  // 但監控可以只看這一個數字。
+  res.json({ ok: true, version: APP_VERSION, audit_failures: auditFailureStats().failures });
 });
 
 app.get("/support", (_req, res) => {
@@ -688,7 +838,7 @@ app.get("/go/:id", async (req, res) => {
 app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { maxAge: "7d" }));
 app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxAge: "7d" }));
 
-app.get("/api/me", (req, res) => {
+app.get("/api/me", async (req, res) => {
   const session = readSession(req);
   if (session?.userId) touchLastLogin(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
   const user = session?.userId ? getUserById(session.userId) : null;
@@ -724,7 +874,7 @@ app.get("/api/me", (req, res) => {
     hint: "",
     version: APP_VERSION,
     vapidPublicKey: publicVapidKey(),
-    sponsor: session ? publicSponsorSettings(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
+    sponsor: session ? await publicSponsorSettingsAsync(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
 });
 
@@ -746,20 +896,20 @@ app.get("/api/disclaimer", (_req, res) => {
   res.json(getLegalCopy());
 });
 
-app.get("/api/public/documents", (_req, res) => {
+app.get("/api/public/documents", async (_req, res) => {
   try {
     res.json({
       types: Object.values(DOC_TYPES).map((row) => ({ id: row.id, label: row.label, required_at: row.required_at })),
-      required: getRequiredRegistrationDocuments(),
+      required: await getRequiredRegistrationDocumentsAsync(),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/public/documents/:type", (req, res) => {
+app.get("/api/public/documents/:type", async (req, res) => {
   try {
-    const doc = getEffectiveDocument(req.params.type);
+    const doc = await getEffectiveDocumentAsync(req.params.type);
     if (!doc || doc.status !== "published" || !doc.enabled) {
       res.status(404).json({ error: "找不到目前有效的文件" });
       return;
@@ -912,14 +1062,14 @@ app.get("/api/wish-rooms/mine", (req, res) => {
   }
 });
 
-app.get("/api/wish-rooms/example", (req, res) => {
+app.get("/api/wish-rooms/example", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json({ example: getWishExampleFor(session.userId) });
+    res.json({ example: await getWishExampleAsync(session.userId) });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -938,14 +1088,14 @@ app.put("/api/wish-rooms/example", (req, res) => {
   }
 });
 
-app.delete("/api/wish-rooms/example", (req, res) => {
+app.delete("/api/wish-rooms/example", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(deleteWishExampleFor(session.userId));
+    res.json(await deleteWishExampleAsync(session.userId));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1173,8 +1323,8 @@ app.get("/verify-email", (req, res) => {
   }
 });
 
-app.get("/api/oauth", (_req, res) => {
-  res.json(getAdminOauthSettings());
+app.get("/api/oauth", async (_req, res) => {
+  res.json(await getAdminOauthSettingsAsync());
 });
 
 app.get("/auth/:provider", (req, res) => {
@@ -1344,11 +1494,17 @@ function auditReq(req, action, target, before, after) {
       appendAdminAudit(payload);
       return;
     }
-    // PG 是非同步，而這個函式被 **20 處**（多為同步）handler 呼叫。
-    // 原本就明訂「稽核失敗不得擋住管理操作」，所以這裡刻意 fire-and-forget 並吞掉錯誤，
-    // 與原本 try/catch 的意圖一致。
+    // PG 是非同步，而這個函式被 **19 處**（多為同步）handler 呼叫
+    // （2026-09-27 實測：19 個呼叫點，其中 16 個在同步 handler 內）。
+    // 原本就明訂「稽核失敗不得擋住管理操作」，所以這裡刻意 fire-and-forget。
     // 代價要講清楚：沒有 await，行程若在寫入完成前結束就會少一筆稽核。
-    // 若之後要求稽核不可遺失，就得把這 20 處 handler 改成 async 並 await。
+    //
+    // ⚠️ 2026-09-27 修正一個**本來會讓全損故障隱形**的設計：
+    // 這裡原本是 `.catch(() => {})`，把錯誤**完全**吞掉。配上正式站
+    // `admin_audit.id` 序列落後，結果是「每一筆稽核都失敗」長達 12 天卻沒有任何痕跡
+    // （詳見 docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）。
+    // 現在 `appendAdminAuditAsync()` 內部會自己記數並寫 log（第一次 + 每 100 次），
+    // 失敗筆數也接到 `/api/health` 的 `audit_failures`。**契約不變**：不 await、不擋管理操作。
     appendAdminAuditAsync(payload).catch(() => {});
   } catch {
     // 稽核失敗不得擋住管理操作
@@ -1433,8 +1589,8 @@ app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/mail", requireAdminApi, (_req, res) => {
-  res.json(getAdminMailSettings());
+app.get("/api/admin/mail", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminMailSettingsAsync());
 });
 
 app.put("/api/admin/mail", requireAdminApi, (req, res) => {
@@ -1445,8 +1601,8 @@ app.put("/api/admin/mail", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/oauth", requireAdminApi, (_req, res) => {
-  res.json(getAdminOauthSettings());
+app.get("/api/admin/oauth", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminOauthSettingsAsync());
 });
 
 app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
@@ -1457,20 +1613,20 @@ app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/sponsor", requireAdminApi, (_req, res) => {
-  res.json(getAdminSponsorSettings());
+app.get("/api/admin/sponsor", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminSponsorSettingsAsync());
 });
 
-app.put("/api/admin/sponsor", requireAdminApi, (req, res) => {
+app.put("/api/admin/sponsor", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveAdminSponsorSettings(req.body || {}));
+    res.json(await saveAdminSponsorSettingsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/admin/ads", requireAdminApi, (_req, res) => {
-  res.json(getAdminAdsSettings());
+app.get("/api/admin/ads", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminAdsSettingsAsync());
 });
 
 app.put("/api/admin/ads", requireAdminApi, (req, res) => {
@@ -1485,27 +1641,27 @@ app.get("/api/ads", (_req, res) => {
   res.json(publicAdsSettings());
 });
 
-app.get("/api/brand", (_req, res) => {
-  res.json(getBrandMascot());
+app.get("/api/brand", async (_req, res) => {
+  res.json(await getBrandMascotAsync());
 });
 
-app.get("/api/admin/brand", requireAdminApi, (_req, res) => {
-  res.json(getBrandMascot());
+app.get("/api/admin/brand", requireAdminApi, async (_req, res) => {
+  res.json(await getBrandMascotAsync());
 });
 
-app.put("/api/admin/brand", requireAdminApi, (req, res) => {
+app.put("/api/admin/brand", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveBrandMascot(req.body || {}));
+    res.json(await saveBrandMascotAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/brand/file", requireAdminApi, express.raw({ type: () => true, limit: BRAND_UPLOAD_MAX_BYTES }), (req, res) => {
+app.post("/api/admin/brand/file", requireAdminApi, express.raw({ type: () => true, limit: BRAND_UPLOAD_MAX_BYTES }), async (req, res) => {
   try {
     const upload = saveBrandUpload(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
     const slot = String(req.query.slot || req.headers["x-brand-slot"] || "").trim();
-    res.json({ ...upload, brand: applyBrandUpload(slot, upload) });
+    res.json({ ...upload, brand: await applyBrandUploadAsync(slot, upload) });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1522,8 +1678,8 @@ app.get("/media/brand/:file", (req, res) => {
   res.sendFile(path.resolve(full));
 });
 
-app.get("/api/admin/broadcasts", requireAdminApi, (_req, res) => {
-  res.json(getAdminBroadcastsSettings());
+app.get("/api/admin/broadcasts", requireAdminApi, async (_req, res) => {
+  res.json(await getAdminBroadcastsSettingsAsync());
 });
 
 app.put("/api/admin/broadcasts", requireAdminApi, (req, res) => {
@@ -1546,29 +1702,29 @@ function sendCommsError(res, error) {
   res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
 }
 
-app.get("/api/admin/announcements", requireAdminApi, (_req, res) => {
-  res.json({ items: listAnnouncementsAdmin(db), meta: commsMeta() });
+app.get("/api/admin/announcements", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listAnnouncementsAdminAsync(), meta: commsMeta() });
 });
 
-app.post("/api/admin/announcements", requireAdminApi, (req, res) => {
+app.post("/api/admin/announcements", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createAnnouncement(db, commsActor(req), req.body || {}));
+    res.status(201).json(await createAnnouncementAsync(commsActor(req), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.patch("/api/admin/announcements/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/announcements/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateAnnouncement(db, commsActor(req), Number(req.params.id), req.body || {}));
+    res.json(await updateAnnouncementAsync(commsActor(req), Number(req.params.id), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/announcements/:id/publish", requireAdminApi, async (req, res) => {
   try {
-    const published = publishAnnouncement(db, commsActor(req), Number(req.params.id));
+    const published = await publishAnnouncementAsync(commsActor(req), Number(req.params.id));
     auditReq(req, "announcement_publish", published?.title || req.params.id, { status: "draft" }, { status: "published" });
     res.json(published);
   } catch (error) {
@@ -1576,21 +1732,21 @@ app.post("/api/admin/announcements/:id/publish", requireAdminApi, (req, res) => 
   }
 });
 
-app.get("/api/admin/campaigns", requireAdminApi, (_req, res) => {
-  res.json({ items: listCampaignsAdmin(db), config: getCommsConfig(), meta: commsMeta() });
+app.get("/api/admin/campaigns", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listCampaignsAdminAsync(), config: await getCommsConfigAsync(), meta: commsMeta() });
 });
 
-app.post("/api/admin/campaigns", requireAdminApi, (req, res) => {
+app.post("/api/admin/campaigns", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(createCampaign(db, commsActor(req), req.body || {}));
+    res.status(201).json(await createCampaignAsync(commsActor(req), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.patch("/api/admin/campaigns/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/campaigns/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateCampaign(db, commsActor(req), Number(req.params.id), req.body || {}));
+    res.json(await updateCampaignAsync(commsActor(req), Number(req.params.id), req.body || {}));
   } catch (error) {
     sendCommsError(res, error);
   }
@@ -1608,52 +1764,52 @@ app.put("/api/admin/comms-config", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/announcements", (_req, res) => {
-  res.json({ items: publicActiveAnnouncements(db), banner: bannerAnnouncements(db) });
+app.get("/api/announcements", async (_req, res) => {
+  res.json({ items: await publicActiveAnnouncementsAsync(), banner: await bannerAnnouncementsAsync() });
 });
 
-app.get("/api/announcements/inbox", (req, res) => {
+app.get("/api/announcements/inbox", async (req, res) => {
   const session = readSession(req);
-  res.json({ items: announcementInboxForUser(db, session?.userId || null) });
+  res.json({ items: await announcementInboxForUserAsync(session?.userId || null) });
 });
 
-app.post("/api/announcements/:id/read", (req, res) => {
+app.post("/api/announcements/:id/read", async (req, res) => {
   const session = readSession(req);
-  res.json(markAnnouncementRead(db, session?.userId || null, Number(req.params.id)));
+  res.json(await markAnnouncementReadAsync(session?.userId || null, Number(req.params.id)));
 });
 
-app.post("/api/announcements/:id/dismiss", (req, res) => {
+app.post("/api/announcements/:id/dismiss", async (req, res) => {
   const session = readSession(req);
-  res.json(dismissAnnouncement(db, session?.userId || null, Number(req.params.id)));
+  res.json(await dismissAnnouncementAsync(session?.userId || null, Number(req.params.id)));
 });
 
-app.get("/api/sponsored", (_req, res) => {
-  const config = getCommsConfig();
+app.get("/api/sponsored", async (_req, res) => {
+  const config = await getCommsConfigAsync();
   res.json({
     interval: config.listing_ad_interval,
     listing_enabled: config.sponsored_master_enabled && config.listing_placement_enabled,
     session_cap: 3,
-    cards: listingCampaigns(db, config).map((row) => publicCampaignView(row)),
+    cards: (await listingCampaignsAsync({ config })).map((row) => publicCampaignView(row)),
   });
 });
 
-app.post("/api/sponsored/:id/event", (req, res) => {
+app.post("/api/sponsored/:id/event", async (req, res) => {
   try {
     const kind = String(req.body?.kind || "");
     const placement = String(req.body?.placement || "listing");
-    res.json(recordSponsoredEvent(db, Number(req.params.id), kind, placement));
+    res.json(await recordSponsoredEventAsync(Number(req.params.id), kind, placement));
   } catch (error) {
     sendCommsError(res, error);
   }
 });
 
-app.get("/api/comms", (req, res) => {
+app.get("/api/comms", async (req, res) => {
   const session = readSession(req);
   // 支持方式（後台「贊助連結」）是公開資訊：未登入訪客也要拿得到，才不會在「支持本站」看到死路。
-  const publicSponsorOffer = publicSponsorSettings({});
-  res.json(publicCommsBundle(db, {
-    config: getCommsConfig(),
-    sponsorOffer: session ? publicSponsorSettings(session) : {},
+  const publicSponsorOffer = await publicSponsorSettingsAsync({});
+  res.json(await publicCommsBundleAsync({
+    config: await getCommsConfigAsync(),
+    sponsorOffer: session ? await publicSponsorSettingsAsync(session) : {},
     sponsorLinks: publicSponsorOffer.links,
     user: session ? { id: session.userId, plan: session.plan, role: session.role } : {},
   }));
@@ -1663,26 +1819,26 @@ function sendSupportError(res, error) {
   res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
 }
 
-function publicSupportFallback() {
+async function publicSupportFallback() {
   return {
     enabled: false,
-    flags: getSupportFlags(db),
+    flags: await getSupportFlagsAsync(),
     entry: { show: false, label: "支持本站", href: "/support.html" },
     cta: { enabled: false },
   };
 }
 
-app.get("/api/support/public", (_req, res) => {
+app.get("/api/support/public", async (_req, res) => {
   try {
-    res.json(publicSupportConfig(db));
+    res.json(await publicSupportConfigAsync());
   } catch {
-    res.json(publicSupportFallback());
+    res.json(await publicSupportFallback());
   }
 });
 
-app.get("/api/support/tiers", (_req, res) => {
+app.get("/api/support/tiers", async (_req, res) => {
   try {
-    const pub = publicSupportConfig(db);
+    const pub = await publicSupportConfigAsync();
     res.json({ items: pub.tiers || [] });
   } catch {
     res.json({ items: [] });
@@ -1692,12 +1848,12 @@ app.get("/api/support/tiers", (_req, res) => {
 app.post("/api/support/checkout", async (req, res) => {
   try {
     assertSupportCheckoutAllowed(clientIp(req));
-    const result = await createSupportCheckout(db, {
+    const result = await createSupportCheckoutAsync({
       tierId: req.body?.tierId,
       amount: req.body?.amount,
     });
     const session = readSession(req);
-    recordSupportEvent(db, "support_checkout_opened", {
+    await recordSupportEventAsync("support_checkout_opened", {
       userId: session?.userId || null,
       meta: { tierId: req.body?.tierId },
     });
@@ -1711,10 +1867,10 @@ app.post("/api/support/checkout", async (req, res) => {
   }
 });
 
-app.post("/api/support/cta", (req, res) => {
+app.post("/api/support/cta", async (req, res) => {
   try {
     const session = readSession(req);
-    const result = handleSupportCtaRequest(db, {
+    const result = await handleSupportCtaRequestAsync({
       userId: session?.userId || null,
       usage: req.body?.usage,
       clientState: req.body?.clientState,
@@ -1725,15 +1881,15 @@ app.post("/api/support/cta", (req, res) => {
   }
 });
 
-app.post("/api/support/cta/dismiss", (req, res) => {
+app.post("/api/support/cta/dismiss", async (req, res) => {
   try {
     const session = readSession(req);
-    const state = dismissSupportCta(db, {
+    const state = await dismissSupportCtaAsync({
       userId: session?.userId || null,
       days: req.body?.days,
       clientState: req.body?.clientState,
     });
-    recordSupportEvent(db, "support_cta_dismissed", {
+    await recordSupportEventAsync("support_cta_dismissed", {
       userId: session?.userId || null,
       meta: { days: req.body?.days },
     });
@@ -1743,10 +1899,10 @@ app.post("/api/support/cta/dismiss", (req, res) => {
   }
 });
 
-app.post("/api/support/event", (req, res) => {
+app.post("/api/support/event", async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(recordSupportEvent(db, String(req.body?.kind || ""), {
+    res.json(await recordSupportEventAsync(String(req.body?.kind || ""), {
       userId: session?.userId || null,
       guestKey: String(req.body?.guestKey || "").slice(0, 80),
       meta: req.body?.meta,
@@ -1765,9 +1921,9 @@ app.post("/api/support/webhook/:provider", async (req, res) => {
   }
 });
 
-app.get("/api/admin/support/dashboard", requireAdminApi, (req, res) => {
+app.get("/api/admin/support/dashboard", requireAdminApi, async (req, res) => {
   try {
-    res.json(supportDashboard(db, {
+    res.json(await supportDashboardAsync({
       period: String(req.query.period || "month"),
       from: req.query.from,
       to: req.query.to,
@@ -1777,18 +1933,18 @@ app.get("/api/admin/support/dashboard", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/config", requireAdminApi, (_req, res) => {
-  res.json(adminSupportConfig(db));
+app.get("/api/admin/support/config", requireAdminApi, async (_req, res) => {
+  res.json(await adminSupportConfigAsync());
 });
 
-app.get("/api/admin/support/preview", requireAdminApi, (_req, res) => {
-  res.json(previewSupportConfig(db));
+app.get("/api/admin/support/preview", requireAdminApi, async (_req, res) => {
+  res.json(await previewSupportConfigAsync());
 });
 
-app.put("/api/admin/support/config", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/config", requireAdminApi, async (req, res) => {
   try {
-    const before = adminSupportConfig(db);
-    const after = saveSupportConfig(db, req.body || {});
+    const before = await adminSupportConfigAsync();
+    const after = await saveSupportConfigAsync(req.body || {});
     auditReq(req, "support.config.update", "support_page_config", before, after);
     res.json(after);
   } catch (error) {
@@ -1796,10 +1952,10 @@ app.put("/api/admin/support/config", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/admin/support/config/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/config/publish", requireAdminApi, async (req, res) => {
   try {
-    const before = adminSupportConfig(db);
-    const after = publishSupportConfig(db);
+    const before = await adminSupportConfigAsync();
+    const after = await publishSupportConfigAsync();
     auditReq(req, "support.page.publish", "support_page_config", before, after);
     res.json(after);
   } catch (error) {
@@ -1807,13 +1963,13 @@ app.post("/api/admin/support/config/publish", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/costs", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportCosts(db) });
+app.get("/api/admin/support/costs", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportCostsAsync() });
 });
 
-app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/costs", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportCost(db, req.body || {});
+    const row = await createSupportCostAsync(req.body || {});
     auditReq(req, "support.cost.create", `support_operating_cost:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1821,10 +1977,10 @@ app.post("/api/admin/support/costs", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/costs/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/costs/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportCosts(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportCost(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportCostsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportCostAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.cost.update", `support_operating_cost:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1832,13 +1988,13 @@ app.put("/api/admin/support/costs/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/tiers", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportTiers(db) });
+app.get("/api/admin/support/tiers", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportTiersAsync() });
 });
 
-app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/tiers", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportTier(db, req.body || {});
+    const row = await createSupportTierAsync(req.body || {});
     auditReq(req, "support.tier.create", `support_tier:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1846,10 +2002,10 @@ app.post("/api/admin/support/tiers", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/tiers/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/tiers/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportTiers(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportTier(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportTiersAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportTierAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.tier.update", `support_tier:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1857,14 +2013,14 @@ app.put("/api/admin/support/tiers/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/providers", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportProviders(db) });
+app.get("/api/admin/support/providers", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportProvidersAsync() });
 });
 
-app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/providers/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportProviders(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportProvider(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportProvidersAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportProviderAsync(Number(req.params.id), req.body || {});
     auditReq(req, before?.page_url !== row.page_url ? "support.checkout_url.update" : "support.provider.update", `support_provider:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1872,15 +2028,15 @@ app.put("/api/admin/support/providers/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/transactions", requireAdminApi, (req, res) => {
+app.get("/api/admin/support/transactions", requireAdminApi, async (req, res) => {
   res.json({
-    items: listSupportTransactions(db, { from: req.query.from, to: req.query.to }),
+    items: await listSupportTransactionsAsync({ from: req.query.from, to: req.query.to }),
   });
 });
 
-app.post("/api/admin/support/transactions/manual", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/transactions/manual", requireAdminApi, async (req, res) => {
   try {
-    const row = createManualTransaction(db, req.body || {});
+    const row = await createManualTransactionAsync(req.body || {});
     auditReq(req, "support.transaction.manual", `support_transaction:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1888,10 +2044,10 @@ app.post("/api/admin/support/transactions/manual", requireAdminApi, (req, res) =
   }
 });
 
-app.put("/api/admin/support/transactions/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/transactions/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportTransactions(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportTransaction(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportTransactionsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportTransactionAsync(Number(req.params.id), req.body || {});
     const action = row.status === "refunded" ? "support.transaction.refund" : "support.transaction.update";
     auditReq(req, action, `support_transaction:${row.id}`, before, row);
     res.json(row);
@@ -1900,13 +2056,13 @@ app.put("/api/admin/support/transactions/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/sponsors", requireAdminApi, (_req, res) => {
-  res.json({ items: listSupportSponsors(db) });
+app.get("/api/admin/support/sponsors", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listSupportSponsorsAsync() });
 });
 
-app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
+app.post("/api/admin/support/sponsors", requireAdminApi, async (req, res) => {
   try {
-    const row = createSupportSponsor(db, req.body || {});
+    const row = await createSupportSponsorAsync(req.body || {});
     auditReq(req, "support.sponsor.create", `support_sponsor:${row.id}`, null, row);
     res.json(row);
   } catch (error) {
@@ -1914,10 +2070,10 @@ app.post("/api/admin/support/sponsors", requireAdminApi, (req, res) => {
   }
 });
 
-app.put("/api/admin/support/sponsors/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/sponsors/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listSupportSponsors(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateSupportSponsor(db, Number(req.params.id), req.body || {});
+    const before = (await listSupportSponsorsAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateSupportSponsorAsync(Number(req.params.id), req.body || {});
     const action = ["active", "disabled"].includes(row.status) ? "support.sponsor.publish" : "support.sponsor.update";
     auditReq(req, action, `support_sponsor:${row.id}`, before, row);
     res.json(row);
@@ -1926,14 +2082,14 @@ app.put("/api/admin/support/sponsors/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/support/cta-rules", requireAdminApi, (_req, res) => {
-  res.json({ items: listCtaRules(db) });
+app.get("/api/admin/support/cta-rules", requireAdminApi, async (_req, res) => {
+  res.json({ items: await listCtaRulesAsync() });
 });
 
-app.put("/api/admin/support/cta-rules/:id", requireAdminApi, (req, res) => {
+app.put("/api/admin/support/cta-rules/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = listCtaRules(db).find((row) => Number(row.id) === Number(req.params.id));
-    const row = updateCtaRule(db, Number(req.params.id), req.body || {});
+    const before = (await listCtaRulesAsync()).find((row) => Number(row.id) === Number(req.params.id));
+    const row = await updateCtaRuleAsync(Number(req.params.id), req.body || {});
     auditReq(req, "support.cta.update", `support_cta_rule:${row.id}`, before, row);
     res.json(row);
   } catch (error) {
@@ -1953,92 +2109,92 @@ app.put("/api/admin/help-qa", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/wish-conditions", requireAdminApi, (_req, res) => {
-  res.json(getWishConditions());
+app.get("/api/admin/wish-conditions", requireAdminApi, async (_req, res) => {
+  res.json(await getWishConditionsAsync());
 });
 
-app.put("/api/admin/wish-conditions", requireAdminApi, (req, res) => {
+app.put("/api/admin/wish-conditions", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveWishConditions(req.body || {}));
+    res.json(await saveWishConditionsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/admin/rental-catalog", requireAdminApi, (_req, res) => {
-  const published = getRentalCatalog();
-  const draft = getRentalCatalogDraft();
+app.get("/api/admin/rental-catalog", requireAdminApi, async (_req, res) => {
+  const published = await getRentalCatalogAsync();
+  const draft = await getRentalCatalogDraftAsync();
   res.json({
     published: publicAdminCatalog(published, { revealIds: true }),
     draft,
     diff: draft ? catalogDiff(published, draft) : null,
-    templates: getRentalCatalogTemplates().map((row) => ({
+    templates: (await getRentalCatalogTemplatesAsync()).map((row) => ({
       id: row.id,
       label: row.label,
       system: isSystemCatalogTemplate(row.id),
     })),
-    flags: publicRentalMarketplaceFlags(getRentalMarketplaceFlags()),
+    flags: publicRentalMarketplaceFlags(await getRentalMarketplaceFlagsAsync()),
   });
 });
 
-app.put("/api/admin/rental-catalog", requireAdminApi, (req, res) => {
+app.put("/api/admin/rental-catalog", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveRentalCatalog(req.body || {}));
+    res.json(await saveRentalCatalogAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/mutate", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/mutate", requireAdminApi, async (req, res) => {
   try {
-    res.json(mutateRentalCatalog(req.body?.action, req.body || {}));
+    res.json(await mutateRentalCatalogAsync(req.body?.action, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/templates", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/templates", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveRentalCatalogTemplate(req.body || {}));
+    res.json(await saveRentalCatalogTemplateAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/rental-catalog/templates/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(renameRentalCatalogTemplate(req.params.id, req.body?.label));
+    res.json(await renameRentalCatalogTemplateAsync(req.params.id, req.body?.label));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, (req, res) => {
+app.delete("/api/admin/rental-catalog/templates/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(deleteRentalCatalogTemplate(req.params.id));
+    res.json(await deleteRentalCatalogTemplateAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/templates/:id/apply", requireAdminApi, (req, res) => {
+app.post("/api/admin/rental-catalog/templates/:id/apply", requireAdminApi, async (req, res) => {
   try {
-    res.json(applyRentalCatalogTemplate(req.params.id));
+    res.json(await applyRentalCatalogTemplateAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, (_req, res) => {
+app.post("/api/admin/rental-catalog/draft/publish", requireAdminApi, async (_req, res) => {
   try {
-    res.json(publishRentalCatalogDraft());
+    res.json(await publishRentalCatalogDraftAsync());
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/admin/rental-marketplace-flags", requireAdminApi, (_req, res) => {
-  res.json(publicRentalMarketplaceFlags(getRentalMarketplaceFlags()));
+app.get("/api/admin/rental-marketplace-flags", requireAdminApi, async (_req, res) => {
+  res.json(publicRentalMarketplaceFlags(await getRentalMarketplaceFlagsAsync()));
 });
 
 app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
@@ -2049,8 +2205,8 @@ app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/rental-match-rules", requireAdminApi, (_req, res) => {
-  res.json(rentalMatchAdminRules());
+app.get("/api/admin/rental-match-rules", requireAdminApi, async (_req, res) => {
+  res.json(await rentalMatchAdminRulesAsync());
 });
 
 app.get("/api/admin/wish-offer-reports", requireAdminApi, (_req, res) => {
@@ -2083,13 +2239,13 @@ app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
   res.json(setOpsDeliveryStop(stop));
 });
 
-app.get("/api/admin/remote-cs", requireAdminApi, (_req, res) => {
-  res.json(getRemoteCsControl());
+app.get("/api/admin/remote-cs", requireAdminApi, async (_req, res) => {
+  res.json(await getRemoteCsControlAsync());
 });
 
-app.put("/api/admin/remote-cs", requireAdminApi, (req, res) => {
+app.put("/api/admin/remote-cs", requireAdminApi, async (req, res) => {
   const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
-  res.json(setRemoteCsStop(stop));
+  res.json(await setRemoteCsStopAsync(stop));
 });
 
 app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
@@ -2110,7 +2266,7 @@ app.get("/api/admin/crm", requireAdminApi, async (req, res) => {
 
 app.put("/api/admin/crm/module", requireAdminApi, async (req, res) => {
   const enabled = !(req.body?.enabled === false || req.body?.enabled === 0 || req.body?.enabled === "0");
-  res.json({ module: await setCrmModuleEnabled(enabled), sync: await getCrmDeliveryControl() });
+  res.json({ module: await setCrmEnabledAsync(enabled), sync: await getCrmDeliveryControl() });
 });
 
 app.put("/api/admin/crm/sync", requireAdminApi, async (req, res) => {
@@ -2216,8 +2372,12 @@ app.put("/api/admin/housing-data", requireAdminApi, async (req, res) => {
 
 app.post("/api/admin/housing-data/refresh", requireAdminApi, async (_req, res) => {
   try {
-    const summary = await refreshHousingData({ getData: getHousingDataRaw, writeData: writeHousingData });
-    res.json({ ok: true, ...summary, data: getHousingData() });
+    // 這三個都改走 driver-aware 版本：PG 模式下讀寫 PostgreSQL，不再只寫回答你那台的本機檔。
+    const summary = await refreshHousingData({
+      getData: () => getHousingDataRawAsync(),
+      writeData: (data) => writeHousingDataAsync(data),
+    });
+    res.json({ ok: true, ...summary, data: await getHousingDataAsync() });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -2247,57 +2407,57 @@ app.put("/api/admin/legal-copy", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/documents", requireAdminApi, (req, res) => {
+app.get("/api/admin/documents", requireAdminApi, async (req, res) => {
   res.json({
     types: Object.values(DOC_TYPES),
-    items: listContentDocuments({ type: req.query?.type, includeDrafts: true }),
+    items: await listContentDocumentsAsync({ type: req.query?.type, includeDrafts: true }),
   });
 });
 
-app.get("/api/admin/documents/:id/events", requireAdminApi, (req, res) => {
-  res.json({ items: listContentEvents({ documentId: req.params.id }) });
+app.get("/api/admin/documents/:id/events", requireAdminApi, async (req, res) => {
+  res.json({ items: await listContentEventsAsync({ documentId: req.params.id }) });
 });
 
-app.get("/api/admin/documents/:id", requireAdminApi, (req, res) => {
-  const doc = getContentDocument(req.params.id);
+app.get("/api/admin/documents/:id", requireAdminApi, async (req, res) => {
+  const doc = await getContentDocumentAsync(req.params.id);
   if (!doc) {
     res.status(404).json({ error: "找不到文件" });
     return;
   }
-  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format), events: listContentEvents({ documentId: doc.id }) });
+  res.json({ ...doc, html: renderSafeContent(doc.body, doc.format), events: await listContentEventsAsync({ documentId: doc.id }) });
 });
 
-app.post("/api/admin/documents", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.status(201).json(createContentDraft(req.body || {}, { actorId: session?.userId || 0 }));
+    res.status(201).json(await createContentDraftAsync(req.body || {}, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.patch("/api/admin/documents/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/documents/:id", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(updateContentDraft(req.params.id, req.body || {}, { actorId: session?.userId || 0 }));
+    res.json(await updateContentDraftAsync(req.params.id, req.body || {}, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/documents/:id/publish", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents/:id/publish", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.json(publishContentDocument(req.params.id, { actorId: session?.userId || 0 }));
+    res.json(await publishContentDocumentAsync(req.params.id, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/admin/documents/:id/new-version", requireAdminApi, (req, res) => {
+app.post("/api/admin/documents/:id/new-version", requireAdminApi, async (req, res) => {
   try {
     const session = readSession(req);
-    res.status(201).json(newContentVersion(req.params.id, { actorId: session?.userId || 0 }));
+    res.status(201).json(await newContentVersionAsync(req.params.id, { actorId: session?.userId || 0 }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2428,9 +2588,9 @@ app.put("/api/admin/system-crawl", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/same-house/reconcile", requireAdminApi, (_req, res) => {
+app.get("/api/admin/same-house/reconcile", requireAdminApi, async (_req, res) => {
   res.json({
-    ...sameHouseBackfillStatus(),
+    ...(await sameHouseBackfillStatusAsync()),
     note: "POST 此路徑執行一批歷史 reconciliation，可中斷續跑。",
   });
 });
@@ -2572,6 +2732,9 @@ app.post("/api/wish-rooms/:id/reopen", (req, res) => {
   });
 });
 
+// ⚠️ 這一條**刻意仍走同步版**（2026-09-28）：`demandAsync.addDemandReplyAsync()` 已經寫好並
+// 有 parity 測試，但回覆寫進 PG 之後，列表／詳情／公開頁仍然讀節點 SQLite（那些函式還沒搬），
+// 接線會變成「寫 PG、讀 SQLite」的雙寫分歧。前置條件是 `getDemandPost()`／`listDemand()` 先上 PG。
 app.post("/api/demand/:id/reply", (req, res) => {
   try {
     const session = readSession(req);
@@ -2585,6 +2748,7 @@ app.post("/api/demand/:id/reply", (req, res) => {
   }
 });
 
+// ⚠️ 同 reply：`closeDemandPostAsync()` 已寫好也有測試，但仍走同步版（理由見上一條）。
 app.post("/api/demand/:id/close", (req, res) => {
   try {
     const session = readSession(req);
@@ -2598,14 +2762,14 @@ app.post("/api/demand/:id/close", (req, res) => {
   }
 });
 
-app.post("/api/demand/:id/report", (req, res) => {
+app.post("/api/demand/:id/report", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能檢舉" });
       return;
     }
-    res.json(reportDemandItem(session.userId, {
+    res.json(await reportDemandAsync(session.userId, {
       targetType: req.body?.targetType || "post",
       targetId: req.body?.targetId || req.params.id,
       reason: req.body?.reason,
@@ -2951,14 +3115,14 @@ app.post("/api/wish-offers/:offerRef/report", (req, res) => {
   }
 });
 
-app.get("/api/self-listings/:id", (req, res) => {
+app.get("/api/self-listings/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(getSelfListing(req.params.id, { viewerId: session.userId }));
+    res.json(await getSelfListingAsync(req.params.id, { viewerId: session.userId }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3008,61 +3172,61 @@ app.get("/media/self/:file", (req, res) => {
 });
 
 // ── 會員照片素材庫（member media library） ──
-app.get("/api/media", (req, res) => {
+app.get("/api/media", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
-    res.json(listMemberMediaFor(session.userId, { plan: session.plan || "free", tagIds }));
+    res.json(await listMemberMediaAsync(session.userId, { plan: session.plan || "free", tagIds }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.get("/api/media/tags", (req, res) => {
+app.get("/api/media/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listMediaTagsFor(session.userId) });
+    res.json({ items: await listMediaTagsAsync(session.userId) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.post("/api/media/tags", (req, res) => {
+app.post("/api/media/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createMediaTagFor(session.userId, req.body?.name));
+    res.json(await createMediaTagAsync(session.userId, req.body?.name));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.patch("/api/media/tags/:id", (req, res) => {
+app.patch("/api/media/tags/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(renameMediaTagFor(session.userId, req.params.id, req.body?.name));
+    res.json(await renameMediaTagAsync(session.userId, req.params.id, req.body?.name));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.delete("/api/media/tags/:id", (req, res) => {
+app.delete("/api/media/tags/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteMediaTagFor(session.userId, req.params.id));
+    res.json(await deleteMediaTagAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.put("/api/media/:id/tags", (req, res) => {
+app.put("/api/media/:id/tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(setMediaTagsFor(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
+    res.json(await setMediaTagsAsync(session.userId, req.params.id, req.body?.tag_ids || req.body?.tags));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.get("/api/media/by-tags", (req, res) => {
+app.get("/api/media/by-tags", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     const tagIds = String(req.query.tag_ids || "").split(",").map(Number).filter((n) => n > 0);
-    res.json({ urls: mediaUrlsForTagIdsFor(session.userId, tagIds) });
+    res.json({ urls: await mediaUrlsForTagIdsAsync(session.userId, tagIds) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
@@ -3076,11 +3240,11 @@ app.post("/api/media", express.raw({ type: () => true, limit: IMAGE_MAX_UPLOAD_B
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.delete("/api/media/:id", (req, res) => {
+app.delete("/api/media/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteMemberMediaFor(session.userId, req.params.id));
+    res.json(await deleteMemberMediaAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
@@ -3088,9 +3252,9 @@ app.delete("/api/media/:id", (req, res) => {
 app.get("/media/lib/:file", servePublicMemberMedia);
 
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
-app.get("/api/public/self-listing/:id", (req, res) => {
+app.get("/api/public/self-listing/:id", async (req, res) => {
   try {
-    const listing = getSelfListing(req.params.id, { viewerId: 0 });
+    const listing = await getSelfListingAsync(req.params.id, { viewerId: 0 });
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json(publicListingView(listing, req.params.id));
   } catch (error) {
@@ -3104,11 +3268,11 @@ app.get("/w/:id", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/wish.html"));
 });
 
-app.get("/api/listing-imports/meta", (req, res) => {
+app.get("/api/listing-imports/meta", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(listingImportMeta({ plan: session.plan || "free" }));
+    res.json(await importMetaAsync({ plan: session.plan || "free" }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.get("/api/listing-imports", (req, res) => {
@@ -3186,84 +3350,90 @@ app.post("/api/self-listings/:id/publish", (req, res) => {
     res.json(publishOwnedDraftFor(session.userId, req.params.id, body));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.get("/api/listing-description-templates", (req, res) => {
+app.get("/api/listing-description-templates", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listDescriptionTemplatesFor(session.userId), limit: listingToolsInfo(session.userId).description_template_limit });
+    res.json({
+      items: await listDescriptionTemplatesAsync(session.userId),
+      limit: listingToolsMeta(session).description_template_limit,
+    });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/listing-description-templates", (req, res) => {
+app.post("/api/listing-description-templates", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createDescriptionTemplateFor(session.userId, req.body || {}));
+    res.json(await createDescriptionTemplateAsync(session.userId, req.body || {}, { plan: session.plan, role: session.role }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-description-templates/:id", (req, res) => {
+app.get("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getOwnedDescriptionTemplateFor(session.userId, req.params.id));
+    res.json(await getOwnedDescriptionTemplateAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.patch("/api/listing-description-templates/:id", (req, res) => {
+app.patch("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(updateDescriptionTemplateFor(session.userId, req.params.id, req.body || {}));
+    res.json(await updateDescriptionTemplateAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.delete("/api/listing-description-templates/:id", (req, res) => {
+app.delete("/api/listing-description-templates/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteDescriptionTemplateFor(session.userId, req.params.id));
+    res.json(await deleteDescriptionTemplateAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.get("/api/listing-contact-profiles", (req, res) => {
+app.get("/api/listing-contact-profiles", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listContactProfilesFor(session.userId), limit: listingToolsInfo().contact_profile_limit });
+    res.json({
+      items: await listContactProfilesAsync(session.userId),
+      limit: listingToolsMeta().contact_profile_limit,
+    });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/listing-contact-profiles", (req, res) => {
+app.post("/api/listing-contact-profiles", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(createContactProfileFor(session.userId, req.body || {}));
+    res.json(await createContactProfileAsync(session.userId, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-contact-profiles/:id", (req, res) => {
+app.get("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getOwnedContactProfileFor(session.userId, req.params.id));
+    res.json(await getOwnedContactProfileAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.patch("/api/listing-contact-profiles/:id", (req, res) => {
+app.patch("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(updateContactProfileFor(session.userId, req.params.id, req.body || {}));
+    res.json(await updateContactProfileAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.delete("/api/listing-contact-profiles/:id", (req, res) => {
+app.delete("/api/listing-contact-profiles/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(deleteContactProfileFor(session.userId, req.params.id));
+    res.json(await deleteContactProfileAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
-app.post("/api/self-listings/:id/close", (req, res) => {
+app.post("/api/self-listings/:id/close", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(closeSelfListing(session.userId, req.params.id, { admin: session.role === "admin" }));
+    res.json(await closeSelfListingAsync(session.userId, req.params.id, { admin: session.role === "admin" }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3290,27 +3460,27 @@ app.post("/api/admin/self-listings/:id/hide", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/push/subscribe", (req, res) => {
+app.post("/api/push/subscribe", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(saveUserPushSubscription(session.userId, req.body || {}));
+    res.json(await savePushSubscriptionAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.post("/api/push/unsubscribe", (req, res) => {
+app.post("/api/push/unsubscribe", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(deleteUserPushSubscription(session.userId, req.body?.endpoint));
+    res.json(await deletePushSubscriptionAsync(session.userId, req.body?.endpoint));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -3321,7 +3491,7 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
     const session = readSession(req);
     const to = String(req.body?.to || session?.email || "").trim();
     if (!to) throw new Error("請先填收件信箱");
-    const smtp = getStoredSmtp();
+    const smtp = await getStoredSmtpAsync();
     if (!mailConfigured(smtp)) throw Object.assign(new Error("請先儲存 SMTP 設定"), { status: 400 });
     await sendMail({
       to,
@@ -4073,13 +4243,13 @@ app.post("/api/listings/:id/report-gone", async (req, res) => {
   }
 });
 
-app.post("/api/listings/:id/reject-match", (req, res) => {
+app.post("/api/listings/:id/reject-match", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入才能拆開同屋源" });
     return;
   }
-  const result = rejectSuspectedMatch(Number(req.params.id), session.userId, {
+  const result = await rejectSuspectedMatchAsync(Number(req.params.id), session.userId, {
     peerId: req.body?.peer_id,
     admin: session.role === "admin",
   });
@@ -4090,7 +4260,7 @@ app.post("/api/listings/:id/reject-match", (req, res) => {
   }
   res.json({
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
     personal: true,
     promoted: result.promoted,
     remaining: result.remaining,
@@ -4112,7 +4282,7 @@ app.post("/api/listings/:id/confirm-match", async (req, res) => {
   }
   res.json({
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
     personal: result.personal !== false && !result.admin_confirmed,
     shared: result.shared === true,
     admin_confirmed: result.admin_confirmed === true,
@@ -4145,7 +4315,7 @@ app.post("/api/listings/merge-same-house", async (req, res) => {
     post_ids: result.post_ids,
     group_id: result.group_id || "",
     listing: result.listing,
-    stats: stats(undefined, session.userId),
+    stats: await listingStatsAsync({ userId: session.userId }),
   });
 });
 
@@ -4270,7 +4440,7 @@ app.post("/api/watch", async (req, res) => {
     const uid = session.userId;
     const result = await tick(req.body?.force === true ? "force" : "manual");
     const events = (result.events || []).filter((event) => !event.user_id || event.user_id === uid);
-    res.json({ result: { ...result, events }, stats: stats(undefined, uid) });
+    res.json({ result: { ...result, events }, stats: await listingStatsAsync({ userId: uid }) });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -4309,7 +4479,11 @@ app.get("/api/events/stream", (req, res) => {
 });
 
 function runHousingRefresh() {
-  refreshHousingData({ getData: getHousingDataRaw, writeData: writeHousingData })
+  // ⚠️ 這是**排程**的居住數據自動更新（日誌「居住數據自動更新：N 筆」就是它）。
+  // 原本用同步的 SQLite 讀寫 ⇒ PG 模式下自動抓到的居住成本只寫進回答你那台的本機檔，
+  // 另一台看不到、PG 也永遠不會更新（`housingData` 本來就已經是「三個來源各一版」）。
+  // 改走 driver-aware 版本才是真正修掉分歧，不只是讓判定變綠。
+  refreshHousingData({ getData: () => getHousingDataRawAsync(), writeData: (data) => writeHousingDataAsync(data) })
     .then((s) => { if (s.count) console.log(`居住數據自動更新：${s.count} 筆${s.errors.length ? `（${s.errors.length} 個來源失敗）` : ""}`); })
     .catch((error) => console.warn("居住數據自動更新失敗：", error.message));
 }

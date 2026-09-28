@@ -110,6 +110,14 @@ jobs:
           url="postgres://${PGUSER}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           echo "PG_URL=${url}" >> "$GITHUB_ENV"
           echo "PG_TEST_URL=${url}" >> "$GITHUB_ENV"
+          # live PG 驗證（v3/test/reject-match-live-pg.test.js）刻意**不吃** PG_TEST_URL：
+          # 開發機上的 PG_TEST_URL 指向正式庫，gate 在它上面會讓本機誤寫正式站。
+          # 它只認 PG_LIVE_REPRO_URL，且拒絕允許清單以外的資料庫名（tracker_test 在清單內）。
+          # 這裡是本 job 的拋棄式容器，所以顯式餵給它。
+          # 為什麼要接：2026-09-27 的 identity 序列缺陷（見
+          # docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）正是「全離線測試看不到」
+          # 才上線的；pg-integration-setup.mjs 預設 resyncSequences=true，所以這裡的序列是健康的。
+          echo "PG_LIVE_REPRO_URL=${url}" >> "$GITHUB_ENV"
 
       - name: Run PostgreSQL integration tests
         shell: bash

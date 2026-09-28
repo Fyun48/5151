@@ -42,11 +42,11 @@ export const FORBIDDEN_TARGETING_FIELDS = Object.freeze([
 
 const SEVERITY_IDS = new Set(ANNOUNCEMENT_SEVERITIES.map((row) => row.id));
 
-function iso(now = new Date()) {
+export function iso(now = new Date()) {
   return new Date(now).toISOString();
 }
 
-function httpError(message, status = 400, code = "") {
+export function httpError(message, status = 400, code = "") {
   const error = new Error(message);
   error.status = status;
   if (code) error.code = code;
@@ -201,21 +201,21 @@ export function ensureCommsSchema(db) {
   `);
 }
 
-export function writeCommsAudit(db, {
-  entity_type,
-  entity_id,
-  action,
-  actor_id = null,
-  detail = "",
-  now = new Date(),
-}) {
-  db.prepare(`
+export const INSERT_COMMS_AUDIT_SQL = `
     INSERT INTO comms_audit(entity_type, entity_id, action, actor_id, detail, created_at)
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(entity_type, entity_id, action, actor_id, String(detail || "").slice(0, 400), iso(now));
+  `; // comms.js:212
+
+// 稽核參數的組法（含 detail 截斷與 iso(now)）只有這一份，PG 版共用。
+export function commsAuditParams({ entity_type, entity_id, action, actor_id = null, detail = "", now = new Date() }) {
+  return [entity_type, entity_id, action, actor_id, String(detail || "").slice(0, 400), iso(now)];
 }
 
-function announcementRow(row) {
+export function writeCommsAudit(db, entry) {
+  db.prepare(INSERT_COMMS_AUDIT_SQL).run(...commsAuditParams(entry));
+}
+
+export function announcementRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -240,7 +240,7 @@ function announcementRow(row) {
   };
 }
 
-function campaignRow(row) {
+export function campaignRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -326,7 +326,7 @@ export function publicCampaignView(row, { includeAdmin = false } = {}) {
   return out;
 }
 
-function normalizeAnnouncementInput(input = {}, { partial = false } = {}) {
+export function normalizeAnnouncementInput(input = {}, { partial = false } = {}) {
   const src = input && typeof input === "object" ? input : {};
   const title = requireSafeText(src.title, ANNOUNCEMENT_TITLE_MAX, "標題");
   if (!partial && !title) throw httpError("請填公告標題");
@@ -348,7 +348,7 @@ function normalizeAnnouncementInput(input = {}, { partial = false } = {}) {
   };
 }
 
-function normalizeCampaignInput(input = {}) {
+export function normalizeCampaignInput(input = {}) {
   const src = input && typeof input === "object" ? input : {};
   const title = requireSafeText(src.title, CAMPAIGN_TITLE_MAX, "標題");
   if (!title) throw httpError("請填贊助標題");

@@ -90,7 +90,9 @@ export const HOUSING_FETCHERS = [fetchRisPopulation];
 export async function refreshHousingData({ fetchers = HOUSING_FETCHERS, getData, writeData, now = new Date() } = {}) {
   const errors = [];
   const updated = [];
-  let data = normalizeHousingData(getData ? getData() : {});
+  // `await` 是必要的：呼叫端在 PG 模式下傳的是 async 版本；await 一個非 Promise 是 no-op，
+  // 所以 sqlite 模式行為完全不變。
+  let data = normalizeHousingData(getData ? await getData() : {});
   for (const fetcher of fetchers) {
     try {
       const entries = await fetcher({ now });
@@ -103,6 +105,6 @@ export async function refreshHousingData({ fetchers = HOUSING_FETCHERS, getData,
     }
   }
   data.updatedAt = now.toISOString();
-  if (writeData) writeData(data);
+  if (writeData) await writeData(data);
   return { updated, errors, count: updated.length, at: data.updatedAt };
 }

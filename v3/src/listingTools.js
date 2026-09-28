@@ -57,14 +57,14 @@ export const COPYABLE_FIELDS = Object.freeze([
   "line_url",
 ]);
 
-function httpError(message, status = 400, code = "") {
+export function httpError(message, status = 400, code = "") {
   const err = new Error(message);
   err.status = status;
   if (code) err.code = code;
   return err;
 }
 
-function iso(now = new Date()) {
+export function iso(now = new Date()) {
   return (now instanceof Date ? now : new Date(now)).toISOString();
 }
 
@@ -80,7 +80,7 @@ function withImmediate(db, fn) {
   }
 }
 
-function stripUnsafePlain(value, max) {
+export function stripUnsafePlain(value, max) {
   let text = sanitizeDocumentText(value, max);
   text = text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
   if (containsUnsafeMarkup(text)) {
@@ -166,7 +166,7 @@ function ensureOneAccountContactPerUser(db) {
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_contact_one_account ON listing_contact_profile(user_id) WHERE is_account = 1");
 }
 
-function publicTemplate(row) {
+export function publicTemplate(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
@@ -184,7 +184,7 @@ function accountDisplayLabel(row) {
   return ACCOUNT_CONTACT_LABEL;
 }
 
-function publicContact(row) {
+export function publicContact(row) {
   if (!row) return null;
   const isAccount = Number(row.is_account) === 1;
   return {
@@ -200,15 +200,9 @@ function publicContact(row) {
   };
 }
 
-function accountContactFields(db, userId) {
-  let user = {};
-  try {
-    user = db.prepare("SELECT nickname, email, contact_phone, line_id FROM users WHERE id=?").get(Number(userId) || 0) || {};
-  } catch {
-    try {
-      user = db.prepare("SELECT nickname, email FROM users WHERE id=?").get(Number(userId) || 0) || {};
-    } catch { user = {}; }
-  }
+// 純轉換：把 `users` 的一列變成帳號聯絡人的欄位。SQLite 版與 PG 版（listingToolsAsync.js）
+// 都走這一份，所以名稱／電話／LINE 的規則不可能有兩份實作。
+export function accountFieldsFromUser(user = {}) {
   const name = String(user.nickname || "").trim() || String(user.email || "").trim() || ACCOUNT_CONTACT_LABEL;
   let lineUrl = "";
   const lineId = String(user.line_id || "").trim();
@@ -221,6 +215,18 @@ function accountContactFields(db, userId) {
     phone: digitsPhone(user.contact_phone || ""),
     line_url: lineUrl,
   };
+}
+
+export function accountContactFields(db, userId) {
+  let user = {};
+  try {
+    user = db.prepare("SELECT nickname, email, contact_phone, line_id FROM users WHERE id=?").get(Number(userId) || 0) || {};
+  } catch {
+    try {
+      user = db.prepare("SELECT nickname, email FROM users WHERE id=?").get(Number(userId) || 0) || {};
+    } catch { user = {}; }
+  }
+  return accountFieldsFromUser(user);
 }
 
 export function ensureAccountContactProfile(db, userId, now = new Date()) {
@@ -359,13 +365,21 @@ export function listDescriptionTemplates(db, userId) {
   ).all(uid).map(publicTemplate);
 }
 
+// 範本名稱／內容的正規化與驗證。建立與更新原本各寫一次（同一組規則寫兩份），
+// 抽出來給兩邊＋PG 版（listingToolsAsync.js）共用；順序與錯誤訊息完全不變。
+// `fallback` 是更新時「沒帶這個欄位就沿用舊值」用的。
+export function templateFields(input = {}, fallback = {}) {
+  const name = input.name != null ? stripUnsafePlain(input.name, TEMPLATE_NAME_MAX) : fallback.name;
+  const body = input.body != null ? sanitizeListingBodyHtml(input.body, SELF_BODY_MAX) : fallback.body;
+  if (!name) throw httpError("請填範本名稱");
+  if (!listingBodyPlain(body)) throw httpError("請填範本內容");
+  return { name, body };
+}
+
 export function createDescriptionTemplate(db, userId, input = {}, now = new Date(), opts = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
-  const name = stripUnsafePlain(input.name, TEMPLATE_NAME_MAX);
-  const body = sanitizeListingBodyHtml(input.body, SELF_BODY_MAX);
-  if (!name) throw httpError("請填範本名稱");
-  if (!listingBodyPlain(body)) throw httpError("請填範本內容");
+  const { name, body } = templateFields(input);
   const stamp = iso(now);
   const limit = descriptionTemplateLimit(opts);
   return withImmediate(db, () => {
@@ -401,10 +415,7 @@ function ownedTemplate(db, userId, id) {
 
 export function updateDescriptionTemplate(db, userId, id, input = {}, now = new Date()) {
   const row = ownedTemplate(db, userId, id);
-  const name = input.name != null ? stripUnsafePlain(input.name, TEMPLATE_NAME_MAX) : row.name;
-  const body = input.body != null ? sanitizeListingBodyHtml(input.body, SELF_BODY_MAX) : row.body;
-  if (!name) throw httpError("請填範本名稱");
-  if (!listingBodyPlain(body)) throw httpError("請填範本內容");
+  const { name, body } = templateFields(input, row);
   const stamp = iso(now);
   const sameName = db.prepare(
     "SELECT * FROM listing_description_template WHERE user_id=? AND name=? AND id!=?",
@@ -436,7 +447,7 @@ export function listContactProfiles(db, userId) {
   ).all(uid).map(publicContact);
 }
 
-function sanitizeContactInput(input = {}, fallback = {}) {
+export function sanitizeContactInput(input = {}, fallback = {}) {
   const label = stripUnsafePlain(input.label != null ? input.label : fallback.label, CONTACT_LABEL_MAX);
   const contactName = stripUnsafePlain(
     input.contact_name != null ? input.contact_name : fallback.contact_name,

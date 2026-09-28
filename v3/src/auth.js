@@ -8,6 +8,10 @@ import {
 import { normalizeEmail } from "./password.js";
 import { assertNotLocked, clearAuthFailures, recordAuthFailure } from "./rateLimit.js";
 import { isEmailVerified } from "./emailVerify.js";
+import { resolveDbDriver } from "./dbDriver.js";
+import { sharedPgDriver } from "./pgSharedDriver.js";
+import { toPostgresSql } from "./sqlDialect.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 const COOKIE = "591_session";
 const MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -60,7 +64,22 @@ function parseCookies(req) {
   return out;
 }
 
-export function readSession(req) {
+// ── Session 解析（driver-aware，2026-09-27）────────────────────────────────
+//
+// 為什麼要動這裡：`readSession()` 走 `findUserByEmail()` → 節點本機 `v3.db`，
+// 是步驟 3 剩下的**最大單一卡點**——`server.js` 有 113 個呼叫點、尺規上有 137 條路由
+// 因此被判成 SQLite／MIXED，而且只要它在，後面每一批移植都會停在 MIXED、數字不會動。
+//
+// 解法（Owner 決定，方案 A）：**非同步中介層每請求預先解析一次**，把結果掛在 `req` 上；
+// `readSession()` 改成優先讀快取。113 個呼叫點完全不用改，而且因為同一請求內
+// `readSession()` 常被呼叫好幾次，每請求的 `users` 查詢次數反而**變少**。
+export const SESSION_BY_EMAIL_SQL = "SELECT * FROM users WHERE email = ?";
+
+const SESSION_SLOT = Symbol("591.session");
+
+// token 驗證（純函式、不碰 DB）：同步／PG／fallback 三條路共用同一份，
+// 所以簽章與到期判斷不可能有兩份實作而漂移。
+function sessionClaim(req) {
   const token = parseCookies(req)[COOKIE];
   if (!token || !token.includes(".")) return null;
   const [payload, mac] = token.split(".");
@@ -68,12 +87,85 @@ export function readSession(req) {
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (!data?.exp || Date.now() > Number(data.exp)) return null;
-    const user = findUserByEmail(data.e);
-    if (!user || String(user.deleted_at || "").trim()) return null;
-    return { email: user.email, userId: Number(user.id), role: user.role || "member", plan: user.plan || "free" };
+    const email = normalizeEmail(data.e);
+    return email ? { email } : null;
   } catch {
     return null;
   }
+}
+
+// 身分欄位只有這一份：同步版、PG 版、fallback 版都經過它，回傳形狀不可能漂移。
+// `deleted_at` 的判斷留在這裡（原本 readSession 內就是這兩個條件）。
+export function sessionFromUser(user) {
+  if (!user || String(user.deleted_at || "").trim()) return null;
+  return { email: user.email, userId: Number(user.id), role: user.role || "member", plan: user.plan || "free" };
+}
+
+export function readSession(req) {
+  // 中介層解析過就以它為準（連「已解析為未登入」也快取，才不會每次都回頭查 SQLite）。
+  if (req && Object.prototype.hasOwnProperty.call(req, SESSION_SLOT)) return req[SESSION_SLOT];
+  const claim = sessionClaim(req);
+  if (!claim) return null;
+  return sessionFromUser(findUserByEmail(claim.email));
+}
+
+export async function readSessionAsync(req, options = {}) {
+  const claim = sessionClaim(req);
+  if (!claim) return null;
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return sessionFromUser(findUserByEmail(claim.email));
+  try {
+    if (options.exec) return sessionFromUser((await options.exec(SESSION_BY_EMAIL_SQL, [claim.email]))[0] || null);
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
+    const res = await pgDriver.query(toPostgresSql(SESSION_BY_EMAIL_SQL), [claim.email]);
+    return sessionFromUser(res.rows[0] || null);
+  } catch (error) {
+    // 讀取維持 fail-open（與其他 PG 島嶼同一政策）：PG 讀不到時退回本機 SQLite，
+    // 免得「PG 抖一下」被放大成「全站登出」。`strict` 仍可讓它往上丟（驗證用）。
+    if (!sqliteFallbackAllowed(options)) throw error;
+    return sessionFromUser(findUserByEmail(claim.email));
+  }
+}
+
+// 靜態資產不需要 session；帶 cookie 載入 30 個檔案不該換來 30 次 users 查詢。
+//
+// 規則：**符合靜態副檔名、且不在 `/api/` 底下**就當靜態。
+// ⚠️ 第一版只認 `/vendor/`、`/icons/`、`/brand/`、`/media/` 四個前綴，於是
+// `express.static(v3/public)` 服務的**根目錄檔案**（`/app.js`、`/support-page.css`…）
+// 全部沒被跳過——那才是最大一批。改成看副檔名之後，四個前綴自然被涵蓋。
+//
+// 安全前提：目前唯一「符合副檔名卻不是靜態檔」的路由是 `GET /sw.js`（純 `sendFile`，
+// 用 `_req` 不讀 session）。`route-data-map.test.js` 有一條守衛會盯著這件事：
+// 之後若有人加了會讀 session 的副檔名路由，那一條會紅，屆時把它加進 DYNAMIC_ASSET_PATHS。
+const STATIC_EXT = /\.(?:js|mjs|css|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot)$/i;
+export const DYNAMIC_ASSET_PATHS = Object.freeze([]);
+
+export function isStaticAssetPath(pathname) {
+  const p = String(pathname || "");
+  if (!STATIC_EXT.test(p)) return false;
+  if (p.startsWith("/api/")) return false;
+  return !DYNAMIC_ASSET_PATHS.includes(p);
+}
+
+// 掛在 app 層（所有路由註冊之前）：每請求解析一次並快取。
+// 沒有 cookie 或純靜態資產直接寫入 null，完全不碰 DB。
+export function resolveSession(options = {}) {
+  return async function resolveSessionMiddleware(req, _res, next) {
+    const cookie = String(req.headers?.cookie || "");
+    if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {
+      req[SESSION_SLOT] = null;
+      next();
+      return;
+    }
+    try {
+      req[SESSION_SLOT] = await readSessionAsync(req, options);
+    } catch {
+      // 解析失敗一律當成未登入：與舊 readSession() 「從不丟錯」的契約一致，
+      // 免得 auth 的例外變成 500。
+      req[SESSION_SLOT] = null;
+    }
+    next();
+  };
 }
 
 function cookieHeader(req, token, clear = false, { secure } = {}) {

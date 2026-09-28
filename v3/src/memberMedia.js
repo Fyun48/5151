@@ -137,7 +137,7 @@ export function servePublicMemberMedia(req, res) {
   createReadStream(path.resolve(full)).pipe(res);
 }
 
-function mediaTagsFor(db, mediaId) {
+export function mediaTagsFor(db, mediaId) {
   return db.prepare(
     `SELECT t.id, t.name FROM media_tag_map m
      JOIN media_tags t ON t.id = m.tag_id
@@ -146,7 +146,9 @@ function mediaTagsFor(db, mediaId) {
   ).all(Number(mediaId)).map((row) => ({ id: Number(row.id), name: row.name }));
 }
 
-function publicMedia(row, db = null) {
+// 純形狀：PG 分支（memberMediaAsync.js）用同一份，所以兩邊的欄位不可能漂移。
+// 標籤由呼叫端取好傳進來（SQLite 走 `mediaTagsFor`，PG 走一句 JOIN）。
+export function publicMediaShape(row, tags = []) {
   const key = memberMediaPublicName(row.storage_key);
   if (!key) return null;
   const id = String(key).replace(/\.jpg$/, "");
@@ -160,8 +162,17 @@ function publicMedia(row, db = null) {
     bytes: row.bytes == null ? null : Number(row.bytes),
     watermarked: Number(row.watermarked) === 1,
     created_at: row.created_at,
-    tags: db ? mediaTagsFor(db, row.id) : [],
+    tags,
   };
+}
+
+export function publicMedia(row, db = null) {
+  return publicMediaShape(row, db ? mediaTagsFor(db, row.id) : []);
+}
+
+export function publicTag(row) {
+  if (!row) return null;
+  return { id: Number(row.id), name: row.name, created_at: row.created_at };
 }
 
 export function countActiveMedia(db, userId) {
@@ -302,6 +313,22 @@ export async function reprocessMemberMediaDisplay(db, userId, id, { watermarker 
   return { ...getOwnedMedia(db, userId, id), skipped: false };
 }
 
+// 移除實體檔 ＋ CDN 上的公開顯示檔（best-effort；`_o.jpg` 從未上傳，刪除後最慢 7 天自然失效）。
+// 抽出來是為了讓 PG 分支（memberMediaAsync.js）用同一份——這一段沒有 SQL，不該有兩份。
+export function removeMediaArtifacts(row) {
+  for (const n of [
+    memberMediaPublicName(row.storage_key),
+    memberMediaPublicName(row.thumb_key),
+    memberMediaInternalOriginalName(row.original_key),
+  ].filter(Boolean)) {
+    try { const p = path.join(memberMediaDir(), n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
+  }
+  const removed = [memberMediaPublicName(row.storage_key), memberMediaPublicName(row.thumb_key)].filter(Boolean);
+  void deleteMemberMediaObjects(removed)
+    .then(() => purgeMemberMediaNames(removed))
+    .catch(() => {});
+}
+
 // 刪除：驗本人；釋放配額（soft delete）；若無任何刊登引用才移除實體檔（引用中則保留，維持歷史顯示）。
 export function deleteMemberMedia(db, userId, id, { now = new Date() } = {}) {
   const row = db.prepare("SELECT * FROM member_media WHERE id=? AND user_id=?").get(Number(id), Number(userId));
@@ -312,31 +339,18 @@ export function deleteMemberMedia(db, userId, id, { now = new Date() } = {}) {
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
   db.prepare("UPDATE member_media SET deleted_at=? WHERE id=? AND user_id=?").run(ts, Number(id), Number(userId));
   db.prepare("DELETE FROM media_tag_map WHERE media_id=?").run(Number(id));
-  if (!referenced) {
-    for (const n of [
-      memberMediaPublicName(row.storage_key),
-      memberMediaPublicName(row.thumb_key),
-      memberMediaInternalOriginalName(row.original_key),
-    ].filter(Boolean)) {
-      try { const p = path.join(memberMediaDir(), n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
-    }
-    // CDN 端的公開顯示檔一併移除並清快取（best-effort；`_o.jpg` 從未上傳，刪除後最慢 7 天自然失效）。
-    const removed = [memberMediaPublicName(row.storage_key), memberMediaPublicName(row.thumb_key)].filter(Boolean);
-    void deleteMemberMediaObjects(removed)
-      .then(() => purgeMemberMediaNames(removed))
-      .catch(() => {});
-  }
+  if (!referenced) removeMediaArtifacts(row);
   return { deleted: true, kept_file: referenced };
 }
 
-function httpError(message, status = 400, code = "") {
+export function httpError(message, status = 400, code = "") {
   const err = new Error(message);
   err.status = status;
   if (code) err.code = code;
   return err;
 }
 
-function tagName(value) {
+export function tagName(value) {
   const name = String(value || "").replace(/[\r\n\t]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
   if (!name) throw httpError("請填標籤名稱");
   return name;
