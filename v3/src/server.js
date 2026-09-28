@@ -136,12 +136,6 @@ import {
   resumeIdleIfNeeded,
   linkOauthIdentity,
   createDemand,
-  updateWishRoomFor,
-  publishWishRoomFor,
-  reopenWishRoomFor,
-  getWishExampleFor,
-  saveWishExampleFor,
-  deleteWishExampleFor,
   publicWishRoomView,
   demandMeta,
   submitFeedback,
@@ -287,16 +281,19 @@ import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSett
 import { importMetaAsync } from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
-import { deleteWishExampleAsync, getWishExampleAsync } from "./wishExampleAsync.js";
+import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
 import { closeSelfListingAsync } from "./selfListingsAsync.js";
-// 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情。
+// 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情＋生命週期寫入（更新／刊登／重開）。
 // 讀取先搬是關鍵——在那之前「寫 PG、讀 SQLite」會讓新寫入看不到；現在兩邊同源。
 import {
   addDemandReplyAsync,
   closeDemandPostAsync,
   getDemandPostAsync,
   listDemandPostsAsync,
+  publishWishRoomAsync,
+  reopenWishRoomAsync,
   reportDemandAsync,
+  updateWishRoomAsync,
   wishRoomOwnerSummaryAsync,
 } from "./demandAsync.js";
 // 許願房提案（wishOffers）的 PG 島嶼入口：讀取、檢舉、封鎖名單、後台清單、聯絡方式與狀態機。
@@ -1084,14 +1081,14 @@ app.get("/api/wish-rooms/example", async (req, res) => {
   }
 });
 
-app.put("/api/wish-rooms/example", (req, res) => {
+app.put("/api/wish-rooms/example", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json({ example: saveWishExampleFor(session.userId, req.body || {}) });
+    res.json({ example: await saveWishExampleAsync(session.userId, req.body || {}) });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
@@ -2692,40 +2689,40 @@ app.post("/api/wish-rooms", (req, res) => {
   }
 });
 
-app.patch("/api/wish-rooms/:id", (req, res) => {
+app.patch("/api/wish-rooms/:id", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(updateWishRoomFor(session.userId, req.params.id, req.body || {}));
+    res.json(await updateWishRoomAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
-app.post("/api/wish-rooms/:id/publish", (req, res) => {
+app.post("/api/wish-rooms/:id/publish", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(publishWishRoomFor(session.userId, req.params.id, req.body || {}));
+    res.json(await publishWishRoomAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
-app.post("/api/wish-rooms/:id/reopen", (req, res) => {
+app.post("/api/wish-rooms/:id/reopen", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(reopenWishRoomFor(session.userId, req.params.id));
+    res.json(await reopenWishRoomAsync(session.userId, req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }

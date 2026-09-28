@@ -1,15 +1,38 @@
 // 許願房範例（`wish_room_example`）的 driver-aware 入口（PG 島嶼，2026-09-27）。
 //
-// 涵蓋的路由：`GET /api/wish-rooms/example`、`DELETE /api/wish-rooms/example`。
-// 兩個都只碰一張表（`user_id` 是主鍵，一人一列），而且 `payload` 是 JSON 字串
+// 涵蓋的路由：`GET /api/wish-rooms/example`、`PUT /api/wish-rooms/example`、
+// `DELETE /api/wish-rooms/example`。
+// 三個都只碰一張表（`user_id` 是主鍵，一人一列），而且 `payload` 是 JSON 字串
 // ——所以讀取要照抄同步版的 `try { JSON.parse } catch { 只回 updated_at }`，
 // 壞掉的 payload **不能**讓端點爆掉。
 import { resolveDbDriver } from "./dbDriver.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { httpError } from "./demand.js";
+import { sqliteHandle } from "./db.js";
+import {
+  WISH_CONTACT_PROFILE_SQL,
+  WISH_EXAMPLE_UPSERT_SQL,
+  contactFields,
+  examplePayload,
+  httpError,
+  normalizeWishFields,
+} from "./demand.js";
+// ⚠️ 與 `demandAsync.js` 同一個理由：`saveWishExampleFor()`（db.js）第一件事是
+// `getWishConditions()`，它把 marketplace flags／租屋目錄灌進 `demand.js` 的模組快取，
+// 而 `normalizeWishFields()` 讀的正是那兩個。PG 分支跳過它就會用**空目錄**正規化。
+import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
 
 export const WISH_EXAMPLE_SELECT_SQL = "SELECT * FROM wish_room_example WHERE user_id = ?"; // demand.js:1533
 export const WISH_EXAMPLE_DELETE_SQL = "DELETE FROM wish_room_example WHERE user_id = ?"; // demand.js:1559
+// ⚠️ `saveWishExampleAsync` **不用** `ON CONFLICT(user_id) DO UPDATE`：
+//   1. PG 接受那個語法，但前提是 `user_id` 上真的有唯一約束。`ensureWishExampleStoreOnce()`
+//      自己建的 PG 表有 `user_id BIGINT PRIMARY KEY`，可是正式站的表是 `ensurePgSchema()`
+//      從 SQLite DDL **鏡射**出來的，而鏡射只涵蓋「`sqlite_master` 裡有 `sql` 的索引」——
+//      寫在 CREATE TABLE 裡的主鍵／UNIQUE 表約束**不會**被鏡射。也就是說這個 ON CONFLICT
+//      能不能用，取決於 SQLite 那邊的 DDL 寫法，不是這裡能保證的
+//      （`rentalAnalyticsAsync.bumpAnalyticsAsync` 踩過同一個坑：`42P10`）。
+//   2. 「先查再寫」在任何情況下都對，而且 `updated_at`／`created_at` 的行為與同步版相同。
+export const WISH_EXAMPLE_UPDATE_SQL =
+  "UPDATE wish_room_example SET payload = ?, updated_at = ? WHERE user_id = ?";
 export const PG_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS wish_room_example (
      user_id BIGINT PRIMARY KEY,
@@ -50,6 +73,12 @@ const requireUser = (userId) => {
   return uid;
 };
 
+// 注入式 `exec` 有兩種形狀：`crmOutboxAsync` 起的 `{ rows, rowCount }` 慣例，以及
+// `pgDriver.query()` 直接回傳的裸陣列（這一支的 `pgExec()` 就是回裸陣列）。
+// 原本只吃裸陣列，於是餵 `{ rows }` 形狀的替身時會**靜默地**回 null／少寫一列
+// ——2026-09-28 補上容錯，兩種形狀都吃。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 // 純轉換：與 demand.js:1535 的 try/catch 逐字同義。
 function exampleFromRow(row) {
   if (!row) return null;
@@ -75,8 +104,8 @@ export async function getWishExampleAsync(userId, options = {}) {
   return run(options, {}, async () => {
     const exec = await pgExec(options);
     if (!options.exec) await ensureWishExampleStoreOnce(options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver()));
-    const rows = await exec(WISH_EXAMPLE_SELECT_SQL, [uid]);
-    return exampleFromRow(rows?.[0] || null);
+    const rows = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));
+    return exampleFromRow(rows[0] || null);
   }, async () => (await import("./db.js")).getWishExampleFor(uid));
 }
 
@@ -88,4 +117,54 @@ export async function deleteWishExampleAsync(userId, options = {}) {
     await exec(WISH_EXAMPLE_DELETE_SQL, [uid]);
     return { deleted: true };
   }, async () => (await import("./db.js")).deleteWishExampleFor(uid));
+}
+
+export const WISH_EXAMPLE_INSERT_SQL =
+  "INSERT INTO wish_room_example(user_id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)";
+
+// `saveWishExampleFor()`（db.js）的 PG 版。
+//
+// ⚠️ 兩件與讀取那兩支不同的事：
+//   1. 它需要**正規化**（`normalizeWishFields`），所以一定要先讓行程內快取跟上 PG 的
+//      marketplace flags／目錄（`getWishConditionsAsync`）——同步版的 `saveWishExampleFor()`
+//      也是先 `getWishConditions()` 才呼叫本體。
+//   2. 它需要「查好的聯絡人列」（`contact_profile_id` 有值時），那份查詢也要跑在 PG 上。
+async function contactThunkFor(exec, userId, input) {
+  const profileId = Number(input?.contact_profile_id) || 0;
+  if (!profileId) return () => contactFields(userId, input, {}, null);
+  let row = null;
+  let failed = false;
+  try {
+    const rows = rowsOf(await exec(WISH_CONTACT_PROFILE_SQL, [profileId]));
+    row = rows[0] || null;
+  } catch {
+    failed = true;
+  }
+  return () => {
+    if (failed || !row) throw httpError("找不到這個聯絡人", 404);
+    return contactFields(userId, input, {}, row);
+  };
+}
+
+export async function saveWishExampleAsync(userId, input = {}, options = {}) {
+  const uid = requireUser(userId);
+  return run(options, { write: true }, async () => {
+    const exec = await pgExec(options);
+    if (!options.exec) await ensureWishExampleStoreOnce(options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver()));
+    await getWishConditionsAsync(options);
+    const fields = normalizeWishFields(uid, input || {}, {}, await contactThunkFor(exec, uid, input || {}));
+    // 時間的測試縫（與 `listingSimilarityAsync` 同一個寫法）：正式路徑不傳 `now`。
+    const stamp = (options.now ? new Date(options.now) : new Date()).toISOString();
+    const payload = JSON.stringify(examplePayload(fields));
+    // 先查再寫（不用 ON CONFLICT，理由見檔頭）。
+    const existing = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));
+    if (existing[0]) await exec(WISH_EXAMPLE_UPDATE_SQL, [payload, stamp, uid]);
+    else await exec(WISH_EXAMPLE_INSERT_SQL, [uid, payload, stamp, stamp]);
+    // 本機 handle 追上：`wish_room_example` 在 PG 模式下的讀取有兩條線還沒搬完
+    // （同步版 `getWishExample()` 與 `wishRoomOwnerSummaryFor()` 的 `has_example`），
+    // 只寫 PG 會讓同一台節點的同步讀取看到舊範例。
+    sqliteHandle().prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);
+    const landed = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));
+    return exampleFromRow(landed[0] || null);
+  }, async () => (await import("./db.js")).saveWishExampleFor(uid, input));
 }

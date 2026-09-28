@@ -2140,6 +2140,85 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 3. **第三十八批 38.2 的順序建議據此修正**：第 3 步（`ensureUser`）**刪除**；
    力氣應該放在「一起清掉 `getUserById`＋`countWatched`＋`sqlExcludeFixtureRows` 這組共同卡點」。
 
+## 二之負九、2026-09-28 第四十批：許願房生命週期寫入（更新／刊登／重開）＋範例儲存
+
+### 40.1 量測方式換了：從「模組」改成「**移植單元**」，答案完全相反
+
+39.1 的分組法（依定義模組）有一個盲點：**同一個工作單元常常橫跨兩個模組**
+（實作在 `demand.js`、吃 handle 的包裝在 `db.js`）。所以「只清一個模組能放掉幾條路由」
+永遠接近 0，看起來像「沒有便宜的目標」，其實是**量錯了**。
+
+改成用「移植單元」（把 `X`／`XFor` 這種成對的包裝收斂成同一個單元）重量之後：
+
+| 移植單元 | 影響路由 | 單獨做完可放掉的路由 |
+|---|---:|---:|
+| `ensureUser` | 22 | 3（**偽陽性**，見 38.7，實際 0） |
+| `getUserById` | 24 | 0 |
+| `setCachedGeo` | 7 | 1（`POST /api/profiles`） |
+| **`updateWishRoom`／`publishWishRoom`／`reopenWishRoom`** | **3** | **3** |
+| **`saveWishExample`** | **1** | **1** |
+| `getCompletionSurvey`／`submitCompletionSurvey` | 2 | 0（要搭 `getDemandPost`，已在島上） |
+
+⇒ 許願房生命週期的三支 ＋ 範例儲存是**唯一一組「自己就是自己瓶頸」的單元**：
+把這四支搬完，四條路由同時落地。這就是這一包。
+
+### 40.2 做法
+
+`demand.js` 這一批**只抽共用、不改行為**（先抽再搬，兩個 driver 才不可能漂移）：
+
+- `normalizeWishFields(userId, input, fallback, contactThunk)`：`normalizeWishInput()` 的純核心。
+  ⚠️ `contactThunk` 在**原本 `snapshotContact()` 的位置**才被呼叫——「同時有多個錯誤時先丟哪一個」
+  與同步版相同（`rentPair()`／行政區等較早的驗證仍然優先）。PG 版把查好的聯絡人列包成 thunk。
+- `contactFields()`：聯絡人快照的純部分（「只能用自己的聯絡人」「電話太短」「line 正規化」）。
+- `WRITE_ROW_SQL` ＋ `writeRowParams()`：`writeRow()` 的語句與參數順序（29 個欄位）。
+- `applyPublishInPlace()`／`applyPublishInPlaceAsync()`、`applyReopenInPlace()`／`applyReopenInPlaceAsync()`：
+  狀態轉換的資料半，同步版與 PG 版逐字共用同一組語句與同一個 lifecycle patch。
+- `countMutable` 的兩條 COUNT、`publishExpiry()`、`publishLifecyclePatch()`、`examplePayload()` 也都匯出重用。
+
+`demandAsync.js` 新增 `updateWishRoomAsync()`／`publishWishRoomAsync()`／`reopenWishRoomAsync()`，
+`wishExampleAsync.js` 新增 `saveWishExampleAsync()`，`server.js` 接線四條路由
+（`PATCH /api/wish-rooms/:id`、`POST …/publish`、`POST …/reopen`、`PUT /api/wish-rooms/example`）。
+
+### 40.3 這一包的三個坑（少處理一個就會出錯，而且症狀都很難查）
+
+1. **行程內快取要先跟上 PG**：`db.js` 的 `*For` 包裝第一件事是 `getWishConditions()`，
+   它把 `marketplaceFlags`／`catalogCacheV2` 灌進 `demand.js` 的模組變數——`normalizeWishFields()`
+   讀的正是那兩個。PG 分支若跳過，會拿**空目錄**正規化（條件選項整批消失、生命週期開關判錯），
+   而且只有在「真的改了條件選項」時才看得出來。所以每一支都先 `await getWishConditionsAsync(options)`。
+2. **`updated_at` 這種「寫入當下」的時間戳會漏進衍生欄位**：`last_active_at`、`activity_score`、
+   `activity_bucket` 都是由 `updated_at` 推出來的，所以 parity 比對不能只遮罩 `updated_at`。
+   這一包改用**時間縫**（`options.now`，與 `listingSimilarityAsync` 同一個寫法）：
+   兩邊餵同一個時間，回傳值就能逐鍵 `deepEqual`，不必遮罩任何欄位。
+3. **PG 沒有交易**：`run()` 走連線池，下 `BEGIN` 不保證同一條連線，所以 `withImmediate()` 沒有對應物。
+   「同一人只能有一則 open／draft」改靠 `ensurePgSchema` 從 SQLite 鏡射過去的**部分唯一索引**
+   （`idx_demand_one_open`／`idx_demand_one_draft`／`idx_demand_one_mutable`）；
+   撞到 23505 要轉成與同步版**同一個** `wish_active_limit`。
+   ⚠️ 轉換要**指名索引名稱**：`demand_posts` 上還有 `idx_demand_public_token`，
+   把所有 23505 都當成 active limit 會把「token 撞號」講成「已有許願房」。
+
+順手補掉一個**潛在缺陷**：`wishExampleAsync` 的 `pgExec()` 回裸陣列，但注入式 `exec` 的既有慣例是
+`{ rows, rowCount }`（`crmOutboxAsync` 起）。原本只認裸陣列，餵另一種會**靜默地**回 null
+（症狀：「範例明明存進去了，GET 卻說沒有」）。現在 `rowsOf()` 兩種都吃。
+⚠️ 同一類的形狀問題在 `settingsKvAsync.getSiteSettingAsync()` 還在（它讀 `rows[0]?.value`）——
+   目前**只影響注入式 `exec` 的測試**（正式路徑 `pgExec()` 回裸陣列，所以沒事），尚未處理。
+
+### 40.4 測試
+
+- `v3/test/wish-room-lifecycle-async.test.js`（**11 項全綠**）：更新（正規化欄位／錯誤形狀／
+  PG 不得被寫入）、刊登（draft→open 的兩個 store、冪等、非草稿狀態的錯誤、23505 競態與
+  「非 23505 不得被吞掉」）、重開（closed→open、hidden／blocked／collapsed／completed 四種拒絕）、
+  快取 priming（真的對 `settings` 查過 ＋ 快取被灌好）、範例（INSERT→UPDATE、`created_at` 不變、
+  兩個 store、未登入／別人的聯絡人、兩種 exec 形狀）。變異 **15 條全殺**。
+- `v3/test/demand-live-pg.test.js` 追加一條 live PG：更新／刊登／重開真的在 PG 上生效、
+  **PG 上真的擋得住第二則 mutable**（部分唯一索引）、範例第二次是 UPDATE。
+- 尺規（可重跑）：`node v3/scripts/route-data-map.mjs` ⇒ 缺口 **95 → 91**，PG **173 → 177**。
+
+### 40.5 下一個候選（用同一個「移植單元」量測法）
+
+`getCompletionSurvey`／`submitCompletionSurvey`（2 條路由，`rentalSurvey.js` 只有 72 行）＋
+`surveyAggregate`／`rentalOpsSummary`／`rentalOpsDrilldown`（2 條路由，`rentalOpsAnalytics.js` 206 行）
+＝ **4 條路由**，而且 `getDemandPost`／`bumpAnalytics` 都已經在島上。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2150,13 +2229,13 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在** |
+| 判定 | 起點 | **現在（2026-09-28 第四十批合併後）** |
 |---|---:|---:|
 | SQLite | 95 | **11** |
-| MIXED | — | **87** |
+| MIXED | — | **80** |
 | 無直接DB | — | **20** |
-| PG | 22 | **170** |
-| **缺口（SQLite＋MIXED）** | — | **98** |
+| PG | 22 | **177** |
+| **缺口（SQLite＋MIXED）** | — | **91** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`
@@ -2166,6 +2245,9 @@ node v3/scripts/route-data-map.mjs
 >   `getAdminAdsSettings`／`applyBrandUpload`／`getAdminBroadcastsSettings`／
 >   `remoteCsAcceptControl` **都已經完成**（實跑尺規：這些函式已經不在任何缺口路由的卡點裡）。
 > - 障礙清單第 1 項（`ensureUser` 3 條）**仍然成立**；新增的 2026-09-28 進度看「二之一」。
+> - **量測要改用「移植單元」而不是「模組」**：舊分組法會讓每一包的投報率看起來都是 0，
+>   因為同一個工作單元通常橫跨 `X`（實作模組）與 `XFor`（`db.js` 包裝）兩個模組。
+>   做法與量測表見 40.1。
 
 PR #529（`fix/route-map-driver-aware`，34 個 commit）**CI 全綠、未部署**；
 Production `{"ok":true,"version":"3.57"}`、identity 序列 75/75 健康。**部署要 Owner 明確批准（§8.2）。**

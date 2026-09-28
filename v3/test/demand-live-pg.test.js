@@ -194,3 +194,128 @@ test("live PG：bootstrap 之後檢舉／回覆／關閉真的生效，且 deman
   try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 檔案被鎖住就算了 */ }
   void sqliteHandle;
 });
+
+// 生命週期寫入（更新／刊登／重開）與範例儲存（`wish_room_example`）的 live PG 驗證。
+//
+// 離線 parity 用的是記憶體 SQLite 替身，證明不了這幾件事（與上面那一條同一個理由）：
+//   1. `ensurePgSchema` 鏡射出來的表真的能接受這些 UPDATE（`COALESCE(?, status)`、
+//      `condition_choices`、`lifecycle` 這些欄位在 PG 上的型別與 NOT NULL）。
+//   2. 「同一人只能有一則 open／draft」的**部分唯一索引在 PG 上真的存在**——同步版靠
+//      `BEGIN IMMEDIATE` ＋ 這個索引，PG 版沒有交易，只剩這個索引可以擋。
+//   3. `wish_room_example` 的「先查再寫」在 PG 上真的能寫第二次（INSERT 之後 UPDATE）。
+test("live PG：更新／刊登／重開與範例儲存真的生效，且部分唯一索引在 PG 上擋得住", { skip }, async () => {
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const demandAsync = await import("../src/demandAsync.js");
+  const wishExampleAsync = await import("../src/wishExampleAsync.js");
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
+
+  const pgDriver = await createPostgresDriver({ connectionString: RAW });
+  const query = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  const who = (await query("SELECT current_database() AS db"))[0];
+  assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
+
+  const syncSequence = async (table) => {
+    await query(
+      `SELECT setval(pg_get_serial_sequence($1, 'id'), GREATEST((SELECT COALESCE(MAX(id),0) FROM ${table}), 1))`,
+      [table],
+    );
+  };
+  const cleanup = async () => {
+    const users = await query("SELECT id FROM users WHERE email LIKE 'live-wish-%@example.com'");
+    if (!users.length) return;
+    const ids = users.map((r) => Number(r.id));
+    const posts = await query("SELECT id FROM demand_posts WHERE user_id = ANY($1)", [ids]);
+    const postIds = posts.map((r) => Number(r.id));
+    if (postIds.length) await query("DELETE FROM demand_posts WHERE id = ANY($1)", [postIds]);
+    await query("DELETE FROM wish_room_example WHERE user_id = ANY($1)", [ids]);
+    await query("DELETE FROM users WHERE id = ANY($1)", [ids]);
+  };
+
+  await cleanup();
+  await syncSequence("users");
+  await syncSequence("demand_posts");
+
+  const [UID] = (await query(
+    "INSERT INTO users(email, nickname, role, plan, created_at) VALUES ($1,'屋主','member','free',$2) RETURNING id",
+    ["live-wish-owner@example.com", OLD],
+  )).map((r) => Number(r.id));
+  assert.ok(UID, "測試帳號必須真的被建立");
+
+  const DRAFT_ID = Number((await query(
+    `INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token)
+     VALUES ($1,'[]',0,'any',0,'live PG 生命週期驗證','draft',$2,$3,$4) RETURNING id`,
+    [UID, OLD, EXPIRES, `${TOKEN}-draft`],
+  ))[0].id);
+
+  // ⚠️ 與上面那一條同一個理由：`options.exec` 有值時 `withFallback()` 不再套 `toPostgresSql`，
+  // 所以注入的 runner 自己要套（正式路徑也是這樣）。
+  const exec = async (sql, params = []) => {
+    const res = await pgDriver.query(toPostgresSql(sql), params);
+    return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
+  };
+  const opts = { driver: "postgres", pgDriver, exec, strict: true };
+  const rowOf = async (id) => (await query(
+    "SELECT status, lifecycle, closed_at, published_at, districts, rent_min, rent_max, body, city FROM demand_posts WHERE id = $1",
+    [id],
+  ))[0];
+
+  // 1) 刊登：draft → open，而且在 PG 上真的落地（不是只寫本機 handle）
+  const published = await demandAsync.publishWishRoomAsync(UID, DRAFT_ID, { districts: ["1-5"], body: "live 刊登的內容" }, opts);
+  assert.equal(published.status, "open", "回傳的許願房必須是 open");
+  let row = await rowOf(DRAFT_ID);
+  assert.equal(row.status, "open", "PG 上必須真的變 open");
+  assert.equal(row.lifecycle, "active", "lifecycle 必須在 PG 上落地");
+  assert.ok(row.published_at, "published_at 必須被寫入");
+  assert.equal(row.closed_at, null, "closed_at 必須是 NULL");
+
+  // 2) 更新：欄位正規化後寫進 PG
+  const updated = await demandAsync.updateWishRoomAsync(UID, DRAFT_ID, {
+    districts: ["1-5", "1-7"], rent_min: 15000, rent_max: 25000, body: "  live 更新後的內容  ",
+  }, opts);
+  assert.equal(updated.status, "open");
+  row = await rowOf(DRAFT_ID);
+  assert.equal(row.districts, '["1-5","1-7"]', "districts 必須以 JSON 陣列落地");
+  assert.equal(row.city, "台北市", "city 必須由行政區推導");
+  assert.equal(row.rent_min, 15000);
+  assert.equal(row.body, "live 更新後的內容", "頭尾空白必須被正規化");
+
+  // 3) 部分唯一索引：PG 上「同一人只能有一則 open／draft」是真的靠索引擋下來的
+  //    （PG 版沒有 `BEGIN IMMEDIATE`，所以這是唯一的防線）。
+  await assert.rejects(
+    () => query(
+      `INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token)
+       VALUES ($1,'[]',0,'any',0,'第二則','draft',$2,$3,$4)`,
+      [UID, OLD, EXPIRES, `${TOKEN}-second`],
+    ),
+    /idx_demand_one_(draft|mutable)|duplicate key/i,
+    "PG 上必須有擋住『第二則 mutable』的部分唯一索引",
+  );
+
+  // 4) 重開：先關掉（PG 上），再走 PG 版重開
+  await query("UPDATE demand_posts SET status = 'closed', lifecycle = 'paused', closed_at = $2 WHERE id = $1", [DRAFT_ID, OLD]);
+  const reopened = await demandAsync.reopenWishRoomAsync(UID, DRAFT_ID, opts);
+  assert.equal(reopened.status, "open");
+  row = await rowOf(DRAFT_ID);
+  assert.equal(row.status, "open", "重開必須在 PG 上真的生效");
+  assert.equal(row.lifecycle, "active", "重開要把 lifecycle 寫回 active");
+  assert.equal(row.closed_at, null, "重開必須清掉 closed_at");
+
+  // 5) 範例：第一次 INSERT、第二次 UPDATE，兩次都要在 PG 上真的落地
+  const firstExample = await wishExampleAsync.saveWishExampleAsync(UID, { districts: ["1-5"], rent_max: 20000, body: "live 範例一" }, opts);
+  const afterFirst = (await query("SELECT created_at FROM wish_room_example WHERE user_id = $1", [UID]))[0];
+  const secondExample = await wishExampleAsync.saveWishExampleAsync(UID, { districts: ["1-7"], rent_max: 26000, body: "live 範例二" }, opts);
+  const stored = (await query("SELECT payload, created_at, updated_at FROM wish_room_example WHERE user_id = $1", [UID]))[0];
+  assert.ok(stored, "範例必須真的寫進 PG 的 wish_room_example");
+  assert.match(stored.payload, /live 範例二/, "第二次必須覆蓋第一次");
+  assert.equal(stored.created_at, afterFirst.created_at, "第二次（UPDATE）不得改寫 created_at");
+  assert.equal(firstExample.body, "live 範例一");
+  assert.equal(secondExample.body, "live 範例二");
+  assert.equal(
+    (await query("SELECT COUNT(*)::int AS n FROM wish_room_example WHERE user_id = $1", [UID]))[0].n, 1,
+    "一人只能有一列（先查再寫不得寫出第二列）",
+  );
+
+  await cleanup();
+  await pgDriver.close();
+  try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* 檔案被鎖住就算了 */ }
+});

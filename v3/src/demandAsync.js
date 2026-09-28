@@ -40,16 +40,41 @@ import {
   DEMAND_REPLY_MAX_PER_HOUR,
   DEMAND_REPLY_MIN_GAP_MS,
   DEMAND_REPORT_HIDE_AFTER,
+  DEMAND_MAX_OPEN,
+  COUNT_MUTABLE_EXCEPT_SQL,
+  COUNT_MUTABLE_SQL,
+  WISH_CONTACT_PROFILE_SQL,
+  WRITE_ROW_SQL,
   addDemandReply as addDemandReplySync,
   applyClosedPostEffects,
   applyClosedPostEffectsAsync,
+  applyPublishInPlace,
+  applyPublishInPlaceAsync,
+  applyReopenInPlace,
+  applyReopenInPlaceAsync,
   applyReportHideEffects,
   applyReportHideEffectsAsync,
   assertMatureAccount,
+  assertNotCollapsed,
+  assertPublishable,
+  classifyWishPublishState,
   closeDemandPost as closeDemandPostSync,
+  contactFields,
+  currentRentalMarketplaceFlags,
   decoratePostWith,
   getDemandPost as getDemandPostSync,
+  httpError,
+  isUniqueUserConstraintError,
   matchesFilters,
+  normalizeWishFields,
+  publishWishRoom as publishWishRoomSync,
+  reopenWishRoom as reopenWishRoomSync,
+  reportDemand as reportDemandSync,
+  stripUnsafePlain,
+  throwActiveLimit,
+  updateWishRoom as updateWishRoomSync,
+  writeRow,
+  writeRowParams,
   assertPublicFields,
   EXPIRE_CONFIRM_SQL,
   EXPIRE_PAUSE_SQL,
@@ -62,10 +87,14 @@ import {
   expireOpenPosts,
   isWishLifecycleExpiryEnabled,
   publicWishRoomView,
-  httpError,
-  reportDemand as reportDemandSync,
-  stripUnsafePlain,
 } from "./demand.js";
+// 生命週期的兩個純判斷：`reopen` 要與同步版逐條相同（completed 不能重開、blocked 不能重開）。
+import { isWishLifecycleEnabled } from "./rentalMarketplaceFlags.js";
+import { mapLegacyLifecycle } from "./wishLifecycle.js";
+// ⚠️ 這個 import 是**語意必需**、不是方便：`getWishConditionsAsync()` 會把 PG 上的
+// marketplace flags 與租屋目錄灌進 `demand.js` 的模組快取，而 `normalizeWishFields()`
+// 讀的正是那兩個快取（同步版的 `*For` 包裝也是先呼叫 `getWishConditions()`）。
+import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
 
 // 這三支只碰這三張表。`ensurePgSchema` 會由 SQLite 的實際 schema 鏡射建表，並把
 // `sqlite_master` 裡有 `sql` 的索引一併補建（`createIndexStatements()` 逐字沿用 SQLite 的
@@ -492,4 +521,173 @@ export async function wishRoomOwnerSummaryAsync(userId, options = {}) {
       can_create: !active,
     };
   }, async () => (await import("./db.js")).wishRoomOwnerSummaryFor(userId));
+}
+
+// ── 許願房生命週期寫入（更新／刊登／重開）────────────────────────────────────
+//
+// 涵蓋的路由：
+//   `PATCH /api/wish-rooms/:id`         → `updateWishRoomAsync`
+//   `POST  /api/wish-rooms/:id/publish` → `publishWishRoomAsync`
+//   `POST  /api/wish-rooms/:id/reopen`  → `reopenWishRoomAsync`
+//
+// 這三條原本各差「一組吃 handle 的同步函式」（`demand.js` 的實作 ＋ `db.js` 的 `*For` 包裝），
+// 主要資料都只落在 `demand_posts`，其餘部分（`getDemandPostAsync`／`expireOpenPostsAsync`）
+// 都已經在島上。規則**全部**重用 `demand.js`，這裡只負責「跑語句」：
+// `normalizeWishFields`（純核心）／`classifyWishPublishState`／`assertNotCollapsed`／
+// `assertPublishable`／`countMutable` 的語句／`applyPublishInPlaceAsync`／`applyReopenInPlaceAsync`。
+//
+// ⚠️ 三個一定要處理的耦合（少一個就會出錯，這裡寫明理由）：
+//
+//   1. **行程內快取**：`db.js` 的 `*For` 包裝第一件事是 `getWishConditions()`，它會把
+//      `marketplaceFlags`／`catalogCacheV2` 灌進 `demand.js` 的模組變數——而
+//      `normalizeWishFields()` 讀的正是那兩個。PG 分支若跳過這一步，會拿**空目錄**去正規化
+//      （條件選項整批消失、生命週期開關判錯），而且只有在真的改了條件選項時才看得出來。
+//      所以每一支都先 `await getWishConditionsAsync(options)`（PG 版的 settings 讀取，
+//      跑的是同一組 setter）。
+//
+//   2. **兩個 store 都要寫**：PG 是真的來源；本機 handle 也要寫，讓還沒搬完的讀取
+//      （`aggregateDemand`／`homepageDemandExposure` 那幾支仍吃 handle）看到一致的狀態。
+//      順序固定「PG 先、本機後」，與 `reportDemandAsync`／`closeDemandPostAsync` 相同。
+//
+//   3. **沒有交易**：PG 走連線池，用 `run()` 下 `BEGIN` 不保證同一條連線（反而會把
+//      `BEGIN` 留在池子裡的某條連線上）。同步版的 `withImmediate()` 在這裡沒有對應物，
+//      「同時只能有一則 open」改靠 `ensurePgSchema` 從 SQLite 鏡射過去的部分唯一索引
+//      （`idx_demand_one_open`／`idx_demand_one_mutable`）擋；撞到就轉成與同步版**同一個**
+//      `wish_active_limit` 錯誤（`isUniqueUserConstraintError()`）。
+//
+// ⚠️ 回傳值與同步版相同（整則許願房）：`getDemandPostAsync()` 已經在島上，讀的是 PG，
+// 所以不會出現「寫 PG、讀 SQLite」那種拿到舊資料的假回應（那正是 reply／close 兩支
+// 當初只能回最小封包的原因，現在那個前置條件已經滿足）。
+export const POST_OWNER_ROW_SQL = "SELECT * FROM demand_posts WHERE id = ?";
+
+// 巢狀讀取（回傳整則許願房）用：把當前這條 runner 直接傳下去，不要再解一次 driver／schema。
+const nested = (options, run) => ({ ...options, driver: "postgres", exec: run });
+
+// 時間的測試縫：與 `listingSimilarityAsync` 同一個寫法（`iso(options.now)`）。
+// 有注入就用注入的，沒有就用當下——正式路徑不傳，行為與同步版的預設參數相同。
+const nowOf = (options) => (options.now ? new Date(options.now) : new Date());
+
+async function countMutableAsync(run, userId, exceptId = 0) {
+  const res = exceptId
+    ? await run(COUNT_MUTABLE_EXCEPT_SQL, [userId, exceptId])
+    : await run(COUNT_MUTABLE_SQL, [userId]);
+  return Number(one(res.rows)?.n) || 0;
+}
+
+// `normalizeWishFields()` 需要「已經查好的聯絡人列」，但那個查詢是非同步的、而 thunk 必須在
+// **原本的位置**才被呼叫（見 `demand.js` 的說明：同時有多個錯誤時，先丟哪一個要與同步版一致）。
+// 所以這裡先查、後把結果包成同步 thunk；查不到時 thunk 才丟 404——與同步版的順序相同。
+async function contactThunkFor(run, userId, input, fallback) {
+  const profileId = Number(input?.contact_profile_id) || 0;
+  if (!profileId) return () => contactFields(userId, input, fallback, null);
+  let row = null;
+  let failed = false;
+  try {
+    row = one((await run(WISH_CONTACT_PROFILE_SQL, [profileId])).rows);
+  } catch {
+    failed = true;
+  }
+  return () => {
+    if (failed || !row) throw httpError("找不到這個聯絡人", 404);
+    return contactFields(userId, input, fallback, row);
+  };
+}
+
+async function wishFieldsAsync(run, userId, input, fallback) {
+  return normalizeWishFields(userId, input, fallback, await contactThunkFor(run, userId, input, fallback));
+}
+
+// 撞到「一人一則」的部分唯一索引時，PG 丟的是 23505，同步版丟的是 `wish_active_limit`。
+// 兩邊的**錯誤形狀**必須相同，否則前端看到的訊息會隨 driver 改變。
+function rethrowActiveLimit(error) {
+  if (isUniqueUserConstraintError(error)) throwActiveLimit();
+  throw error;
+}
+
+// `updateWishRoomFor()`（db.js）的 PG 版。
+export async function updateWishRoomAsync(userId, postId, input = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    const uid = Number(userId) || 0;
+    if (!uid) throw httpError("請先登入", 401);
+    await getWishConditionsAsync(options);
+    const id = Number(postId) || 0;
+    const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);
+    if (!row) throw httpError("找不到這則許願房", 404);
+    if (Number(row.user_id) !== uid) throw httpError("只能修改自己的許願房", 403);
+    if (row.status === "hidden") throw httpError("已隱藏的許願房不能再改", 400);
+    const fields = await wishFieldsAsync(run, uid, input || {}, row);
+    if (row.status === "open") assertPublishable(fields);
+    const extra = { updated_at: iso(nowOf(options)) };
+    await run(WRITE_ROW_SQL, writeRowParams(row.id, fields, extra));
+    // 本機 handle 追上（`writeRow()` 內含 `syncDemandMatchDistricts()`，那一支吃 handle）。
+    writeRow(sqliteHandle(), row.id, fields, extra);
+    return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
+  }, () => updateWishRoomSync(sqliteHandle(), userId, postId, input));
+}
+
+// `publishWishRoomFor()`（db.js）的 PG 版。順序照抄同步版：成熟度 → 過期掃描 → 狀態分類。
+export async function publishWishRoomAsync(userId, postId, input = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    const uid = Number(userId) || 0;
+    if (!uid) throw httpError("請先登入", 401);
+    await getWishConditionsAsync(options);
+    const now = nowOf(options);
+    // 與 `addDemandReplyAsync` 同一個已知落差：帳號成熟度讀的是**本機** `users.created_at`
+    // （`assertMatureAccount()` 吃 handle）。真正同源要跟 session／users 那條線一起解。
+    assertMatureAccount(sqliteHandle(), uid, now, "刊登許願房");
+    await expireOpenPostsAsync(run, now);
+    const id = Number(postId) || 0;
+    const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);
+    if (!row) throw httpError("找不到這則許願房", 404);
+    if (Number(row.user_id) !== uid) throw httpError("只能刊登自己的許願房", 403);
+    if (classifyWishPublishState(row) === "already_open") {
+      return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
+    }
+    const fields = await wishFieldsAsync(run, uid, input || {}, row);
+    assertPublishable(fields);
+    if (await countMutableAsync(run, uid, row.id) >= DEMAND_MAX_OPEN) throwActiveLimit();
+    try {
+      await applyPublishInPlaceAsync(run, row, fields, now);
+    } catch (error) {
+      rethrowActiveLimit(error);
+    }
+    applyPublishInPlace(sqliteHandle(), row, fields, now);
+    return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
+  }, () => publishWishRoomSync(sqliteHandle(), userId, postId, input));
+}
+
+// `reopenWishRoomFor()`（db.js）的 PG 版。
+export async function reopenWishRoomAsync(userId, postId, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    const uid = Number(userId) || 0;
+    if (!uid) throw httpError("請先登入", 401);
+    await getWishConditionsAsync(options);
+    const now = nowOf(options);
+    assertMatureAccount(sqliteHandle(), uid, now, "重新公開許願房");
+    await expireOpenPostsAsync(run, now);
+    const id = Number(postId) || 0;
+    const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);
+    if (!row) throw httpError("找不到這則許願房", 404);
+    if (Number(row.user_id) !== uid) throw httpError("只能重開自己的許願房", 403);
+    if (row.status === "open") return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
+    if (row.status === "hidden") throw httpError("已隱藏的許願房不能重開", 400);
+    if (row.status === "draft") throw httpError("草稿請改用刊登", 400);
+    assertNotCollapsed(row);
+    if (await countMutableAsync(run, uid, row.id) >= DEMAND_MAX_OPEN) throwActiveLimit();
+    const fields = await wishFieldsAsync(run, uid, {}, row);
+    assertPublishable(fields);
+    // ⚠️ 這兩個判斷讀的是**行程內快取**（`getWishConditionsAsync()` 剛灌好），與同步版相同。
+    const flags = currentRentalMarketplaceFlags();
+    if (mapLegacyLifecycle(row) === "completed" && isWishLifecycleEnabled(flags)) {
+      throw httpError("已找到房的許願房請另開新的一則", 400, "wish_completed");
+    }
+    if (mapLegacyLifecycle(row) === "blocked") throw httpError("已封鎖的許願房不能重開", 400, "wish_blocked");
+    try {
+      await applyReopenInPlaceAsync(run, row, fields, now);
+    } catch (error) {
+      rethrowActiveLimit(error);
+    }
+    applyReopenInPlace(sqliteHandle(), row, fields, now);
+    return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
+  }, () => reopenWishRoomSync(sqliteHandle(), userId, postId));
 }
