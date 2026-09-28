@@ -46,10 +46,12 @@ test("live PG：prefs／訂閱／取消訂閱端到端，唯一索引與 identit
   const who = (await query("SELECT current_database() AS db"))[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
 
-  const syncSequence = async (table) => {
+  // ⚠️ 欄位名要一起給：`listings` 的主鍵是 `post_id`（不是 `id`），寫死 `id` 會得到
+  // `column "id" does not exist`（CI 第一次跑就是這樣紅的）。
+  const syncSequence = async (table, column = "id") => {
     await query(
-      `SELECT setval(pg_get_serial_sequence($1, 'id'), GREATEST((SELECT COALESCE(MAX(id),0) FROM ${table}), 1))`,
-      [table],
+      `SELECT setval(pg_get_serial_sequence($1, $2), GREATEST((SELECT COALESCE(MAX(${column}),0) FROM ${table}), 1))`,
+      [table, column],
     );
   };
   // `settings` 是站台層級的共用狀態：先記下原值，收尾要還原（別的 live 測試會讀它）。
@@ -73,7 +75,7 @@ test("live PG：prefs／訂閱／取消訂閱端到端，唯一索引與 identit
 
   await cleanup();
   await syncSequence("users");
-  await syncSequence("listings");
+  await syncSequence("listings", "post_id");
   await syncSequence("rental_match_subscriptions");
   // 通知要開著，否則寫入會被 `assertRentalNotificationsEnabled()` 擋下（那是站台政策）。
   await query(
