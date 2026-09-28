@@ -2359,6 +2359,62 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 - `v3/test/rental-ops-live-pg.test.js`（新，CI 的 PG job 會跑）：方言 SQL 的中位數與 JS 對帳
   （奇／偶各一次）、整包該有的鍵、明細在 PG 上真的能分頁且兩頁不重複。
 
+## 二之負十二、2026-09-28 第四十三批：租屋通知偏好／配對訂閱／取消訂閱
+
+### 43.1 範圍與投報率
+
+42.1 之後剩下的長尾裡，這一組是「同一個使用者的三張小表、一次做完」最順的一包
+（`rentalNotify.js` 裡的 prefs／subscriptions／unsubscribe_tokens）。做完放掉五條路由：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /api/rental-notify/prefs` | `getRentalNotifyPrefsForAsync` |
+| `PUT  /api/rental-notify/prefs` | `saveRentalNotifyPrefsForAsync` |
+| `GET  /api/self-listings/:id/match-subscription` | `getMatchSubscriptionAsync` |
+| `PUT  /api/self-listings/:id/match-subscription` | `saveMatchSubscriptionAsync` |
+| `POST /api/public/unsubscribe/:token` | `applyUnsubscribeTokenAsync` |
+
+尺規：缺口 **87 → 82**，PG **181 → 186**（其中 `POST /api/public/unsubscribe/:token` 原本是
+唯一的 SQLite 判定，也一起變 PG）。
+
+### 43.2 這一包的四個坑
+
+1. **行程內快取決定「通知是開還是關」**：`db.js` 的 `*For` 包裝第一件事是
+   `hydrateRentalMarketplace()`，它灌的是 `flagsCache`（`assertRentalNotificationsEnabled()`
+   讀它）與 marketplace flags（`publicRentalNotifyCaps()` 讀它）。PG 分支跳過就會
+   「站上明明開了通知，PG 站卻回 404 `rental_notify_disabled`」——**功能全滅**，不是小差異。
+   ⇒ 每一支都先 `await getWishConditionsAsync(options)`；測試刻意讓本機與 PG 的 settings
+   不一致，驗 PG 版跟的是 PG（`prefs 讀取`／`PG 說通知關閉`這兩條）。
+2. **取消訂閱要暫時打開閘門，而且 `finally` 在 async 會提早還原**：同步版直接改
+   `flagsCache`，PG 版若照抄那個寫法，`finally` 會在 `saveRentalNotifyPrefsAsync()` 的
+   Promise **還沒結算**時就還原旗標 ⇒ 使用者的取消連結被自己的閘門擋下（404）。
+   ⇒ 另寫一支 `withNotificationsForcedEnabledAsync()`（`await` 之後才還原）。
+3. **兩個 store，而且本機那一列不一定存在**：同步的 `planDeliveries()` 讀本機 prefs、
+   worker 的摘要查詢讀本機訂閱，所以 PG 寫完本機要寫**同一組值**；反過來取消連結的
+   token 可能是**別的節點**寄的（本機沒有那一列），那時只能動 PG
+   ——硬寫本機不會報錯，但會讓狀態看起來像「取消了」而本機其實沒有那筆資料。
+4. **`rental_match_subscriptions` 的唯一鍵又是表約束**：`UNIQUE(owner_user_id, listing_id)`
+   與 `public_token UNIQUE` 都鏡射不到（本系列**第五次**），少了它們「同一刊登一組訂閱」會失效；
+   另外 `rental_notify_prefs.user_id` 是 `INTEGER PRIMARY KEY` ⇒ PG 上是 identity，而它是
+   使用者 id ⇒ 健檢會永遠紅著（與第四十批的 `wish_room_example` 同一個坑），ensure 補
+   `DROP IDENTITY`。
+
+**訂閱 token 的優先序**（PG 已有的 → 本機已有的 → 新產生）：PG 上還沒有那一列、但本機有時
+（島嶼搬遷前建立的訂閱），沿用本機的 token 才不會讓**已經寄出去**的連結失效；
+兩個 store 因此一定收斂到同一個 token（`SUBSCRIPTION_SYNC_LOCAL_SQL` 連 `public_token` 一起蓋）。
+
+### 43.3 測試
+
+- `v3/test/rental-notify-prefs-async.test.js`（**10 項全綠**）：常數清單（兩條 unique index ＋
+  `DROP IDENTITY`）、prefs 讀取（預設值／caps 跟 PG）、prefs 寫入（兩個 store 同值、
+  計數各一次、未知鍵不得落地）、未登入 401 與站上關閉 404（PG 版與本機旗標不一致時以 PG 為準）、
+  訂閱（INSERT／UPDATE／同一個 token／不合法 mode 降級／所有權與名稱錯誤）、取消訂閱
+  （四種 scope、只能用一次、站上關閉時仍要生效、過期／不存在、本機沒有 token 時仍要成功）、
+  非 postgres 走同步路徑。變異 **14 條全殺**。
+- `v3/test/rental-notify-prefs-live-pg.test.js`（新，CI 的 PG job 會跑）：唯一索引真的在 PG 上、
+  `user_id` 不是 identity、prefs 的 `ON CONFLICT` insert／update 兩條分支、
+  訂閱的 INSERT→UPDATE 與「第二列被唯一索引擋下」、取消連結端到端（prefs＋訂閱＋`used_at`）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2369,13 +2425,13 @@ members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十二批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十三批）** |
 |---|---:|---:|
-| SQLite | 95 | **11** |
-| MIXED | — | **76** |
+| SQLite | 95 | **10** |
+| MIXED | — | **72** |
 | 無直接DB | — | **20** |
-| PG | 22 | **181** |
-| **缺口（SQLite＋MIXED）** | — | **87** |
+| PG | 22 | **186** |
+| **缺口（SQLite＋MIXED）** | — | **82** |
 
 > ⚠️ **這一節的「下一步」與「障礙」清單寫在 2026-09-27，部分已經過期**：
 > - 「session 解析是步驟 3 的前置條件」**已經做完**（Owner 方案 A：`readSessionAsync()`

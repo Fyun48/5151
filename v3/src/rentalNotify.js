@@ -67,6 +67,31 @@ export function setRentalNotifyPushSink(fn) {
   pushSink = typeof fn === "function" ? fn : null;
 }
 
+// 取消訂閱時的「暫時打開閘門」：使用者按了取消連結就一定要生效，不該被
+// 「站上通知已關閉」擋下（同步版原本直接改模組層的 `flagsCache`）。
+// 抽成函式讓 PG 版逐字重用——**非同步版必須另寫一支**：同步版的 `finally` 會在
+// `fn()` 回傳 Promise 的當下就還原旗標（還沒結算），於是 PG 版的
+// `saveRentalNotifyPrefsAsync()` 會在中途被自己的 `assertRentalNotificationsEnabled()` 擋下。
+export function withNotificationsForcedEnabled(fn) {
+  const prev = flagsCache;
+  flagsCache = { ...prev, wish: { ...(prev.wish || {}), notifications_enabled: true } };
+  try {
+    return fn();
+  } finally {
+    flagsCache = prev;
+  }
+}
+
+export async function withNotificationsForcedEnabledAsync(fn) {
+  const prev = flagsCache;
+  flagsCache = { ...prev, wish: { ...(prev.wish || {}), notifications_enabled: true } };
+  try {
+    return await fn();
+  } finally {
+    flagsCache = prev;
+  }
+}
+
 export function assertRentalNotificationsEnabled() {
   if (!isRentalNotificationsEnabled(flagsCache)) {
     const err = new Error("租屋通知尚未開放");
@@ -105,7 +130,8 @@ function hasTable(db, name) {
   return Boolean(db.prepare("SELECT 1 AS n FROM sqlite_master WHERE type = 'table' AND name = ?").get(name));
 }
 
-function policyCheckError(message, cause) {
+// 匯出給 PG 版（`rentalNotifyPrefsAsync.js`）：所有權查不到時要丟**同一個**錯誤形狀。
+export function policyCheckError(message, cause) {
   const err = new Error(message);
   err.code = "policy_check_failed";
   err.status = 500;
@@ -126,14 +152,16 @@ export function wishHasActiveOffer(db, wishId) {
   }
 }
 
+// 所有權查詢：PG 版逐字共用（`listings` 在 PG 上是同一張表）。
+export const LISTING_OWNER_SQL =
+  "SELECT listed_by_user_id, COALESCE(self_status, 'open') AS self_status FROM listings WHERE post_id = ? AND COALESCE(source, '591') = 'self'";
+
 export function listingOwnedBy(db, ownerUserId, listingId) {
   if (!hasTable(db, "listings")) {
     throw policyCheckError("listings_unavailable");
   }
   try {
-    const row = db.prepare(
-      "SELECT listed_by_user_id, COALESCE(self_status, 'open') AS self_status FROM listings WHERE post_id = ? AND COALESCE(source, '591') = 'self'",
-    ).get(Number(listingId) || 0);
+    const row = db.prepare(LISTING_OWNER_SQL).get(Number(listingId) || 0);
     if (!row) return { found: false, open: false };
     return {
       found: Number(row.listed_by_user_id) === Number(ownerUserId),
@@ -149,7 +177,8 @@ function atMs(now = new Date()) {
   return now instanceof Date ? now.getTime() : (Number(now) || Date.now());
 }
 
-function newToken(bytes = 18) {
+// 匯出給 PG 版：訂閱列的 `public_token` 兩個 driver 用同一個產生器。
+export function newToken(bytes = 18) {
   return randomBytes(bytes).toString("base64url");
 }
 
@@ -354,6 +383,54 @@ export function defaultRentalNotifyPrefs() {
   };
 }
 
+// prefs 的 upsert：`ON CONFLICT(user_id)` 靠的是 `user_id INTEGER PRIMARY KEY`，
+// 而 `ensurePgSchema()` **會**把主鍵帶過去（主鍵是 table_info 看得到的），所以這一句
+// 兩個 driver 都合法、可以逐字共用。
+// ⚠️ 但 `user_id` 在 PG 上會是 identity（SQLite 的 rowid 別名被翻成 identity），
+// 而這個欄位是**使用者 id**、永遠由呼叫端提供 ⇒ 序列不會前進，健檢會永遠紅著。
+// 所以 async 版的 ensure 要多一句 `DROP IDENTITY`（見 `rentalNotifyPrefsAsync.js`）。
+export const PREFS_UPSERT_SQL = `
+    INSERT INTO rental_notify_prefs(
+      user_id, lifecycle_reminder, new_match, offer_transactional, daily_digest,
+      channel_dock, channel_mail, channel_push, timezone, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      lifecycle_reminder = excluded.lifecycle_reminder,
+      new_match = excluded.new_match,
+      offer_transactional = excluded.offer_transactional,
+      daily_digest = excluded.daily_digest,
+      channel_dock = excluded.channel_dock,
+      channel_mail = excluded.channel_mail,
+      channel_push = excluded.channel_push,
+      timezone = excluded.timezone,
+      updated_at = excluded.updated_at
+  `;
+
+export function prefsUpsertParams(uid, prefs, now = new Date()) {
+  return [
+    Number(uid) || 0,
+    prefs.lifecycle_reminder ? 1 : 0,
+    prefs.new_match ? 1 : 0,
+    prefs.offer_transactional ? 1 : 0,
+    prefs.daily_digest ? 1 : 0,
+    prefs.channel_dock ? 1 : 0,
+    prefs.channel_mail ? 1 : 0,
+    prefs.channel_push ? 1 : 0,
+    String(prefs.timezone || RENTAL_SITE_TZ).slice(0, 64),
+    iso(now),
+  ];
+}
+
+// 「patch 只覆蓋既有鍵」的合併規則：同步版與 PG 版共用（未知的鍵一律忽略）。
+export function mergeRentalNotifyPrefs(current, patch = {}) {
+  const next = {
+    ...current,
+    ...Object.fromEntries(Object.entries(patch || {}).filter(([key]) => key in current)),
+  };
+  next.timezone = String(next.timezone || RENTAL_SITE_TZ).slice(0, 64);
+  return next;
+}
+
 export function getRentalNotifyPrefs(db, userId) {
   const row = db.prepare("SELECT * FROM rental_notify_prefs WHERE user_id = ?").get(Number(userId) || 0);
   if (!row) return defaultRentalNotifyPrefs();
@@ -373,39 +450,8 @@ export function saveRentalNotifyPrefs(db, userId, patch = {}, now = new Date()) 
   assertRentalNotificationsEnabled();
   const uid = Number(userId) || 0;
   if (!uid) throw rentalNotifyHttpError("請先登入", 401, "auth_required");
-  const current = getRentalNotifyPrefs(db, uid);
-  const next = {
-    ...current,
-    ...Object.fromEntries(Object.entries(patch || {}).filter(([key]) => key in current)),
-  };
-  next.timezone = String(next.timezone || RENTAL_SITE_TZ).slice(0, 64);
-  db.prepare(`
-    INSERT INTO rental_notify_prefs(
-      user_id, lifecycle_reminder, new_match, offer_transactional, daily_digest,
-      channel_dock, channel_mail, channel_push, timezone, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(user_id) DO UPDATE SET
-      lifecycle_reminder = excluded.lifecycle_reminder,
-      new_match = excluded.new_match,
-      offer_transactional = excluded.offer_transactional,
-      daily_digest = excluded.daily_digest,
-      channel_dock = excluded.channel_dock,
-      channel_mail = excluded.channel_mail,
-      channel_push = excluded.channel_push,
-      timezone = excluded.timezone,
-      updated_at = excluded.updated_at
-  `).run(
-    uid,
-    next.lifecycle_reminder ? 1 : 0,
-    next.new_match ? 1 : 0,
-    next.offer_transactional ? 1 : 0,
-    next.daily_digest ? 1 : 0,
-    next.channel_dock ? 1 : 0,
-    next.channel_mail ? 1 : 0,
-    next.channel_push ? 1 : 0,
-    next.timezone,
-    iso(now),
-  );
+  const next = mergeRentalNotifyPrefs(getRentalNotifyPrefs(db, uid), patch);
+  db.prepare(PREFS_UPSERT_SQL).run(...prefsUpsertParams(uid, next, now));
   bumpAnalytics(db, "pref_updated", now);
   return getRentalNotifyPrefs(db, uid);
 }
@@ -419,45 +465,73 @@ export function createUnsubscribeToken(db, userId, scope = "all", now = new Date
   return token;
 }
 
+// 取消連結的 scope → prefs patch。抽成純函式：兩個 driver 的「取消哪幾個開關」不可能漂移。
+export function unsubscribePrefsPatch(scope) {
+  const key = String(scope || "all");
+  if (key === "lifecycle") return { lifecycle_reminder: false };
+  if (key === "new_match") return { new_match: false, daily_digest: false };
+  if (key === "digest") return { daily_digest: false };
+  return { lifecycle_reminder: false, new_match: false, daily_digest: false, channel_mail: false, channel_push: false };
+}
+
+export const UNSUB_TOKEN_SQL = "SELECT * FROM rental_unsubscribe_tokens WHERE token = ?";
+export const UNSUB_MARK_USED_SQL = "UPDATE rental_unsubscribe_tokens SET used_at = ? WHERE token = ?";
+// 訂閱的自動關閉：`all`／`new_match` 關掉使用者全部的訂閱，`digest` 只關每日摘要。
+export const SUBSCRIPTIONS_OFF_ALL_SQL =
+  "UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ?";
+export const SUBSCRIPTIONS_OFF_DIGEST_SQL =
+  "UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ? AND mode = 'daily_digest'";
+
+// 取消訂閱的「資料半」：關訂閱 → 寫 prefs（暫時打開閘門）。標記 token 已用由呼叫端負責
+// （同步版與 PG 版都一樣，放在最後一步）。
+// 同步版與 PG 版共用這一段的**順序與規則**；PG 版的差別只是把 `db` 換成 runner，
+// 所以呼叫端負責 `saveRentalNotifyPrefs` 那一步的 driver 版本。
+export function applyUnsubscribeEffects(db, { userId, scope, now = new Date(), savePrefs = saveRentalNotifyPrefs } = {}) {
+  const stamp = iso(now);
+  if (scope === "new_match" || scope === "all") {
+    db.prepare(SUBSCRIPTIONS_OFF_ALL_SQL).run(stamp, userId);
+  } else if (scope === "digest") {
+    db.prepare(SUBSCRIPTIONS_OFF_DIGEST_SQL).run(stamp, userId);
+  }
+  withNotificationsForcedEnabled(() => savePrefs(db, userId, unsubscribePrefsPatch(scope), now));
+}
+
 export function applyUnsubscribeToken(db, token, now = new Date()) {
   const raw = String(token || "").trim();
   if (!raw || /^\d+$/.test(raw)) throw rentalNotifyHttpError("找不到取消連結", 404, "unsub_not_found");
-  const row = db.prepare("SELECT * FROM rental_unsubscribe_tokens WHERE token = ?").get(raw);
+  const row = db.prepare(UNSUB_TOKEN_SQL).get(raw);
   if (!row) throw rentalNotifyHttpError("找不到取消連結", 404, "unsub_not_found");
   if (row.used_at) return { ok: true, already: true };
   if (Date.parse(row.expires_at) <= atMs(now)) throw rentalNotifyHttpError("取消連結已過期", 400, "unsub_expired");
   const scope = String(row.scope || "all");
-  const patch = scope === "lifecycle" ? { lifecycle_reminder: false }
-    : scope === "new_match" ? { new_match: false, daily_digest: false }
-      : scope === "digest" ? { daily_digest: false }
-        : { lifecycle_reminder: false, new_match: false, daily_digest: false, channel_mail: false, channel_push: false };
-  if (scope === "new_match" || scope === "all") {
-    db.prepare("UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ?")
-      .run(iso(now), row.user_id);
-  } else if (scope === "digest") {
-    db.prepare("UPDATE rental_match_subscriptions SET mode = 'off', updated_at = ? WHERE owner_user_id = ? AND mode = 'daily_digest'")
-      .run(iso(now), row.user_id);
-  }
-  const prev = flagsCache;
-  flagsCache = { ...prev, wish: { ...(prev.wish || {}), notifications_enabled: true } };
-  try {
-    saveRentalNotifyPrefs(db, row.user_id, patch, now);
-  } finally {
-    flagsCache = prev;
-  }
-  db.prepare("UPDATE rental_unsubscribe_tokens SET used_at = ? WHERE token = ?").run(iso(now), raw);
+  applyUnsubscribeEffects(db, { userId: row.user_id, scope, now });
+  // ⚠️ 這一行是「這個連結只能用一次」的全部實作。抽常數時一度被字串取代整段吃掉
+  // （`rental-notify.test.js` 的 `second.already` 當場紅）——改這一帶請連測試一起看。
+  db.prepare(UNSUB_MARK_USED_SQL).run(iso(now), raw);
   return { ok: true, already: false };
 }
 
-export function getMatchSubscription(db, ownerUserId, listingId) {
-  const row = db.prepare(
-    "SELECT * FROM rental_match_subscriptions WHERE owner_user_id = ? AND listing_id = ?",
-  ).get(Number(ownerUserId) || 0, Number(listingId) || 0);
+// 訂閱列的三句 SQL 與視圖抽成共用零件：PG 版（`rentalNotifyPrefsAsync.js`）逐字共用，
+// 「沒有限訂閱時回 off／空 token」這個形狀不可能漂移。
+export const SUBSCRIPTION_BY_OWNER_LISTING_SQL =
+  "SELECT * FROM rental_match_subscriptions WHERE owner_user_id = ? AND listing_id = ?";
+export const SUBSCRIPTION_UPDATE_MODE_SQL =
+  "UPDATE rental_match_subscriptions SET mode = ?, updated_at = ? WHERE id = ?";
+export const SUBSCRIPTION_INSERT_SQL = `INSERT INTO rental_match_subscriptions(public_token, owner_user_id, listing_id, mode, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)`;
+
+export function matchSubscriptionView(row, listingId) {
   return {
     listing_ref: Number(listingId) || 0,
     mode: row?.mode || "off",
     subscription_ref: row?.public_token || "",
   };
+}
+
+export function getMatchSubscription(db, ownerUserId, listingId) {
+  const row = db.prepare(SUBSCRIPTION_BY_OWNER_LISTING_SQL)
+    .get(Number(ownerUserId) || 0, Number(listingId) || 0);
+  return matchSubscriptionView(row, listingId);
 }
 
 export function saveMatchSubscription(db, ownerUserId, listingId, mode, now = new Date()) {
@@ -469,18 +543,12 @@ export function saveMatchSubscription(db, ownerUserId, listingId, mode, now = ne
   const owned = listingOwnedBy(db, uid, lid);
   if (!owned.found) throw rentalNotifyHttpError("找不到這則刊登", 404, "listing_not_found");
   const stamp = iso(now);
-  const existing = db.prepare(
-    "SELECT * FROM rental_match_subscriptions WHERE owner_user_id = ? AND listing_id = ?",
-  ).get(uid, lid);
+  const existing = db.prepare(SUBSCRIPTION_BY_OWNER_LISTING_SQL).get(uid, lid);
   if (existing) {
-    db.prepare("UPDATE rental_match_subscriptions SET mode = ?, updated_at = ? WHERE id = ?")
-      .run(next, stamp, existing.id);
+    db.prepare(SUBSCRIPTION_UPDATE_MODE_SQL).run(next, stamp, existing.id);
     return getMatchSubscription(db, uid, lid);
   }
-  db.prepare(
-    `INSERT INTO rental_match_subscriptions(public_token, owner_user_id, listing_id, mode, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(newToken(), uid, lid, next, stamp, stamp);
+  db.prepare(SUBSCRIPTION_INSERT_SQL).run(newToken(), uid, lid, next, stamp, stamp);
   return getMatchSubscription(db, uid, lid);
 }
 

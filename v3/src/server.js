@@ -174,11 +174,6 @@ import {
   getWishOfferFor,
   reportWishOfferFor,
   runWishOfferExpiryWorkerTick,
-  getRentalNotifyPrefsFor,
-  saveRentalNotifyPrefsFor,
-  getMatchSubscriptionFor,
-  saveMatchSubscriptionFor,
-  applyUnsubscribeTokenFor,
   recordShareEventFor,
   sharePageExtrasFor,
   runRentalNotifyWorkerTick,
@@ -315,6 +310,14 @@ import {
   rentalOpsDrilldownAsync,
   rentalOpsSummaryAsync,
 } from "./rentalOpsAnalyticsAsync.js";
+// 租屋通知偏好／配對訂閱／取消訂閱的 PG 島嶼入口。
+import {
+  applyUnsubscribeTokenAsync,
+  getMatchSubscriptionAsync,
+  getRentalNotifyPrefsForAsync,
+  saveMatchSubscriptionAsync,
+  saveRentalNotifyPrefsForAsync,
+} from "./rentalNotifyPrefsAsync.js";
 // 完成問卷（survey）的 PG 島嶼入口：讀取、送出，以及 admin 的 survey_breakdown 零件。
 import {
   getCompletionSurveyAsync,
@@ -1172,9 +1175,9 @@ app.post("/api/public/wish-room/:id/share-events", async (req, res) => {
   }
 });
 
-app.post("/api/public/unsubscribe/:token", (req, res) => {
+app.post("/api/public/unsubscribe/:token", async (req, res) => {
   try {
-    res.json(applyUnsubscribeTokenFor(req.params.token));
+    res.json(await applyUnsubscribeTokenAsync(req.params.token));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
@@ -2889,38 +2892,38 @@ app.post("/api/self-listings/:id/matches/:wishRef/offers", (req, res) => {
   }
 });
 
-app.get("/api/rental-notify/prefs", (req, res) => {
+app.get("/api/rental-notify/prefs", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getRentalNotifyPrefsFor(session.userId));
+    res.json(await getRentalNotifyPrefsForAsync(session.userId));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.put("/api/rental-notify/prefs", (req, res) => {
+app.put("/api/rental-notify/prefs", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(saveRentalNotifyPrefsFor(session.userId, req.body || {}));
+    res.json(await saveRentalNotifyPrefsForAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.get("/api/self-listings/:id/match-subscription", (req, res) => {
+app.get("/api/self-listings/:id/match-subscription", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(getMatchSubscriptionFor(session.userId, req.params.id));
+    res.json(await getMatchSubscriptionAsync(session.userId, req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
-app.put("/api/self-listings/:id/match-subscription", (req, res) => {
+app.put("/api/self-listings/:id/match-subscription", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(saveMatchSubscriptionFor(session.userId, req.params.id, req.body?.mode));
+    res.json(await saveMatchSubscriptionAsync(session.userId, req.params.id, req.body?.mode));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
