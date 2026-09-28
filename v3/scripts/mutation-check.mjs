@@ -1631,6 +1631,61 @@ const REJECT_MUTATIONS = [
   },
 ];
 
+// 許願房寫入（檢舉／回覆／關閉）PG 分支的變異集（v3/test/demand-async.test.js）。
+const DEMAND_SRC = "v3/src/demandAsync.js";
+const DEMAND_EFFECTS_SRC = "v3/src/demand.js";
+const DEMAND_MUTATIONS = [
+  {
+    name: "檢舉計數改成寫入前的門檻（達門檻的那一筆不會隱藏）",
+    file: DEMAND_SRC,
+    from: "    const count = Number(one((await run(REPORT_COUNT_SQL, [kind, id])).rows)?.n) || 0;\n    const hide = count >= DEMAND_REPORT_HIDE_AFTER;",
+    to: "    const count = Number(one((await run(REPORT_COUNT_SQL, [kind, id])).rows)?.n) || 0;\n    const hide = false;",
+    expect: "第二筆達門檻要隱藏",
+  },
+  {
+    name: "拿掉『同一人不重複檢舉』的查詢（會一直重複寫入）",
+    file: DEMAND_SRC,
+    from: "    const already = one((await run(REPORT_DUPLICATE_SQL, [kind, id, uid])).rows);\n    if (already) return { ok: true, already: true };",
+    to: "    const already = null;\n    if (already) return { ok: true, already: true };",
+    expect: "重複檢舉",
+  },
+  {
+    name: "拿掉檢舉目標的存在檢查（不存在的目標也會被寫入）",
+    file: DEMAND_SRC,
+    from: "    const exists = one((await run(TARGET_EXISTS_SQL[kind], [id])).rows);\n    if (!exists) throw httpError(\"找不到要檢舉的內容\", 404);",
+    to: "    const exists = true;\n    if (!exists) throw httpError(\"找不到要檢舉的內容\", 404);",
+    expect: "目標不存在",
+  },
+  {
+    name: "靜默吞掉 PG 的錯誤（寫入失敗會變成無聲的分歧）",
+    file: DEMAND_SRC,
+    from: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();\n  }",
+    to: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) return null;\n    return runSqlite();\n  }",
+    expect: "fail-closed",
+  },
+  {
+    name: "回覆不擋 20 秒間隔（洗版防線失效）",
+    file: DEMAND_SRC,
+    from: "    if (last && now.getTime() - Date.parse(last.created_at) < DEMAND_REPLY_MIN_GAP_MS) {",
+    to: "    if (false && last && now.getTime() - Date.parse(last.created_at) < DEMAND_REPLY_MIN_GAP_MS) {",
+    expect: "間隔與每小時上限",
+  },
+  {
+    name: "關閉不檢查擁有者（任何人可關別人的許願房）",
+    file: DEMAND_SRC,
+    from: "    if (!admin && Number(row.user_id) !== Number(userId)) throw httpError(\"只能關閉自己的許願房\", 403);",
+    to: "    if (false) throw httpError(\"只能關閉自己的許願房\", 403);",
+    expect: "非本人",
+  },
+  {
+    name: "關閉不寫 lifecycle（收尾狀態不會落地）",
+    file: DEMAND_EFFECTS_SRC,
+    from: "  writeLifecycle(db, id, { lifecycle: \"paused\", closed_reason: \"paused\" });\n  syncDemandMatchDistricts(db, id);",
+    to: "  syncDemandMatchDistricts(db, id);",
+    expect: "lifecycle",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -1653,6 +1708,7 @@ const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATION
   : /listing-tools-async/.test(testFile) ? LISTINGTOOLS_MUTATIONS
   : /session-async/.test(testFile) ? SESSION_MUTATIONS
   : /admin-audit-visibility/.test(testFile) ? AUDIT_MUTATIONS
+  : /demand-async/.test(testFile) ? DEMAND_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
           : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
