@@ -477,3 +477,40 @@ test("解除封鎖：moderation 的封鎖不能自行解除，兩邊一致", asy
     "PG 上的 moderation 封鎖列必須還在",
   );
 });
+
+test("後台檢舉清單：形狀、排序與 limit 兩邊一致", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  copyRows(db, mem);
+  const offerRow = transitions.getWishOffer(db, 1, offer.public_token);
+  // 三筆檢舉（不同提案，避開唯一鍵），時間刻意不同以便驗排序
+  const stamps = ["2026-09-28T01:00:00.000Z", "2026-09-28T03:00:00.000Z", "2026-09-28T02:00:00.000Z"];
+  const reasons = ["spam", "fraud", "other"];
+  for (const h of [db, mem]) {
+    stamps.forEach((stamp, i) => {
+      h.prepare(
+        `INSERT INTO wish_offer_reports(public_token, offer_id, reporter_user_id, reported_user_id, listing_id, reason, detail, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, '', 'open', ?)`,
+      ).run(`adm-${i}`, 900000 + i, 50 + i, 2, 2, reasons[i], stamp);
+    });
+  }
+
+  const sync = offers.listAdminOfferReports(db, { limit: 50 });
+  const asyncList = await offerAsync.listAdminOfferReportsAsync({ limit: 50 }, { ...PG, exec, strict: true });
+  assert.deepEqual(asyncList, { items: sync }, "後台清單必須逐鍵相同");
+  assert.equal(asyncList.items.length, 3, "三筆都要在（否則這條沒鑑別力）");
+  // 最新的排最前面（ORDER BY created_at DESC）
+  assert.equal(asyncList.items[0].created_at, "2026-09-28T03:00");
+  // 不得外洩檢舉人（後台清單刻意只給這些欄位）
+  const banned = ["reporter_user_id", "reported_user_id", "detail", "offer_id"];
+  for (const key of banned) {
+    assert.equal(key in asyncList.items[0], false, `後台清單不得有 ${key}`);
+  }
+
+  // limit 夾限：預設 50、上限 100、下限 1
+  for (const limit of [1, 2, 0, -5, 999, undefined]) {
+    const s2 = offers.listAdminOfferReports(db, { limit });
+    const a2 = await offerAsync.listAdminOfferReportsAsync({ limit }, { ...PG, exec, strict: true });
+    assert.deepEqual(a2, { items: s2 }, `limit=${limit} 的結果必須相同`);
+  }
+});

@@ -1797,6 +1797,20 @@ const WOFFERS_MUTATIONS = [
     expect: "形狀（含刊登標題）",
   },
   {
+    name: "後台清單不套 limit 夾限（負數或爆量都照送）",
+    file: WOFFERS_SRC,
+    from: "  const size = Math.min(100, Math.max(1, Number(opts?.limit) || 50));",
+    to: "  const size = Number(opts?.limit) || 50;",
+    expect: "後台檢舉清單",
+  },
+  {
+    name: "後台清單多回傳檢舉人（個資外洩）",
+    file: WOFFERS_SRC,
+    from: "    const rows = (await run(ADMIN_REPORTS_SQL, [size])).rows || [];\n    return { items: rows.map(publicAdminReportView) };",
+    to: "    const rows = (await run(ADMIN_REPORTS_SQL, [size])).rows || [];\n    return { items: rows };",
+    expect: "後台檢舉清單",
+  },
+  {
     name: "非 postgres 不回退（SQLite 站會壞）",
     file: WOFFERS_SRC,
     from: "  if (!isPg(options)) return runSqlite();",

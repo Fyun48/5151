@@ -21,6 +21,7 @@ import { getSelfRowAsync } from "./selfListingsAsync.js";
 import {
   OFFER_REPORT_DAILY_CAP,
   OFFER_REPORT_DETAIL_MAX,
+  ADMIN_REPORTS_SQL,
   OFFER_REPORT_REASONS,
   assertOfferBurst,
   assertWishOfferEnabled,
@@ -29,6 +30,7 @@ import {
   loadVisibleOffer as loadVisibleOfferSync,
   newOfferToken,
   offerHttpError,
+  publicAdminReportView,
   publicBlockView,
   publicOfferViewWith,
 } from "./wishOffers.js";
@@ -370,4 +372,20 @@ export async function unblockByRefAsync(userId, blockRef, options = {}) {
     await run(BLOCK_DELETE_SQL, [Number(row.id), uid]);
     return { ok: true, block_ref: row.public_token };
   }, async () => (await import("./wishOffers.js")).unblockByRef(sqliteHandle(), userId, blockRef));
+}
+
+// ── 後台檢舉清單（`GET /api/admin/wish-offer-reports`）────────────────────────
+//
+// 這一條是**讀取**，而且現在特別重要：檢舉列已經由 `reportOfferAsync()` 寫進 PG，
+// 若後台清單還讀節點 SQLite，管理員看到的會是**舊的／空的**清單（寫 PG、讀 SQLite 的分歧）。
+// 映射重用 `wishOffers.js` 的 `publicAdminReportView()`，語句逐字用 `ADMIN_REPORTS_SQL`。
+export async function listAdminOfferReportsAsync(opts = {}, options = {}) {
+  const size = Math.min(100, Math.max(1, Number(opts?.limit) || 50));
+  return withFallback(options, {}, async (run) => {
+    const rows = (await run(ADMIN_REPORTS_SQL, [size])).rows || [];
+    return { items: rows.map(publicAdminReportView) };
+  }, async () => {
+    const mod = await import("./wishOffers.js");
+    return { items: mod.listAdminOfferReports(sqliteHandle(), opts) };
+  });
 }

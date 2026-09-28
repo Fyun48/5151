@@ -185,7 +185,6 @@ import {
   blockWishOfferFor,
   reportWishOfferFor,
   readWishOfferContactFor,
-  listAdminWishOfferReportsFor,
   runWishOfferExpiryWorkerTick,
   getRentalNotifyPrefsFor,
   saveRentalNotifyPrefsFor,
@@ -2208,8 +2207,13 @@ app.get("/api/admin/rental-match-rules", requireAdminApi, async (_req, res) => {
   res.json(await rentalMatchAdminRulesAsync());
 });
 
-app.get("/api/admin/wish-offer-reports", requireAdminApi, (_req, res) => {
-  res.json(listAdminWishOfferReportsFor());
+// 檢舉列由 PG 島嶼寫入，所以後台清單也必須讀 PG（否則管理員看到的是舊資料）。
+app.get("/api/admin/wish-offer-reports", requireAdminApi, async (req, res) => {
+  try {
+    res.json(await listAdminOfferReportsAsync({ limit: req.query?.limit }));
+  } catch (error) {
+    sendOfferError(res, error);
+  }
 });
 
 app.get("/api/admin/feedback", requireAdminApi, (req, res) => {

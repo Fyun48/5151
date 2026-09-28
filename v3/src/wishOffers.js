@@ -1049,19 +1049,29 @@ export function createOfferReport(db, userId, offer, { reason, detail = "", now 
   return { ok: true, already: false, report_ref: token };
 }
 
-export function listAdminOfferReports(db, { limit = 50 } = {}) {
-  const size = Math.min(100, Math.max(1, Number(limit) || 50));
-  return db.prepare(
-    `SELECT public_token, offer_id, reason, status, created_at, listing_id
-     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`,
-  ).all(size).map((row) => ({
+// 列 → 檢舉視圖的映射抽成純函式，PG 版（wishOffersAsync.listAdminOfferReportsAsync）
+// 用同一支，確保後台看到的欄位形狀不可能與同步版不同。
+export function publicAdminReportView(row) {
+  return {
     report_ref: row.public_token,
     reason: row.reason,
     status: row.status,
     created_at: truncateTime(row.created_at),
     listing_ref: row.listing_id,
-  }));
+  };
 }
+
+export function listAdminOfferReports(db, { limit = 50 } = {}) {
+  const size = Math.min(100, Math.max(1, Number(limit) || 50));
+  return db.prepare(
+    `SELECT public_token, offer_id, reason, status, created_at, listing_id
+     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).all(size).map(publicAdminReportView);
+}
+
+// ⚠️ 查詢語句抽成常數：PG 版逐字用它（只差 LIMIT 的綁定方式）。
+export const ADMIN_REPORTS_SQL = `SELECT public_token, offer_id, reason, status, created_at, listing_id
+     FROM wish_offer_reports ORDER BY created_at DESC, id DESC LIMIT ?`;
 
 export function explainWishOfferPlans(db) {
   const explain = (sql) => {
