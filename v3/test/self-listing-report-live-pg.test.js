@@ -66,7 +66,9 @@ test("live PG：檢舉門檻與停權在真 PG 上生效", { skip }, async (t) =
 
   await cleanup();
   await syncSequence("users");
-  await syncSequence("listings");
+  // ⚠️ `listings` 的主鍵是 `post_id`（不是 `id`）：`syncSequence()` 的預設值是 `id`，
+  // 忘了傳就得到 `column "id" does not exist`（這個坑在同一天的兩支 live 測試各踩一次）。
+  await syncSequence("listings", "post_id");
 
   const mkUser = async (tag) => Number((await query(
     "INSERT INTO users(email, nickname, role, plan, created_at) VALUES ($1, $2, 'member', 'free', $3) RETURNING id",
