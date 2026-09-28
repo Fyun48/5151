@@ -12,6 +12,8 @@
 import {
   adminEmailForUser,
   emptyFlags,
+  loadFlagMap as loadFlagMapSync,
+  loadFlags as loadFlagsSync,
   stampFlags,
 } from "./personalFlags.js";
 // setFlags() 在 db.js（personalFlags.js 只有 setUserListingFlags 等底層函式）。
@@ -24,12 +26,18 @@ import { watchLimitForActor, watchLimitMessage } from "./watchLimits.js";
 import { groupIdForPost } from "./listingGroupsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
+// SQLite 分支需要 handle（同步版那些函式吃 `(conn, …)`）；與 `selfListingsAsync.js` 同一模式。
+import { sqliteHandle } from "./db.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 
 // 語句文字與 personalFlags.setUserListingFlags()／watchLimits.countWatched()／
 // listingGroups.bindWatchToGroup() 逐字相同。
-const FLAGS_BY_USER_POST_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ? AND post_id = ?";
+// `loadFlags()` 的語句（同步版逐字相同）。
+export const FLAGS_BY_USER_POST_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ? AND post_id = ?";
+// `loadFlagMap()` 的語句（同步版逐字相同）。
+export const FLAGS_BY_USER_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ?";
 const COUNT_WATCHED_SQL = "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1";
 const SET_WATCH_GROUP_SQL = "UPDATE user_listing_flags SET watch_group_id = ? WHERE user_id = ? AND post_id = ?";
 const USER_BY_EMAIL_SQL = "SELECT id, role, plan FROM users WHERE email = ? LIMIT 1";
@@ -165,4 +173,51 @@ export async function hideMany(ids, userId, options = {}) {
 export async function hideManyAsync(ids, userId, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") return hideManySync(ids, userId);
   return hideMany(ids, userId, options);
+}
+
+// ── 讀取（`loadFlags()`／`loadFlagMap()`）────────────────────────────────────
+//
+// 為什麼挑這兩支：它們各自只是一個 SELECT，卻是**13 條缺口路由**的共同卡點
+// （`loadFlags` 9 條、`loadFlagMap` 8 條，重疊後 13 條）——以「卡點數 ÷ 影響路由數」
+// 算是目前投報率最高的一組。
+//
+// ⚠️ `emptyFlags()` 是**純物件工廠**（同步版在查不到時回它），PG 版必須回同一個形狀，
+// 否則 `overlayPersonal()` 那類呼叫端會拿到 undefined 欄位。
+
+const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
+
+// ⚠️ 這個模組的 `pgExec()` 回的是 **rows 陣列**（不是 `{ rows, rowCount }`）——
+// 與 `demandAsync.js`／`wishOffersAsync.js` 的契約不同，所以 `one()` 直接吃它即可。
+
+// `loadFlags()` 的 PG 版：查不到（或 uid／pid 為 0）回 `emptyFlags()`。
+// 讀取維持 fail-open（與其他 PG 島嶼同政策）：PG 讀不到時退回本機 SQLite，
+// 免得「PG 抖一下」被放大成「個人標記全部消失」。`strict` 可讓它往上丟（驗證用）。
+export async function loadFlagsAsync(userId, postId, options = {}) {
+  const uid = Number(userId) || 0;
+  const pid = Number(postId) || 0;
+  if (!uid || !pid) return emptyFlags();
+  if (!isPg(options)) return loadFlagsSync(sqliteHandle(), uid, pid) || emptyFlags();
+  try {
+    const exec = await pgExec(options);
+    return one(await exec(FLAGS_BY_USER_POST_SQL, [uid, pid])) || emptyFlags();
+  } catch (error) {
+    if (!sqliteFallbackAllowed(options, {})) throw error;
+    return loadFlagsSync(sqliteHandle(), uid, pid) || emptyFlags();
+  }
+}
+
+// `loadFlagMap()` 的 PG 版：回 `Map(post_id -> row)`，與同步版同一個形狀。
+export async function loadFlagMapAsync(userId, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return new Map();
+  if (!isPg(options)) return loadFlagMapSync(sqliteHandle(), uid);
+  try {
+    const exec = await pgExec(options);
+    const map = new Map();
+    for (const row of (await exec(FLAGS_BY_USER_SQL, [uid])) || []) map.set(Number(row.post_id), row);
+    return map;
+  } catch (error) {
+    if (!sqliteFallbackAllowed(options, {})) throw error;
+    return loadFlagMapSync(sqliteHandle(), uid);
+  }
 }

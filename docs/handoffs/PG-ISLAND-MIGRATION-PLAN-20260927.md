@@ -1191,194 +1191,149 @@ bootstrap 先清重複（保留 id 最大＝最後寫入的那一列）再補建
 
 * `v3/test/web-push-async.test.js` **9/9**（新）；變異測試 **8/8 KILLED**。
 
-## 二之負七、2026-09-28 第三十八批（**只做範圍界定，尚未實作**）：`getUserById` 與 `ensureUser`
+## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
-合併 #531～#533 之後，缺口的前兩大卡點換人了：
+原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
+live PG 測試證明「現在接會錯」，退回同步版並寫明前置條件。這一批的重點其實是那個退回的理由。
 
-| 卡點 | 缺口路由數 |
-|---|---:|
-| `getUserById` | **25** |
-| `ensureUser` | **22** |
-
-### 38.1 為什麼 `getUserById` 不是「一句 SELECT 的便宜目標」
-
-它看起來只是 `SELECT * FROM users WHERE id = ?`，但在 `db.js` 裡有 **8 處私有呼叫**，
-而且那些呼叫端**全部是同步函式**：
-
-```
-db.js:932／942／954   adminPatchMember()
-db.js:2282            listingToolsInfo()
-db.js:2299            createDescriptionTemplateFor()
-db.js:2720            getSettings()
-db.js:2727            saveSettings()
-db.js:2769            saveAsProfile()
-db.js:4111            armMemberExternalFetch()
-```
-
-⇒ 要讓 `getUserById` driver-aware，就得把上面這 7 支**一起**改成 async（或改成注入 loader）。
-這是一個**成組的批次**，不是單點修改；而且其中幾支本身就是高價值標的：
-
-- `getSettings` 是 **8 條**缺口路由的卡點（而且 `getSettingsAsync` **早就存在**，只是呼叫端沒接
-  ——與 `getWishConditions`／`stats` 同一類）。
-- `saveSettings`／`saveAsProfile` 對應 `POST /api/settings`、`POST /api/profiles`。
-- `adminPatchMember` 對應 `PATCH /api/admin/members/:id`。
-
-### 38.2 建議切法
-
-| 順序 | 標的 | 理由 |
+| 路由 | 舊卡點 | 狀態 |
 |---|---|---|
-| **1** | `getSettings` → 接上**既有的** `getSettingsAsync` | 8 條路由、零新程式（先查既有 `*Async.js` 那條紀律） |
-| **2** | `getUserById` 的 PG 版 ＋ 把上面 7 支改成接受 loader | 一次解鎖 25 條的卡點 |
-| **3** | `ensureUser`（22 條） | 它會**寫入**（PG 模式建立使用者？）——要先決定政策：PG 模式找不到人就明確失敗（`personalFlagsAsync.js` 已表明這個立場），不要偷偷在本機建帳號 |
+| `POST /api/demand/:id/report` | `reportDemand` | ✅ **已接線**（`demandAsync.reportDemandAsync`） |
+| `POST /api/demand/:id/reply` | `addDemandReply` | ⛔ 程式與測試都寫好了，**但刻意不接線**（見 30.9） |
+| `POST /api/demand/:id/close` | `closeDemandPost` | ⛔ 同上 |
 
-### 38.3 現況（合併後，可重跑）
+新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（11 項，全綠）＋
+`v3/test/demand-live-pg.test.js`（真 PG，CI 的 PG job 會跑，本機沒有隔離環境時 skip）。
+**CI 四個 check 全綠**（含 PostgreSQL integration）。
 
-```
-node v3/scripts/route-data-map.mjs
-PG 173、MIXED 84、SQLite 11、無直接DB 20、缺口 95
-wishOffers 群：0 條
-```
+### 30.1 副作用刻意留在 `demand.js`（與 `closeSelfListing` 同一個處置）
 
-**已部署**：master `af21275`、image `sha256:8b587364…`（deploy evidence `passed: true`）。
+`reportDemand` 達門檻後的「隱藏」與 `closeDemandPost` 的收尾都會碰到**跨模組**的東西：
+`writeLifecycle()`（demand.js 私有）、`syncDemandMatchDistricts()`、
+`notifyWishOfferLifecycle()`（`wishOffers.js` 註冊的 hook，那個模組整支還在 SQLite handle 上）。
+所以抽出兩支共用副作用函式 `applyReportHideEffects()`／`applyClosedPostEffects()`，
+**兩個 driver 呼叫同一支**（PG 分支傳本機 handle 進去），而不是在 PG 分支重寫一份。
+好處有兩個：語意不可能漂移；hook 那條線仍留在 sqlite 集合裡，尺規不會假裝它搬完了。
 
-### 38.4 第 2 步的第一塊：`getUserByIdAsync()`（`v3/src/usersAsync.js`）
+### 30.2 副作用要**分兩半**看，這是本批最重要的一課
 
-缺口的**頭號卡點**（25 條路由）現在有 PG 版了：
+達門檻之後的「隱藏」有兩半，第一版我把它們當成同一件事，於是 CI 的 live PG 直接紅：
 
-- 語句 `SELECT * FROM users WHERE id = ?`，與 `members.getUserById()` 逐字相同。
-- **查不到回 `null` 而不是 `undefined`**——呼叫端（`adminPatchMember`、`getSettings`、
-  `saveSettings`…）靠 `if (!user)` 判斷，形狀不能變。
-- `uid` 為 0／非數字時**直接早退、不送查詢**（同步版同義）。
-- 測試 `v3/test/users-async.test.js`（5 項全綠）＋變異 **4 條全殺**。
+1. **跟這張表有關的那半**（`status='hidden'`、`lifecycle='blocked'`／`'closed'`）——
+   這是**真的來源**，PG 模式下**一定要寫 PG**；只寫本機 handle 的話 PG 上那一列還是 `open`，
+   等於**完全沒有隱藏**。反過來，只寫 PG 也不夠：還沒搬完的讀取（`listDemand`／
+   `getDemandPost`／公開頁）讀的是節點 SQLite，所以**本機 handle 也要追上**，兩邊才一致。
+2. **跨模組的那半**（`syncDemandMatchDistricts`／`notifyWishOfferLifecycle`／hook）——
+   那些函式吃 handle、整支還在 SQLite 上，所以照舊只跑本機 handle。
 
-**變異測試又抓到我兩個問題，都不是程式的錯：**
+⇒ 因此現在是「PG 先寫，本機 handle 追上」，而且**兩個 driver 的語意來自同一組語句常數**
+（`demand.js` 的 `LIFECYCLE_UPDATE_SQL` ＋ `lifecyclePatchParams`，以及
+`applyReportHideEffectsAsync`／`applyClosedPostEffectsAsync`）。
 
-1. **斷言用了 `assert.equal` 而不是 `assert.strictEqual`**：`assert.equal(undefined, null)` 是**通過的**
-   （`node:assert` 的非嚴格版本用 `==`）。所以「回 undefined 而不是 null」的變異原本殺不死。
-   已全部改成 `strictEqual`。
-2. **一句多餘的 `|| null`**：`one()` 本身就保證查不到回 `null`，所以在它後面再接 `|| null`
-   是**等價**的——拿掉測試照樣過。已把那一句從原始碼移除，並在變異集寫明「刻意不放這條變異」，
-   免得留下「看起來有守衛、其實沒作用」的程式碼。
+> ⚠️ 這裡有一個**很容易寫出無鑑別力測試**的陷阱：第一版這條測試拿**磁碟**當「PG」，
+> 結果兩個 store 其實是同一個檔案 ⇒ 把 PG 那一半的寫入拿掉照樣綠。
+> **變異測試當場抓到（SURVIVED）**。改成「PG 走記憶體夾具、本機走磁碟」之後才殺得死。
 
-#### ⚠️ 第 2 步的**另一半還沒做**（下一次）
+### 30.3 這批我自己的測試寫錯了兩次（第一次整排紅燈都紅在錯的地方）
 
-`getUserById` 的 7 個私有呼叫端（見 38.1）還沒轉成 async／loader。它們**不是同一種難度**：
+1. **回傳封包被拿來當 parity 的對照組，會掩蓋真正的差異。** 第一版測試斷言
+   `deepEqual(async結果, 同步結果)`，於是紅在 `public_token`（隨機產生，兩邊不同）與
+   `replies`（寫 PG、讀 SQLite）——**兩個都與本批無關**，而真正要釘的「落地狀態」反而沒被驗到。
+   改成：落地狀態比對（`status`／`hidden`／`lifecycle`／PG 上的回覆列）＋封包只斷言它自己。
+2. **對照組要先確認起點相同。** PG 分支跑之前磁碟已經被清回起點，所以
+   「磁碟上的回覆列」不能當 PG 分支的對照組（那時是 0 列）；要比的是**同步版留下的快照**。
 
-| 呼叫端 | 難度 | 說明 |
-|---|---|---|
-| `listingToolsInfo()` | 低 | 只讀 `plan`／`role` 交給 `listingToolsMeta()`；但它所在的 `/api/self-listings` 還有 `getRentalCatalog`／`listMineSelfListings` 等同步依賴 |
-| `createDescriptionTemplateFor()` | 低 | 只傳 `plan`／`role` 給 `createDescriptionTemplateOn()` |
-| `armMemberExternalFetch()` | 低 | 只讀 `plan` 算間隔 |
-| `getSettings()` | 中 | **`getSettingsAsync` 早就存在**（第三十八批 38.2 的第 1 步），應先接它 |
-| `saveSettings()`／`saveAsProfile()` | 中 | 依賴 `getSettings()`／`getUserById()` 兩者 |
-| `adminPatchMember()` | 高 | 完整的會員修改流程，牽涉多張表與稽核 |
+### 30.4 🚨 我寫出一個會讓整條路徑壞掉的 bug，而 parity 測試是唯一抓到它的東西
 
-⇒ 建議**先接 `getSettingsAsync`**（零新程式、單獨卡 8 條），再處理低難度那三支。
+`withFallback(options, …, async (exec) => {…})` 的**參數名 `exec` 遮住了 `options.exec`**。
+於是 PG 分支（注入式 runner 的正規路徑）拿到的是 `options.exec` 這個**函式物件**，
+`one()` 收到非陣列就回 `null` ⇒ **每一筆檢舉都被判成「找不到要檢舉的內容」**，
+而 SQL 其實只送出一句、且跑得好好的。
 
-### 38.5 第 1 步（38.2 的順序）：`getSettings` 接上既有的 `getSettingsAsync()`
+- 症狀極具誤導性：錯誤訊息正確、SQL 正確、只有「查到的東西不見了」。
+- 修法：參數改名 `run`，讀取一律 `(await run(...)).rows`（**`run` 的統一回傳形狀是
+  `{ rows, rowCount }`，不是「一列一列的陣列」**——這一點是 `crmOutboxAsync.js` 起的慣例，
+  但它的 `one()` 是取 `rows`，本檔第一版沒照抄）。
+- 已把這個錯誤類別寫成**夾具守衛**：`demand-async.test.js` 的 PG 替身現在會拒絕
+  「不是 SQL 字串」的輸入，同型 bug 下次會直接紅在夾具，而不是紅在一個看起來像業務邏輯的 404。
 
-**零新程式**——`getSettingsAsync()` 早就寫好了，只是呼叫端沒接（與 `getWishConditions`／
-`stats` 同一類）。這一輪把 `server.js` 裡剩下的同步呼叫全部改掉：
+### 30.5 三個測試（不是人）抓到我的錯，其中兩個來自 CI 的 live PG job
 
-| 位置 | 原本 | 現在 |
-|---|---|---|
-| `queueGeoBackfill()` 的同步預設值 | `settings = getSettings()` | `settings = null` ⇒ `await getSettingsAsync(0)` |
-| `GET /api/state` | `getSettings(uid)`（在 try 裡） | `await getSettingsAsync(uid)`（**保留原本的 500 處理**） |
-| `POST /api/commute/focus` | handler 同步 ＋ `queueGeoBackfill(getSettings(uid))` | handler 改 async ＋ `await queueGeoBackfill(await getSettingsAsync(uid))` |
-| `GET /api/commute/snapshot` | handler 同步 | handler 改 async |
-| 已在 async 內的一處（`resolveWorkPointForSave` 之前） | `getSettings(uid)` | `await getSettingsAsync(uid)` |
+**（a）離線 parity 抓到「參數遮住 `options.exec`」**（見 30.4）。
 
-結果：**`getSettings` 從這三條路由的卡點清單消失**（`/api/state`、`/api/commute/focus`、
-`/api/commute/snapshot`）。
+**（b）CI 抓到 live 測試自己的錯（1）：注入式 runner 不翻譯 `?`。**
+注入式 `exec` 直接呼叫 `pgDriver.query(sql, …)`，但 `withFallback()` 在 `options.exec`
+有值時**不會**再包 `toPostgresSql`，而 `pgDriver.query()` **不翻譯 `?`** ⇒ PG 收到
+`SELECT id FROM demand_posts WHERE id = ?`，回 `syntax error at end of input`。
+正式站走的是 `pgDriver.query(toPostgresSql(sql), …)`，所以 live 測試現在自己套
+`toPostgresSql`。**離線夾具看不到這個**，因為 `node:sqlite` 同時接受 `?` 與 `$1`
+——這正是「live PG 測試不可省」的那條紀律又一次兌現。
 
-#### ⚠️ 但**尺規沒動**（缺口仍 95）——這是對的
-
-那三條路由各自還有別的卡點（`ensureUser`、`getUserById`、`countWatched`、
-`collectCommuteSettings`… 都在清單上），所以只換掉一個函式不會改變判定。
-`GET /api/settings` 本來就已經是 PG（它用的是 `getSettingsAsync`）。
-
-`GET /api/demo` 仍把 `getSettings` **以參考傳遞**給 `buildDemoState()`：
-
-```js
-res.json(buildDemoState({ listUserIds, getSettings, defaultUserId, listListings, stats }));
-```
-
-那是「以參考傳遞的函式」那一類（尺規現在看得到它，見第三十一批的缺陷 (2) 修正），
-要改成注入值而不是注入函式才算真的搬完——留給 `/api/demo` 那一包。
-
-#### 測試
-
-57 項相關測試全綠（commute／demo／settings／profile／route-data-map／module-imports／boot）。
-`queueGeoBackfill()` 改成 async 之後，三個仍以同步方式呼叫它的地方（`reason !== "startup"`、
-`settings.enabled` 分支、啟動流程）不會爆——它體內的 DB 讀取已移到最前面並由呼叫端提供，
-throws 只可能發生在「呼叫端已 await」或「參數已備好」的情況下。
-
-#### 38.6 ⚠️ 動手前的量測：為什麼「先轉低難度那三支」其實不會解鎖路由
-
-第 38.4 節建議「先處理低難度那三支（`listingToolsInfo`／`createDescriptionTemplateFor`／
-`armMemberExternalFetch`）」。**實測之後要修正這個建議**：
-
-| 函式 | 目前單獨卡幾條路由 |
-|---|---:|
-| `getUserById` | **24** |
-| `ensureUser` | **22** |
-| `sqlExcludeFixtureRows` | 13 |
-| `countWatched` | 12 |
-| `listingToolsInfo` | **0** |
-| `armMemberExternalFetch` | **0** |
-
-而且**沒有任何一條路由是「只差 `getUserById`」**（`(r.sqlite||[]).length === 1` 且該項為
-`getUserById` ⇒ **0 條**）。
-
-⇒ 兩個結論：
-
-1. **`getUserById` 是一整群的共同卡點，不是終點。** 它出現的 24 條路由每一條都還有別的卡點
-   （`ensureUser`、`countWatched`、`sqlExcludeFixtureRows`、`collectCommuteSettings`…）。
-   所以要看到數字下降，得**成組清掉這些共同卡點**，而不是一次轉一個。
-2. **`listingToolsInfo` 與 `armMemberExternalFetch` 不是「低難度捷徑」。** 它們目前單獨卡 0 條
-   ⇒ 轉了它們**不會改變任何路由的判定**，而且 `/api/self-listings` 還有
-   `getRentalCatalog`／`listMineSelfListings`／`getRentalMarketplaceFlags` 等同步依賴
-   （其中 `getRentalCatalog` 就是第 31.2 節提到的「PG 版快取沒補」那條線）。
-
-**下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
-再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
-
-### 38.7 🚨 量測推翻了 `ensureUser` 那一項：它是**尺規的偽陽性**（不必移植）
-
-第 38.1／38.2 節把 `ensureUser`（22 條路由）列為第二個要處理的卡點，並說它需要政策決定
-（「PG 模式要不要建帳號」）。**實際追完之後，它根本不需要移植。**
-
-#### 可重跑的證據
-
-`ensureUser` 在全站的呼叫點只有三個，**沒有任何一個在路由路徑上**：
+**（c）CI 抓到 live 測試自己的錯（2）：我用了很大的顯式 id，把 identity 序列留在後面。**
+第一版用 `900000000x` 當測試 id，於是序列的 `max` 變成 9 億而 `next` 還是 1；
+**下一個跑到的 live 測試**（`reject-match-live-pg`）就紅在它的守衛上：
 
 ```
-personalFlags.js:23        export function ensureUser(conn, email, …)   ← 定義（吃 handle）
-db.js:430                  ensureUser as ensureUserOn                  ← 匯入
-db.js:836                  ensureUserOn(db, email, opts)               ← db.js 的同步包裝（無人呼叫）
-db.js:841                  cachedDefaultUserId = ensureUserOn(db, …)   ← **只在 defaultUserId() 內**
-db.js:8530                 bootstrapAdminUserOn(db, …, { ensureUser: ensureUserOn })  ← 當參數傳
-members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只在 bootstrap 且由參數傳入時
+identity 序列落後：demand_posts.id (next=1 max=900000000401)、
+                  demand_replies.id (next=1 max=900000000501)、users.id (next=2 max=900000000303)
 ```
 
-- `db.js:841` 是**模組層 `defaultUserId()`** 裡的一行；`ensureUser(email)`（`:836`）**沒有呼叫端**。
-- 那 22 條路由一條都沒有直接呼叫 `ensureUser`；其中 3 條被列成「唯一卡點」
-  （`POST /api/admin/crm/contacts`、`…/contacts/:id/notes`、`POST /api/admin/similarity/:id/review`），
-  但三條的 handler 都是 **async**、走 `crmAsync`／`*Async` 路徑，
-  而 `actorUserId` 是**由 session 帶進來的參數**——它們從來不會碰到 `ensureUser`。
+那道守衛是對的——序列落後會讓所有「不指定 id 的 INSERT」撞主鍵。
+⇒ **live 測試不要自己發明 id**：讓 identity 產生、用 `RETURNING` 取回（正式站的 INSERT 就是這樣），
+並在進入測試時 `setval` 把序列修到 `max`（上一次中途失敗也不會污染）。
+收尾刻意**不**再 `setval`：這輪的列是 identity 產生的，序列本來就前進過，刪掉列之後
+序列仍然 > max，那才是守衛要的健康狀態。
 
-⇒ 尺規把它算成那 3 條的卡點，是因為它掃到 **`db.js` 內有一個 `ensureUser(` 呼叫**，
-再沿 db.js 的模組層邊傳遞出去——與第三十批那個
-`saveSiteBudget`／`budgetStore()` 的偽陽性是**同一類（經過一層 facade／模組層）**。
+**（d）另外那個 `$1` 用兩次**：`DELETE FROM demand_replies WHERE id <> $1 AND post_id = $1`
+卻傳兩個參數 ⇒ PG 回 `bind message supplies 2 parameters, but prepared statement requires 1`。
+**`?` → `$n` 是逐個出現編號，不是依值去重**——同一個值要寫兩次就要兩個編號。
 
-#### 結論
+### 30.6 變異測試：8 條全殺，但前 3 條是**假 SURVIVED**
 
-1. **不要為 `ensureUser` 做 PG 版**，也不需要 Owner 決定「PG 要不要建帳號」——
-   那條路徑在正式站（PG 模式）根本不會被走到。
-2. 缺口的 22 條**含 `ensureUser`** 的路由，真正要清的是它們**其他的**卡點
-   （`countWatched`／`getUserById`／`sqlExcludeFixtureRows`…）。
-3. **第三十八批 38.2 的順序建議據此修正**：第 3 步（`ensureUser`）**刪除**；
-   力氣應該放在「一起清掉 `getUserById`＋`countWatched`＋`sqlExcludeFixtureRows` 這組共同卡點」。
+第一輪跑出 3 條 SURVIVED，實際上都**有**對應測試失敗——是我 `expect` 寫的
+**測試名字串**與真實測試名不符（紀律 6 第 N 次）。實際失敗項與預期殺手不一致時，
+工具會誠實地把它列成「沒有失敗」而不是「殺掉了」，這一點救了這批的可信度。
+改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**；再加上 30.2 那條分庫一致性守衛，這一組共 **8 條變異、全殺**。
+
+### 30.7 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
+
+```
+PG demand_posts 欄位 41 個（與節點 SQLite 相同）✓
+PG demand_posts／demand_replies／demand_reports 只有 pkey，SQLite 定義的索引**一個都沒有** ✗
+```
+
+也就是 `idx_demand_one_open`（同一人只能有一則 open 的部分唯一索引）在 PG 上**不存在**。
+這與「PG 沒有 `CREATE TABLE` 的 UNIQUE」是同一類（第 N 次），但這裡更嚴重一點：
+它不是「鏡射不到」，而是**從來沒有人對這三張表呼叫過 `ensurePgSchema`**。
+本批的 `ensureDemandStoreOnce()` 會在第一次用到時補建（含部分唯一索引）。
+**補建前已先查過資料**：PG 上 `>1 open`＝0 人、重複 `public_token`＝0、`>1 draft`＝0，
+所以索引建得起來（現況 35 列：draft 2／closed 33）。live 測試會斷言這個索引真的存在。
+
+### 30.8 這批的尺規變化
+
+```
+PG 153 → 154　MIXED 103 → 102　缺口 115 → 114
+```
+
+（只多了一條，因為 reply／close 退回同步版——這是**刻意的**，見 30.9。
+下一批的 `getDemandPost()` 會一次解鎖三條讀取路由，並讓這兩條可以接回去。）
+
+### 30.9 ⛔ 為什麼 reply 與 close **刻意不接線**（本批最重要的決定）
+
+`addDemandReplyAsync`／`closeDemandPostAsync` 都寫好了、parity 測試也在驗、
+mutation 也殺得死，**但路由仍走同步版**。理由：
+
+> 這兩支會**改動「會被讀取」的狀態**（回覆清單、許願房狀態），而站上的讀取
+> （`listDemand`／`getDemandPost`／公開頁）**還是讀節點 SQLite**。
+> 接線的話就會變成「寫 PG、讀 SQLite」：回覆確實在 PG，但頁面上看不到——
+> 那是**雙寫分歧**，正是 `PG-ISLAND-ACTIVE-WRITES` 記的那個問題，只是換了個方向。
+
+`reportDemand` 沒有這個問題：它只**新增一列 `demand_reports`**，而且目前沒有任何讀取路徑
+在讀那張表（檢舉數是寫入時自己數的），所以接到 PG 不會造成「同一份資料兩個地方」。
+
+**⇒ 前置條件：`getDemandPost()`（含 `listDemand()`）先搬上 PG，這兩條就可以接回去。**
+那一步會一次解鎖 `GET /api/demand/:id`、`GET /api/wish-rooms/:id`、
+`GET /api/public/wish-room/:id` 三條路由。
 
 ## 二之零、2026-09-28 第三十一批：許願房的**讀取**搬上 PG，reply／close 跟著接回去
 
@@ -1449,6 +1404,7 @@ PG 版把同步版「每一列各查一次」的部分**批次化**（回覆、�
 2. **`users` 的 id 1 是 `db.js` 開檔時建的 bootstrap 管理員**，不屬於測試自己種的帳號，
    清理時不會被刪——但前面的測試會改它的 nickname。不還原就會**跨測試汙染**
    （「作者暱稱」那一條就是這樣紅的）。
+
 ## 二之負一、2026-09-28 第三十二批：許願房**列表**的三個尾巴（屋主摘要／目錄／待處理報價數）
 
 第三十一批把列表本體搬上 PG，但 `GET /api/demand`／`/api/wish-rooms`／`/mine` 還是 MIXED，
@@ -1496,6 +1452,7 @@ parity 的價值就在這裡——它會逼你承認既有的形狀，而不是�
 所以想種「第二筆報價」不能只換 `id`／`status`，要換到約束裡的欄位。
 ⇒ 這是「PG 沒有 `CREATE TABLE` 的 UNIQUE」那條紀律的**鏡像**：SQLite 這邊有，
 夾具（用 SQLite 當 PG 替身）也會照樣擋——**種子資料要照真實約束設計**。
+
 ## 二之負二、2026-09-28 第三十三批：許願房**提案**的讀取（wishOffers 第一刀）
 
 | 路由 | 之前 | 現在 |
@@ -1551,6 +1508,7 @@ return rows[0] || undefined;          // ← exec 回的是 { rows, rowCount }
 
 `PENDING_OFFER_COUNT_SQL` 在 `wishOffersAsync.js` 與 `demandAsync.js`（PR #531 的屋主摘要）
 各有一份：這一包刻意**不依賴未合併的 PR**。**兩支都合併之後要收斂成一支。**
+
 ## 二之負三、2026-09-28 第三十四批：提案檢舉上 PG（wishOffers 寫入的第一支）
 
 | 路由 | 之前 | 現在 |
@@ -1594,6 +1552,7 @@ return rows[0] || undefined;          // ← exec 回的是 { rows, rowCount }
 而不是留一條紅的或假綠的。上限邏輯本身仍由同步版的既有測試守護，
 PG 版用的是同一組常數與同一句 `COUNT`。要補的時候注意：種子必須在 `copyRows()`
 **之前**灌進磁碟，且兩條路徑用不同的 `offer_id`。
+
 ## 二之負四、2026-09-28 第三十五批：封鎖名單（wishOffers 第二支）
 
 | 路由 | 之前 | 現在 |
@@ -1627,6 +1586,7 @@ PG 版用的是同一組常數與同一句 `COUNT`。要補的時候注意：種
    所以**移除該變異並寫明理由**，而不是硬寫一條人工測試。
 
 這一組現在 **12 條變異全殺**。
+
 ## 二之負五、2026-09-28 第三十六批：後台檢舉清單（wishOffers 第三支）
 
 | 路由 | 之前 | 現在 |
@@ -1652,6 +1612,7 @@ PG 版用的是同一組常數與同一句 `COUNT`。要補的時候注意：種
 ### 35.3 變異測試
 
 2 條新變異（拿掉 limit 夾限、多回傳原始列）**都被殺死**；這一組目前 **14 條全殺**。
+
 ## 二之負六、2026-09-28 第三十七批（**只做偵察，尚未實作**）：wishOffers 最後 5 條的真實障礙
 
 剩下的 5 條是 `accept`／`decline`／`withdraw`／`block`／`contact`。動手前先追完依賴，
@@ -1946,149 +1907,238 @@ return Number(res?.rowCount) || 0;
 下一個最大的單一群是**通知／分析的其餘部分**與 **`getUserById`（25 條）／`ensureUser`（22 條）**；
 `bumpAnalyticsAsync()` 與通知寫入端已就位，所以 `POST /api/demand`、`POST /api/wish-rooms`、
 `POST /api/self-listings`、`/verify-email`、`/auth/:provider/callback` 等 8 條已經少了一個卡點。
-## 二之一、2026-09-28 第三十批：許願房的寫入（demand.js 的第一刀）
 
-原本要搬三條「只差一個同步函式」的路由，**最後只接了檢舉那一條**——另外兩條被自己的
-live PG 測試證明「現在接會錯」，退回同步版並寫明前置條件。這一批的重點其實是那個退回的理由。
+## 二之負七、2026-09-28 第三十八批：`getUserById`／`ensureUser` 的範圍界定（第三十八批本身是文件）
 
-| 路由 | 舊卡點 | 狀態 |
+合併 #531～#533 之後，缺口的前兩大卡點換人了：
+
+| 卡點 | 缺口路由數 |
+|---|---:|
+| `getUserById` | **25** |
+| `ensureUser` | **22** |
+
+### 38.1 為什麼 `getUserById` 不是「一句 SELECT 的便宜目標」
+
+它看起來只是 `SELECT * FROM users WHERE id = ?`，但在 `db.js` 裡有 **8 處私有呼叫**，
+而且那些呼叫端**全部是同步函式**：
+
+```
+db.js:932／942／954   adminPatchMember()
+db.js:2282            listingToolsInfo()
+db.js:2299            createDescriptionTemplateFor()
+db.js:2720            getSettings()
+db.js:2727            saveSettings()
+db.js:2769            saveAsProfile()
+db.js:4111            armMemberExternalFetch()
+```
+
+⇒ 要讓 `getUserById` driver-aware，就得把上面這 7 支**一起**改成 async（或改成注入 loader）。
+這是一個**成組的批次**，不是單點修改；而且其中幾支本身就是高價值標的：
+
+- `getSettings` 是 **8 條**缺口路由的卡點（而且 `getSettingsAsync` **早就存在**，只是呼叫端沒接
+  ——與 `getWishConditions`／`stats` 同一類）。
+- `saveSettings`／`saveAsProfile` 對應 `POST /api/settings`、`POST /api/profiles`。
+- `adminPatchMember` 對應 `PATCH /api/admin/members/:id`。
+
+### 38.2 建議切法
+
+| 順序 | 標的 | 理由 |
 |---|---|---|
-| `POST /api/demand/:id/report` | `reportDemand` | ✅ **已接線**（`demandAsync.reportDemandAsync`） |
-| `POST /api/demand/:id/reply` | `addDemandReply` | ⛔ 程式與測試都寫好了，**但刻意不接線**（見 30.9） |
-| `POST /api/demand/:id/close` | `closeDemandPost` | ⛔ 同上 |
+| **1** | `getSettings` → 接上**既有的** `getSettingsAsync` | 8 條路由、零新程式（先查既有 `*Async.js` 那條紀律） |
+| **2** | `getUserById` 的 PG 版 ＋ 把上面 7 支改成接受 loader | 一次解鎖 25 條的卡點 |
+| **3** | `ensureUser`（22 條） | 它會**寫入**（PG 模式建立使用者？）——要先決定政策：PG 模式找不到人就明確失敗（`personalFlagsAsync.js` 已表明這個立場），不要偷偷在本機建帳號 |
 
-新模組 `v3/src/demandAsync.js`；測試 `v3/test/demand-async.test.js`（11 項，全綠）＋
-`v3/test/demand-live-pg.test.js`（真 PG，CI 的 PG job 會跑，本機沒有隔離環境時 skip）。
-**CI 四個 check 全綠**（含 PostgreSQL integration）。
-
-### 30.1 副作用刻意留在 `demand.js`（與 `closeSelfListing` 同一個處置）
-
-`reportDemand` 達門檻後的「隱藏」與 `closeDemandPost` 的收尾都會碰到**跨模組**的東西：
-`writeLifecycle()`（demand.js 私有）、`syncDemandMatchDistricts()`、
-`notifyWishOfferLifecycle()`（`wishOffers.js` 註冊的 hook，那個模組整支還在 SQLite handle 上）。
-所以抽出兩支共用副作用函式 `applyReportHideEffects()`／`applyClosedPostEffects()`，
-**兩個 driver 呼叫同一支**（PG 分支傳本機 handle 進去），而不是在 PG 分支重寫一份。
-好處有兩個：語意不可能漂移；hook 那條線仍留在 sqlite 集合裡，尺規不會假裝它搬完了。
-
-### 30.2 副作用要**分兩半**看，這是本批最重要的一課
-
-達門檻之後的「隱藏」有兩半，第一版我把它們當成同一件事，於是 CI 的 live PG 直接紅：
-
-1. **跟這張表有關的那半**（`status='hidden'`、`lifecycle='blocked'`／`'closed'`）——
-   這是**真的來源**，PG 模式下**一定要寫 PG**；只寫本機 handle 的話 PG 上那一列還是 `open`，
-   等於**完全沒有隱藏**。反過來，只寫 PG 也不夠：還沒搬完的讀取（`listDemand`／
-   `getDemandPost`／公開頁）讀的是節點 SQLite，所以**本機 handle 也要追上**，兩邊才一致。
-2. **跨模組的那半**（`syncDemandMatchDistricts`／`notifyWishOfferLifecycle`／hook）——
-   那些函式吃 handle、整支還在 SQLite 上，所以照舊只跑本機 handle。
-
-⇒ 因此現在是「PG 先寫，本機 handle 追上」，而且**兩個 driver 的語意來自同一組語句常數**
-（`demand.js` 的 `LIFECYCLE_UPDATE_SQL` ＋ `lifecyclePatchParams`，以及
-`applyReportHideEffectsAsync`／`applyClosedPostEffectsAsync`）。
-
-> ⚠️ 這裡有一個**很容易寫出無鑑別力測試**的陷阱：第一版這條測試拿**磁碟**當「PG」，
-> 結果兩個 store 其實是同一個檔案 ⇒ 把 PG 那一半的寫入拿掉照樣綠。
-> **變異測試當場抓到（SURVIVED）**。改成「PG 走記憶體夾具、本機走磁碟」之後才殺得死。
-
-### 30.3 這批我自己的測試寫錯了兩次（第一次整排紅燈都紅在錯的地方）
-
-1. **回傳封包被拿來當 parity 的對照組，會掩蓋真正的差異。** 第一版測試斷言
-   `deepEqual(async結果, 同步結果)`，於是紅在 `public_token`（隨機產生，兩邊不同）與
-   `replies`（寫 PG、讀 SQLite）——**兩個都與本批無關**，而真正要釘的「落地狀態」反而沒被驗到。
-   改成：落地狀態比對（`status`／`hidden`／`lifecycle`／PG 上的回覆列）＋封包只斷言它自己。
-2. **對照組要先確認起點相同。** PG 分支跑之前磁碟已經被清回起點，所以
-   「磁碟上的回覆列」不能當 PG 分支的對照組（那時是 0 列）；要比的是**同步版留下的快照**。
-
-### 30.4 🚨 我寫出一個會讓整條路徑壞掉的 bug，而 parity 測試是唯一抓到它的東西
-
-`withFallback(options, …, async (exec) => {…})` 的**參數名 `exec` 遮住了 `options.exec`**。
-於是 PG 分支（注入式 runner 的正規路徑）拿到的是 `options.exec` 這個**函式物件**，
-`one()` 收到非陣列就回 `null` ⇒ **每一筆檢舉都被判成「找不到要檢舉的內容」**，
-而 SQL 其實只送出一句、且跑得好好的。
-
-- 症狀極具誤導性：錯誤訊息正確、SQL 正確、只有「查到的東西不見了」。
-- 修法：參數改名 `run`，讀取一律 `(await run(...)).rows`（**`run` 的統一回傳形狀是
-  `{ rows, rowCount }`，不是「一列一列的陣列」**——這一點是 `crmOutboxAsync.js` 起的慣例，
-  但它的 `one()` 是取 `rows`，本檔第一版沒照抄）。
-- 已把這個錯誤類別寫成**夾具守衛**：`demand-async.test.js` 的 PG 替身現在會拒絕
-  「不是 SQL 字串」的輸入，同型 bug 下次會直接紅在夾具，而不是紅在一個看起來像業務邏輯的 404。
-
-### 30.5 三個測試（不是人）抓到我的錯，其中兩個來自 CI 的 live PG job
-
-**（a）離線 parity 抓到「參數遮住 `options.exec`」**（見 30.4）。
-
-**（b）CI 抓到 live 測試自己的錯（1）：注入式 runner 不翻譯 `?`。**
-注入式 `exec` 直接呼叫 `pgDriver.query(sql, …)`，但 `withFallback()` 在 `options.exec`
-有值時**不會**再包 `toPostgresSql`，而 `pgDriver.query()` **不翻譯 `?`** ⇒ PG 收到
-`SELECT id FROM demand_posts WHERE id = ?`，回 `syntax error at end of input`。
-正式站走的是 `pgDriver.query(toPostgresSql(sql), …)`，所以 live 測試現在自己套
-`toPostgresSql`。**離線夾具看不到這個**，因為 `node:sqlite` 同時接受 `?` 與 `$1`
-——這正是「live PG 測試不可省」的那條紀律又一次兌現。
-
-**（c）CI 抓到 live 測試自己的錯（2）：我用了很大的顯式 id，把 identity 序列留在後面。**
-第一版用 `900000000x` 當測試 id，於是序列的 `max` 變成 9 億而 `next` 還是 1；
-**下一個跑到的 live 測試**（`reject-match-live-pg`）就紅在它的守衛上：
+### 38.3 現況（合併後，可重跑）
 
 ```
-identity 序列落後：demand_posts.id (next=1 max=900000000401)、
-                  demand_replies.id (next=1 max=900000000501)、users.id (next=2 max=900000000303)
+node v3/scripts/route-data-map.mjs
+PG 173、MIXED 84、SQLite 11、無直接DB 20、缺口 95
+wishOffers 群：0 條
 ```
 
-那道守衛是對的——序列落後會讓所有「不指定 id 的 INSERT」撞主鍵。
-⇒ **live 測試不要自己發明 id**：讓 identity 產生、用 `RETURNING` 取回（正式站的 INSERT 就是這樣），
-並在進入測試時 `setval` 把序列修到 `max`（上一次中途失敗也不會污染）。
-收尾刻意**不**再 `setval`：這輪的列是 identity 產生的，序列本來就前進過，刪掉列之後
-序列仍然 > max，那才是守衛要的健康狀態。
+**已部署**：master `af21275`、image `sha256:8b587364…`（deploy evidence `passed: true`）。
 
-**（d）另外那個 `$1` 用兩次**：`DELETE FROM demand_replies WHERE id <> $1 AND post_id = $1`
-卻傳兩個參數 ⇒ PG 回 `bind message supplies 2 parameters, but prepared statement requires 1`。
-**`?` → `$n` 是逐個出現編號，不是依值去重**——同一個值要寫兩次就要兩個編號。
+### 38.4 第 2 步的第一塊：`getUserByIdAsync()`（`v3/src/usersAsync.js`）
 
-### 30.6 變異測試：8 條全殺，但前 3 條是**假 SURVIVED**
+缺口的**頭號卡點**（25 條路由）現在有 PG 版了：
 
-第一輪跑出 3 條 SURVIVED，實際上都**有**對應測試失敗——是我 `expect` 寫的
-**測試名字串**與真實測試名不符（紀律 6 第 N 次）。實際失敗項與預期殺手不一致時，
-工具會誠實地把它列成「沒有失敗」而不是「殺掉了」，這一點救了這批的可信度。
-改掉三個 `expect` 字串之後 **KILLED 7／SURVIVED 0**；再加上 30.2 那條分庫一致性守衛，這一組共 **8 條變異、全殺**。
+- 語句 `SELECT * FROM users WHERE id = ?`，與 `members.getUserById()` 逐字相同。
+- **查不到回 `null` 而不是 `undefined`**——呼叫端（`adminPatchMember`、`getSettings`、
+  `saveSettings`…）靠 `if (!user)` 判斷，形狀不能變。
+- `uid` 為 0／非數字時**直接早退、不送查詢**（同步版同義）。
+- 測試 `v3/test/users-async.test.js`（5 項全綠）＋變異 **4 條全殺**。
 
-### 30.7 順手查到的既成事實（唯讀查 `5151_shadow`，可重跑）
+**變異測試又抓到我兩個問題，都不是程式的錯：**
+
+1. **斷言用了 `assert.equal` 而不是 `assert.strictEqual`**：`assert.equal(undefined, null)` 是**通過的**
+   （`node:assert` 的非嚴格版本用 `==`）。所以「回 undefined 而不是 null」的變異原本殺不死。
+   已全部改成 `strictEqual`。
+2. **一句多餘的 `|| null`**：`one()` 本身就保證查不到回 `null`，所以在它後面再接 `|| null`
+   是**等價**的——拿掉測試照樣過。已把那一句從原始碼移除，並在變異集寫明「刻意不放這條變異」，
+   免得留下「看起來有守衛、其實沒作用」的程式碼。
+
+#### ⚠️ 第 2 步的**另一半還沒做**（下一次）
+
+`getUserById` 的 7 個私有呼叫端（見 38.1）還沒轉成 async／loader。它們**不是同一種難度**：
+
+| 呼叫端 | 難度 | 說明 |
+|---|---|---|
+| `listingToolsInfo()` | 低 | 只讀 `plan`／`role` 交給 `listingToolsMeta()`；但它所在的 `/api/self-listings` 還有 `getRentalCatalog`／`listMineSelfListings` 等同步依賴 |
+| `createDescriptionTemplateFor()` | 低 | 只傳 `plan`／`role` 給 `createDescriptionTemplateOn()` |
+| `armMemberExternalFetch()` | 低 | 只讀 `plan` 算間隔 |
+| `getSettings()` | 中 | **`getSettingsAsync` 早就存在**（第三十八批 38.2 的第 1 步），應先接它 |
+| `saveSettings()`／`saveAsProfile()` | 中 | 依賴 `getSettings()`／`getUserById()` 兩者 |
+| `adminPatchMember()` | 高 | 完整的會員修改流程，牽涉多張表與稽核 |
+
+⇒ 建議**先接 `getSettingsAsync`**（零新程式、單獨卡 8 條），再處理低難度那三支。
+
+### 38.5 第 1 步（38.2 的順序）：`getSettings` 接上既有的 `getSettingsAsync()`
+
+**零新程式**——`getSettingsAsync()` 早就寫好了，只是呼叫端沒接（與 `getWishConditions`／
+`stats` 同一類）。這一輪把 `server.js` 裡剩下的同步呼叫全部改掉：
+
+| 位置 | 原本 | 現在 |
+|---|---|---|
+| `queueGeoBackfill()` 的同步預設值 | `settings = getSettings()` | `settings = null` ⇒ `await getSettingsAsync(0)` |
+| `GET /api/state` | `getSettings(uid)`（在 try 裡） | `await getSettingsAsync(uid)`（**保留原本的 500 處理**） |
+| `POST /api/commute/focus` | handler 同步 ＋ `queueGeoBackfill(getSettings(uid))` | handler 改 async ＋ `await queueGeoBackfill(await getSettingsAsync(uid))` |
+| `GET /api/commute/snapshot` | handler 同步 | handler 改 async |
+| 已在 async 內的一處（`resolveWorkPointForSave` 之前） | `getSettings(uid)` | `await getSettingsAsync(uid)` |
+
+結果：**`getSettings` 從這三條路由的卡點清單消失**（`/api/state`、`/api/commute/focus`、
+`/api/commute/snapshot`）。
+
+#### ⚠️ 但**尺規沒動**（缺口仍 95）——這是對的
+
+那三條路由各自還有別的卡點（`ensureUser`、`getUserById`、`countWatched`、
+`collectCommuteSettings`… 都在清單上），所以只換掉一個函式不會改變判定。
+`GET /api/settings` 本來就已經是 PG（它用的是 `getSettingsAsync`）。
+
+`GET /api/demo` 仍把 `getSettings` **以參考傳遞**給 `buildDemoState()`：
+
+```js
+res.json(buildDemoState({ listUserIds, getSettings, defaultUserId, listListings, stats }));
+```
+
+那是「以參考傳遞的函式」那一類（尺規現在看得到它，見第三十一批的缺陷 (2) 修正），
+要改成注入值而不是注入函式才算真的搬完——留給 `/api/demo` 那一包。
+
+#### 測試
+
+57 項相關測試全綠（commute／demo／settings／profile／route-data-map／module-imports／boot）。
+`queueGeoBackfill()` 改成 async 之後，三個仍以同步方式呼叫它的地方（`reason !== "startup"`、
+`settings.enabled` 分支、啟動流程）不會爆——它體內的 DB 讀取已移到最前面並由呼叫端提供，
+throws 只可能發生在「呼叫端已 await」或「參數已備好」的情況下。
+
+#### 38.6 ⚠️ 動手前的量測：為什麼「先轉低難度那三支」其實不會解鎖路由
+
+第 38.4 節建議「先處理低難度那三支（`listingToolsInfo`／`createDescriptionTemplateFor`／
+`armMemberExternalFetch`）」。**實測之後要修正這個建議**：
+
+| 函式 | 目前單獨卡幾條路由 |
+|---|---:|
+| `getUserById` | **24** |
+| `ensureUser` | **22** |
+| `sqlExcludeFixtureRows` | 13 |
+| `countWatched` | 12 |
+| `listingToolsInfo` | **0** |
+| `armMemberExternalFetch` | **0** |
+
+而且**沒有任何一條路由是「只差 `getUserById`」**（`(r.sqlite||[]).length === 1` 且該項為
+`getUserById` ⇒ **0 條**）。
+
+⇒ 兩個結論：
+
+1. **`getUserById` 是一整群的共同卡點，不是終點。** 它出現的 24 條路由每一條都還有別的卡點
+   （`ensureUser`、`countWatched`、`sqlExcludeFixtureRows`、`collectCommuteSettings`…）。
+   所以要看到數字下降，得**成組清掉這些共同卡點**，而不是一次轉一個。
+2. **`listingToolsInfo` 與 `armMemberExternalFetch` 不是「低難度捷徑」。** 它們目前單獨卡 0 條
+   ⇒ 轉了它們**不會改變任何路由的判定**，而且 `/api/self-listings` 還有
+   `getRentalCatalog`／`listMineSelfListings`／`getRentalMarketplaceFlags` 等同步依賴
+   （其中 `getRentalCatalog` 就是第 31.2 節提到的「PG 版快取沒補」那條線）。
+
+**下一次的順序建議改為**：先量「哪一組共同卡點一起清掉之後，缺口會真的下降」，
+再從那一組開始；`getUserByIdAsync()` 已經是那組的現成零件。
+
+## 二之負八、2026-09-28 第三十九批：個人旗標讀取（`loadFlags`／`loadFlagMap`）
+
+### 39.1 先做了「模組 × 卡點 × 影響路由」的量測，才挑這一包
+
+38.6 的結論是「要找一組共同卡點」，所以我把 95 條缺口路由的 207 個卡點
+**依定義模組分組**，再看哪個模組的「卡點數 ÷ 影響路由數」最好：
+
+| 模組 | 卡點數 | 影響路由數 |
+|---|---:|---:|
+| `db.js`（都是包裝層） | 97 | 78 |
+| `selfListings.js` | 8 | 16 |
+| `demand.js` | 12 | 16 |
+| **`personalFlags.js`** | **2** | **13** |
+| `rentalNotify.js` | 7 | 13 |
+| `contentDocuments.js` | 7 | 12 |
+
+⇒ **`personalFlags.js` 只有 2 個卡點（`loadFlags` 9 條 ＋ `loadFlagMap` 8 條，重疊後 13 條）**，
+是投報率最高的一組。
+
+### 39.2 做法
+
+兩支都只是**一個 SELECT**，而且 `personalFlagsAsync.js` 裡**已經有**
+`FLAGS_BY_USER_POST_SQL`（`setFlags` 在用），所以只補了 `FLAGS_BY_USER_SQL`：
+
+- `loadFlagsAsync()`：查不到（或 `uid`／`pid` 為 0）回 **`emptyFlags()`**——不是 null／undefined。
+  呼叫端 `overlayPersonal()` 會直接讀欄位，形狀不對就會出現 `undefined` 而不是 0。
+- `loadFlagMapAsync()`：回 **`Map`**，鍵是**數字** `post_id`
+  （`overlayRowsPersonal()` 用 `flagMap?.get(Number(row.post_id))` 查，鍵型別錯了永遠查不到）。
+- `uid`／`pid` 為 0 時**直接早退、不送查詢**（同步版同義）。
+
+⚠️ 這個模組的 `pgExec()` 回的是 **rows 陣列**，不是 `{ rows, rowCount }`
+（與 `demandAsync.js`／`wishOffersAsync.js` 的契約不同）——寫新函式時要看清楚，別套錯樣板。
+
+### 39.3 測試
+
+`v3/test/personal-flags-read-async.test.js`（**7 項全綠**）：逐鍵 parity、查不到的形狀
+（含「每個鍵都要在」的斷言）、只讀自己的、Map 的鍵型別、空集合、fail-closed、sqlite 回退
+（用**計數的 exec** 證明回退時完全不碰 PG runner）。變異 **6 條全殺**。
+
+順手踩到兩個夾具問題（都已寫進測試註解）：`user_listing_flags` 有 **FK 到 `users`**，
+所以測試使用者要先種、夾具也要鏡射 `users` 的表定義，否則會是
+`FOREIGN KEY constraint failed`／`no such table: main.users`。
+
+### 38.7 🚨 量測推翻了 `ensureUser` 那一項：它是**尺規的偽陽性**（不必移植）
+
+第 38.1／38.2 節把 `ensureUser`（22 條路由）列為第二個要處理的卡點，並說它需要政策決定
+（「PG 模式要不要建帳號」）。**實際追完之後，它根本不需要移植。**
+
+#### 可重跑的證據
+
+`ensureUser` 在全站的呼叫點只有三個，**沒有任何一個在路由路徑上**：
 
 ```
-PG demand_posts 欄位 41 個（與節點 SQLite 相同）✓
-PG demand_posts／demand_replies／demand_reports 只有 pkey，SQLite 定義的索引**一個都沒有** ✗
+personalFlags.js:23        export function ensureUser(conn, email, …)   ← 定義（吃 handle）
+db.js:430                  ensureUser as ensureUserOn                  ← 匯入
+db.js:836                  ensureUserOn(db, email, opts)               ← db.js 的同步包裝（無人呼叫）
+db.js:841                  cachedDefaultUserId = ensureUserOn(db, …)   ← **只在 defaultUserId() 內**
+db.js:8530                 bootstrapAdminUserOn(db, …, { ensureUser: ensureUserOn })  ← 當參數傳
+members.js:316             ensureUser(conn, key, { role: "admin" })     ← 只在 bootstrap 且由參數傳入時
 ```
 
-也就是 `idx_demand_one_open`（同一人只能有一則 open 的部分唯一索引）在 PG 上**不存在**。
-這與「PG 沒有 `CREATE TABLE` 的 UNIQUE」是同一類（第 N 次），但這裡更嚴重一點：
-它不是「鏡射不到」，而是**從來沒有人對這三張表呼叫過 `ensurePgSchema`**。
-本批的 `ensureDemandStoreOnce()` 會在第一次用到時補建（含部分唯一索引）。
-**補建前已先查過資料**：PG 上 `>1 open`＝0 人、重複 `public_token`＝0、`>1 draft`＝0，
-所以索引建得起來（現況 35 列：draft 2／closed 33）。live 測試會斷言這個索引真的存在。
+- `db.js:841` 是**模組層 `defaultUserId()`** 裡的一行；`ensureUser(email)`（`:836`）**沒有呼叫端**。
+- 那 22 條路由一條都沒有直接呼叫 `ensureUser`；其中 3 條被列成「唯一卡點」
+  （`POST /api/admin/crm/contacts`、`…/contacts/:id/notes`、`POST /api/admin/similarity/:id/review`），
+  但三條的 handler 都是 **async**、走 `crmAsync`／`*Async` 路徑，
+  而 `actorUserId` 是**由 session 帶進來的參數**——它們從來不會碰到 `ensureUser`。
 
-### 30.8 這批的尺規變化
+⇒ 尺規把它算成那 3 條的卡點，是因為它掃到 **`db.js` 內有一個 `ensureUser(` 呼叫**，
+再沿 db.js 的模組層邊傳遞出去——與第三十批那個
+`saveSiteBudget`／`budgetStore()` 的偽陽性是**同一類（經過一層 facade／模組層）**。
 
-```
-PG 153 → 154　MIXED 103 → 102　缺口 115 → 114
-```
+#### 結論
 
-（只多了一條，因為 reply／close 退回同步版——這是**刻意的**，見 30.9。
-下一批的 `getDemandPost()` 會一次解鎖三條讀取路由，並讓這兩條可以接回去。）
-
-### 30.9 ⛔ 為什麼 reply 與 close **刻意不接線**（本批最重要的決定）
-
-`addDemandReplyAsync`／`closeDemandPostAsync` 都寫好了、parity 測試也在驗、
-mutation 也殺得死，**但路由仍走同步版**。理由：
-
-> 這兩支會**改動「會被讀取」的狀態**（回覆清單、許願房狀態），而站上的讀取
-> （`listDemand`／`getDemandPost`／公開頁）**還是讀節點 SQLite**。
-> 接線的話就會變成「寫 PG、讀 SQLite」：回覆確實在 PG，但頁面上看不到——
-> 那是**雙寫分歧**，正是 `PG-ISLAND-ACTIVE-WRITES` 記的那個問題，只是換了個方向。
-
-`reportDemand` 沒有這個問題：它只**新增一列 `demand_reports`**，而且目前沒有任何讀取路徑
-在讀那張表（檢舉數是寫入時自己數的），所以接到 PG 不會造成「同一份資料兩個地方」。
-
-**⇒ 前置條件：`getDemandPost()`（含 `listDemand()`）先搬上 PG，這兩條就可以接回去。**
-那一步會一次解鎖 `GET /api/demand/:id`、`GET /api/wish-rooms/:id`、
-`GET /api/public/wish-room/:id` 三條路由。
+1. **不要為 `ensureUser` 做 PG 版**，也不需要 Owner 決定「PG 要不要建帳號」——
+   那條路徑在正式站（PG 模式）根本不會被走到。
+2. 缺口的 22 條**含 `ensureUser`** 的路由，真正要清的是它們**其他的**卡點
+   （`countWatched`／`getUserById`／`sqlExcludeFixtureRows`…）。
+3. **第三十八批 38.2 的順序建議據此修正**：第 3 步（`ensureUser`）**刪除**；
+   力氣應該放在「一起清掉 `getUserById`＋`countWatched`＋`sqlExcludeFixtureRows` 這組共同卡點」。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
