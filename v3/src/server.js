@@ -188,14 +188,12 @@ import {
   updateContactProfileFor,
   deleteContactProfileFor,
   listingImportMeta,
-  listMineListingImports,
   getOwnedListingImport,
   startListingImportFor,
   reviewListingImportFor,
   cancelListingImportFor,
   confirmListingImportFor,
   publishConfirmedImportFor,
-  listAdminListingImports,
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
@@ -265,7 +263,11 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
-import { importMetaAsync } from "./listingImportAsync.js";
+import {
+  importMetaAsync,
+  listAdminListingImportsAsync,
+  listMineListingImportsAsync,
+} from "./listingImportAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
@@ -3303,11 +3305,11 @@ app.get("/api/listing-imports/meta", async (req, res) => {
     res.json(await importMetaAsync({ plan: session.plan || "free" }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/listing-imports", (req, res) => {
+app.get("/api/listing-imports", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json({ items: listMineListingImports(session.userId) });
+    res.json({ items: await listMineListingImportsAsync(session.userId) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.post("/api/listing-imports", async (req, res) => {
@@ -3356,9 +3358,9 @@ app.post("/api/listing-imports/:id/publish", (req, res) => {
     res.json(publishConfirmedImportFor(session.userId, req.params.id, body));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.get("/api/admin/listing-imports", requireAdminApi, (req, res) => {
+app.get("/api/admin/listing-imports", requireAdminApi, async (req, res) => {
   try {
-    res.json({ items: listAdminListingImports({ limit: Number(req.query?.limit) || 50 }) });
+    res.json({ items: await listAdminListingImportsAsync({ limit: Number(req.query?.limit) || 50 }) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 

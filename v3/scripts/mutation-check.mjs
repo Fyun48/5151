@@ -959,6 +959,61 @@ const SYSCRAWL_MUTATIONS = [
   },
 ];
 
+// 匯入清單（listing imports）PG 分支的變異集（v3/test/listing-imports-async.test.js）。
+const IMPORTS_SRC = "v3/src/listingImportAsync.js";
+const IMPORTS_SYNC_SRC = "v3/src/listingImport.js";
+const IMPORTS_MUTATIONS = [
+  {
+    name: "會員清單不篩 user_id（看得到別人的匯入）",
+    file: IMPORTS_SRC,
+    from: "    const rows = (await run(IMPORT_MINE_SQL, [uid, importListLimit(limit, { cap: 50, fallback: 20 })])).rows || [];",
+    to: "    const rows = (await run(\"SELECT * FROM listing_import ORDER BY id DESC LIMIT ?\", [importListLimit(limit, { cap: 50, fallback: 20 })])).rows || [];",
+    expect: "會員清單",
+  },
+  {
+    name: "後台清單拿掉 LEFT JOIN（member_email 永遠空）",
+    file: IMPORTS_SYNC_SRC,
+    from: "export const IMPORT_ADMIN_SQL = `SELECT i.*, u.email AS member_email\n     FROM listing_import i\n     LEFT JOIN users u ON u.id = i.user_id\n     ORDER BY i.id DESC LIMIT ?`;",
+    to: "export const IMPORT_ADMIN_SQL = `SELECT i.*, '' AS member_email\n     FROM listing_import i\n     ORDER BY i.id DESC LIMIT ?`;",
+    expect: "後台清單",
+  },
+  {
+    name: "後台清單不回傳 member_email 欄位",
+    file: IMPORTS_SYNC_SRC,
+    from: "export function importAdminView(row) {\n  return { ...rowToImport(row), member_email: row.member_email || \"\" };\n}",
+    to: "export function importAdminView(row) {\n  return rowToImport(row);\n}",
+    expect: "後台清單",
+  },
+  {
+    name: "清單順序反過來（舊到新）",
+    file: IMPORTS_SYNC_SRC,
+    from: "export const IMPORT_MINE_SQL = \"SELECT * FROM listing_import WHERE user_id=? ORDER BY id DESC LIMIT ?\";",
+    to: "export const IMPORT_MINE_SQL = \"SELECT * FROM listing_import WHERE user_id=? ORDER BY id ASC LIMIT ?\";",
+    expect: "會員清單",
+  },
+  {
+    name: "會員清單的上限被放寬到 5000",
+    file: IMPORTS_SYNC_SRC,
+    from: "export function importListLimit(limit, { cap, fallback }) {\n  return Math.min(cap, Number(limit) || fallback);\n}",
+    to: "export function importListLimit(limit, { fallback }) {\n  return Number(limit) || fallback;\n}",
+    expect: "上限是共用政策",
+  },
+  {
+    name: "沒給 limit 時的預設值寫錯（20 變 200）",
+    file: IMPORTS_SYNC_SRC,
+    from: "export function importListLimit(limit, { cap, fallback }) {\n  return Math.min(cap, Number(limit) || fallback);\n}",
+    to: "export function importListLimit(limit, { cap }) {\n  return Math.min(cap, Number(limit) || 200);\n}",
+    expect: "上限是共用政策",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: IMPORTS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2584,6 +2639,7 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
 const MUTATIONS = /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
+  : /listing-imports-async/.test(testFile) ? IMPORTS_MUTATIONS
   : /system-crawl-async/.test(testFile) ? SYSCRAWL_MUTATIONS
   : /rental-notify-prefs-async/.test(testFile) ? NPREFSWRITE_MUTATIONS
   : /rental-ops-async/.test(testFile) ? OPS_MUTATIONS

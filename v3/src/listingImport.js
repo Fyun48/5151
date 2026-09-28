@@ -99,7 +99,9 @@ export function ensureListingImportSchema(db) {
   `);
 }
 
-function rowToImport(row) {
+// 匯出給 PG 版（`listingImportAsync.listMineListingImportsAsync` 等）：列 → 物件的轉換
+// 兩個 driver 必須完全相同（`asJson` 的寬容度、`listing_id == null` 的處理都在這裡）。
+export function rowToImport(row) {
   if (!row) return null;
   return {
     id: Number(row.id),
@@ -129,22 +131,32 @@ export function getListingImport(db, id) {
   return rowToImport(db.prepare("SELECT * FROM listing_import WHERE id=?").get(Number(id) || 0));
 }
 
+// 兩個清單查詢與「上限夾法」抽成共用零件（PG 版逐字共用）。
+export const IMPORT_MINE_SQL = "SELECT * FROM listing_import WHERE user_id=? ORDER BY id DESC LIMIT ?";
+export const IMPORT_ADMIN_SQL = `SELECT i.*, u.email AS member_email
+     FROM listing_import i
+     LEFT JOIN users u ON u.id = i.user_id
+     ORDER BY i.id DESC LIMIT ?`;
+
+// 上限是**政策**（會員 50、後台 200），PG 版與同步版共用同一個算法。
+export function importListLimit(limit, { cap, fallback }) {
+  return Math.min(cap, Number(limit) || fallback);
+}
+
+export function importAdminView(row) {
+  return { ...rowToImport(row), member_email: row.member_email || "" };
+}
+
 export function listMineListingImports(db, userId, { limit = 20 } = {}) {
-  return db.prepare(
-    "SELECT * FROM listing_import WHERE user_id=? ORDER BY id DESC LIMIT ?",
-  ).all(Number(userId) || 0, Math.min(50, Number(limit) || 20)).map(rowToImport);
+  return db.prepare(IMPORT_MINE_SQL)
+    .all(Number(userId) || 0, importListLimit(limit, { cap: 50, fallback: 20 }))
+    .map(rowToImport);
 }
 
 export function listAdminListingImports(db, { limit = 50 } = {}) {
-  return db.prepare(
-    `SELECT i.*, u.email AS member_email
-     FROM listing_import i
-     LEFT JOIN users u ON u.id = i.user_id
-     ORDER BY i.id DESC LIMIT ?`,
-  ).all(Math.min(200, Number(limit) || 50)).map((row) => ({
-    ...rowToImport(row),
-    member_email: row.member_email || "",
-  }));
+  return db.prepare(IMPORT_ADMIN_SQL)
+    .all(importListLimit(limit, { cap: 200, fallback: 50 }))
+    .map(importAdminView);
 }
 
 export function findActiveImportBySource(db, userId, normalizedUrl) {
