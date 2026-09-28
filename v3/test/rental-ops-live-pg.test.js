@@ -100,7 +100,10 @@ test("live PG：中位數的方言 SQL 真的算得對，明細也真的能分�
         `INSERT INTO wish_offers(public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status,
            created_at, updated_at, expires_at, accepted_at)
          VALUES ($1, 1, $2, $3, $4, 'accepted', $5, $5, $6, $7)`,
-        [`${TOKEN}-${month}-${i}`, 900000 + i, OWNER, TENANT, created, EXPIRES, accepted],
+        // ⚠️ `listing_id` 一定要**跨月份**唯一：`idx_wish_offers_active_unique` 是
+        // UNIQUE(owner_user_id, listing_id, wish_id) WHERE status IN ('pending','accepted')，
+        // 兩個月都用 900000+i 的話第二個月會撞（CI 第一次跑就是這樣紅的）。
+        [`${TOKEN}-${month}-${i}`, 900000 + (month === "03" ? 0 : 10) + i, OWNER, TENANT, created, EXPIRES, accepted],
       );
     }
   };
