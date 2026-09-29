@@ -2725,6 +2725,39 @@ const NOTIFYQ_MUTATIONS = [
   },
 ];
 
+// 「清除物件紀錄／清除全部資料」的 PG 島嶼（v3/test/site-reset-async.test.js，第七十三批）。
+const SITERESET_SRC = "v3/src/siteResetAsync.js";
+const SITERESET_MUTATIONS = [
+  {
+    name: "清除只寫本機（PG 站按了卻什麼都沒清）",
+    file: SITERESET_SRC,
+    from: "  if (!isPg(options)) {\n    const sync = await import(\"./db.js\");\n    return sync[syncName]();\n  }",
+    to: "  if (true) {\n    const sync = await import(\"./db.js\");\n    return sync[syncName]();\n  }",
+    expect: "PG 分支刪的是 PG 的表",
+  },
+  {
+    name: "清除全部資料漏刪 user_settings（別的會員設定留著）",
+    file: "v3/src/db.js",
+    from: '  "DELETE FROM user_settings",\n',
+    to: "",
+    expect: "清除全部資料",
+  },
+  {
+    name: "清除之後不寫回設定補丁（hasBaseline 沒重設）",
+    file: SITERESET_SRC,
+    from: "    return await saveSettingsAsync({ ...settingsPatch }, uid, { forceAdmin: true, ...options });",
+    to: "    void saveSettingsAsync; void uid; void settingsPatch; return {};",
+    expect: "清除物件紀錄",
+  },
+  {
+    name: "清除物件紀錄改回同步版（路由仍寫本機）",
+    file: "v3/src/server.js",
+    from: "  const settings = await resetListingsAsync();",
+    to: "  const settings = resetListings();",
+    expect: "兩條路由都用 PG 島嶼",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4143,6 +4176,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /notify-queue-parity/.test(testFile) ? NOTIFYQ_MUTATIONS
+  : /site-reset-async/.test(testFile) ? SITERESET_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS

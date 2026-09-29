@@ -44,8 +44,6 @@ import {
   GUEST_MAX_DISTRICTS,
   sameHouseBackfillStatus,
   mergeSameHouseForUser,
-  resetListings,
-  resetAllData,
   saveAsProfile,
   saveSettings,
   sourceHistory,
@@ -430,6 +428,8 @@ import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCache
 import { confirmExpiredOfflineAsync } from "./crawlerWrites.js";
 // 通知佇列的 PG 島嶼入口（`GET /api/state` 的事件清單讀 `user_events`）。
 import { recentEventsAsync } from "./notifyQueueAsync.js";
+// 「清除物件紀錄／清除全部資料」的 PG 島嶼入口（管理員的核彈按鈕）。
+import { resetAllDataAsync, resetListingsAsync } from "./siteResetAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
 import { publicListingView } from "./selfListings.js";
@@ -4233,7 +4233,7 @@ app.post("/api/listings/hide-many", async (req, res) => {
   }
 });
 
-app.post("/api/reset-listings", (req, res) => {
+app.post("/api/reset-listings", async (req, res) => {
   if (!actorIsAdmin(req)) {
     res.status(403).json({ error: "只有管理員可以清除物件紀錄" });
     return;
@@ -4242,13 +4242,14 @@ app.post("/api/reset-listings", (req, res) => {
     res.status(400).json({ error: "需要確認才會清除紀錄" });
     return;
   }
-  const settings = resetListings();
+  // PG 模式下 DELETE 必須下在站上讀的那一份（同步版只清本機，畫面卻回「已清除」）。
+  const settings = await resetListingsAsync();
   lastRun = null;
   const session = readSession(req);
-  res.json({ ok: true, settings, stats: stats(undefined, session?.userId) });
+  res.json({ ok: true, settings, stats: await safeStats(session?.userId) });
 });
 
-app.post("/api/reset-all", (req, res) => {
+app.post("/api/reset-all", async (req, res) => {
   if (!actorIsAdmin(req)) {
     res.status(403).json({ error: "只有管理員可以清除全部資料" });
     return;
@@ -4257,7 +4258,7 @@ app.post("/api/reset-all", (req, res) => {
     res.status(400).json({ error: "需要確認才會清除全部資料" });
     return;
   }
-  const settings = resetAllData();
+  const settings = await resetAllDataAsync();
   lastRun = null;
   res.json({ ok: true, settings, stats: { total: 0 } });
 });
