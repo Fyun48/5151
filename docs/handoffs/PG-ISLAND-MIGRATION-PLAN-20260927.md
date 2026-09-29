@@ -3658,6 +3658,62 @@ crawler 那一側（`watcher.js` 的 `setCachedGeo`／`updateListingsGeoByAddres
 `updateListingsGeoByAddress()` 還會一起寫 `listings`（那是第 (4) 步的 35 卡點叢），所以留到那一批
 一起處理。在那之前：**同一個地址在網頁請求路徑與 crawler 之間不會共用快取**。
 
+## 二之負三十五、2026-09-29 第六十五批：許願房建立（兩條同一個 handler）
+
+### 65.1 範圍與投報率
+
+| 路由 | 進入點 | 卡點 |
+|---|---|---|
+| `POST /api/demand` | `createDemandAsync`（新） | `createDemand`／`createDemandPost`／`insertRow` ＋ fixture／analytics |
+| `POST /api/wish-rooms` | **同一個 handler 本體** | 同上 |
+
+Owner 指定順序第 (3) 步的第一組（卡點集相同的兩條）。兩條路由本來是**同步** handler
+（`createDemand()` → 本機 SQLite）⇒ PG 模式下「刊登成功、站上讀不到」。
+
+尺規：缺口 **31 → 29**、PG **237 → 239**、MIXED **28 → 26**（SQLite 3、無直接DB 20 不變）。
+
+### 65.2 這一包的三個關鍵設計
+
+1. **交易內「檢查一人一則 ＋ 插入」**（同步版是 `BEGIN IMMEDIATE`）。⚠️ PG 的交易一旦撞到
+   `23505` 就進入 **aborted** 狀態，同一個交易內**不能再查**——同步版是同一條連線 catch 之後
+   直接重查。所以競態的接手（有搶先建立的草稿就就地刊登／改寫，有 open 就丟
+   `wish_active_limit`）放在**新的交易**裡跑（`recoverCreateRaceAsync`），邏輯與同步版的 catch
+   分支逐條相同。
+2. **INSERT 語句與參數抽成共用常數**（`DEMAND_INSERT_SQL`／`DEMAND_INSERT_WITH_ID_SQL`／
+   `demandInsertParams()`）：PG 版只多接一個 `RETURNING id`（SQLite 也支援），欄位對應不可能漂移。
+3. **本機 handle 追上**（與 update／publish／reopen 同一個處置）：鏡像時帶 `registered: true`
+   與拿掉 hook，避免 fixture registry 被註冊兩次；鏡像失敗**只記警告不往上丟**——PG 才是來源，
+   使用者的刊登不該因為本機鏡像而失敗。
+
+### 65.3 這一包的四個坑（含一個 live PG 抓到的既有缺陷）
+
+1. 🚨 **既有缺陷：惰性補 `public_token` 每次都生一個新的**（live PG 測試抓到）。`rowsToViews()`
+   補完 token 後會**再裝飾一次**，而 `row.public_token` 在記憶體裡仍是空的 ⇒ 回傳的是「第二個」
+   token，那一個**從來沒有落地** ⇒ 建立／讀取許願房後拿到的分享連結 404。已修（同一列記住同一個
+   token：`cache.tokenByRow`），補了離線測試與變異。這是「PG 版自己一套流程」才會有的缺陷——
+   同步版是 `ensurePublicToken()` 直接寫入並回傳同一個值。
+2. 🚨 **反洗版的 24 小時門檻在 PG 站靜默失效**：`assertMatureAccount()` 讀的是**本機**
+   `users.created_at`，本機沒有那個會員時 `Date.parse("")` 是 NaN ⇒ **完全不擋**。本批新增
+   `assertMatureAccountAsync()`（讀 PG 的 `users`，本機只在 PG 查不到那一列時當備援），
+   建立／刊登／重開／**回覆**四條路徑一起換——只換一條會讓不同路由的門檻不一致。
+3. **測試的 `districts` 是鍵不是區名**：`normalizeWatchDistricts()` 吃 `${city.id}-${district.id}`
+   （士林區是 `1-8`）。寫 `["士林區"]` 的症狀是「請至少選一個行政區」，看起來像別人在壞。
+4. **跨測試的行程內快取**：生命週期開關是模組快取，上一個測試開過就會讓下一個測試的同步版基準
+   用 TTL、PG 版用遠期。`resetBoth()` 清完 settings 後要重讀一次（`getWishConditions()`）。
+   另外兩個 store 的 `AUTOINCREMENT` 進度不同 ⇒ 回傳值比對要排除 `id`；`public_token` 是隨機的
+   ⇒ 也要排除（但兩邊都要斷言「有值且與落地值相同」）。
+
+### 65.4 測試
+
+- `v3/test/demand-async.test.js`（**32 項全綠**，新增 14 條）：建立（刊登／草稿）、部分欄位、
+  `wish_active_limit`／`wish_mutable_limit`、驗證錯誤、未登入 401、成熟度（含「以 PG 為準」）、
+  過期掃描、`wish_cloned`、生命週期 TTL、競態接手（夾具自己補部分唯一索引重現 23505）、
+  本機鏡像、惰性 token 一致性、sqlite 回退。變異 **22 條全殺**（新增 10 條）。
+- `v3/test/demand-create-live-pg.test.js`（**1 項全綠**，新檔）：真 PG 上驗 `INSERT … RETURNING id`、
+  `idx_demand_one_open`／`idx_demand_one_mutable` **真的存在**、**真並發**（`Promise.allSettled`）
+  走 23505 並被對應成 `wish_active_limit`、以及「交易內後續語句失敗時 INSERT 必須回滾」。
+  ⚠️ 只碰自己那三個測試帳號。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3668,13 +3724,13 @@ crawler 那一側（`watcher.js` 的 `setCachedGeo`／`updateListingsGeoByAddres
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十四批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十五批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **28** |
+| MIXED | — | **26** |
 | 無直接DB | — | **20** |
-| PG | 22 | **237** |
-| **缺口（SQLite＋MIXED）** | — | **31** |
+| PG | 22 | **239** |
+| **缺口（SQLite＋MIXED）** | — | **29** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

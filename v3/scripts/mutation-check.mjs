@@ -2809,6 +2809,95 @@ const DEMAND_MUTATIONS = [
     to: "    const filtered = rows;",
     expect: "含篩選條件",
   },
+  // 第六十五批：`createDemandAsync`（`POST /api/demand` ＋ `POST /api/wish-rooms`）。
+  {
+    name: "建立不檢查『一人一則』（可以一直開新的公開許願房）",
+    file: DEMAND_SRC,
+    from: "  if (await idOfAsync(tx, OPEN_ID_SQL, uid)) throwActiveLimit();\n  const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);",
+    to: "  const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);",
+    expect: "wish_active_limit",
+  },
+  {
+    name: "草稿不看現有的 open（可以在公開許願房旁邊存草稿）",
+    file: DEMAND_SRC,
+    from: "    if (await idOfAsync(tx, OPEN_ID_SQL, uid)) throwDraftBesideOpen();\n",
+    to: "",
+    expect: "wish_mutable_limit",
+  },
+  {
+    name: "草稿不就地改寫（每次存草稿都多一列）",
+    file: DEMAND_SRC,
+    from: "    const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);\n    if (draftId) {\n      const extra = { updated_at: iso(now) };",
+    to: "    const draftId = 0;\n    if (draftId) {\n      const extra = { updated_at: iso(now) };",
+    expect: "已有草稿時就地改寫",
+  },
+  {
+    name: "建立後不鏡像到本機 handle（還沒搬完的讀取看不到）",
+    file: DEMAND_SRC,
+    from: "  mirrorInsertLocal(id, uid, fields, status, now, isolation);\n",
+    to: "",
+    expect: "本機 handle 要有鏡像列",
+  },
+  {
+    name: "建立不驗帳號成熟度（新帳號可以立刻洗版）",
+    file: DEMAND_SRC,
+    from: "    if (!asDraft && !isFixtureMaturityAuthorized(sqliteHandle(), uid, now, maturity)) {\n      await assertMatureAccountAsync(run, uid, now, \"刊登許願房\");\n    }\n",
+    to: "",
+    expect: "新帳號未滿 24 小時",
+  },
+  {
+    // 反洗版的門檻不能在 PG 站靜默失效：本機 handle 只是備援，來源必須是 PG 的 `users`。
+    name: "成熟度改讀本機（本機沒有那一列時等於完全不擋）",
+    file: DEMAND_SRC,
+    from: "  const row = one((await run(USER_CREATED_AT_SQL, [uid])).rows);\n  const local = row ? String(row.created_at || \"\") : String(userCreatedAt(sqliteHandle(), uid) || \"\");",
+    to: "  const row = null;\n  const local = String(userCreatedAt(sqliteHandle(), uid) || \"\");",
+    expect: "成熟度以 PG 的 users 為準",
+  },
+  {
+    name: "回覆不驗帳號成熟度（新帳號可以立刻回覆洗版）",
+    file: DEMAND_SRC,
+    from: '    await assertMatureAccountAsync(run, uid, new Date(), "回覆");\n',
+    to: "",
+    expect: "回覆：新帳號未滿 24 小時",
+  },
+  {
+    name: "建立前不掃過期許願（過期的 open 會誤擋新刊登）",
+    file: DEMAND_SRC,
+    from: "    await expireOpenPostsAsync(run, now);\n    const fields = await wishFieldsAsync(run, uid, input || {}, {});",
+    to: "    const fields = await wishFieldsAsync(run, uid, input || {}, {});",
+    expect: "過期的舊許願要先被掃掉",
+  },
+  {
+    name: "競態時不接手（直接丟回唯一的錯誤）",
+    file: DEMAND_SRC,
+    from: "      created = await inDemandTransaction(options, (tx) => recoverCreateRaceAsync(tx, uid, now, options, fields, asDraft, error));",
+    to: "      throw error;",
+    expect: "競態（插入前先被建立草稿）",
+  },
+  {
+    name: "建立不記 wish_cloned（複製許願的統計永遠 0）",
+    file: DEMAND_SRC,
+    from: '        if (prior.length) await bumpAnalyticsAsync("wish_cloned", now, 1, nested(options, run));',
+    to: '        if (prior.length) await bumpAnalyticsAsync("__none__", now, 1, nested(options, run));',
+    expect: "wish_cloned",
+  },
+  {
+    // 2026-09-29 live PG 測試抓到的既有缺陷：`rowsToViews()` 補完 token 後會**再裝飾一次**，
+    // 而 `row.public_token` 在記憶體裡仍是空的 ⇒ 每次都生一個新 token，回傳的是「第二個」，
+    // 那個從來沒落地（分享連結 404）。
+    name: "惰性補 token 每次都生新的（回傳的 token 與落地值不同）",
+    file: DEMAND_SRC,
+    from: "      const known = cache.tokenByRow.get(id);\n      if (known) return known;",
+    to: "      const known = null;\n      if (known) return known;",
+    expect: "同一組 token",
+  },
+  {
+    name: "插入不取回 id（新許願房的 id 變成 0）",
+    file: DEMAND_SRC,
+    from: "  const id = forcedId || Number(one((await tx(`${sql} RETURNING id`, params)).rows)?.id) || 0;",
+    to: "  const id = forcedId || 0;",
+    expect: "本機 handle 要有鏡像列",
+  },
 ];
 
 // 許願房提案讀取（PG 島嶼）的變異集（v3/test/wish-offers-async.test.js）。

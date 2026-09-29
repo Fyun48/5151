@@ -127,7 +127,6 @@ import {
   touchLastLogin,
   resumeIdleIfNeeded,
   linkOauthIdentity,
-  createDemand,
   publicWishRoomView,
   demandMeta,
   submitFeedback,
@@ -300,6 +299,7 @@ import { closeSelfListingAsync, hideSelfListingAsync, reportSelfListingAsync } f
 import {
   addDemandReplyAsync,
   closeDemandPostAsync,
+  createDemandAsync,
   getDemandPostAsync,
   listDemandPostsAsync,
   publishWishRoomAsync,
@@ -2828,27 +2828,29 @@ app.post("/api/admin/same-house/confirm", requireAdminApi, async (req, res) => {
   }
 });
 
-app.post("/api/demand", (req, res) => {
+// 這兩條是**同一個 handler 本體**（都建立許願房），所以一起改接 PG 島嶼入口：
+// PG 模式下寫本機 SQLite 等於「刊登成功、站上讀不到」。
+app.post("/api/demand", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能刊登許願房" });
       return;
     }
-    res.json(createDemand(session.userId, req.body || {}));
+    res.json(await createDemandAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
 });
 
-app.post("/api/wish-rooms", (req, res) => {
+app.post("/api/wish-rooms", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能刊登許願房" });
       return;
     }
-    res.json(createDemand(session.userId, req.body || {}));
+    res.json(await createDemandAsync(session.userId, req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
