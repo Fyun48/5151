@@ -54,6 +54,7 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 // 2.3b 第二段：入列與 worker 的 queue 管理走 driver-aware 版本
 // （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
+import { resolveDbDriver } from "./dbDriver.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
@@ -128,22 +129,30 @@ function listingForWatch(postId, userId) {
   return getListing(postId, userId, { sameHouse: false });
 }
 
-export function listingEnrichHelpers() {
-  return {
-    // The enrich queue awaits loadListingAsync/markGoneAsync/markAliveAsync/invalidateLocationAsync
-    // when the bundle provides them (see loadListingForRun in listingEnrichQueue.js); the
-    // synchronous variants stay for SQLite-only callers.
-    loadListing: (id) => listingForWatch(id),
-    loadListingAsync: (id) => listingForWatchAsync(id),
-    persistHpListingFields,
-    persistHpListingFieldsAsync: (id, next, options = {}) => persistHpListingFieldsAsync(id, next, options),
-    upsertListingPrepAsync: (postId, listing, evalResult) => upsertListingPrepAsync(postId, listing, evalResult),
-    invalidateLocation: invalidateListingLocation,
-    invalidateLocationAsync: (listing, next) => invalidateListingLocationAsync(Number(next?.post_id || listing?.post_id) || 0),
-    markGone: (id) => markListingOffline(id),
-    markGoneAsync: (id) => markListingOfflineAsync(id),
-    markAlive: (id) => markListingAlive(id),
-    markAliveAsync: (id) => markListingAliveAsync(id),
+/**
+ * 補抓 worker（`processListingEnrichBatch()`）的 helper bundle。
+ *
+ * 兩件必須一起看的事：
+ *   1. `listingEnrichQueue.js` 的 `runHelper()` **一律優先 `xxxAsync`**，只有在 bundle 沒有
+ *      對應的 async 變體時才退回同步版（那個順序是為了 SQLite-only 的呼叫端）。
+ *   2. 所以 PG 模式下同步變體是**死碼**——留著只會讓尺規（靜態分析）把整條路由判成 MIXED，
+ *      也讓「這個 bundle 到底走哪個 store」看不出來。
+ *
+ * ⇒ 這裡依 driver 決定要不要提供同步變體：PG 只給 async（真的走 `crawlerWrites.js` 的
+ * PostgreSQL 分支），SQLite 兩種都給（行為與以前完全相同）。`options` 會逐層轉發給 async 變體，
+ * 讓測試能注入 `pgDriver`／`strict`（正式路徑不傳，行為不變）。
+ */
+export function listingEnrichHelpers(options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  const fwd = (fn) => (...args) => fn(...args, options);
+  const base = {
+    loadListingAsync: (id) => listingForWatchAsync(id, undefined, options),
+    persistHpListingFieldsAsync: (id, next, extra = {}) => persistHpListingFieldsAsync(id, next, { ...options, ...extra }),
+    upsertListingPrepAsync: (postId, listing, evalResult) => upsertListingPrepAsync(postId, listing, evalResult, options),
+    // 同步版簽名是 `(listing, next)`，async 版是 `(postId)`；兩個都只取 post_id。
+    invalidateLocationAsync: (listing, next) => invalidateListingLocationAsync(Number(next?.post_id || listing?.post_id) || 0, options),
+    markGoneAsync: fwd(markListingOfflineAsync),
+    markAliveAsync: fwd(markListingAliveAsync),
     isSourceEnabled: isCrawlSourceEnabled,
     onFirstReady: async (listing) => {
       const age = Date.now() - (Date.parse(listing.first_seen_at || "") || 0);
@@ -157,7 +166,17 @@ export function listingEnrichHelpers() {
     // 2.3b 第二段：補抓 worker 的 queue 管理（seed／claim／finish／metric／擁有權／prep）走
     // driver-aware 分派（processListingEnrichBatch 會用這個 bundle）。PG 模式下 seed 回 0，
     // 因為種子查詢還依賴 listings 的讀取島（細節見 PG-2.3-NOTES.md）。
-    enrichQueue: listingEnrichQueueFacade(db),
+    enrichQueue: listingEnrichQueueFacade(db, { driver }),
+  };
+  if (driver === "postgres") return base;
+  // SQLite-only 的呼叫端（以及非 PG 的舊路徑）用同步變體：與以前完全相同。
+  return {
+    ...base,
+    loadListing: (id) => listingForWatch(id),
+    persistHpListingFields,
+    invalidateLocation: invalidateListingLocation,
+    markGone: (id) => markListingOffline(id),
+    markAlive: (id) => markListingAlive(id),
   };
 }
 

@@ -270,6 +270,67 @@ for (const [rel, mod] of mods) {
   for (const name of mod.fns.keys()) pgFns.add(name);
 }
 
+// 🚨 2026-09-29 修正缺陷 (8)：**driver-aware 的 wrapper 把 driver 判斷放在 helper 裡**。
+//
+// 例：`crawlerWrites.js` 的
+//     export function markListingAliveAsync(postId, options = {}) {
+//       return write(options, (exec) => markListingAliveRepo(…), () => markListingAliveSync(postId));
+//     }
+// 真正的 `resolveDbDriver()` 在**同模組的 `write()`** 裡，不在這一支的本體 ⇒ 舊規則
+// （`/resolveDbDriver\s*\(/.test(body)`）看不到，於是 `markListingAliveSync` 被算成 SQLite 節點，
+// 一路傳上去讓 `/api/listings/:id/recheck` 永遠留在缺口裡（**假陽性**：PG 模式下那個 fallback
+// 是 `sqliteFallbackAllowed(…, {write:true})` fail-closed 的緊急出口，正常情況跑不到）。
+//
+// 修法（保守）：如果一個函式把某個名字**只**用在「呼叫同模組 driver-aware 函式」的引數裡
+// （例如 `write(options, …, () => xxxSync(id))`），那個名字就不算這個函式在用 SQLite。
+// 只要有任何一個 mention 落在那個呼叫之外，就照舊計入。
+const driverAwareLocalNames = (rel) => {
+  const mod = mods.get(rel);
+  const out = new Set();
+  if (!mod) return out;
+  for (const [name, body] of mod.fns) {
+    // 只有「本體自己就有 driver 判斷」的才算（保守：不做遞移）。
+    if (!DRIVER_AWARE.test(body) || sqliteNodes.has(nodeKey(rel, name))) continue;
+    out.add(name);
+  }
+  // 同模組的 driver-aware 函式也可能再委派給另一個（`write` → `postgresExec` 之類），
+  // 但不做遞移（保守：只認本體就有 driver 判斷的）。
+  return out;
+};
+
+// `name(` 的引數範圍（配對括號；找不到結尾就回 null）。
+function callArgSpans(body, name) {
+  const spans = [];
+  const re = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}\\s*\\(`, "g");
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    let depth = 0;
+    let i = m.index + m[0].length - 1;
+    for (; i < body.length; i += 1) {
+      const ch = body[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") { depth -= 1; if (depth === 0) break; }
+    }
+    if (depth === 0) spans.push([m.index, i + 1]);
+  }
+  return spans;
+}
+
+// 這個名字在 body 裡的**所有**出現是否都落在 driver-aware 呼叫的引數裡。
+function onlyInsideDriverCalls(body, name, awareNames) {
+  const spans = [];
+  for (const aware of awareNames) spans.push(...callArgSpans(body, aware));
+  if (!spans.length) return false;
+  const re = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$])`, "g");
+  let m;
+  let seen = false;
+  while ((m = re.exec(body)) !== null) {
+    seen = true;
+    if (!spans.some(([a, b]) => m.index >= a && m.index < b)) return false;
+  }
+  return seen;
+}
+
 const memo = new Map();
 let resolving = new Map();
 
@@ -316,8 +377,17 @@ function resolveNode(rel, name) {
   const inFlight = resolving.get(key);
   if (inFlight) return inFlight;
   resolving.set(key, out);
+  // 這一支自己有沒有「同模組 driver-aware 委派」（見 onlyInsideDriverCalls 的說明）。
+  const awareNames = driverAwareLocalNames(rel);
+  const delegated = awareNames.size
+    ? new Set([...mod.fns.keys()].filter((other) => other !== name && awareNames.has(other) && callsIn(body, other)))
+    : new Set();
   for (const [local, target] of mod.imports) {
     if (!callsIn(body, local)) continue;
+    // 只在 driver-aware 呼叫的引數裡出現 ⇒ 那是 fallback，不是這個函式在用 SQLite。
+    // ⚠️ 要**整條邊**跳過（含下面的遞移展開）：只跳過「直接計入」的話，
+    // `resolveNode(db.js::markListingAlive)` 還是會把 ensureUser／groupIdForPost 那串拉回來。
+    if (delegated.size && onlyInsideDriverCalls(body, local, delegated)) continue;
     if (sqliteNodes.has(nodeKey(target.to, target.orig))) out.sqlite.add(target.orig);
     if (target.to.endsWith("Async.js") && pgFns.has(target.orig)) out.pg.add(target.orig);
     const next = resolveNode(target.to, target.orig);
