@@ -2886,6 +2886,53 @@ const USERS_MUTATIONS = [
     to: "    if (!sqliteFallbackAllowed(options, {})) return null;\n    return runSqlite();",
     expect: "fail-closed",
   },
+  {
+    name: "已刪除的帳號也算通過驗證",
+    file: USERS_SRC,
+    from: "  if (!user || isUserDeleted(user)) return null;",
+    to: "  if (!user) return null;",
+    expect: "verifyUserPassword：對的密碼回那一列",
+  },
+  // ⚠️ 刻意**沒有**「ensureUser 先查再寫拿掉」那條變異：它是**等價變異**——
+  // 夾具與正式庫的 `users.email` 都有唯一約束，INSERT 撞唯一鍵時會走 catch 重讀，
+  // 回傳值完全一樣（實測：單獨跑也殺不死）。要留的是下面這條「不回傳新 id」。
+  {
+    name: "ensureUser 不回傳新 id（INSERT 少了 RETURNING id）",
+    file: USERS_SRC,
+    from: "  \"INSERT INTO users(email, password_hash, role, plan, created_at) VALUES (?, '', ?, 'free', ?) RETURNING id\";",
+    to: "  \"INSERT INTO users(email, password_hash, role, plan, created_at) VALUES (?, '', ?, 'free', ?)\";",
+    expect: "ensureUser：不存在就建",
+  },
+  {
+    name: "defaultUserIdAsync 走本機（拿錯 store 的 id）",
+    file: USERS_SRC,
+    from: "export async function defaultUserIdAsync(options = {}) {\n  return ensureUserAsync(adminEmailForUser(), { role: \"admin\" }, options);\n}",
+    to: "export async function defaultUserIdAsync(options = {}) {\n  return defaultUserIdSync();\n}",
+    expect: "defaultUserIdAsync：必須在 PG 建帳號",
+  },
+  {
+    name: "touchLastLogin 不夾間隔（每次都重寫）",
+    file: USERS_SRC,
+    from: "        if (Number.isFinite(prev) && prev > 0 && now - prev < minIntervalMs) return false;",
+    to: "        if (false) return false;",
+    expect: "touchLastLogin：寫入 PG",
+  },
+  {
+    name: "resumeIdleIfNeededAsync 讀本機（PG 的暫停旗標看不到）",
+    file: USERS_SRC,
+    from: "  if (!isPg(options)) return resumeIdleIfNeededSync(userId);",
+    to: "  return resumeIdleIfNeededSync(userId);",
+    expect: "resumeIdleIfNeededAsync：暫停中的會員會被恢復",
+  },
+  {
+    // 第五十二批又找到一個（settingsAsync）：`{ rows, rowCount }` 會被 `for (const row of rows)` 炸掉。
+    name: "settingsAsync 的注入式 exec 不經正規化（{rows} 形狀會炸）",
+    file: "v3/src/settingsAsync.js",
+    from: "  if (options.exec) return asArrayExec(options.exec);",
+    to: "  if (options.exec) return options.exec;",
+    expect: "resumeIdleIfNeededAsync：暫停中的會員會被恢復",
+  },
+
 ];
 
 // 個人旗標讀取（loadFlags／loadFlagMap）PG 分支的變異集。
@@ -3038,6 +3085,52 @@ const SIMILARITY_MUTATIONS = [
   },
 ];
 
+// 登入讀 PG（`verifyLoginAsync`）的變異集（v3/test/auth-member-async.test.js）。
+const AUTHMEMBER_SRC = "v3/src/auth.js";
+// （`USERS_SRC` 已在上面（USERS_MUTATIONS）宣告，這裡共用同一個常數。）
+const AUTHMEMBER_MUTATIONS = [
+  {
+    name: "登入的 PG 分支改讀本機（別節點建立的成員登不進去）",
+    file: AUTHMEMBER_SRC,
+    from: "  if ((options.driver || resolveDbDriver()) !== \"postgres\") return verifyLogin(email, password, { keys, now });",
+    to: "  return verifyLogin(email, password, { keys, now });",
+    expect: "密碼正確：PG 才有的帳號也登得進去",
+  },
+  {
+    name: "登入不比對雜湊（任何密碼都過）",
+    file: USERS_SRC,
+    from: "  if (user.password_hash && verifyPassword(password, user.password_hash)) return user;",
+    to: "  if (user.password_hash) return user;",
+    expect: "密碼錯誤／查無此人",
+  },
+  {
+    name: "登入不擋未驗證信箱",
+    file: AUTHMEMBER_SRC,
+    // 錨點要含下一行（同步版與 async 版各有一處同樣的判斷）。
+    from: "  const hashed = await verifyUserPasswordAsync(key, pass, options);\n  if (hashed) {\n    if (!isEmailVerified(hashed)) {",
+    to: "  const hashed = await verifyUserPasswordAsync(key, pass, options);\n  if (hashed) {\n    if (false) {",
+    expect: "未驗證信箱",
+  },
+];
+
+// 閒置恢復 async 版的變異集（v3/test/idle-verify.test.js）。
+const IDLEPAUSE_MUTATIONS = [
+  {
+    name: "applyIdleResumeAsync 不判斷是否暫停（每個人都被恢復＋arm）",
+    file: "v3/src/idlePause.js",
+    from: "  const current = typeof getSettings === \"function\" ? await getSettings(uid) : null;\n  if (!uid || !shouldResumeIdle(current)) {",
+    to: "  const current = typeof getSettings === \"function\" ? await getSettings(uid) : null;\n  if (!uid) {",
+    expect: "applyIdleResumeAsync 與同步版逐欄相同",
+  },
+  {
+    name: "applyIdleResumeAsync 不寫恢復旗標（暫停狀態留著）",
+    file: "v3/src/idlePause.js",
+    from: "  let settings = typeof saveSettings === \"function\" ? await saveSettings(uid, idleResumeFlags()) : current;",
+    to: "  let settings = current;",
+    expect: "applyIdleResumeAsync 與同步版逐欄相同",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3046,7 +3139,9 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
+const MUTATIONS = /idle-verify/.test(testFile) ? IDLEPAUSE_MUTATIONS
+  : /auth-member-async/.test(testFile) ? AUTHMEMBER_MUTATIONS
+  : /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
   : /listing-enrich-parity/.test(testFile) ? ENRICHQ_MUTATIONS
   : /listing-similarity-admin-parity/.test(testFile) ? SIMILARITY_MUTATIONS
   : /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS

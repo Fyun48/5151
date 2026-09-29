@@ -12,7 +12,7 @@ import {
   touchLastLogin,
 } from "../src/members.js";
 import { confirmVerifyToken, issueVerifyToken } from "../src/emailVerify.js";
-import { applyIdlePauseToMembers, applyIdleResume } from "../src/idlePause.js";
+import { applyIdlePauseToMembers, applyIdleResume, applyIdleResumeAsync } from "../src/idlePause.js";
 import { memberShouldContributeCrawl } from "../src/settingsState.js";
 import { shouldNotify } from "../src/notify.js";
 
@@ -151,4 +151,43 @@ test("used verify token stays findable as used, empty token is missing", () => {
   } catch (error) {
     assert.equal(error.code, "missing");
   }
+});
+
+test("applyIdleResumeAsync 與同步版逐欄相同（PG 島嶼用；三種情境都要一樣）", async () => {
+  // 同步版與 async 版是兩份實作，所以要用**同一組注入回呼**比對三種情境：
+  // 沒暫停、暫停中（要恢復）、恢復後仍暫停（不再 arm）。少一種就會有分支沒被比到。
+  const cases = [
+    { name: "沒暫停", current: { inactivityPaused: false } },
+    { name: "暫停中", current: { inactivityPaused: true, notificationsPaused: true } },
+    { name: "已恢復但通知仍關", current: { inactivityPaused: true, notificationsPaused: true, keepPaused: true } },
+  ];
+  for (const { name, current } of cases) {
+    const make = () => {
+      const state = { saved: null, armed: 0, settings: { ...current } };
+      return {
+        state,
+        deps: {
+          getSettings: (uid) => { assert.equal(uid, 7); return { ...state.settings }; },
+          saveSettings: (uid, patch) => {
+            assert.equal(uid, 7);
+            state.saved = patch;
+            state.settings = { ...state.settings, ...patch };
+            // 「已恢復但通知仍關」：假的回傳值讓 armFetch 這條分支被走到／不被走到
+            if (state.settings.keepPaused) state.settings.notificationsPaused = true;
+            return { ...state.settings };
+          },
+          armFetch: (uid) => { assert.equal(uid, 7); state.armed += 1; return { ...state.settings, armed: true }; },
+        },
+      };
+    };
+    const syncWorld = make();
+    const asyncWorld = make();
+    const syncOut = applyIdleResume(7, syncWorld.deps);
+    const asyncOut = await applyIdleResumeAsync(7, asyncWorld.deps);
+    assert.deepEqual(asyncOut, syncOut, `${name}：回傳值必須逐欄相同`);
+    assert.deepEqual(asyncWorld.state.saved, syncWorld.state.saved, `${name}：寫入的旗標必須相同`);
+    assert.equal(asyncWorld.state.armed, syncWorld.state.armed, `${name}：armFetch 的次數必須相同`);
+  }
+  // uid 0 與空設定：兩邊都要早退，不得寫入
+  assert.deepEqual(await applyIdleResumeAsync(0, {}), applyIdleResume(0, {}));
 });

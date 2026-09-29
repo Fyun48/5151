@@ -2953,6 +2953,66 @@ for t in budget-parity listing-enrich-parity listing-similarity-admin-parity \
 done
 ```
 
+## 二之負二十二、2026-09-28 第五十二批：會員帳號讀寫＋登入搬上 PG
+
+### 52.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `POST /api/login` | `verifyLoginAsync`（PG 分支）＋ `afterMemberSessionAsync` |
+| `POST /api/admin/crm/contacts` | `await actorUserIdAsync(req)` |
+| `POST /api/admin/crm/contacts/:id/notes` | 同上 |
+| `POST /api/admin/similarity/:id/review` | 同上 |
+
+尺規：缺口 **62 → 58**、PG **206 → 210**、MIXED **55 → 52**、SQLite **10 → 6**。
+
+**這一包修的是「只有剛好在本機建過帳號的人登得進去」。** 同步版 `verifyLogin()` 讀的是
+節點本機的 `users`；PG 模式下別的管理節點建立的成員一律回「帳號或密碼不正確」，
+而且沒有任何訊息指向真正的原因。
+
+### 52.2 新增的共用單元（後面幾批都會用到）
+
+`v3/src/usersAsync.js` 補上：`findUserByEmailAsync`、`ensureUserAsync`、`defaultUserIdAsync`、
+`verifyUserPasswordAsync`、`setUserPasswordAsync`、`touchLastLoginAsync`、`resumeIdleIfNeededAsync`；
+`v3/src/auth.js` 補上 `verifyLoginAsync`（**同一串規則**：鎖定 → 雜湊 → 未驗證擋下 → env admin 後備）；
+`v3/src/idlePause.js` 補上 `applyIdleResumeAsync`（與同步版逐欄相同的雙實作，用注入回呼比對）。
+
+### 52.3 這一包的三個坑
+
+1. 🚨 **`defaultUserId()` 是「lazy 寫入」而不是純讀取。** 它第一次被呼叫時會在**節點本機**
+   `INSERT` 一個 admin 帳號，然後回傳**本機 id**。`server.js` 的 `actorUserId(req)`（沒有 session 時）
+   與 `ensureWorkCoords()` 都用它 ⇒ PG 模式下「拿本機 id 去讀 PG 設定」＝**跨店錯位**
+   （同一個人在兩個 store 各有一份 id）。修法：`defaultUserIdAsync()` ＋ `actorUserIdAsync(req)`。
+   **判斷這類問題的方法**：不要看函式名，要看它**有沒有寫入**——「讀起來像 getter」的名字最危險。
+2. 🚨 **`settingsAsync.js` 是第七個「注入式 exec 形狀」的洞**（第五十一批只修了六個）。
+   它的 `pgExec()` 直接回傳 `options.exec`，於是 `{ rows, rowCount }` 會在
+   `for (const row of rows)` 炸成 `(rows || []) is not iterable`。
+   這次不是推論出來的：新測試的夾具照 `crmOutboxAsync` 慣例回 `{rows, rowCount}`，當場炸。
+   已修（`asArrayExec`）＋變異。**剩下還沒檢查的同型模組請用同一招驗**：夾具回 `{rows}` 跑一輪。
+3. **等價變異要移除並寫理由**：「`ensureUser` 先查再寫拿掉」殺不死——`users.email` 有唯一約束，
+   INSERT 撞鍵會走 catch 重讀，回傳值完全一樣。改用「INSERT 少了 `RETURNING id`」這條
+   （回 0 ⇒ 呼叫端拿不到 id）。
+
+### 52.4 測試
+
+- `v3/test/users-async.test.js`（**13 項全綠**）：新增 8 條（findUserByEmail 大小寫、驗密碼／已刪除、
+  換密碼後新舊密碼、ensureUser 冪等與 role、`defaultUserIdAsync` **必須在 PG 建帳號且本機不得多一列**、
+  touchLastLogin 的 `minIntervalMs` 與 best-effort、resumeIdle 走 PG 設定、sqlite 模式不碰 exec）。
+  變異 **10 條全殺**。
+- `v3/test/auth-member-async.test.js`（**6 項全綠**）：PG 才有的帳號登得進去（同步版會說密碼錯誤）、
+  密碼錯誤 401、未驗證 403、env admin 後備、sqlite 模式走同步版、wiring。變異 **3 條全殺**。
+- `v3/test/idle-verify.test.js`（**6 項全綠**）：`applyIdleResumeAsync` 與同步版在三種情境下逐欄相同。
+  變異 **2 條全殺**。
+- `v3/test/member-auth-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：只在 PG 建帳號（本機確認沒有）、
+  大小寫讀回、冪等、換密碼後新舊密碼、`touchLastLogin` 的時間與間隔守衛。
+
+> 📌 **下一批（第五十三批）**：`GET /verify-email` 與 `POST /api/forgot-password`（各 11／3 個卡點）。
+> 兩者都已具備大半前置（`findUserByEmailAsync`、`setUserPasswordAsync`、`touchLastLoginAsync`、
+> `resumeIdleIfNeededAsync`、`activateSearchProfileAsync`、`getMailTemplatesAsync`、`getStoredSmtpAsync`），
+> 還缺：`confirmVerifyTokenAsync`（emailVerify）、`requestTempPasswordAsync`（forgotPassword，
+> 該函式已經是 async 且可注入，只需換掉 `findUser`／`setPassword`／`restoreHash`／`compose`）、
+> `recordShareEventAsync`、`attributeShareAsync`。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2963,13 +3023,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十二批）** |
 |---|---:|---:|
-| SQLite | 95 | **7** |
-| MIXED | — | **55** |
+| SQLite | 95 | **6** |
+| MIXED | — | **52** |
 | 無直接DB | — | **20** |
-| PG | 22 | **206** |
-| **缺口（SQLite＋MIXED）** | — | **62** |
+| PG | 22 | **210** |
+| **缺口（SQLite＋MIXED）** | — | **58** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

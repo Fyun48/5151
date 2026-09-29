@@ -36,16 +36,22 @@ import {
   sqliteHandle,
 } from "./db.js";
 
+// 注入式 `exec` 的形狀正規化：這個模組的 PG runner 一律吃**裸陣列**，
+// 呼叫端可能照 `crmOutboxAsync` 的慣例傳 `{ rows, rowCount }` —— 直接轉送會讓
+// `for (const row of rows)` 變成 `(rows || []) is not iterable`（第五十二批實測中過）。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+const asArrayExec = (exec) => async (sql, params = []) => rowsOf(await exec(sql, params));
+
 // 注入式 exec（測試）優先；否則借用共用 PG pool。PG 分支的每個入口都吃 options。
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) return asArrayExec(options.exec);
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
 
 // 與 db.js 的寫入交易對應；注入式 exec（離線測試）沒有交易，就照同一條連線的順序跑。
 async function runInTransaction(options, fn) {
-  if (options.exec) return fn(options.exec);
+  if (options.exec) return fn(asArrayExec(options.exec));
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return pgDriver.withTransaction(async (client) => {
     const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);
