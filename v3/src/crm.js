@@ -461,7 +461,9 @@ export function enqueueCrmFromFeedback(db, feedbackId, { now = new Date() } = {}
   return cases.length;
 }
 
-function guessContactFromFeedback(fb) {
+// 匯出給 PG 島嶼逐字重用：這是**政策**（怎麼從回饋的聯絡欄位猜出 email／電話／名稱），
+// 兩個 driver 必須猜出同一組欄位，否則同一筆回饋在兩邊會建立不同的聯絡人。
+export function guessContactFromFeedback(fb) {
   const raw = String(fb.contact || "").trim();
   let display_name = raw;
   let email = "";

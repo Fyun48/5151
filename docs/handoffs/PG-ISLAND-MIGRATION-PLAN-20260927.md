@@ -3343,6 +3343,57 @@ done
 > `assertCrmOpen`／猜聯絡人／建 case 那一串）與 `POST /api/ops/commands/apply`
 > （8 個卡點、`handleApplyRequest` 跨多表）。
 
+## 二之負二十九、2026-09-28 第五十九批：由回饋建立案件 ＋ Ops 反向指令（第 4 項收尾）
+
+### 59.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `POST /api/admin/crm/from-feedback/:id` | `createCaseFromFeedbackAsync` |
+| `POST /api/ops/commands/apply` | `handleApplyRequestAsync` → `applySiteCommandAsync` |
+
+尺規：缺口 **43 → 41**、PG **225 → 227**、MIXED **39 → 38**、SQLite **4 → 3**。
+
+**這一包把目標第 4 項（feedback／Ops 遞送 worker 重做成 PG）收完。**
+`POST /api/ops/commands/apply` 是 Ops Console 把處理結果**套回產品端**的入口：PG 模式下
+同步版套在節點本機的 feedback／CRM，而使用者看到的是 PG 的資料 ⇒ **Ops 改了狀態、產品端完全
+沒變**，而且 Ops 收到的是「已套用」。
+
+### 59.2 這一包的四個坑（全部由 live PG 測試抓到）
+
+1. 🚨 **`createContactAsync()` 回的是 `snapshotContact()` 的形狀**（`{contact, cases, notes,…}`），
+   不是聯絡人本身。少了 `created.contact || created` 這層 unwrap，`contact.id` 是 undefined
+   ⇒ 下一句 `createCaseAsync()` 會說「找不到這位聯絡人」。
+2. 🚨 **`site_command_inbox` 是延遲建立的表**：全新節點的本機 SQLite 還沒有它，
+   `ensurePgSchema()` 會**主動擋下**（第五十批加的那道「零欄表」守衛）。
+   `ensureSiteCommandStoreOnce()` 要先 `ensureSiteCommandInboxSync(sqliteHandle())`。
+3. 🚨 **live 測試的清理順序**：只刪聯絡人會留下 `contact_id` 指向不存在聯絡人的**孤兒案件**
+   ⇒ 下一次走「已存在就沿用」那條路時，`snapshotContact()` 會丟「找不到這位聯絡人」。
+   要先刪 `crm_cases`（與 notes／outbox），再刪聯絡人。
+4. **`verifyIngestRequest()` 讀小寫標頭名**（Express 會轉小寫），而 `signIngestRequest()` 回的是
+   `X-Ops-Signature` ⇒ 離線測試要自己把小寫化那一步做出來，否則永遠是 `missing_headers`。
+
+### 59.3 順手修掉的兩個形狀問題
+
+- `crmAsync.createCaseFromFeedbackAsync()` 的「已存在就沿用」路徑要 unwrap（同上第 1 點）。
+- `siteCommandApplyAsync` 的停止鍵（`ops_remote_cs_stop`）與 `ops_feedback_stop` 一樣是
+  **原生字串**：寫入用 `INSERT … ON CONFLICT`（不是 `settingsKvAsync`），並在本機鏡射一份。
+  ⚠️ 測試必須看 **PG 那一份**的位元組——只看應用程式 DB 會被本機鏡射蓋掉（變異因此存活過一次）。
+
+### 59.4 測試
+
+- `v3/test/site-command-apply-async.test.js`（**7 項全綠**）：驗章與三道開關（env／secret／
+  本地停止鍵，狀態碼與 reason 都與同步版比對）、`feedback.patch_handling`（PG 的列被改 ＋
+  inbox 記 applied ＋ **第二次 duplicate 且不再套用**）、被拒絕的指令（400 ＋ rejected 也要寫 inbox）、
+  `invalid_json`／`command_id_mismatch`、`crm.add_note`（備註落在 store、缺 contact_id 400）、
+  sqlite 模式。變異 **8 條全殺**。
+- `v3/test/crm-parity.test.js`（**16 項**，新增 3 條）：`createCaseFromFeedbackAsync` 與同步版
+  給出相同的案件（標題／處理狀態／猜出來的聯絡人）、已存在就沿用不建第二張、找不到 404／
+  CRM 關閉 409 的訊息相同。
+- `v3/test/ops-command-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：真 PG 上簽章 → 套用 →
+  inbox applied、**冪等**（duplicate 不再套用）、壞簽章 401、由回饋建立案件（聯絡人與案件都在 PG、
+  第二次沿用）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3353,13 +3404,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十八批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十九批）** |
 |---|---:|---:|
-| SQLite | 95 | **4** |
-| MIXED | — | **39** |
+| SQLite | 95 | **3** |
+| MIXED | — | **38** |
 | 無直接DB | — | **20** |
-| PG | 22 | **225** |
-| **缺口（SQLite＋MIXED）** | — | **43** |
+| PG | 22 | **227** |
+| **缺口（SQLite＋MIXED）** | — | **41** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

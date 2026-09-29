@@ -293,7 +293,7 @@ import {
   listAdminMembersAsync,
 } from "./adminMembersAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
-import { setCrmEnabledAsync } from "./crmAsync.js";
+import { createCaseFromFeedbackAsync, setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
 import { closeSelfListingAsync, hideSelfListingAsync, reportSelfListingAsync } from "./selfListingsAsync.js";
 // 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情＋生命週期寫入（更新／刊登／重開）。
@@ -485,6 +485,8 @@ import {
   startDeliveryLoopAsync,
 } from "./opsDeliveryAsync.js";
 import { compactSentOutboxPayloadsAsync, outboxCapacityAlertAsync } from "./feedbackOutboxAsync.js";
+// Ops 反向指令（套用 Ops 的處理結果）的 PG 島嶼。
+import { handleApplyRequestAsync } from "./siteCommandApplyAsync.js";
 // 回饋（feedback）的 PG 島嶼：送出時「feedback ＋ 初始 outbox 事件」必須在同一個交易裡，
 // 否則會出現「回饋進去了、事件沒進去」的半套狀態（Ops 唯一來源就是那個事件）。
 import {
@@ -1581,8 +1583,12 @@ app.get("/logout", (req, res) => {
   res.redirect(303, "/login.html?logout=1");
 });
 
-app.post("/api/ops/commands/apply", (req, res) => {
-  const result = applyOpsSiteCommand(req.headers, req.rawBody || JSON.stringify(req.body || {}));
+app.post("/api/ops/commands/apply", async (req, res) => {
+  // PG 模式要把 Ops 的指令套在 PG 上（同步版套在本機 ⇒ Ops 說「已套用」但產品端沒變）。
+  const result = await handleApplyRequestAsync({
+    headers: req.headers,
+    rawBody: req.rawBody || JSON.stringify(req.body || {}),
+  });
   res.status(result.httpStatus).json(result.body);
 });
 
@@ -2495,7 +2501,7 @@ app.post("/api/admin/crm/todos/:id/done", requireAdminApi, async (req, res) => {
 
 app.post("/api/admin/crm/from-feedback/:id", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(await createCrmFromFeedback(req.params.id));
+    res.status(201).json(await createCaseFromFeedbackAsync(req.params.id));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
