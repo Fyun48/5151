@@ -267,9 +267,33 @@ test("純函式不得被列為 SQLite 卡點：normalizeLineUrl 必須完全不�
     `normalizeLineUrl 是純函式，出現在 sqlite 欄代表剝註解又把它的本文弄壞了：${bad.join(" / ")}`);
 });
 
-test("交叉驗證：交接文件明寫「真的還沒轉換」的 /api/admin/legal-copy 必須看得到 SQLite 讀取", () => {
-  const r = route("GET /api/admin/legal-copy");
-  assert.equal(r.verdict, "MIXED", `實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("getLegalCopy"),
-    `實際 sqlite=${JSON.stringify(r.sqlite)}`);
+test("交接文件的「現況」表必須與尺規一致（兩邊都是解析來的，不會過期）", () => {
+  // 📌 這一條取代了原本的「交叉驗證：/api/admin/legal-copy 必須看得到 SQLite 讀取」。
+  // 舊寫法拿「某條路由還沒移植」當真值，**第八次過期**就發生在第五十批
+  // （`getLegalCopy` 一移植，那條路由變 PG，守衛就從「會紅」變成什麼都驗不到）。
+  //
+  // ✅ 新寫法不寫死任何數字：文件那張表和尺規的 `--json` 統計**都是解析出來的**，
+  //    所以不會隨進度過期；但「改了程式卻忘了更新交接文件」會當場變紅（這才是要守的紀律）。
+  const docPath = path.join(dir, "../../docs/handoffs/PG-ISLAND-MIGRATION-PLAN-20260927.md");
+  const doc = readFileSync(docPath, "utf8");
+  const start = doc.indexOf("### 現況（可重跑）");
+  assert.ok(start > 0, "交接文件裡必須有「### 現況（可重跑）」那一節");
+  const end = doc.indexOf("\n## ", start);
+  const section = doc.slice(start, end === -1 ? undefined : end);
+
+  const json = JSON.parse(execFileSync(process.execPath, [SCRIPT, "--json"], {
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+  }));
+  const documented = (label) => {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = section.match(new RegExp(`^\\|\\s*\\**${escaped}\\**\\s*\\|[^|]*\\|\\s*\\*\\*(\\d+)\\*\\*\\s*\\|\\s*$`, "m"));
+    assert.ok(m, `交接文件的現況表裡找不到「${label}」那一列的「現在」值`);
+    return Number(m[1]);
+  };
+  for (const verdict of ["SQLite", "MIXED", "無直接DB", "PG"]) {
+    assert.equal(documented(verdict), json.tally[verdict] || 0,
+      `交接文件與尺規的「${verdict}」不一致（跑 node v3/scripts/route-data-map.mjs --json 之後要同步改文件）`);
+  }
+  assert.equal(documented("缺口（SQLite＋MIXED）"), (json.tally.SQLite || 0) + (json.tally.MIXED || 0),
+    "交接文件與尺規的「缺口」不一致");
 });

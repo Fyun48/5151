@@ -213,7 +213,12 @@ async function withFallback(options, runPostgres, runSqlite) {
 async function withFallbackTx(options, runPostgres, runSqlite) {
   if (!isPg(options)) return runSqlite();
   try {
-    if (options.exec) return await runPostgres(options.exec);
+    // 🚨 注入式 `exec` 一定要走 `pgExec()` 正規化：這個模組的 PG runner 一律吃**裸陣列**，
+    // 而呼叫端可能照 `crmOutboxAsync` 的慣例傳 `{ rows, rowCount }`。直接轉送的話
+    // `nextVersionAsync()` 會把 `{rows}` 當成「沒有資料列」⇒ 版本算成 1 ⇒
+    // 撞 `idx_content_documents_type_version`（2026-09-28 由 live PG 測試抓到；
+    // 這是「exec 形狀」第六次咬人）。`pgExec()` 兩種形狀都回裸陣列。
+    if (options.exec) return await runPostgres(await pgExec(options));
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensureContentDocumentStoreOnce(pgDriver);
     return await pgDriver.withTransaction(async (client) => {
