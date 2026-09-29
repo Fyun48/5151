@@ -230,6 +230,8 @@ export function ensureDemandMatchGenerationSchema(db) {
   } catch { /* demand_posts may be absent in isolated tests */ }
 }
 
+export const DEMAND_MATCH_GENERATION_SQL = "SELECT generation FROM demand_match_generation WHERE id = 1";
+
 export function readDemandMatchGeneration(db) {
   ensureDemandMatchGenerationSchema(db);
   try {

@@ -4326,6 +4326,60 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
      `demand_replies`（回讀整則許願房時會拉）、`user_listing_flags`（活動分數）——少一張就會
      「no such table」。
 
+## 二之負五十、2026-09-29 第八十批：站內刊登的屋主配對（讀取側）
+
+### 80.1 範圍與投報率
+
+- `GET /api/self-listings`（16 卡點）→ `listMineSelfListingsAsync`（自己的刊登 ＋ 配對摘要）；
+- `GET /api/self-listings/:id/matches/summary`（11 卡點）→ `ownerListingMatchSummaryAsync`。
+
+PG 模式下整條配對鏈讀的是**節點本機**：
+
+- **候選許願房**（`demand_posts`／`demand_match_districts`）：別的節點收到的心願完全不算，
+  「目前可能符合 N 個活躍需求」因此偏少（或整條掛在 `ensureRentalMatchIndexes()` 的 SQLite 建表上）；
+- **自己的刊登**（`listings`）：別的節點建立的刊登**列表直接是空的**；
+- **方案／角色**（`listingToolsInfo` → `users`）：額度與工具開關跟著本機那一份跑。
+
+尺規：兩條 **MIXED → PG**；缺口總數 **10 → 8**（`PG` 258 → **260**、`MIXED` 10 → **8**）。
+
+### 80.2 做法
+
+同步版的配對引擎本來就吃「handle」；這一包把**純函式**抽出來共用，只換「誰去撈列」
+（新檔 `v3/src/rentalMatchAsync.js`）：
+
+- `rentalMatchQuery.js` 匯出 `candidateSql()`（同一句 SQL、`MATCH_CANDIDATE_CHUNK` 分塊）、
+  新增 `activityMapFrom()`（活動資料的組裝）／`computeListingMatchesFrom()`（快取 ＋ 評分 ＋ 快照）／
+  `ownerMatchSummaryFrom()`（摘要外型）／`unavailableSummary()`，同步版全部改成呼叫它們。
+- `rentalMatchAsync.js`：`wishGenerationAsync()`／`queryAllCandidateWishesAsync()`（含**索引為空的
+  懶重建**，第七十九批修過同一個坑）／`preloadActivityByUserAsync()`（`users.last_login_at` ＋
+  `user_listing_flags` 的批次查詢）／`computeListingMatchesAsync()`／`loadOwnedMatchListingAsync()`／
+  `ownerListingMatchSummaryAsync()`／`attachOwnerMatchSummariesAsync()`／`listMineSelfListingsAsync()`／
+  `listingToolsInfoAsync()`／`rentalMatchOwnerMetaAsync()`。
+- `demand.js` 匯出 `DEMAND_MATCH_GENERATION_SQL`、`selfListings.js` 匯出 `SELF_LISTINGS_BY_OWNER_SQL`
+  （兩個 driver 共用同一句）。
+
+### 80.3 測試
+
+- `v3/test/self-listing-match-async.test.js`（**6 項全綠**，新檔）：自己的刊登逐欄位比對（含
+  `match_summary`）、**列只留在 PG 時同步版是空的而 PG 版照樣算得出來**、摘要與 404
+  `listing_not_found`／409 `listing_not_matchable` 的錯誤形狀、工具資訊讀 PG 的方案、
+  **只有 PG 關掉配對時 PG 版要 404（本機那份不算）**、索引清空時的懶重建、fail-open／sqlite 模式、
+  兩條路由接線。
+- `v3/test/self-listing-match-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  「PG 的站內刊登 → 配到 PG 的三則同區許願房」（同步版在本機看不到那則刊登）、懶重建把
+  `demand_match_districts` 補回來。
+- **變異 10 條全殺**（`SELFLISTING_MATCH_MUTATIONS`）。
+- 踩點：
+  1. **心願要有 `public_token`**：`scoreCandidates()` 會跳過沒有 token 的心願
+     （`if (!wish.public_token) continue;`）⇒ 用 SQL 直接種許願房時漏了它，配對數永遠是 0
+     （live PG 測試抓到）。
+  2. **`dbMod.saveRentalMarketplaceFlags()` 不會補水到 `rentalMatchQuery` 的行程內快取**：
+     要驗「PG 版有沒有自己去向 PG 補水」，測試得先用同步的 `getWishConditions()` 把快取設成
+     「開」，再直接改 PG 的設定列。
+  3. `createSelfListing()` 的必填欄位比想像多（`street`／`floor`＋`total_floors`／`rooms`＋`living`＋`bath`／
+     聲明勾選／說明字數），測資要照著填；`listingToolsMeta()` 的輸出**沒有 `plan` 欄位**
+     （差別在 `description_template_limit`）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4336,13 +4390,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十九批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **10** |
+| MIXED | — | **8** |
 | 無直接DB | — | **20** |
-| PG | 22 | **258** |
-| **缺口（SQLite＋MIXED）** | — | **10** |
+| PG | 22 | **260** |
+| **缺口（SQLite＋MIXED）** | — | **8** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
