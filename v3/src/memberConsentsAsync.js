@@ -43,6 +43,7 @@ export const CONSENT_INSERT_SQL = `INSERT INTO member_consents(user_id, document
 export const CONSENT_BY_ID_SQL = "SELECT * FROM member_consents WHERE id=?";
 export const CONSENT_BY_ID_OWNED_SQL = "SELECT * FROM member_consents WHERE id=? AND user_id=?";
 export const USER_DISCLAIMER_SQL = "SELECT accepted_disclaimer_at, disclaimer_version FROM users WHERE id=?";
+export const LOCAL_USER_SQL = "SELECT id FROM users WHERE id=?";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
@@ -111,24 +112,28 @@ export async function recordConsentAsync(userId, input = {}, { now = new Date(),
   return withFallback(options, { write: true }, async (run) => {
     const existing = one((await run(CONSENT_EXISTS_SQL, [uid, documentId, hash])).rows);
     const local = sqliteHandle();
+    // ⚠️ 本機鏡射的兩個前提（都踩過）：
+    //   1. **本機要有這個帳號**：`member_consents` 有 `FOREIGN KEY(user_id) → users`，
+    //      但 PG 模式的帳號可能是在**別的節點**建立的 ⇒ 硬寫會讓一個已經在 PG 寫成功的請求
+    //      變成 `FOREIGN KEY constraint failed` 的 500（live PG 測試抓到的，與 wish_room_example 同一個坑）。
+    //   2. **本機可能已經有那一列**：`idx_member_consents_unique`（user_id, document_id, content_hash）
+    //      在兩個 store 都有 ⇒ 先查再寫。
+    const mirror = (row, fallbackVersion) => {
+      try {
+        if (!local.prepare(LOCAL_USER_SQL).get(uid)) return;
+        if (local.prepare(CONSENT_EXISTS_SQL).get(uid, documentId, hash)) return;
+        local.prepare(CONSENT_INSERT_SQL)
+          .run(uid, row.document_type, documentId, Number(row.version) || fallbackVersion, hash, row.source || source, row.agreed_at || isoOf(now));
+      } catch { /* 本機沒有那張表時就算了（與其他鏡射一致的寬容度） */ }
+    };
     if (existing) {
       const row = one((await run(CONSENT_BY_ID_SQL, [existing.id])).rows);
-      // 已經有這一筆時，**只補本機缺的那一份**（PG 是來源；同步的註冊流程讀本機）。
-      // ⚠️ `idx_member_consents_unique`（user_id, document_id, content_hash）在本機與 PG 都有，
-      // 直接寫會撞；所以先查再寫。
-      if (!local.prepare(CONSENT_EXISTS_SQL).get(uid, documentId, hash)) {
-        try {
-          local.prepare(CONSENT_INSERT_SQL)
-            .run(uid, row.document_type, documentId, Number(row.version) || version, hash, row.source || source, row.agreed_at || isoOf(now));
-        } catch { /* 本機沒有那張表時就算了（與其他鏡射一致的寬容度） */ }
-      }
+      mirror(row, version);
       return publicConsentRow(row);
     }
     await run(CONSENT_INSERT_SQL, [uid, type, documentId, version, hash, source, isoOf(now)]);
     // 本機追上：`hasAcceptedRequiredDocument()` 的同步呼叫端（例如註冊流程）讀本機。
-    if (!local.prepare(CONSENT_EXISTS_SQL).get(uid, documentId, hash)) {
-      local.prepare(CONSENT_INSERT_SQL).run(uid, type, documentId, version, hash, source, isoOf(now));
-    }
+    mirror({ document_type: type, version, source, agreed_at: isoOf(now) }, version);
     // 回讀剛寫的那一列：用 (user, document_id, hash) 找，不必依賴 lastInsertRowid／RETURNING
     // （兩個 driver 的「最後一列」語意不同，這裡刻意避開）。
     const landed = (await run(CONSENTS_BY_USER_SQL, [uid])).rows.find((row) => (

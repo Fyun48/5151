@@ -2707,6 +2707,9 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
    （匯入確認會回 503、同意清單會多出根本不存在的待同意文件）。已在 runner 邊界統一成裸陣列。
    五次清單：`wishExampleAsync`、`settingsKvAsync`、`siteContentAsync`＋`adminOverviewAsync`、
    `memberMediaAsync`、`contentDocumentsAsync`。
+   另外**本機鏡射的 FK 陷阱第二次出現**（`member_consents` 有 FK 到 `users`）：PG 模式的帳號
+   可能在別的節點建立 ⇒ 鏡射前要先確認本機有那一列（`LOCAL_USER_SQL`），
+   否則一個已經在 PG 寫成功的請求會變成 `FOREIGN KEY constraint failed` 的 500。
 
 **語意照抄的兩條**：`hasAcceptedRequiredDocument()` 比的是 **id ＋ content_hash**（不是「曾經同意過」），
 而且文件若 `requires_reacceptance`，legacy 的 `users.accepted_disclaimer_at` **不算數**；
