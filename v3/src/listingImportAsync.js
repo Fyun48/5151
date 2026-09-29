@@ -23,6 +23,7 @@ import { getEffectiveDocumentAsync } from "./contentDocumentsAsync.js";
 import {
   IMPORT_ADMIN_SQL,
   IMPORT_BY_ID_SQL,
+  IMPORT_CONFIRM_UPDATE_SQL,
   IMPORT_DECLARATION_TYPE,
   IMPORT_MINE_SQL,
   IMPORT_STATUSES,
@@ -38,6 +39,7 @@ import {
 import { sanitizeImportedText, sanitizeImportedTitle } from "./importSanitize.js";
 import { abandonImportedDraftListingAsync, getSelfListingAsync, updateImportedDraftListingAsync } from "./selfListingsAsync.js";
 import { deleteMemberMediaAsync } from "./memberMediaAsync.js";
+import { recordConsentAsync } from "./memberConsentsAsync.js";
 
 export const LISTING_IMPORT_TABLES = ["listing_import"];
 
@@ -193,4 +195,49 @@ export async function cancelListingImportAsync(userId, id, options = {}) {
     sqliteHandle().prepare(IMPORT_STATUS_UPDATE_SQL).run(IMPORT_STATUSES.CANCELLED, row.id);
     return publicImportAsync(await readImportRow(run, row.id), {}, rest, run);
   }, async () => (await import("./db.js")).cancelListingImportFor(userId, id));
+}
+
+// `db.js confirmListingImportFor()` 的 PG 版（第四十八批）。
+//
+// ⚠️ 三件事與同步版逐條對齊：
+//   1. **只接受 `ready_for_review`**，而且必須明確 `accept === true`（或 `accepted === true`）。
+//   2. **聲明必須是「目前有效的那一版」**：比對 document_id／version／content_hash，
+//      不一致就 409 `declaration_stale`（使用者要重新閱讀）；取不到有效文件則 503。
+//   3. **同意紀錄走 `recordConsentAsync()`**（idempotent：同一 (user, document_id, hash) 不寫第二列）。
+export async function confirmListingImportAsync(userId, id, input = {}, options = {}) {
+  const { now = new Date(), ...rest } = options;
+  return withFallback(rest, async (run) => {
+    const row = assertImportOwner(await readImportRow(run, id), userId);
+    if (row.status !== IMPORT_STATUSES.READY_FOR_REVIEW) {
+      throw httpError("這筆匯入還不能確認", 409, row.status);
+    }
+    if (input.accept !== true && input.accepted !== true) {
+      throw httpError("請勾選匯入聲明後再確認", 400);
+    }
+    const current = await getEffectiveDocumentAsync(IMPORT_DECLARATION_TYPE, { now, ...IMPORT_ROW_OPTIONS(rest, run) });
+    if (!current) throw httpError("目前無法取得有效的匯入聲明", 503);
+    const submitted = {
+      document_id: Number(input.document_id || input.terms_document_id) || 0,
+      version: Number(input.version || input.declaration_version) || 0,
+      content_hash: String(input.content_hash || input.declaration_content_hash || "").trim(),
+    };
+    if (
+      submitted.document_id !== current.id
+      || submitted.version !== current.version
+      || submitted.content_hash !== current.content_hash
+    ) {
+      throw httpError("匯入聲明已更新，請重新閱讀目前有效版本後再確認", 409, "declaration_stale");
+    }
+    await recordConsentAsync(userId, {
+      document_type: IMPORT_DECLARATION_TYPE,
+      document_id: current.id,
+      version: current.version,
+      content_hash: current.content_hash,
+      source: "import",
+    }, { now, ...IMPORT_ROW_OPTIONS(rest, run) });
+    const params = [IMPORT_STATUSES.CONFIRMED, current.id, current.version, current.content_hash, now instanceof Date ? now.toISOString() : new Date(now).toISOString(), row.id];
+    await run(IMPORT_CONFIRM_UPDATE_SQL, params);
+    sqliteHandle().prepare(IMPORT_CONFIRM_UPDATE_SQL).run(...params);
+    return publicImportAsync(await readImportRow(run, row.id), {}, rest, run);
+  }, async () => (await import("./db.js")).confirmListingImportFor(userId, id, input));
 }

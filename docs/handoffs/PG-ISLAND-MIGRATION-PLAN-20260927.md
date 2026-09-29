@@ -2672,6 +2672,58 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
   已統一成裸陣列。四次清單：`wishExampleAsync`、`settingsKvAsync`、`siteContentAsync`＋
   `adminOverviewAsync`、`memberMediaAsync`——**新模組請在 runner 邊界就 `rowsOf()`**。
 
+## 二之負十八、2026-09-28 第四十八批：會員同意紀錄＋匯入確認
+
+### 48.1 範圍與投報率
+
+第四十七批之後，這一包把「同意紀錄」整組搬完，順便把匯入流程在使用者路徑上的最後一塊
+（`confirm`）補上：
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /api/consents` | `listMyConsentsAsync` ＋ `pendingRequiredDocumentsAsync` |
+| `POST /api/consents` | `acceptPendingDocumentsAsync` |
+| `GET  /api/consents/:id/document` | `getOwnConsentDocumentAsync` |
+| `POST /api/listing-imports/:id/confirm` | `confirmListingImportAsync` |
+
+尺規：缺口 **71 → 67**，PG **197 → 201**。
+
+### 48.2 這一包的四個坑
+
+1. **`member_consents` 是 append-only**（DDL 有 trigger 擋 `DELETE`），而且有 **FK 到 `users`**
+   ⇒ 「先刪測試資料再用同一個帳號」的做法行不通（刪不掉同意列、也刪不掉有同意列的帳號）。
+   離線測試改成**每個測試配置全新的 user id**（`nextUserId()`），live 測試用全新帳號且只清匯入列。
+2. **`content_documents` 有 `UNIQUE(document_type, version)`，而且 bootstrap 已經種了
+   `registration_terms`／`privacy_notice`／匯入聲明** ⇒ 測試要用 v2；而且離線夾具（只鏡射 DDL）
+   **沒有那些 bootstrap 列**，於是「待同意清單」兩邊會不一樣（同步版 2 份、PG 版 1 份）——
+   第四十八批的夾具改成**把磁碟上的文件列原樣複製進夾具**（那才是 PG 站的真實狀態）。
+3. **`db.js` 的 `recordMemberConsent` 只是原樣再匯出**（`export { recordConsentOn as recordMemberConsent }`，
+   沒有綁 handle）⇒ 照包裝的簽章呼叫會把 `userId` 當成 `db`（症狀是「請先登入」）。
+   SQLite 分支要直接呼叫 `memberConsents.recordConsent(sqliteHandle(), …)`。
+4. 🚨 **注入式 `exec` 的形狀問題第五次出現**（`contentDocumentsAsync`）：它的呼叫端是
+   `rows.map(...)`／`readById(exec, …)`（裸陣列），餵 `{ rows, rowCount }` 時
+   `getEffectiveDocumentAsync()`／`getDocumentByIdAsync()` 會回 null／undefined ⇒
+   呼叫端（同意紀錄、匯入確認）把它當成「目前沒有有效文件」⇒ **靜默的功能失效**
+   （匯入確認會回 503、同意清單會多出根本不存在的待同意文件）。已在 runner 邊界統一成裸陣列。
+   五次清單：`wishExampleAsync`、`settingsKvAsync`、`siteContentAsync`＋`adminOverviewAsync`、
+   `memberMediaAsync`、`contentDocumentsAsync`。
+   另外**本機鏡射的 FK 陷阱第二次出現**（`member_consents` 有 FK 到 `users`）：PG 模式的帳號
+   可能在別的節點建立 ⇒ 鏡射前要先確認本機有那一列（`LOCAL_USER_SQL`），
+   否則一個已經在 PG 寫成功的請求會變成 `FOREIGN KEY constraint failed` 的 500。
+
+**語意照抄的兩條**：`hasAcceptedRequiredDocument()` 比的是 **id ＋ content_hash**（不是「曾經同意過」），
+而且文件若 `requires_reacceptance`，legacy 的 `users.accepted_disclaimer_at` **不算數**；
+`recordConsent()` 是 idempotent（先查再寫、回舊的那一筆）。
+
+### 48.3 測試
+
+- `v3/test/member-consents-async.test.js`（**7 項全綠**）：列表／idempotent／缺欄位 400／未登入 401、
+  待同意（id＋雜湊、`requires_reacceptance` 時 legacy 不算、舊雜湊不算）、批次同意（缺件 400、齊件寫入）、
+  歷史文件（自己的／別人的／不存在／非 published）、匯入確認（三個聲明欄位各自的 stale、寫入同意、
+  狀態與所有權錯誤）、非 postgres 走同步路徑。變異 **10 條全殺**。
+- `v3/test/member-consents-live-pg.test.js`（新，CI 的 PG job 會跑）：真 PG 上的待同意清單（bootstrap 文件）、
+  逐一同意 ＋ idempotent、匯入聲明的 stale 409、確認成功後匯入列與 `source=import` 的同意列都落地。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2682,13 +2734,13 @@ needle／上限、來源標籤），只把「跑語句」留給 driver——與�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十七批）** |
+| 判定 | 起點 | **現在（2026-09-28 第四十八批）** |
 |---|---:|---:|
 | SQLite | 95 | **10** |
-| MIXED | — | **61** |
+| MIXED | — | **57** |
 | 無直接DB | — | **20** |
-| PG | 22 | **197** |
-| **缺口（SQLite＋MIXED）** | — | **71** |
+| PG | 22 | **201** |
+| **缺口（SQLite＋MIXED）** | — | **67** |
 
 > 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
 > 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`

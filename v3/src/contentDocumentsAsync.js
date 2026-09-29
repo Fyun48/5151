@@ -158,8 +158,18 @@ const firstRow = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null)
 // PG 的 MAX()／COUNT() 是 bigint，node-pg 回字串。
 const countOf = (rows) => Number(firstRow(rows)?.n) || 0;
 
+// 注入式 `exec` 有兩種形狀：`pgDriver.query()` 的裸陣列，以及 `crmOutboxAsync` 起的
+// `{ rows, rowCount }`。這個模組的呼叫端一律當**裸陣列**用（`rows.map(...)`／`readById()`），
+// 所以統一轉成裸陣列——2026-09-28 由 member-consents 的 parity 測試抓到：
+// 餵 `{ rows }` 時 `getEffectiveDocumentAsync()`／`getDocumentByIdAsync()` 會回 null／undefined，
+// 而呼叫端（同意紀錄、匯入確認）會把它當成「目前沒有有效文件」⇒ 靜默的功能失效。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => rowsOf(await injected(sql, params));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
