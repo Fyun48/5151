@@ -83,6 +83,23 @@ test("an imported store re-syncs the identity sequences", () => {
   db.close();
 });
 
+test("ensurePgSchema refuses a table the SQLite source does not have", async () => {
+  // 🚨 來源沒有那張表時，`createTableStatement()` 會產生**零欄的 `CREATE TABLE x ()`**，
+  // 而 PostgreSQL 照收 —— 之後每一句都 42703（`column "..." does not exist`），不是 42P01。
+  // 2026-09-28 在 CI 的拋棄式資料庫上實際中過（`data_revision` 是延遲建立的表，
+  // 而呼叫端的本機 SQLite 還沒有它）。寧可當場擋下來，也不要送出一張空表。
+  const db = new DatabaseSync(":memory:");
+  const sent = [];
+  const driver = { exec: async (sql) => { sent.push(String(sql)); } };
+  await assert.rejects(
+    () => ensurePgSchema(driver, db, { tables: ["nope"] }),
+    /缺少資料表 nope/,
+    "缺少來源表時必須丟錯",
+  );
+  assert.deepEqual(sent, [], "不得送出任何 DDL（尤其不能是零欄表）");
+  db.close();
+});
+
 test("readTableChunks streams rowid-ordered chunks without holding the table", () => {
   const db = new DatabaseSync(":memory:");
   db.exec("CREATE TABLE listings (post_id INTEGER PRIMARY KEY, title TEXT)");

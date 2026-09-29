@@ -33,9 +33,12 @@ export function bumpRevision(db, { entityType, entityId = null, eventType, now =
   return Number(result.lastInsertRowid);
 }
 
+// 上限是共用政策（PG 版也用它）。
+export const CHANGES_SINCE_MAX = 5000;
+
 export function changesSince(db, revision, { limit = 500 } = {}) {
   ensureDataRevisionTable(db);
-  const cap = Math.max(1, Math.min(Number(limit) || 500, 5000));
+  const cap = Math.max(1, Math.min(Number(limit) || 500, CHANGES_SINCE_MAX));
   return db.prepare(
     "SELECT id, entity_type, entity_id, event_type, created_at FROM data_revision WHERE id > ? ORDER BY id ASC LIMIT ?",
   ).all(Number(revision) || 0, cap);

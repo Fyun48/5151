@@ -18,6 +18,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
+
+const dir = path.dirname(new URL(import.meta.url).pathname);
 
 const SCRIPT = "v3/scripts/route-data-map.mjs";
 
@@ -151,82 +156,88 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("吃 handle 參數的 helper 必須被看見：/api/events/revision 的 changesSince", () => {
-  // 📌 這條**已經換過六次標的**，換的原因值得記下來：
+test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 helper 必須被算進 sqlite", () => {
+  // 📌 這一條**已經換過七次標的**，換的原因值得記下來（前六次都是「拿『目前還沒移植』
+  // 當 ground truth」）：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
-  //   2. `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 下一步又移植掉 ⇒ 失效。
-  //   3. `/api/media`（`listMemberMedia(db)`）→ 第十四批移植掉 ⇒ 失效。
-  //   4. `/api/admin/campaigns`（`listCampaignsAdmin(db)`）→ 第十七批移植掉 ⇒ 失效。
-  //   5. `/api/wish-rooms/example`（`getWishExample(db, …)`）→ 第二十七批移植掉 ⇒ 失效。
-  //   6. `GET /api/admin/listings/search`（`searchAdminListings`，adminOverview.js）
-  //      → 第四十四批移植掉 ⇒ 失效（就是這一次）。
-  // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效。**
+  //   2. `/api/admin/support/dashboard`（`supportDashboard(db)`）→ 失效。
+  //   3. `/api/media`（`listMemberMedia(db)`）→ 第十四批 ⇒ 失效。
+  //   4. `/api/admin/campaigns`（`listCampaignsAdmin(db)`）→ 第十七批 ⇒ 失效。
+  //   5. `/api/wish-rooms/example`（`getWishExample(db, …)`）→ 第二十七批 ⇒ 失效。
+  //   6. `GET /api/admin/listings/search`（`searchAdminListings`）→ 第四十四批 ⇒ 失效。
+  //   7. `GET /api/events/revision`（`changesSince`／`currentRevision`）→ 第四十九批 ⇒ 失效。
+  //      **而這一次全站已經沒有「還沒移植」的標的了**（實測：把缺陷 (2) 套回去跑，
+  //      288 條的判定一條都不會變）——所以不能再換標的。
   //
-  // 這一次照紀律**重新實測**（`node v3/scripts/route-data-map.mjs --json`＋把缺陷 (2)
-  // 手動套回去跑一次）：288 條裡只剩 **`GET /api/events/revision`** 會因為缺陷 (2) 而變判定，
-  // 所以標的換成它。下面的 `已移植` 斷言是**反向**的：把第四十四批的成果釘住，
-  // 這樣「移植完就整條失效」的歷史不會再重演一次（失效的是 MIXED 那一半，不是整條測試）。
-  const r = route("GET /api/events/revision");
-  assert.equal(r.verdict, "MIXED", `缺陷 (2) 會讓它變成「無直接DB」。實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("changesSince"),
-    `必須看得到 changesSince（住在 dataRevision.js、吃 handle）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
-  assert.ok(r.sqlite.includes("currentRevision"),
-    `必須看得到 currentRevision（同一支）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
-  for (const path of [
-    "GET /api/admin/listings/search",
-    "GET /api/admin/system-crawl",
-    "PUT /api/admin/system-crawl",
-    "GET /api/public/wish-room/:id",
-  ]) {
-    const moved = route(path);
-    assert.equal(moved.verdict, "PG", `第四十四批已把 ${path} 判成 PG。實際：${JSON.stringify(moved)}`);
-    assert.deepEqual(moved.sqlite, [], `${path} 不得再有 SQLite 卡點。實際 sqlite=${JSON.stringify(moved.sqlite)}`);
+  // ✅ 這次改成**合成來源樹**：在暫存目錄裡放一份尺規的複本 ＋ 一個最小的合成 app，
+  //    然後**同時**驗「修好的尺規看得到」與「套回缺陷 (2) 之後看不到」。
+  //    這樣守衛直接鎖住尺規的**行為**，不再依賴任何真實路由的移植進度（不會再到期）。
+  const tmp = mkdtempSync(path.join(tmpdir(), "v3-ruler-guard-"));
+  try {
+    mkdirSync(path.join(tmp, "v3/scripts"), { recursive: true });
+    mkdirSync(path.join(tmp, "v3/src"), { recursive: true });
+    copyFileSync(path.join(dir, "../scripts/route-data-map.mjs"), path.join(tmp, "v3/scripts/route-data-map.mjs"));
+    // 合成 app：`external.js` 是「住在 db.js 以外、吃 handle 參數」的 helper（缺陷 (2) 的標的）。
+    writeFileSync(path.join(tmp, "v3/src/db.js"), [
+      'import { DatabaseSync } from "node:sqlite";',
+      "export const db = new DatabaseSync(\":memory:\");",
+      "export function readThing() {",
+      '  return db.prepare("SELECT 1 AS n").get();',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/external.js"), [
+      "export function loadThing(db) {",
+      '  return db.prepare("SELECT * FROM things").all();',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/server.js"), [
+      'import { db, readThing } from "./db.js";',
+      'import { loadThing } from "./external.js";',
+      "",
+      "const app = { get() {} };",
+      "",
+      'app.get("/api/thing", (req, res) => {',
+      "  res.json(loadThing(db));",
+      "});",
+      "",
+      'app.get("/api/other", (req, res) => {',
+      "  res.json(readThing());",
+      "});",
+      "",
+    ].join("\n"));
+
+    const runRuler = () => {
+      const out = execFileSync(process.execPath, ["v3/scripts/route-data-map.mjs", "--json"], {
+        cwd: tmp, encoding: "utf8", maxBuffer: 32 * 1024 * 1024,
+      });
+      return new Map(JSON.parse(out).rows.map((r) => [`${r.method} ${r.path}`, r]));
+    };
+
+    const fixed = runRuler();
+    const thing = fixed.get("GET /api/thing");
+    assert.equal(thing.verdict, "SQLite", `合成樹的 /api/thing 應該被判成 SQLite。實際：${JSON.stringify(thing)}`);
+    assert.ok(thing.sqlite.includes("loadThing"),
+      `db.js 以外的 handle helper 必須被看見。實際 sqlite=${JSON.stringify(thing.sqlite)}`);
+
+    // 套回缺陷 (2)：sqlite 歸屬只看 db.js ⇒ `loadThing` 必須消失（沒消失代表守衛沒有牙齒）。
+    const rulerPath = path.join(tmp, "v3/scripts/route-data-map.mjs");
+    const original = readFileSync(rulerPath, "utf8");
+    const anchor = "    if (sqliteNodes.has(nodeKey(target.to, target.orig))) sqlite.add(target.orig);";
+    assert.ok(original.includes(anchor), "缺陷 (2) 的錨點必須還在（尺規改寫時要同步更新這一條）");
+    writeFileSync(rulerPath, original.replace(anchor,
+      '    if (target.to === "db.js" && touches.has(target.orig)) sqlite.add(target.orig);'));
+    const defective = runRuler();
+    const broken = defective.get("GET /api/thing");
+    assert.equal(broken.verdict, "無直接DB", `缺陷 (2) 下應該完全看不到那個 helper。實際：${JSON.stringify(broken)}`);
+    assert.deepEqual(broken.sqlite, [], "缺陷 (2) 下 sqlite 必須是空的");
+    // 對照：另一條路由（helper 住在 db.js）在缺陷下不受影響——確保上面驗的是「跨模組」而不是全部消失。
+    assert.ok(defective.get("GET /api/other").sqlite.includes("readThing"),
+      "db.js 內的 helper 在缺陷 (2) 下仍然要被看見（這才是缺陷的定義）");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
-});
-
-test("跨模組的 handle helper 是可替換的守衛（單一標的移植掉時整條不會失效）", () => {
-  // 上面那條是「指名一個標的」，移植掉就得人工換——已經換過三次了。
-  // 這一條改驗**性質**：缺陷 (2) 一旦回來，這些「住在 db.js 以外、吃 handle 參數」的 helper
-  // 會**同時**從整張表消失；只移植掉一兩個模組則不會讓它變紅。
-  // 門檻設 2：這三個只要少一個就代表「只認 db.js」的退化回來了。
-  // 清單一律挑「定義在 db.js 以外」的（`listCampaignsAdmin` 第十六批移植掉了；
-  // `addDemandReply`／`getRentalCatalog` 其實是 db.js 的包裝，對這個缺陷沒有鑑別力——
-  // 第一版就是混進了那兩個，才會出現「清單看起來很長、變異卻殺不死」的假象）。
-  // ⚠️ 清單要挑「缺陷 (2) 下真的會消失」的：實測只有 `searchAdminListings`、
-  // `changesSince`、`currentRevision` 三個（其餘大多與 db.js 的集合重疊）。
-  // 第一版混進了 db.js 的包裝，看起來清單很長、實際上沒有鑑別力。
-  const NON_DB_HANDLE_HELPERS = [
-    "changesSince",         // dataRevision.js（server.js 直接 import）
-    "currentRevision",      // dataRevision.js
-    "searchAdminListings",  // adminOverview.js
-  ];
-  const visible = new Set();
-  for (const [, r] of rows) for (const fn of r.sqlite) visible.add(fn);
-  const found = NON_DB_HANDLE_HELPERS.filter((fn) => visible.has(fn));
-  assert.ok(found.length >= 2,
-    `缺陷 (2)（sqlite 歸屬只看 db.js）會讓這類 helper 全部隱形。只看得到 ${found.length} 個：${found.join(", ") || "（無）"}`);
-});
-
-test("被低估的那一批：/api/demand/:id/reply 必須看得到 addDemandReply", () => {
-  // 📌 **測試名稱的「被低估的那一批」刻意保持不變**（只換標的）：變異集的 `expect` 比對的是
-  // 測試名稱，改名就得同步改 `expect`——那個坑已經踩過兩次（一次是改名忘了改，一次是
-  // expect 與測試名差一個字），兩次都變成「有殺手卻報成 SURVIVED」的假訊號。
-  //
-  // 這條**已經換過一次標的**：原本是 `/api/admin/campaigns` ← `listCampaignsAdmin`，
-  // 第十六批把 comms.js 移植成 PG 之後失效（理由與「吃 handle 參數的 helper」那條相同：
-  // **凡是拿「目前還沒移植」當 ground truth 的守衛，都會在移植完成那一刻失效**）。
-  // 這次挑 `demand.js`（1698 行、沒有 import db.js）的 `addDemandReply(db, …)`。
-  // ⚠️ 移植 demand.js 時，這一條要再換標的，**不要刪掉斷言**。
-  // ⚠️ 標的必須是**真的住在 db.js 以外**、server.js **直接 import**、而且**在缺陷 (2) 下
-  // 真的會消失**的 helper。這件事我換了兩次才對：
-  //   * `addDemandReply` → 是 db.js 的包裝（`addDemandReply as addDemandReplyOn`），缺陷下照樣被算進去。
-  //   * `countWatched`（watchLimits.js）→ 也是類似的重疊，實測缺陷 (2) 下 288 條裡只有 **2 條**會變。
-  // 最後用實測反推：把缺陷套回去跑一次，只有這兩條會失去卡點，其中之一就是這裡用的
-  // `changesSince`／`currentRevision`（`dataRevision.js`，**沒有** import db.js）。
-  const r = route("GET /api/events/revision");
-  assert.equal(r.verdict, "MIXED", `實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("changesSince") && r.sqlite.includes("currentRevision"),
-    `舊尺看不到「吃 handle 參數且住在 db.js 以外」的 helper。實際 sqlite=${JSON.stringify(r.sqlite)}`);
 });
 
 test("副檔名路由的守衛：符合靜態副檔名的路由只能是「不讀 session 的檔案伺服」", () => {
