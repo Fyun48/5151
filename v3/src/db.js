@@ -6413,13 +6413,10 @@ export function listingsNeedingRoute(limit = 40, options = {}) {
 listingsNeedingRoute.lastCursor = 0;
 listingsNeedingRoute.lastCursor = 0;
 
-export function listingCommutePatch(postId, userId, settingsOverride) {
-  const uid = userId == null ? defaultUserId() : Number(userId) || 0;
-  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(Number(postId));
-  if (!row) return null;
-  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MAP, viewerId: uid })) return null;
-  const settings = settingsOverride || getSettings(uid);
-  const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });
+// 通勤快照的欄位投影（**純函式**）：同步版與 PG 版（`listingCommuteAsync.js`）共用同一份清單，
+// 否則兩邊的欄位會各自漂移（少一個欄位前端就是空白，而且不會有人發現）。
+export function commutePatchFields(lite, settings) {
+  if (!lite) return null;
   return {
     post_id: lite.post_id,
     lat: lite.lat,
@@ -6442,6 +6439,16 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
     mrt_walk_km: lite.mrt_walk_km,
     fingerprint: commuteSettingsFingerprint(settings),
   };
+}
+
+export function listingCommutePatch(postId, userId, settingsOverride) {
+  const uid = userId == null ? defaultUserId() : Number(userId) || 0;
+  const row = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(Number(postId));
+  if (!row) return null;
+  if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MAP, viewerId: uid })) return null;
+  const settings = settingsOverride || getSettings(uid);
+  const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });
+  return commutePatchFields(lite, settings);
 }
 
 function applyListingFilter(rows, settings = getSettings(), provider = null) {

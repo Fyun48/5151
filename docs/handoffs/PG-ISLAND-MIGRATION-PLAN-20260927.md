@@ -4092,6 +4092,63 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   5. 「同一個交易」那一條**只有原始碼斷言殺得掉**（注入式 exec 沒有交易邊界），
      寫在變異定義的註解裡。
 
+## 二之負四十六、2026-09-29 第七十六批：通勤快照（地圖卡片的通勤欄位）搬上 PG
+
+### 76.1 範圍與投報率
+
+`GET /api/commute/snapshot` 的 7 個卡點一次清掉（`listingCommutePatch`／`loadFlags`／
+`groupIdForPost`／`personalGroupAgrees`／`loadPersonalSameHouseIndex`／`ensureUser`／`getUserById`）。
+
+同步版 `db.js:listingCommutePatch()` 在 PG 模式下讀的是**節點本機**：
+
+- PG 才有的刊登（別的節點爬到的、匯入的）在這裡回 `null` ⇒ 地圖卡片**沒有通勤資訊**，
+  而且看起來就像「這台節點沒有這筆」，不會有人發現是讀錯 store；
+- 觀看者旗標與個人同戶群組也讀本機 ⇒ 同一張卡片在兩台節點可能不一樣。
+
+尺規：`GET /api/commute/snapshot` **MIXED（7 個卡點）→ PG**；缺口總數 **18 → 17**
+（`MIXED` 16 → **15**、`PG` 250 → **251**、`SQLite` 2 不變）。
+
+> 📌 這一條會一次清掉 7 個卡點，是因為它整條走**既有的裝飾管線**：`preloadDecorationProviderAsync()`
+> 一次預載 flags／personalIndex／splitPairs／prep／routeCache／mrtCache／routeJobs，於是
+> `loadFlags`／`groupIdForPost`／`personalGroupAgrees`／`loadPersonalSameHouseIndex` 這些
+> 「一個候選一次查詢」的同步 helper 全部不再被走到。**後面三條 20 卡點的路由（`/api/settings`、
+> `/api/listings/:id/flags`、`/api/commute/focus`）要用同一招。**
+
+### 76.2 做法
+
+- `v3/src/db.js`：把 patch 的 20 個欄位抽成純函式 `commutePatchFields(lite, settings)`，
+  同步版改為呼叫它（兩個 driver 不可能漂移）。
+- `v3/src/listingCommuteAsync.js`（新檔）：`listingCommutePatchesAsync(ids, userId, options)`
+  ＋單筆版 `listingCommutePatchAsync()`。PG 分支＝**一次**讀一批列（`SELECT * FROM listings
+  WHERE post_id IN (…)`）→ 可見性關卡 → `preloadDecorationProviderAsync({peers:false})`
+  → `decorateRowsWithProvider({sameHouse:false})` → `commutePatchFields()`，順序照呼叫端給的 ids。
+- `options.exec` 一律**正規化成純陣列**：裝飾資料的載入器吃陣列，而本專案有些島嶼的注入式
+  exec 回 `{rows, rowCount}`（兩種寫法都有）。
+- fail-closed：缺 `settings` 直接丟（不得回退本機設定）；PG 失敗時 `sqliteFallbackAllowed()`
+  決定要不要回退，`strict` 一律往上丟。
+- `v3/src/repository/listings.js`：`idPlaceholders()` 改為匯出（同一組 `$n` 佔位符規則不重寫一份）。
+
+### 76.3 測試
+
+- `v3/test/commute-snapshot-async.test.js`（**5 項全綠**，新檔）：逐欄位比對同步版（含 20 個欄位的
+  清單）、路線快取真的要命中（`commute_km` 8.4／`commute_return_km` 8.9／state `done`）、
+  夾具列被濾掉、順序照呼叫端、`strict` 不靜默回退、缺 settings 丟錯、`userId: null` 要問 PG
+  的預設帳號、sqlite 模式不碰注入的 exec、路由接線。
+- `v3/test/commute-snapshot-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上「PG 才有的
+  刊登」算得出通勤欄位（同步版在**同一筆**上是 `null`）、注入 exec 與純 `pgDriver` 兩條路徑結果相同。
+- **變異 8 條全殺**（`COMMUTE_MUTATIONS`）。
+- 踩點（都真的紅過）：
+  1. 裝飾資料的載入器回的是**純陣列**，不是 `{rows}`；而它們在 driver=postgres 時自己產生
+     **`$n`** 佔位符與 **`= ANY(?::bigint[])`／`= ANY(?::text[])` 陣列綁定** ⇒ 離線夾具要把
+     `$n` 換回 `?`、把 ANY 展開成 `IN (?,…)`（SQLite 沒有這兩種寫法）。
+  2. `listings` **沒有** `district`／`city`／`commute_*` 欄：行政區從地址推、通勤欄位是讀取時
+     用 `route_cache` ＋ settings 算的，種測試資料時只能種「原料」。
+  3. `geo_source` 要用**受信任**的值（`geocode`／來源名），配 `location_class = 'address'`
+     才過得了 `canUseForRoadDistance()`；寫 `geo_source = "address"` 會讓兩邊都變 `wait_geo`
+     ——parity 照樣過，但什麼都沒驗到（第一版就是這樣）。
+  4. `setCachedRoute()` 的距離是**公里數陣列**（`[8.4]`），不是 `[{km,min}]`：後者會被
+     `parseRouteCacheRow()` 的 `map(Number)` 濾成空陣列 ⇒ 讀不到。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4102,13 +4159,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十五批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十六批）** |
 |---|---:|---:|
 | SQLite | 95 | **2** |
-| MIXED | — | **16** |
+| MIXED | — | **15** |
 | 無直接DB | — | **20** |
-| PG | 22 | **250** |
-| **缺口（SQLite＋MIXED）** | — | **18** |
+| PG | 22 | **251** |
+| **缺口（SQLite＋MIXED）** | — | **17** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

@@ -2927,6 +2927,66 @@ const REGISTER_MUTATIONS = [
   },
 ];
 
+// 通勤快照（`GET /api/commute/snapshot`）的 PG 島嶼（v3/test/commute-snapshot-async.test.js，第七十六批）。
+const COMMUTE_MUTATIONS = [
+  {
+    name: "通勤快照改回同步版（PG 才有的刊登看不到通勤資訊）",
+    file: "v3/src/server.js",
+    from: "    listings: await listingCommutePatchesAsync(ids, uid, { settings }),",
+    to: "    listings: ids.map((id) => listingCommutePatch(id, uid, settings)).filter(Boolean),",
+    expect: "路由接線",
+  },
+  {
+    name: "可見性關卡拿掉（Stage 1 夾具列會被畫到地圖上）",
+    file: "v3/src/listingCommuteAsync.js",
+    from: "      .filter((row) => row && listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MAP, viewerId: uid }));",
+    to: "      .filter((row) => Boolean(row));",
+    expect: "可見性關卡與順序",
+  },
+  {
+    name: "不套共用投影（少 20 個欄位、前端卡片空白）",
+    file: "v3/src/listingCommuteAsync.js",
+    from: "    const patchById = new Map(decorated.map((row) => [Number(row.post_id), commutePatchFields(row, settings)]));",
+    to: "    const patchById = new Map(decorated.map((row) => [Number(row.post_id), row]));",
+    expect: "逐欄位相同",
+  },
+  {
+    name: "投影少掉 fingerprint（前端不會發現設定變了）",
+    file: "v3/src/db.js",
+    from: "    mrt_walk_km: lite.mrt_walk_km,\n    fingerprint: commuteSettingsFingerprint(settings),",
+    to: "    mrt_walk_km: lite.mrt_walk_km,",
+    expect: "逐欄位相同",
+  },
+  {
+    name: "同步版不再套投影（兩個 driver 的形狀分岔）",
+    file: "v3/src/db.js",
+    from: "  const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });\n  return commutePatchFields(lite, settings);",
+    to: "  const lite = decorateListing(withPersonal(row, uid), settings, uid, { sameHouse: false });\n  return lite;",
+    expect: "逐欄位相同",
+  },
+  {
+    name: "缺 settings 時靜默回退（PG 版會用本機設定算通勤）",
+    file: "v3/src/listingCommuteAsync.js",
+    from: '    if (!settings) throw new Error("PG 版通勤快照需要 settings（不得回退本機設定）");',
+    to: "    if (!settings) return fallback();",
+    expect: "fail-closed",
+  },
+  {
+    name: "PG 失敗時無條件回退本機（寫入以外的讀取也不該假裝成功）",
+    file: "v3/src/listingCommuteAsync.js",
+    from: "    if (!sqliteFallbackAllowed(options, {})) throw error;\n    return fallback();",
+    to: "    return fallback();",
+    expect: "fail-closed",
+  },
+  {
+    name: "預設帳號改讀本機（userId 為 null 時用本機 id 認人）",
+    file: "v3/src/listingCommuteAsync.js",
+    from: "    const uid = userId == null ? await defaultUserIdAsync(options) : Number(userId) || 0;",
+    to: '    const uid = userId == null ? (await import("./db.js")).defaultUserId() : Number(userId) || 0;',
+    expect: "userId: null",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4347,6 +4407,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /notify-queue-parity/.test(testFile) ? NOTIFYQ_MUTATIONS
   : /site-reset-async/.test(testFile) ? SITERESET_MUTATIONS
   : /register-async/.test(testFile) ? REGISTER_MUTATIONS
+  : /commute-snapshot-async/.test(testFile) ? COMMUTE_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
