@@ -3428,6 +3428,69 @@ const OUTBOXASYNC_MUTATIONS = [
   },
 ];
 
+// 回饋（feedback）PG 島嶼的變異集（第五十八批）。
+const FEEDBACKASYNC_SRC = "v3/src/feedbackAsync.js";
+const FEEDBACKASYNC_MUTATIONS = [
+  {
+    // 不變式：transaction 失敗時**不能**吞掉——否則會留下「回饋進去了、事件沒進去」的半套狀態，
+    // 而那個事件是 Ops 唯一的來源。
+    name: "交易失敗時吞掉錯誤、回 ok（半套狀態被當成成功）",
+    file: FEEDBACKASYNC_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    return createFeedbackWithOutboxSync(sqliteHandle(), userId, input);",
+    to: "    return { ok: true, id: 0 };",
+    expect: "不變式：outbox 寫入失敗時",
+  },
+  {
+    name: "honeypot 不擋（機器人可以把內容塞進來）",
+    file: FEEDBACKASYNC_SRC,
+    from: "  if (String(input?.website || input?.hp || \"\").trim()) return { ok: true, id: 0 };",
+    to: "  if (false) return { ok: true, id: 0 };",
+    expect: "honeypot",
+  },
+  {
+    name: "太短的內容也放行",
+    file: FEEDBACKASYNC_SRC,
+    from: "  if (body.length < FEEDBACK_BODY_MIN) throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);",
+    to: "  if (false) throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);",
+    expect: "內容驗證與洪水限制",
+  },
+  {
+    name: "洪水限制不看「剛剛才送過」（可以連送）",
+    file: FEEDBACKASYNC_SRC,
+    from: "  if (last && nowMs(now) - Date.parse(last.created_at) < FEEDBACK_MIN_GAP_MS) {",
+    to: "  if (false) {",
+    expect: "內容驗證與洪水限制",
+  },
+  {
+    name: "統計不把 bigint 轉數字（total 變字串）",
+    file: FEEDBACKASYNC_SRC,
+    from: "        out.total += Number(row.n) || 0;",
+    to: "        out.total += row.n;",
+    expect: "統計：狀態／類型白名單",
+  },
+  {
+    name: "列表不 join users（後台看不到 email／nickname）",
+    file: FEEDBACKASYNC_SRC,
+    from: "export const FEEDBACK_LIST_SQL = `SELECT f.*, COALESCE(u.email, '') AS __email, COALESCE(u.nickname, '') AS __nickname\n   FROM feedback f LEFT JOIN users u ON u.id = f.user_id`;",
+    to: "export const FEEDBACK_LIST_SQL = `SELECT f.*, '' AS __email, '' AS __nickname FROM feedback f`;",
+    expect: "後台列表：篩選、排序",
+  },
+  {
+    name: "備註不截斷（可以塞爆資料表）",
+    file: FEEDBACKASYNC_SRC,
+    from: "      args.push(String(patch.admin_note || \"\").trim().slice(0, FEEDBACK_NOTE_MAX));",
+    to: "      args.push(String(patch.admin_note || \"\").trim());",
+    expect: "改狀態／備註",
+  },
+  {
+    name: "更新後重讀不 join users（回傳少了 email）",
+    file: FEEDBACKASYNC_SRC,
+    from: "    const next = one((await exec(FEEDBACK_BY_ID_JOINED_SQL, [Number(row.id)])).rows);",
+    to: "    const next = one((await exec(FEEDBACK_BY_ID_SQL, [Number(row.id)])).rows);",
+    expect: "改狀態／備註",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3436,7 +3499,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
+const MUTATIONS = /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
+  : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
