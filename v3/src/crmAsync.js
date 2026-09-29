@@ -12,10 +12,12 @@ import {
   addNote as addNoteSync,
   addTodo as addTodoSync,
   createCase as createCaseSync,
+  createCaseFromFeedback as createCaseFromFeedbackSync,
   createContact as createContactSync,
   crmModule as crmModuleSync,
   crmOverview as crmOverviewSync,
   getContact as getContactSync,
+  guessContactFromFeedback,
   listContacts as listContactsSync,
   setTodoDone as setTodoDoneSync,
   updateCase as updateCaseSync,
@@ -379,6 +381,56 @@ export function createCaseAsync(contactId, input = {}, opts = {}, options = {}) 
       });
     },
     () => createCaseSync(sqliteFor(options), contactId, input, { now }),
+  );
+}
+
+// `crm.js createCaseFromFeedback()` 的 PG 版（第五十九批）。
+// 順序與同步版逐條對應：CRM 開關 → 找 feedback（404）→ 已經有案件就沿用 →
+// 用 email／電話找既有聯絡人（找不到才建）→ 建案件 → 回傳案件的快照。
+// ⚠️ `createContactAsync()`／`createCaseAsync()` 內部都會再檢查一次 CRM 開關與交易，
+// 所以這裡的 `assertCrmOpenExec()` 是「先擋一次給使用者看得懂的錯誤」，不是唯一防線。
+export function createCaseFromFeedbackAsync(feedbackId, options = {}) {
+  const id = Number(feedbackId) || 0;
+  return withFallback(
+    { ...options, write: true },
+    async (exec) => {
+      await assertCrmOpenExec(exec);
+      const fbQuery = repo.feedbackFullQuery(id);
+      const fb = (await exec(fbQuery.sql, fbQuery.params) || [])[0] || null;
+      if (!fb) throw httpError("找不到這則回饋", 404);
+      const caseQuery = repo.caseByFeedbackQuery(fb.id);
+      const existing = (await exec(caseQuery.sql, caseQuery.params) || [])[0] || null;
+      if (existing) {
+        return { reused: true, ...(await snapshotContact(exec, existing.contact_id)) };
+      }
+      const guessed = guessContactFromFeedback(fb);
+      let contact = null;
+      if (guessed.email) {
+        const q = repo.contactByEmailQuery(guessed.email);
+        contact = (await exec(q.sql, q.params) || [])[0] || null;
+      }
+      if (!contact && guessed.phone) {
+        const q = repo.contactByPhoneQuery(guessed.phone);
+        contact = (await exec(q.sql, q.params) || [])[0] || null;
+      }
+      if (!contact) {
+        // ⚠️ `createContactAsync()` 回的是 `snapshotContact()` 的形狀（`{contact, cases, …}`），
+        // 不是聯絡人本身；同步版是 `created.contact`。少了這一層 unwrap，`contact.id` 會是 undefined
+        // ⇒ 下一句 `createCaseAsync()` 會說「找不到這位聯絡人」（live PG 測試抓到的）。
+        const created = await createContactAsync(guessed, {}, options);
+        contact = created?.contact || created;
+      }
+      const title = clip(fb.body, 40) || `回饋 #${fb.id}`;
+      return {
+        reused: false,
+        ...(await createCaseAsync(contact.id, {
+          title,
+          feedback_id: fb.id,
+          handling_state: normalizeHandling(fb.status),
+        }, {}, options)),
+      };
+    },
+    () => createCaseFromFeedbackSync(sqliteFor(options), feedbackId),
   );
 }
 

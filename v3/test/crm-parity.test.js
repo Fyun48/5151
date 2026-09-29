@@ -320,3 +320,74 @@ test("live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）", a
   }
 });
 
+
+// ---- 第五十九批：由回饋建立案件（`createCaseFromFeedbackAsync`）-------------------
+//
+// 這一條是 Ops Console 的「從回饋開一張案件」。同步版在 PG 模式下把案件建在**節點本機**
+// ⇒ 後台的 CRM 看不到、而 Ops 卻收到「已建立」。規則（猜聯絡人、已存在就沿用、CRM 關閉要擋）
+// 全部沿用 `crm.js`，這裡驗「跑語句的人」換掉之後仍然一樣。
+
+const feedbackMod = await import("../src/feedback.js");
+const FEEDBACK_ID = 990001;
+
+function seedFeedback({ contact = "a@example.test", body = "搜尋怪怪的" } = {}) {
+  db.prepare("DELETE FROM feedback WHERE id = ?").run(FEEDBACK_ID);
+  db.prepare(
+    `INSERT INTO feedback(id, user_id, kind, body, contact, context, status, admin_note, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+  ).run(FEEDBACK_ID, 0, "bug", body, contact, "{}", "new", "", STAMP, STAMP);
+}
+
+test("第五十九批：createCaseFromFeedbackAsync 與同步版給出相同的案件（含猜出來的聯絡人）", async () => {
+  // 兩個 driver 各自建一張（用兩筆內容相同的回饋），再比對建出來的形狀——
+  // ⚠️ 不能在同一筆回饋上先後呼叫：第二次會走「已存在 ⇒ reused」那條路（第一版就是這樣紅的）。
+  const OTHER_ID = FEEDBACK_ID + 1;
+  seedFeedback();
+  db.prepare("DELETE FROM feedback WHERE id = ?").run(OTHER_ID);
+  db.prepare(
+    `INSERT INTO feedback(id, user_id, kind, body, contact, context, status, admin_note, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+  ).run(OTHER_ID, 0, "bug", "搜尋怪怪的", "b@example.test", "{}", "new", "", STAMP, STAMP);
+
+  const viaPg = await crmAsync.createCaseFromFeedbackAsync(FEEDBACK_ID, { ...pgOptions, now: WHEN });
+  const viaSync = crm.createCaseFromFeedback(db, OTHER_ID, { now: WHEN });
+  assert.equal(viaPg.reused, false);
+  assert.equal(viaSync.reused, false);
+  const caseOf = (result) => (result.cases || []).find((row) => row.feedback_id === FEEDBACK_ID || row.feedback_id === OTHER_ID) || (result.cases || [])[0] || {};
+  const pgCase = caseOf(viaPg);
+  const syncCase = caseOf(viaSync);
+  assert.equal(pgCase.title, syncCase.title, "案件標題必須相同（由回饋內容前 40 字決定）");
+  assert.equal(pgCase.handling_state, syncCase.handling_state, "處理狀態必須相同（由回饋狀態對應）");
+  assert.equal(viaPg.contact?.email || viaPg.email, "a@example.test", "PG 這邊猜出來的聯絡人要用回饋的 contact");
+  assert.equal(viaSync.contact?.email || viaSync.email, "b@example.test", "同步版同一組規則");
+  // 兩張案件各自對到自己的回饋（沒有互相污染）
+  assert.equal(Number(pgCase.feedback_id), FEEDBACK_ID);
+  assert.equal(Number(syncCase.feedback_id), OTHER_ID);
+});
+
+test("第五十九批：已經有案件時兩邊都回 reused、而且不再建第二張", async () => {
+  seedFeedback();
+  const first = await crmAsync.createCaseFromFeedbackAsync(FEEDBACK_ID, { ...pgOptions, now: WHEN });
+  assert.equal(first.reused, false);
+  const before = db.prepare("SELECT COUNT(*) AS n FROM crm_cases WHERE feedback_id = ?").get(FEEDBACK_ID).n;
+  const again = await crmAsync.createCaseFromFeedbackAsync(FEEDBACK_ID, { ...pgOptions, now: WHEN });
+  assert.equal(again.reused, true, "第二次必須沿用");
+  const after = db.prepare("SELECT COUNT(*) AS n FROM crm_cases WHERE feedback_id = ?").get(FEEDBACK_ID).n;
+  assert.equal(after, before, "不得多建一張案件");
+});
+
+test("第五十九批：找不到回饋 404、CRM 關閉 409，訊息與同步版相同", async () => {
+  seedFeedback();
+  const missingPg = await crmAsync.createCaseFromFeedbackAsync(999999, { ...pgOptions, now: WHEN }).then(() => null, (e) => e);
+  const missingSync = (() => { try { crm.createCaseFromFeedback(db, 999999, { now: WHEN }); return null; } catch (e) { return e; } })();
+  assert.equal(missingPg?.status, 404);
+  assert.equal(missingPg.message, missingSync.message, "找不到回饋的訊息必須相同");
+
+  // CRM 關閉：兩邊都要擋（409），而且不得建出案件
+  db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)").run(crm.CRM_ENABLED_KEY, "0");
+  const closedPg = await crmAsync.createCaseFromFeedbackAsync(FEEDBACK_ID, { ...pgOptions, now: WHEN }).then(() => null, (e) => e);
+  const closedSync = (() => { try { crm.createCaseFromFeedback(db, FEEDBACK_ID, { now: WHEN }); return null; } catch (e) { return e; } })();
+  assert.equal(closedPg?.status, 409);
+  assert.equal(closedPg.message, closedSync.message, "CRM 關閉的訊息必須相同");
+  db.prepare("DELETE FROM settings WHERE key = ?").run(crm.CRM_ENABLED_KEY);
+});

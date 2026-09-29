@@ -50,6 +50,25 @@ export function listContactsQuery({ q = "" } = {}) {
   };
 }
 
+// 由回饋建立案件時，先用 email／電話找既有聯絡人（`crm.js guessContactFromFeedback()` 的兩個查詢）。
+export function contactByEmailQuery(email) {
+  return { sql: "SELECT * FROM crm_contacts WHERE email = ?", params: [String(email || "")] };
+}
+
+export function contactByPhoneQuery(phone) {
+  return { sql: "SELECT * FROM crm_contacts WHERE phone = ?", params: [String(phone || "")] };
+}
+
+// 某筆回饋是否已經有案件（重複按「建立案件」時要沿用，不要建第二筆）。
+export function caseByFeedbackQuery(feedbackId) {
+  return { sql: "SELECT * FROM crm_cases WHERE feedback_id = ?", params: [Number(feedbackId) || 0] };
+}
+
+// 建立案件需要 feedback 的完整內容（body／status 決定標題與處理狀態）。
+export function feedbackFullQuery(feedbackId) {
+  return { sql: "SELECT * FROM feedback WHERE id = ?", params: [Number(feedbackId) || 0] };
+}
+
 export function contactCasesQuery(contactId) {
   return { sql: "SELECT * FROM crm_cases WHERE contact_id = ? ORDER BY id DESC", params: [Number(contactId) || 0] };
 }

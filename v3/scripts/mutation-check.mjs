@@ -3491,6 +3491,67 @@ const FEEDBACKASYNC_MUTATIONS = [
   },
 ];
 
+// Ops 反向指令（第五十九批）的變異集。
+const SITECMD_SRC = "v3/src/siteCommandApplyAsync.js";
+const SITECMD_MUTATIONS = [
+  {
+    name: "本地停止鍵用 truthy 判斷（'0' 也被當成停止）",
+    file: SITECMD_SRC,
+    from: "    return String(row?.value || \"\") === \"1\";",
+    to: "    return Boolean(row?.value);",
+    expect: "驗章與開關",
+  },
+  {
+    name: "停止鍵用 JSON.stringify 寫入（開關永遠失效）",
+    file: SITECMD_SRC,
+    from: "    await exec(STOP_UPSERT_SQL, [REMOTE_CS_STOP_KEY, value]);",
+    to: "    await exec(STOP_UPSERT_SQL, [REMOTE_CS_STOP_KEY, JSON.stringify(value)]);",
+    expect: "驗章與開關",
+  },
+  {
+    name: "不驗簽章（任何人送指令都會被套用）",
+    file: SITECMD_SRC,
+    from: "  if (!verified.ok) return { httpStatus: 401, body: { apply_state: \"rejected\", reason: \"bad_signature\" } };",
+    to: "  if (false) return { httpStatus: 401, body: { apply_state: \"rejected\", reason: \"bad_signature\" } };",
+    expect: "驗章與開關",
+  },
+  {
+    name: "不檢查 command_id 與簽章帶的 deliveryId 是否一致",
+    file: SITECMD_SRC,
+    from: "  if (String(parsed.command_id || \"\") !== String(verified.deliveryId || \"\")) {",
+    to: "  if (false) {",
+    expect: "格式錯誤",
+  },
+  {
+    name: "不做冪等（同一組 idempotency_key 會再套用一次）",
+    file: SITECMD_SRC,
+    from: "  const existing = one(await exec(INBOX_FIND_SQL, [commandId, idem]));\n  if (existing) {",
+    to: "  const existing = null;\n  if (existing) {",
+    expect: "套用 feedback.patch_handling",
+  },
+  {
+    name: "被拒絕的指令不寫 inbox（Ops 看不到失敗）",
+    file: SITECMD_SRC,
+    from: "      await exec(INBOX_INSERT_SQL, [commandId, idem, kind, JSON.stringify(command.payload || {}), applyState, JSON.stringify({ reason }), ts, null]);",
+    to: "      void applyState;",
+    expect: "被拒絕的指令",
+  },
+  {
+    name: "空 patch 也放行",
+    file: SITECMD_SRC,
+    from: "    if (payload.handling_state == null && payload.status == null && payload.admin_note == null) {",
+    to: "    if (false) {",
+    expect: "被拒絕的指令",
+  },
+  {
+    name: "crm.add_note 少了 contact_id 也放行",
+    file: SITECMD_SRC,
+    from: "    if (!contactId) throw reject(\"rejected\", \"missing_contact_id\", 400);",
+    to: "    if (false) throw reject(\"rejected\", \"missing_contact_id\", 400);",
+    expect: "crm.add_note",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3499,7 +3560,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
+const MUTATIONS = /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
+  : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
   : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
