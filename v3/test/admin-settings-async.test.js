@@ -15,7 +15,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -28,6 +28,8 @@ const sync = {
   getMailTemplates: db.getMailTemplates,
   getStoredSmtp: db.getStoredSmtp,
   getAdminMailSettings: db.getAdminMailSettings,
+  saveAdminMailSettings: db.saveAdminMailSettings,
+  saveAdminOauthSettings: db.saveAdminOauthSettings,
   getStoredOauth: db.getStoredOauth,
   getAdminOauthSettings: db.getAdminOauthSettings,
   getSponsorConfig: db.getSponsorConfig,
@@ -343,4 +345,89 @@ test("applyBrandUploadAsync：不合法／空白的位置要擋下，兩邊訊�
     );
   }
   disk.close();
+});
+
+// ---- 第五十五批：兩個寫入（settings 進 PG、auth.env 留節點本機）-----------------
+//
+// Owner 的決定是「移植」：設定要進 PG（其他節點／所有讀者才看得到），
+// 而 `auth.env` 仍留在**回答你的那一台**（它是節點啟動時套用的檔案）。
+// 兩個 store 都要寫，所以下面每一條都同時驗 PG 與本機（含 auth.env 檔案）。
+
+const SMTP_INPUT = {
+  smtp: { host: "smtp.example.test", port: 2525, user: "mailer", pass: "s3cret", from: "no-reply@example.test", secure: true },
+  templates: { welcome: { subject: "歡迎", text: "嗨" } },
+};
+
+test("saveAdminMailSettingsAsync：PG 落地、回傳形狀與同步版相同、本機鏡射 ＋ auth.env 都寫", async () => {
+  const [disk, exec] = resetBoth();
+  const pg = await asyncMod.saveAdminMailSettingsAsync(SMTP_INPUT, { ...PG, exec, strict: true });
+  assert.equal(pg.smtp.host, "smtp.example.test");
+  assert.equal(pg.smtp.pass, undefined, "公開形狀不得帶出密碼");
+  assert.equal(pg.configured, true, "有 host ＋ from ⇒ configured");
+  // PG 那邊：兩個鍵都要有值（而且 smtp 存的是**含密碼**的完整設定）
+  const pgSmtp = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='smtp'").get().value);
+  const pgTemplates = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='mailTemplates'").get().value);
+  const liteSmtp = JSON.parse(disk.prepare("SELECT value FROM settings WHERE key='smtp'").get().value);
+  assert.equal(pgSmtp.host, "smtp.example.test");
+  assert.equal(pgSmtp.pass, "s3cret", "PG 的 smtp 必須存完整設定（與同步版相同語意）");
+  assert.deepEqual(pgSmtp, liteSmtp, "兩邊落地的 smtp 必須逐欄相同");
+  assert.deepEqual(pgTemplates, JSON.parse(disk.prepare("SELECT value FROM settings WHERE key='mailTemplates'").get().value),
+    "兩個 driver 的 templates 必須相同");
+  // 本機鏡射：本機的 settings 也要有（同步讀者 getStoredSmtp()/getMailTemplates() 還在用）
+  assert.equal(db.getStoredSmtp().host, "smtp.example.test", "本機那份要被鏡射");
+  assert.equal(db.getMailTemplates().welcome.subject, "歡迎");
+  // auth.env（節點本機檔案）
+  const envText = readFileSync(path.join(dataDir, "auth.env"), "utf8");
+  assert.match(envText, /SMTP_HOST=smtp\.example\.test/, `auth.env 必須寫入 SMTP_HOST：${envText}`);
+  // ⚠️ 對照組（同步版）要放**最後**：它自己也會寫本機，先跑就會把「async 版沒做本機落地」
+  // 這個缺陷蓋掉（實測：變異因此存活過一次）。
+  const lite = sync.saveAdminMailSettings(SMTP_INPUT);
+  assert.deepEqual(pg, lite, "回傳的公開形狀必須與同步版逐欄相同");
+});
+
+test("saveAdminMailSettingsAsync：PG 寫失敗時**不得**動本機（否則這台看起來設定好了）", async () => {
+  const [disk] = resetBoth();
+  const before = rowsOf(disk);
+  const envPath = path.join(dataDir, "auth.env");
+  const envBefore = existsSync(envPath) ? readFileSync(envPath, "utf8") : null;
+  const boom = async () => { throw new Error("PG 掛了"); };
+  await assert.rejects(
+    () => asyncMod.saveAdminMailSettingsAsync(SMTP_INPUT, { ...PG, exec: boom, strict: true }),
+    /PG 掛了/,
+  );
+  assert.deepEqual(rowsOf(disk), before, "本機 settings 不得被動到");
+  const envAfter = existsSync(envPath) ? readFileSync(envPath, "utf8") : null;
+  assert.equal(envAfter, envBefore, "auth.env 不得被動到");
+});
+
+test("saveAdminOauthSettingsAsync：PG 落地、公開形狀不含 secret、auth.env 也寫", async () => {
+  const [disk, exec] = resetBoth();
+  const input = { oauth: { google: { enabled: true, clientId: "gid", clientSecret: "gsecret" } } };
+  const pg = await asyncMod.saveAdminOauthSettingsAsync(input, { ...PG, exec, strict: true });
+  assert.equal(pg.oauth.google.clientId, "gid");
+  assert.equal(pg.oauth.google.clientSecret, undefined, "公開形狀不得帶出 secret");
+  const pgOauth = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='oauth'").get().value);
+  const liteOauth = JSON.parse(disk.prepare("SELECT value FROM settings WHERE key='oauth'").get().value);
+  assert.equal(pgOauth.google.clientSecret, "gsecret", "PG 必須存完整設定");
+  assert.deepEqual(pgOauth, liteOauth, "兩邊落地的 oauth 必須逐欄相同");
+  // 讀者：PG 版與本機版都要看得到剛剛存的設定
+  assert.equal((await asyncMod.getStoredOauthAsync({ ...PG, exec, strict: true })).google.clientId, "gid");
+  assert.equal(db.getStoredOauth().google.clientId, "gid", "本機鏡射要生效（同步讀者還在用）");
+  assert.match(readFileSync(path.join(dataDir, "auth.env"), "utf8"), /GOOGLE_OAUTH_CLIENT_ID=gid/,
+    "auth.env 的鍵名由 applyOauthEnv() 決定（不是我自己發明的名字）");
+  // 對照組放最後（理由同上一條）。
+  const lite = sync.saveAdminOauthSettings(input);
+  assert.deepEqual(pg, lite, "回傳形狀必須與同步版相同");
+});
+
+test("非 postgres：兩個寫入都走同步路徑（不碰傳入的 exec）", async () => {
+  resetBoth();
+  let calls = 0;
+  const boom = async () => { calls += 1; throw new Error("exec 不該被呼叫（sqlite 模式）"); };
+  const sqlite = { driver: "sqlite", exec: boom };
+  const mail = await asyncMod.saveAdminMailSettingsAsync(SMTP_INPUT, sqlite);
+  assert.equal(mail.smtp.host, "smtp.example.test");
+  const oauth = await asyncMod.saveAdminOauthSettingsAsync({ oauth: { line: { enabled: true, clientId: "lid", clientSecret: "lsecret" } } }, sqlite);
+  assert.equal(oauth.oauth.line.clientId, "lid");
+  assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
 });

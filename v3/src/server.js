@@ -252,7 +252,13 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
-import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+import {
+  applyBrandUploadAsync,
+  getAdminAdsSettingsAsync,
+  getAdminBroadcastsSettingsAsync,
+  saveAdminMailSettingsAsync,
+  saveAdminOauthSettingsAsync,
+} from "./adminSettingsAsync.js";
 // 註冊信箱確認與忘記密碼的 PG 島嶼入口。
 import { confirmVerifyTokenAsync } from "./emailVerifyAsync.js";
 import { requestTempPasswordAsync } from "./forgotPasswordAsync.js";
@@ -1691,9 +1697,10 @@ app.get("/api/admin/mail", requireAdminApi, async (_req, res) => {
   res.json(await getAdminMailSettingsAsync());
 });
 
-app.put("/api/admin/mail", requireAdminApi, (req, res) => {
+app.put("/api/admin/mail", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveAdminMailSettings(req.body || {}));
+    // 設定進 PG、auth.env 留節點本機（Owner 第五十五批決定）。
+    res.json(await saveAdminMailSettingsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -1703,9 +1710,9 @@ app.get("/api/admin/oauth", requireAdminApi, async (_req, res) => {
   res.json(await getAdminOauthSettingsAsync());
 });
 
-app.put("/api/admin/oauth", requireAdminApi, (req, res) => {
+app.put("/api/admin/oauth", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveAdminOauthSettings(req.body || {}));
+    res.json(await saveAdminOauthSettingsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

@@ -5,13 +5,16 @@
 // 純函式留在原模組（兩個 driver 共用），這裡只換「跑語句的人」，語句由
 // `settingsKvAsync.js` 的通用存取器負責，所以每個 port 都只有幾行。
 //
-// ⚠️ **刻意沒有移植的兩個（不是漏掉）**：
-//   - `saveAdminMailSettings()`  → 除了寫 `smtp`／`mailTemplates`，還會 `persistSmtpToAuthEnv()`
-//   - `saveAdminOauthSettings()` → 除了寫 `oauth`，還會 `persistOauthToAuthEnv()`
-//   兩者都**額外寫節點本機的 `auth.env`**（db.js:1164／1195），與 `saveAdminMapsSettings`
-//   同一類陷阱：在 PG 模式下「資料進 PG、檔案設定只留在回答你那台」。
-//   這需要一個刻意的決定（auth.env 在 PG 模式還要不要寫？由誰寫？），**留給下一批**。
-//   對應的路由因此仍會留在缺口裡——這是誠實的取捨，不是忘記。
+// ✅ 第五十五批（Owner 決定：**移植**）：`saveAdminMailSettings()`／`saveAdminOauthSettings()`
+//   也搬上 PG，作法是「**設定進 PG、`auth.env` 仍留節點本機**」：
+//     1. 讀目前值（PG）
+//     2. 用同一組純函式正規化
+//     3. 寫 PG（`settings.smtp`／`settings.mailTemplates`／`settings.oauth`）
+//     4. 在**回答你的那一台**做本機落地（本機 settings 鏡射 ＋ 寫 `auth.env`）
+//   第 4 步是必要的，不是遺漏：`auth.env` 是節點啟動時套用的檔案（`applyStoredSmtp()`／
+//   `applyStoredOauth()` 在 import 時就跑），而本機的同步讀者（`getStoredSmtp()`…）也還在。
+//   ⚠️ 也就是說 **SMTP 密碼與 OAuth client secret 會進 PG 的 settings**——與先前 SQLite 的
+//   `settings` 同一類（本來就不是只放檔案），但 PG 是多節點共用的 store，維運時要記得。
 import { resolveDbDriver } from "./dbDriver.js";
 import {
   defaultBrandMascot,
@@ -41,8 +44,12 @@ import {
   getStoredOauth as getStoredOauthSync,
   getStoredSmtp as getStoredSmtpSync,
   publicSponsorSettings as publicSponsorSettingsSync,
+  saveAdminMailSettings as saveAdminMailSettingsSync,
+  saveAdminOauthSettings as saveAdminOauthSettingsSync,
   saveAdminSponsorSettings as saveAdminSponsorSettingsSync,
   saveBrandMascot as saveBrandMascotSync,
+  applyAdminMailSettingsLocally,
+  applyAdminOauthSettingsLocally,
 } from "./db.js";
 
 const SMTP_KEY = "smtp";
@@ -87,6 +94,44 @@ export async function getStoredOauthAsync(options = {}) {
   if (!isPg(options)) return getStoredOauthSync();
   const stored = await getSiteSettingAsync(OAUTH_KEY, options);
   return normalizeOauthConfig(stored && typeof stored === "object" ? stored : {}, {}, process.env);
+}
+
+// `db.js saveAdminMailSettings()` 的 PG 版（第五十五批）。
+// ⚠️ 順序：**先寫 PG，再本機落地**。反過來的話，PG 寫失敗時本機已經變了（而且 auth.env 也寫了），
+// 會出現「這台看起來設定好了、其他節點還是舊的」——正是這一包要修掉的病。
+export async function saveAdminMailSettingsAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveAdminMailSettingsSync(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const current = await getStoredSmtpAsync(options);
+  const smtp = normalizeSmtp(src.smtp || {}, current);
+  const templates = normalizeMailTemplates({
+    ...(await getMailTemplatesAsync(options)),
+    ...(src.templates && typeof src.templates === "object" ? src.templates : {}),
+  });
+  await setSiteSettingAsync(SMTP_KEY, smtp, options);
+  await setSiteSettingAsync(MAIL_TEMPLATES_KEY, templates, options);
+  // 本機落地（best effort）：auth.env 寫不進去不該讓「PG 已經寫成功」變成失敗。
+  try {
+    applyAdminMailSettingsLocally({ smtp, templates });
+  } catch (error) {
+    console.warn("本機 SMTP 落地失敗（PG 已寫入）：", error?.message || error);
+  }
+  return getAdminMailSettingsAsync(options);
+}
+
+// `db.js saveAdminOauthSettings()` 的 PG 版（第五十五批）。
+export async function saveAdminOauthSettingsAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveAdminOauthSettingsSync(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const current = await getStoredOauthAsync(options);
+  const oauth = normalizeOauthConfig(src.oauth || {}, current);
+  await setSiteSettingAsync(OAUTH_KEY, oauth, options);
+  try {
+    applyAdminOauthSettingsLocally(oauth);
+  } catch (error) {
+    console.warn("本機 OAuth 落地失敗（PG 已寫入）：", error?.message || error);
+  }
+  return getAdminOauthSettingsAsync(options);
 }
 
 export async function getAdminOauthSettingsAsync(options = {}) {
