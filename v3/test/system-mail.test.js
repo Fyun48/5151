@@ -93,7 +93,9 @@ test("server register, change-password, and sponsor patch queue system mail", ()
   // 註冊確認的歡迎信在第五十三批改走 PG 島嶼（同步版讀本機的 SMTP／範本 ⇒ PG 站寄不出去）。
   assert.match(src, /await queueSystemMailAsync\("verified_welcome"/);
   assert.match(src, /queueSystemMail\("verify_expired"/);
-  assert.match(src, /queueSystemMail\("password_changed"/);
+  // 第七十批：改密碼改走 PG 島嶼（同步版的 queueSystemMail 會讀本機 SMTP／範本 ⇒ PG 站寄不出去），
+  // 而且密碼本身也改寫 PG（登入讀的是 PG）。
+  assert.match(src, /await queueSystemMailAsync\("password_changed"/);
   // 贊助感謝信也在第五十四批跟著 `PATCH /api/admin/members/:id` 改走 PG 島嶼。
   assert.match(src, /await queueSystemMailAsync\("sponsor_thanks"/);
   // 停權通知也在第五十四批改走 PG 島嶼。

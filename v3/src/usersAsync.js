@@ -141,6 +141,29 @@ export async function setUserPasswordAsync(userId, password, options = {}) {
   }, () => setUserPasswordSync(sqliteHandle(), id, password));
 }
 
+// `members.js::changeUserPassword()` 的 PG 版（`POST /api/change-password`）。
+//
+// ⚠️ 為什麼重要：PG 模式下這一條原本只寫本機 SQLite，而**登入讀的是 PG**（`verifyLoginAsync`）
+// ⇒ 使用者改了密碼卻只能用舊密碼登入（或是完全登不進去）。驗證規則（目前密碼比對、新密碼強度、
+// 「不能與目前密碼相同」）逐字沿用 `members.js` 用的那三支純函式，錯誤訊息與狀態碼也一樣。
+export async function changeUserPasswordAsync(userId, currentPassword, nextPassword, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) throw Object.assign(new Error("請先登入"), { status: 401 });
+  return run(options, async (exec) => {
+    const user = one((await exec(USER_BY_ID_SQL, [id])).rows);
+    if (!user) throw Object.assign(new Error("請先登入"), { status: 401 });
+    if (!verifyPassword(currentPassword, user.password_hash)) {
+      throw Object.assign(new Error("目前密碼不對"), { status: 400 });
+    }
+    const next = validatePassword(nextPassword);
+    if (next === String(currentPassword || "")) {
+      throw Object.assign(new Error("新密碼不能跟目前密碼一樣"), { status: 400 });
+    }
+    await exec(USER_SET_PASSWORD_SQL, [hashPassword(next), id]);
+    return publicUser(user);
+  }, async () => (await import("./db.js")).changeUserPassword(id, currentPassword, nextPassword));
+}
+
 // 直接寫入「已經算好的」雜湊（`forgotPassword.js` 寄信失敗時要把舊雜湊寫回去）。
 // 這一支**不**做 validate／hash——那不是它的工作，拿 `setUserPasswordAsync()` 代替會改變語意。
 export async function setPasswordHashAsync(userId, hash, options = {}) {
