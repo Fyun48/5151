@@ -5184,40 +5184,38 @@ export function listingsNeedingOfflineRecheck({ limit = 8 } = {}) {
   return db.prepare(sql).all(...params).map((row) => ({ ...row }));
 }
 
+// 「清除物件紀錄／清除全部資料」的語句與設定補丁抽成常數／純函式，讓 PG 版
+// （`siteResetAsync.js`）逐字共用——刪哪些表、刪的順序、設定要寫什麼，不能有兩份。
+export const RESET_LISTINGS_SQLS = Object.freeze([
+  "DELETE FROM events",
+  "DELETE FROM user_events",
+  "DELETE FROM user_listing_flags",
+  "DELETE FROM listings",
+]);
+export const RESET_ALL_SQLS = Object.freeze([
+  "DELETE FROM events",
+  "DELETE FROM user_events",
+  "DELETE FROM user_listing_flags",
+  "DELETE FROM user_settings",
+  "DELETE FROM crawl_covers",
+  "DELETE FROM listings",
+  "DELETE FROM settings",
+  "DELETE FROM geo_cache",
+  "DELETE FROM route_cache",
+  "DELETE FROM community_cache",
+]);
+export const RESET_LISTINGS_SETTINGS = Object.freeze({ hasBaseline: false });
+
 export function resetListings() {
-  db.exec("DELETE FROM events");
-  db.exec("DELETE FROM user_events");
-  db.exec("DELETE FROM user_listing_flags");
-  db.exec("DELETE FROM listings");
-  return saveSettings({ hasBaseline: false });
+  for (const sql of RESET_LISTINGS_SQLS) db.exec(sql);
+  return saveSettings({ ...RESET_LISTINGS_SETTINGS });
 }
 
 export { DATA_EPOCH };
 
-export function resetAllData() {
-  db.exec("BEGIN");
-  try {
-    db.exec("DELETE FROM events");
-    db.exec("DELETE FROM user_events");
-    db.exec("DELETE FROM user_listing_flags");
-    db.exec("DELETE FROM user_settings");
-    db.exec("DELETE FROM crawl_covers");
-    db.exec("DELETE FROM listings");
-    db.exec("DELETE FROM settings");
-    db.exec("DELETE FROM geo_cache");
-    db.exec("DELETE FROM route_cache");
-    db.exec("DELETE FROM community_cache");
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  try {
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } catch {
-    // ignore checkpoint failures; rows are already gone
-  }
-  return saveSettings({
+/** `resetAllData()` 最後要寫回的設定（純函式：PG 版逐欄共用同一份）。 */
+export function resetAllSettingsPatch() {
+  return {
     dataEpoch: DATA_EPOCH,
     searchUrls: [],
     watchDistricts: [],
@@ -5235,7 +5233,24 @@ export function resetAllData() {
     excludeKeywords: [],
     excludeAgents: [],
     excludeAgentIds: [],
-  });
+  };
+}
+
+export function resetAllData() {
+  db.exec("BEGIN");
+  try {
+    for (const sql of RESET_ALL_SQLS) db.exec(sql);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch {
+    // ignore checkpoint failures; rows are already gone
+  }
+  return saveSettings(resetAllSettingsPatch());
 }
 
 function readDataEpoch() {

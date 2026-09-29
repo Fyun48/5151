@@ -3969,6 +3969,39 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   `GET /api/state` 的接線斷言。
 - 變異 **3 條全殺**（新增 `NOTIFYQ_MUTATIONS`：改讀本機／參數順序顛倒／路由改回同步版）。
 
+## 二之負四十三、2026-09-29 第七十三批：管理員的兩顆核彈按鈕（清除物件紀錄／清除全部資料）
+
+### 73.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `POST /api/reset-listings` | `resetListingsAsync()`（新，`siteResetAsync.js`） | MIXED → **PG** |
+| `POST /api/reset-all` | `resetAllDataAsync()`（新） | MIXED → **PG** |
+
+尺規：缺口 **21 → 19**、PG **247 → 249**、MIXED **18 → 16**（SQLite 3、無直接DB 20 不變）。
+
+**缺陷形狀**：同步版把 DELETE 全部下在**本機 SQLite** ⇒ PG 模式下管理員按下按鈕後站上（讀 PG）
+**什麼都沒清掉**，而畫面回「已清除」——後台看起來成功了，這是最糟的一種。
+
+### 73.2 做法
+
+- `db.js`：`RESET_LISTINGS_SQLS`／`RESET_ALL_SQLS`／`RESET_LISTINGS_SETTINGS`／`resetAllSettingsPatch()`
+  抽成常數與純函式（刪哪些表、刪的順序、設定補丁只有一份），同步版改成迴圈跑同一組語句。
+- `siteResetAsync.js`（新）：PG 分支在同一個 `withTransaction` 內跑同一組 DELETE（半途失敗整批回滾，
+  與同步版的 BEGIN/COMMIT 同義），**刪完之後**才把設定補丁寫回（`settings` 本身也在刪除清單裡）；
+  注入式 exec 沒有交易，照同一條連線的順序跑（與其他島嶼同一個處置）。
+  `ensurePgSchema(..., { indexes: false })`：這裡只需要表存在——SQLite 的表達式索引可能用了 PG 沒有的
+  函式（`instr(...)`），建立索引失敗會讓整個清除失敗（live 測試第一版就是這樣紅的）。
+- `server.js`：兩條路由改 async；`/api/reset-listings` 的統計改走 `safeStats()`（PG 統計島嶼）。
+
+### 73.3 測試
+
+- `v3/test/site-reset-async.test.js`（**5 項全綠**，新檔）：PG 分支刪的是 PG 的表、**本機那一份不動**、
+  會員不會被刪；`reset-all` 十張表全清且補丁寫回（站台層級的鍵在 `settings`、會員層級的鍵在
+  `user_settings`——`saveSettings()` 就是這樣分流的）；sqlite 模式回退；兩條路由的接線；
+  **live PG** 在拋棄式 schema 內真的清空（`PG_TEST_URL` gate，本機指向影子站所以只碰自己的 schema）。
+- 變異 **4 條全殺**（`SITERESET_MUTATIONS`）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3979,13 +4012,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十二批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十三批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **18** |
+| MIXED | — | **16** |
 | 無直接DB | — | **20** |
-| PG | 22 | **247** |
-| **缺口（SQLite＋MIXED）** | — | **21** |
+| PG | 22 | **249** |
+| **缺口（SQLite＋MIXED）** | — | **19** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
