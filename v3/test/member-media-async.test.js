@@ -509,3 +509,88 @@ test("非重複的錯誤不得被誤報成 409 tag_exists（與同步版的 catc
   await assert.rejects(() => asyncMod.createMediaTagAsync(43, "乙", { now: NOW, ...PG, exec: failingExec }),
     /connection terminated/);
 });
+
+// ---- 第六十二批：照片上傳（`saveMemberMediaAsync`）-------------------------------
+//
+// 上傳是「**配額檢查 ＋ INSERT** 必須在同一個交易裡」（同步版用 `BEGIN IMMEDIATE` 序列化並發上傳）。
+// PG 版若把配額查在交易外，兩個並行上傳會各自通過檢查 ⇒ 超過方案上限。
+// 另外檔案與 CDN 物件的生命週期要跟著交易成敗（失敗要刪掉剛寫的檔）。
+
+// 上傳用的假處理器：不碰真實影像函式庫，只回固定形狀（這一條測的是**交易與配額**，不是影像處理）。
+const fakeProcessor = async (buffer) => ({
+  main: { buffer: Buffer.from(`main:${buffer.length}`), width: 800, height: 600 },
+  thumb: { buffer: Buffer.from(`thumb:${buffer.length}`), width: 200, height: 150 },
+  mime: "image/jpeg",
+  format: "jpeg",
+  digest: "d".repeat(64),
+});
+const fakeWatermarker = async (buffer) => ({ buffer, watermarked: true });
+
+function countRows(handle, uid) {
+  return Number(handle.prepare("SELECT COUNT(*) AS n FROM member_media WHERE user_id = ? AND deleted_at IS NULL").get(uid).n);
+}
+
+test("上傳：配額沒滿就寫入 PG，配額滿了回 409（而且不得寫入任何列）", async () => {
+  const exec = resetBoth();
+  const UID = 900000010001;
+  for (const table of TABLES) exec.raw.prepare(`DELETE FROM ${table} WHERE 1=1`).run();
+  const before = countRows(exec.raw, UID);
+  assert.equal(before, 0, "前提：這個人還沒有照片");
+
+  const item = await asyncMod.saveMemberMediaAsync(UID, Buffer.from("hello"), {
+    plan: "free", processor: fakeProcessor, watermarker: fakeWatermarker, now: NOW, ...PG, exec,
+  });
+  assert.ok(item && item.id, `要回剛建立的那一列（實際 ${JSON.stringify(item)}）`);
+  assert.equal(item.url.startsWith("/media/lib/"), true, "要回公開網址");
+  assert.equal(countRows(exec.raw, UID), 1, "PG 要有一列");
+  const row = exec.raw.prepare("SELECT * FROM member_media WHERE user_id = ?").get(UID);
+  assert.equal(row.watermarked, 1, "有浮水印要記 1");
+  assert.equal(row.bytes, "main:5".length, "bytes 是浮水印後的大小");
+
+  // 配額：塞滿 free 上限（30）之後再傳一張 ⇒ 409
+  const quota = sync.mediaQuotaForPlan("free");
+  for (let i = countRows(exec.raw, UID); i < quota; i += 1) {
+    seedRow(exec.raw, "member_media", { user_id: UID, storage_key: `pad${i}.jpg`, created_at: NOW.toISOString() });
+  }
+  assert.equal(countRows(exec.raw, UID), quota, "前提：已達上限");
+  const over = await asyncMod.saveMemberMediaAsync(UID, Buffer.from("hello"), {
+    plan: "free", processor: fakeProcessor, watermarker: fakeWatermarker, now: NOW, ...PG, exec,
+  }).then(() => null, (e) => e);
+  assert.equal(over?.status, 409, `配額滿必須是 409（實際 ${over?.status}/${over?.message}）`);
+  assert.equal(over.code, "quota_exceeded");
+  assert.equal(countRows(exec.raw, UID), quota, "被擋下時不得多一列");
+});
+
+test("上傳：交易失敗時檔案與 CDN 物件都要清掉（不得留下孤兒檔）", async () => {
+  const exec = resetBoth();
+  const UID = 900000010002;
+  // 檔案目錄的前後快照：失敗時不得留下孤兒檔（`_o.jpg`／浮水印圖／縮圖都不行）。
+  const { readdirSync } = await import("node:fs");
+  const mediaDir = sync.memberMediaDir();
+  const listDir = () => { try { return readdirSync(mediaDir).sort().join(","); } catch { return ""; } };
+  const beforeFiles = listDir();
+  const failing = async (sql, params = []) => {
+    // 讓 INSERT 失敗（模擬 CDN／DB 出錯），前面的寫檔已經發生 ⇒ 一定要清掉。
+    if (/INSERT INTO member_media/i.test(String(sql))) throw new Error("boom: insert failed");
+    return exec(sql, params);
+  };
+  const error = await asyncMod.saveMemberMediaAsync(UID, Buffer.from("hello"), {
+    plan: "free", processor: fakeProcessor, watermarker: fakeWatermarker, now: NOW, ...PG, exec: failing,
+  }).then(() => null, (e) => e);
+  assert.match(String(error?.message), /boom/, "錯誤要往上丟（fail-closed）");
+  assert.equal(countRows(exec.raw, UID), 0, "不得留下半筆資料");
+  assert.equal(listDir(), beforeFiles, "失敗時不得留下孤兒檔（要與上傳前的目錄內容相同）");
+});
+
+test("上傳：非 postgres 走同步版（不碰傳入的 exec）", async () => {
+  resetBoth();
+  let calls = 0;
+  const boom = async () => { calls += 1; throw new Error("exec 不該被呼叫（sqlite 模式）"); };
+  const UID = 900000010003;
+  const item = await asyncMod.saveMemberMediaAsync(UID, Buffer.from("hello"), {
+    plan: "free", processor: fakeProcessor, watermarker: fakeWatermarker, now: NOW,
+    driver: "sqlite", exec: boom,
+  });
+  assert.ok(item && item.id, "sqlite 模式要真的寫本機");
+  assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
+});

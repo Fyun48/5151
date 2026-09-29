@@ -415,11 +415,12 @@ export function mediaUrlsForTagIds(db, userId, tagIds = []) {
   return listed.items.map((item) => item.url);
 }
 
-function safeName(name) {
+// 匯出給 PG 島嶼逐字重用（檔名清理是安全政策，兩個 driver 不能各寫一份）。
+export function safeName(name) {
   return String(name || "").replace(/[\r\n\t]/g, " ").replace(/[^\w.\-\u4e00-\u9fff ]/g, "").slice(0, 120);
 }
 
-async function watermarkPublicDerivative(watermarker, buffer, dims = {}) {
+export async function watermarkPublicDerivative(watermarker, buffer, dims = {}) {
   const marked = await watermarker(buffer, { ...dims, watermarked: 0 });
   if (!marked?.buffer?.length) {
     const e = new Error("顯示圖處理失敗，未寫入損壞檔案");

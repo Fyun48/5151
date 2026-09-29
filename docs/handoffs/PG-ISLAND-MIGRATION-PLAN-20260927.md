@@ -3465,6 +3465,49 @@ done
   變異 **16 條全殺**（新增 3 條）。
 - `v3/test/route-data-map.test.js`（**12 項全綠**）：合成來源樹守衛擴充到缺陷 (7)。變異 **8 條全殺**。
 
+## 二之負三十二、2026-09-29 第六十二批：照片上傳＋個人資料更新
+
+### 62.1 範圍與投報率
+
+| 路由 | 進入點 | 重點 |
+|---|---|---|
+| `POST /api/media` | `saveMemberMediaAsync`（新） | **配額檢查 ＋ INSERT 必須在同一個 PG 交易** |
+| `PATCH /api/profile` | `updateUserProfileWithLegalAsync`（新） | 只有帶到的欄位才改；法律文案也要讀 PG |
+
+尺規：缺口 **37 → 35**、PG **231 → 233**、MIXED **34 → 32**（SQLite 3 不變）。
+
+### 62.2 這一包的兩個關鍵設計
+
+1. **`POST /api/media`：交易與檔案的生命週期要一起。** 同步版用 `BEGIN IMMEDIATE` 把
+   「配額檢查 ＋ INSERT」包起來（序列化並發上傳）；PG 版用 `withFallbackTx()`（真交易）。
+   若把配額查在交易外，兩個並行上傳會各自通過檢查 ⇒ **超過方案上限**。
+   檔案與 CDN 物件的生命週期跟著交易成敗：失敗要刪掉剛寫的三個檔（含未上 CDN 的 `_o.jpg`）
+   與剛上傳的兩個物件（測試用「目錄內容前後相同」釘住）。
+2. **`PATCH /api/profile`：法律文案不能讀本機。** 同步版 `db.js updateUserProfile()` 會呼叫
+   `withLegalProfile()` → `getLegalCopy()`（讀本機）。PG 版改用 `getLegalCopyAsync()`；
+   回傳欄位與同步版相同（`publicUser` ＋ `publicProfile` ＋ 四個法律欄位 ＋ `legal_version`）。
+
+### 62.3 這一包的四個坑
+
+1. **`profile.js` 的驗證函式是私有的**（`cleanLine`／`mediaUrl`）：PG 島嶼要逐字重用同一組
+   輸入政策（長度、URL 白名單），所以把它們匯出，而不是在島嶼裡重寫一份。
+2. **`memberMediaAsync` 的 helper 來源要分清**：`applySiteWatermark`／`normalizeImage` 來自
+   `imageProcess.js`，`putMemberMediaObjects`／`deleteMemberMediaObjects` 來自
+   `media/mediaStore.js`——不是 `memberMedia.js`（第一版照印象寫，模組載入直接失敗）。
+   `watermarkPublicDerivative`／`safeName` 才是 `memberMedia.js` 的私有函式（已匯出）。
+3. **`publicProfile` 在 `profile.js`**（不是 `members.js`）：`publicUser` 在 `members.js`。
+4. **離線夾具要翻譯 `$n`**：`profileAsync` 的 SQL 用 PG 的位置參數；SQLite 只認 `?`
+   （沿用 `feedback-async` 的夾具作法）。
+
+### 62.4 測試
+
+- `v3/test/profile-async.test.js`（**5 項全綠**）：只改帶到的欄位（其餘沿用舊值、`profile_onboarded_at`
+  要蓋上）、驗證（email 不可改／頭像與 LINE QR 的 URL 白名單／聯絡 Email／訊息與同步版相同）、
+  404／401、`updateUserProfileWithLegalAsync` 的法律文案**來自 PG**、sqlite 模式。變異 **5 條全殺**。
+- `v3/test/member-media-async.test.js`（**24 項全綠**，新增 3 條）：配額沒滿就寫入（含 bytes／
+  watermarked 的落地值）、配額滿 409 且不得多一列、**失敗時不留孤兒檔（目錄內容前後相同）**、
+  sqlite 模式。變異 **17 條全殺**（新增 3 條）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3475,13 +3518,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十一批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十二批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **34** |
+| MIXED | — | **32** |
 | 無直接DB | — | **20** |
-| PG | 22 | **231** |
-| **缺口（SQLite＋MIXED）** | — | **37** |
+| PG | 22 | **233** |
+| **缺口（SQLite＋MIXED）** | — | **35** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
