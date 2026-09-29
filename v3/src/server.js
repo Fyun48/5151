@@ -250,7 +250,7 @@ import {
   saveAdminOauthSettingsAsync,
 } from "./adminSettingsAsync.js";
 // 註冊信箱確認與忘記密碼的 PG 島嶼入口。
-import { confirmVerifyTokenAsync } from "./emailVerifyAsync.js";
+import { confirmVerifyTokenAsync, issueVerifyTokenAsync } from "./emailVerifyAsync.js";
 import { requestTempPasswordAsync } from "./forgotPasswordAsync.js";
 import { recordShareEventAsync } from "./rentalShareGrowthAsync.js";
 // 法律文案（免責聲明／個資說明）的 PG 島嶼入口：一份文案、兩個 store
@@ -1318,15 +1318,17 @@ function publicBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-app.post("/api/register", (req, res) => {
+app.post("/api/register", async (req, res) => {
   try {
     assertHuman(req.body);
-    if (!mailConfigured(getStoredSmtp())) {
+    // SMTP 設定與「帳號 ＋ 同意紀錄 ＋ 開通信」全部走 PG：同步版只寫本機，而登入讀 PG
+    // ⇒ PG 模式下新註冊的會員**登不進去**（第七十五批）。
+    if (!mailConfigured(await getStoredSmtpAsync())) {
       const err = new Error("尚未設定寄信，無法寄出註冊確認信。請聯絡管理員到後台填 SMTP。");
       err.status = 503;
       throw err;
     }
-    const user = registerUserWithConsents({
+    const user = await registerUserWithConsentsAsync({
       email: req.body?.email,
       password: req.body?.password,
       acceptDisclaimer: req.body?.acceptDisclaimer === true,
@@ -1334,9 +1336,9 @@ app.post("/api/register", (req, res) => {
       consents: req.body?.consents,
       emailVerified: false,
     });
-    const issued = issueVerifyToken(user.id);
+    const issued = await issueVerifyTokenAsync(user.id);
     const base = publicBaseUrl(req);
-    queueSystemMail("welcome", user.email, {
+    await queueSystemMailAsync("welcome", user.email, {
       verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,
     });
     res.json({

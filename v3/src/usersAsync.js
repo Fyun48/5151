@@ -13,6 +13,7 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import {
+  DISCLAIMER_VERSION,
   assertMemberDeletable,
   assertMemberRestorable,
   deleteUser as deleteUserSync,
@@ -27,10 +28,25 @@ import {
 } from "./members.js";
 import { ensureUser as ensureUserSync, adminEmailForUser } from "./personalFlags.js";
 import { publicUser } from "./members.js";
-import { hashPassword, normalizeEmail, validatePassword, verifyPassword } from "./password.js";
+import { hashPassword, normalizeEmail, validateEmail, validatePassword, verifyPassword } from "./password.js";
 import { defaultUserId as defaultUserIdSync, resumeIdleIfNeeded as resumeIdleIfNeededSync } from "./db.js";
 import { applyIdleResumeAsync } from "./idlePause.js";
 import { updateUserProfileAsync } from "./profileAsync.js";
+import { assertRegistrationConsentsAsync, recordRegistrationConsentsAsync } from "./memberConsentsAsync.js";
+
+// 交易：註冊要「建帳號 ＋ 寫同意紀錄」在同一個交易內（同步版是 `BEGIN`／`COMMIT`）。
+// 注入式 exec（離線夾具）沒有交易，就照同一條連線的順序跑——與 `settingsAsync.js` 同一個處置。
+async function runInTransaction(options, fn) {
+  if (options.exec) {
+    const injected = (sql, params = []) => Promise.resolve(options.exec(sql, params)).then(normalizeResult);
+    return fn(injected);
+  }
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  return pgDriver.withTransaction(async (client) => {
+    const tx = async (sql, params = []) => normalizeResult(await client.query(toPostgresSql(sql), params));
+    return fn(tx);
+  });
+}
 
 export const USER_BY_ID_SQL = "SELECT * FROM users WHERE id = ?";
 
@@ -139,6 +155,79 @@ export async function setUserPasswordAsync(userId, password, options = {}) {
   return run(options, async (exec) => {
     await exec(USER_SET_PASSWORD_SQL, [hashPassword(validatePassword(password)), id]);
   }, () => setUserPasswordSync(sqliteHandle(), id, password));
+}
+
+// ---- 註冊（`POST /api/register`）----
+//
+// ⚠️ 為什麼重要：同步版把新帳號寫進**本機 SQLite**，而登入讀的是 PG（`verifyLoginAsync`）
+// ⇒ PG 模式下新註冊的會員**登不進去**（與第七十批的改密碼同一類，屬線上就會中）。
+//
+// 語句與 `members.js:registerUser()` 逐字對應；判斷（Email 正規化、密碼強度、已刪除兩次的
+// 上限、未驗證帳號可重送）全部重用同一組純函式與常數，錯誤訊息也逐字相同。
+export const USER_REGISTER_INSERT_SQL = `INSERT INTO users(email, password_hash, role, plan, created_at, accepted_disclaimer_at, disclaimer_version, signup_count, email_verified)
+     VALUES (?, ?, 'member', 'free', ?, ?, ?, 1, ?) RETURNING id`;
+export const USER_REFRESH_UNVERIFIED_SQL = `UPDATE users
+         SET password_hash = ?, accepted_disclaimer_at = ?, disclaimer_version = ?
+         WHERE id = ?`;
+export const USER_REVIVE_DELETED_SQL = `UPDATE users
+       SET password_hash = ?, plan = 'free', accepted_disclaimer_at = ?, disclaimer_version = ?,
+           signup_count = ?, deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '',
+           email_verified = ?
+       WHERE id = ?`;
+export const USER_PRIVACY_STAMP_SQL =
+  "UPDATE users SET profile_privacy_at = COALESCE(NULLIF(profile_privacy_at, ''), ?) WHERE id = ?";
+
+/** `members.js:stampPrivacy()` 的 PG 版（老庫沒有那個欄位時吞掉，與同步版同義）。 */
+async function stampPrivacyAsync(exec, userId, at) {
+  try {
+    await exec(USER_PRIVACY_STAMP_SQL, [at, Number(userId) || 0]);
+  } catch {
+    /* 舊庫還沒有個資欄 */
+  }
+}
+
+/** `members.js:registerUser()` 的 PG 版：吃執行器（呼叫端可能是交易 client）。 */
+export async function registerUserAsync(exec, input = {}, { now = new Date() } = {}) {
+  const { acceptDisclaimer, acceptPrivacy, emailVerified = true } = input || {};
+  if (!acceptDisclaimer) throw Object.assign(new Error("請先閱讀並同意免責聲明"), { status: 400 });
+  if (acceptPrivacy === false) throw Object.assign(new Error("請先閱讀並同意個資說明"), { status: 400 });
+  const key = validateEmail(input?.email);
+  if (!key) throw Object.assign(new Error("請輸入有效的 Email"), { status: 400 });
+  const pass = validatePassword(input?.password);
+  const existing = one((await exec(USER_BY_EMAIL_SQL, [key])).rows);
+  const stamp = new Date(now).toISOString();
+  const verifiedFlag = emailVerified === false ? 0 : 1;
+  if (existing) {
+    const id = Number(existing.id);
+    if (!isUserDeleted(existing) && Number(existing.email_verified) === 0 && emailVerified === false) {
+      await exec(USER_REFRESH_UNVERIFIED_SQL, [hashPassword(pass), stamp, DISCLAIMER_VERSION, id]);
+      await stampPrivacyAsync(exec, id, stamp);
+      return one((await exec(USER_BY_ID_SQL, [id])).rows);
+    }
+    if (!isUserDeleted(existing)) throw Object.assign(new Error("這個 Email 已經註冊過了"), { status: 409 });
+    const signups = Number(existing.signup_count) || 1;
+    if (signups >= 2) throw Object.assign(new Error("這個 Email 已刪除兩次，不能再註冊"), { status: 409 });
+    await exec(USER_REVIVE_DELETED_SQL, [hashPassword(pass), stamp, DISCLAIMER_VERSION, signups + 1, verifiedFlag, id]);
+    await stampPrivacyAsync(exec, id, stamp);
+    return one((await exec(USER_BY_ID_SQL, [id])).rows);
+  }
+  const id = Number(one((await exec(USER_REGISTER_INSERT_SQL, [key, hashPassword(pass), stamp, stamp, DISCLAIMER_VERSION, verifiedFlag])).rows)?.id) || 0;
+  if (!id) throw new Error("註冊寫入沒有回傳 id");
+  await stampPrivacyAsync(exec, id, stamp);
+  return one((await exec(USER_BY_ID_SQL, [id])).rows);
+}
+
+/** `db.js:registerUserWithConsents()` 的 PG 版：同意紀錄與帳號建立要在**同一個交易**。 */
+export async function registerUserWithConsentsAsync(input, { now = new Date(), source = "registration", ...options } = {}) {
+  return run(options, async (exec) => {
+    const docs = await assertRegistrationConsentsAsync(input?.consents, { now, ...options });
+    return runInTransaction(options, async (tx) => {
+      const user = await registerUserAsync(tx, input, { now });
+      const recorded = await recordRegistrationConsentsAsync(user.id, docs, { source, now, ...options, exec: tx });
+      void recorded;
+      return user;
+    });
+  }, async () => (await import("./db.js")).registerUserWithConsents(input, { now, source }));
 }
 
 // `members.js::changeUserPassword()` 的 PG 版（`POST /api/change-password`）。

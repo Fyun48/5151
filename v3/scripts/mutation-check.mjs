@@ -2793,6 +2793,140 @@ const NOTIFYFLUSH_MUTATIONS = [
   },
 ];
 
+// 註冊（帳號 ＋ 同意 ＋ 開通 token）的 PG 島嶼（v3/test/register-async.test.js，第七十五批）。
+//
+// ⚠️ 「帳號與同意紀錄包在同一個交易」那一條**只有原始碼斷言殺得掉**：注入式 exec 沒有交易，
+// 離線夾具驗不出交易邊界（live PG 那邊也只能驗結果、驗不出邊界）。
+const REGISTER_MUTATIONS = [
+  {
+    name: "新帳號的 INSERT 拿掉 RETURNING id（拿不到 id 就整條註冊掛掉）",
+    file: "v3/src/usersAsync.js",
+    from: "VALUES (?, ?, 'member', 'free', ?, ?, ?, 1, ?) RETURNING id`;",
+    to: "VALUES (?, ?, 'member', 'free', ?, ?, ?, 1, ?)`;",
+    expect: "新增帳號：落地欄位與同步版逐鍵相同",
+  },
+  {
+    name: "`emailVerified: false` 被寫成已驗證（註冊完可以直接登入，繞過點信）",
+    file: "v3/src/usersAsync.js",
+    from: "  const verifiedFlag = emailVerified === false ? 0 : 1;",
+    to: "  const verifiedFlag = 1;",
+    expect: "新增帳號：落地欄位與同步版逐鍵相同",
+  },
+  {
+    name: "未驗證帳號的重送條件放寬（已驗證的帳號也會被改密碼）",
+    file: "v3/src/usersAsync.js",
+    from: "    if (!isUserDeleted(existing) && Number(existing.email_verified) === 0 && emailVerified === false) {",
+    to: "    if (!isUserDeleted(existing) && Number(existing.email_verified) === 0) {",
+    expect: "未驗證帳號可重送",
+  },
+  {
+    name: "已刪除兩次的上限放寬（第三次也能註冊）",
+    file: "v3/src/usersAsync.js",
+    from: "    if (signups >= 2) throw Object.assign(new Error(",
+    to: "    if (signups > 2) throw Object.assign(new Error(",
+    expect: "已刪除帳號：復活時 signup_count +1",
+  },
+  {
+    name: "復活不累加 signup_count（兩次上限永遠不會到）",
+    file: "v3/src/usersAsync.js",
+    from: "[hashPassword(pass), stamp, DISCLAIMER_VERSION, signups + 1, verifiedFlag, id]",
+    to: "[hashPassword(pass), stamp, DISCLAIMER_VERSION, signups, verifiedFlag, id]",
+    expect: "已刪除帳號：復活時 signup_count +1",
+  },
+  {
+    name: "復活不清 deleted_at（帳號復活了還是被當成刪除）",
+    file: "v3/src/usersAsync.js",
+    from: "signup_count = ?, deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '',",
+    to: "signup_count = ?, deleted_by = '', deleted_reason = '', deleted_reason_code = '',",
+    expect: "已刪除帳號：復活時 signup_count +1",
+  },
+  {
+    name: "復活不把方案降回 free（延續刪除前的 sponsor）",
+    file: "v3/src/usersAsync.js",
+    from: "       SET password_hash = ?, plan = 'free', accepted_disclaimer_at = ?, disclaimer_version = ?,",
+    to: "       SET password_hash = ?, accepted_disclaimer_at = ?, disclaimer_version = ?,",
+    expect: "已刪除帳號：復活時 signup_count +1",
+  },
+  {
+    name: "新帳號不寫個資戳記（profile_privacy_at 永遠是空的）",
+    file: "v3/src/usersAsync.js",
+    from: '  if (!id) throw new Error("註冊寫入沒有回傳 id");\n  await stampPrivacyAsync(exec, id, stamp);',
+    to: '  if (!id) throw new Error("註冊寫入沒有回傳 id");',
+    expect: "新增帳號：落地欄位與同步版逐鍵相同",
+  },
+  {
+    name: "帳號與同意紀錄不在同一個交易（同意失敗時留下半個帳號）",
+    file: "v3/src/usersAsync.js",
+    from: "    return runInTransaction(options, async (tx) => {",
+    to: "    return (async (tx) => {",
+    // 注入式 exec 沒有交易 ⇒ 只有原始碼斷言殺得掉。
+    expect: "交易版（含同意紀錄）",
+  },
+  {
+    name: "同意紀錄不寫（帳號建了、同意欄全空）",
+    file: "v3/src/usersAsync.js",
+    from: "      const recorded = await recordRegistrationConsentsAsync(user.id, docs, { source, now, ...options, exec: tx });\n      void recorded;",
+    to: "      const recorded = [];\n      void recorded;",
+    expect: "交易版（含同意紀錄）",
+  },
+  {
+    name: "不驗證送來的同意清單（版本過期也照收）",
+    file: "v3/src/usersAsync.js",
+    from: "    const docs = await assertRegistrationConsentsAsync(input?.consents, { now, ...options });",
+    to: "    const docs = input?.consents || [];\n    void assertRegistrationConsentsAsync;",
+    expect: "交易版（含同意紀錄）",
+  },
+  {
+    name: "開通 token 只回傳不寫 PG（會員點信裡的連結是 404）",
+    file: "v3/src/emailVerifyAsync.js",
+    from: "    await exec(USER_ISSUE_VERIFY_SQL, [issued.token, issued.expiresAt, id]);",
+    to: "    void exec;",
+    expect: "開通 token：PG 版寫進 PG",
+  },
+  {
+    name: "開通 token 不把 email_verified 歸零（重新開通後仍是已驗證）",
+    file: "v3/src/emailVerifyAsync.js",
+    from: '  "UPDATE users SET email_verified = 0, verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0, verify_used_at = NULL WHERE id = ?";',
+    to: '  "UPDATE users SET verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0, verify_used_at = NULL WHERE id = ?";',
+    expect: "開通 token：PG 版寫進 PG",
+  },
+  {
+    name: "開通 token 的有效期不算 TTL（立刻過期）",
+    file: "v3/src/emailVerify.js",
+    from: '  return { token: randomBytes(24).toString("hex"), expiresAt: new Date(now + VERIFY_TTL_MS).toISOString() };',
+    to: '  return { token: randomBytes(24).toString("hex"), expiresAt: new Date(now).toISOString() };',
+    expect: "開通 token：PG 版寫進 PG",
+  },
+  {
+    name: "開通 token 仍只寫本機（PG 模式的註冊照樣卡死）",
+    file: "v3/src/emailVerifyAsync.js",
+    from: "  if (!isPg(options)) return issueVerifyTokenSync(sqliteHandle(), id, { now });\n  const issued = newVerifyToken({ now });",
+    to: "  if (true) return issueVerifyTokenSync(sqliteHandle(), id, { now });\n  const issued = newVerifyToken({ now });",
+    expect: "開通 token：PG 版寫進 PG",
+  },
+  {
+    name: "註冊路由改回同步的 registerUserWithConsents（只寫本機）",
+    file: "v3/src/server.js",
+    from: "    const user = await registerUserWithConsentsAsync({",
+    to: "    const user = registerUserWithConsents({",
+    expect: "路由接線",
+  },
+  {
+    name: "註冊路由改回同步的 issueVerifyToken（token 寫本機）",
+    file: "v3/src/server.js",
+    from: "    const issued = await issueVerifyTokenAsync(user.id);",
+    to: "    const issued = issueVerifyToken(user.id);",
+    expect: "路由接線",
+  },
+  {
+    name: "註冊路由的 SMTP 設定改讀本機（PG 站說沒設定、擋掉註冊）",
+    file: "v3/src/server.js",
+    from: "    if (!mailConfigured(await getStoredSmtpAsync())) {",
+    to: "    if (!mailConfigured(getStoredSmtp())) {",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4212,6 +4346,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /notify-queue-parity/.test(testFile) ? NOTIFYQ_MUTATIONS
   : /site-reset-async/.test(testFile) ? SITERESET_MUTATIONS
+  : /register-async/.test(testFile) ? REGISTER_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
