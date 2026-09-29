@@ -3508,6 +3508,85 @@ done
   watermarked 的落地值）、配額滿 409 且不得多一列、**失敗時不留孤兒檔（目錄內容前後相同）**、
   sqlite 模式。變異 **17 條全殺**（新增 3 條）。
 
+## 二之負三十三、2026-09-29 第六十三批：租屋開關寫入 ＋ 啟用時的許願遷移
+
+### 63.1 範圍與投報率
+
+| 路由 | 進入點 | 重點 |
+|---|---|---|
+| `PUT /api/admin/rental-marketplace-flags` | `saveRentalMarketplaceFlagsAsync`（新） | 逐段合併開關；`lifecycle_enabled` 由 false → true 時，**遷移舊許願 ＋ 寫開關必須在同一個交易** |
+
+這一條是 Owner 指定順序的第 (1) 步（八條長尾單點）的**最後一條**。它的兩個卡點就是
+`db.js saveRentalMarketplaceFlags()` 自己，以及它啟用生命週期時會呼叫的
+`demand.js migrateOpenWishesOnActivation()`——兩者都在同一支函式裡，所以一起搬。
+
+尺規：缺口 **35 → 34**、PG **233 → 234**、MIXED **32 → 31**（SQLite 3、無直接DB 20 不變）。
+
+### 63.2 這一包的四個關鍵設計
+
+1. **遷移與開關同一個交易**。同步版是 `BEGIN` ＋ `migrateOpenWishesOnActivation()` ＋
+   `persist()` ＋ `COMMIT`；PG 版用 `runInTransaction()`（注入式 exec 時沒有交易，照同一條連線
+   的順序跑，與 `settingsAsync.js` 同一個處置）。**只寫開關不遷移**＝已存在的遠期許願
+   （`expires_at = 9999-12-31`）永遠不會到期，功能等於沒開。
+2. **欄位探測必須在交易外**。PG 沒有 `PRAGMA table_info()`，所以用
+   `SELECT <column> FROM demand_posts WHERE 1 = 0` 探測；⚠️ PG 的交易內**任何**錯誤都會讓整個交易
+   進入 aborted 狀態（之後每句都 `current transaction is aborted`），所以兩個探測都在 `BEGIN` 之前。
+   而且只有「欄位／表不存在」（42703／42P01／`no such column`）才算沒有——連線錯誤要往上丟，
+   否則 strict 模式會把真正的失敗吞成「這張表沒有那個欄位」（缺陷：靜默不遷移）。
+3. **本機 handle 也要追上**（與 `demandAsync.js expireOpenPostsAsync()` 同一個處置）：島嶼還沒搬完
+   的讀取（`/api/demand/aggregate`、`/api/self-listings` …）看的是節點 SQLite。順序刻意擺在
+   PG 交易**之後**：反過來的話 PG 失敗時本機會留下一批被改短 TTL 的許願，而開關其實沒開。
+4. **兩個 driver 共用同一個 `now`**（同步版也只有一個）：否則 PG 與本機的時間戳差幾毫秒，
+   「兩個 store 逐列相同」這條斷言永遠不成立（第一版就是這樣紅的）。
+
+### 63.3 這一包的六個坑
+
+1. 🚨 **`publicRentalMarketplaceFlags()` 只公開 `lifecycle_enabled`**（其餘旗標一律回 false，是
+   分階段上線的設計）。所以「部分更新不得關掉其他旗標」**不能**用回傳值驗，要看**落地的 blob**
+   與行程內快取（第一版用回傳值斷言 `offer_enabled === true`，測試直接紅）。
+2. 🚨 **「遠期到期」的判準是 `expires_at >= WISH_FAR_EXPIRE`（`9999-12-31`）**，不是「比今天晚」。
+   測試第一版用 `2099-01-01` 當遠期值，`isLegacyWishForActivation()` 直接回 false（遷移 0 列），
+   而測試看起來「有跑」——這種「假的綠」只有逐列比對才看得出來。
+3. **`demand_posts` 有兩條部分唯一索引**（`idx_demand_one_open`／`idx_demand_one_mutable`）：
+   「同一人只能有一則 open」。離線夾具只鏡射**表** DDL（沒有索引），但同步版那一邊是真的資料庫，
+   所以測試資料的 `user_id` 必須每列不同，而且要先種 `users`（本機有開 `PRAGMA foreign_keys`）。
+4. **夾具也要有 `users` 表**：`demand_posts` 的 `FOREIGN KEY (user_id) REFERENCES users(id)` 在
+   父表缺席時，連 `DELETE FROM demand_posts` 都會以 `no such table: main.users` 失敗。
+5. **兩條等價變異（殺不死，已刪除並留下理由）**：把遷移 SELECT 的 `WHERE status = 'open'` 拿掉
+   （純判斷第一行就檢查 status），以及在純判斷裡把 `status` 硬改成 `"open"`（那些列根本不會被
+   SELECT 選進來）。真正殺得死的是「不看標記」——已遷移過的列會被再遷一次、TTL 被往後推。
+6. **`ALTER TABLE … DROP COLUMN` 只能在種完資料之後做**（先 DROP 就種不進去）；
+   而「沒有標記欄位」與「沒有 lifecycle 欄位」是**兩條不同的測試**——只驗其中一條的話，
+   兩個探測結果的變異都會活下來（第一版就是這樣，SURVIVED 2）。
+
+### 63.4 測試
+
+- `v3/test/rental-catalog-async.test.js`（**27 項全綠**，新增 7 條）：部分更新不得關掉其他旗標
+  （落地 blob ＋ 快取 ＋ 落地列都與同步版相同）、啟用時 PG 與本機都要遷移（逐列相同）、
+  沒啟用時不得動任何列、遷移只挑「遠期到期的 open」、沒有標記欄位仍要遷移、沒有 lifecycle 欄位
+  就完全不遷移、strict 失敗時不得先遷移本機。變異 **27 條全殺**（新增 12 條）。
+- `v3/test/rental-flags-live-pg.test.js`（**1 項全綠**，新檔）：在真 PG 上驗四件事——
+  兩句 UPDATE 的 `?`→`$n` 與欄位順序真的能寫、欄位探測在真 PG 上回 true、
+  公開形狀與落地值一致、**用「settings UPSERT 一定失敗」的同一個交易物件注入失敗**，
+  確認同一批的遷移會一起回滾（沒有回滾＝遷移其實跑在交易外）。
+
+### 63.5 本批刻意**沒有**動的相鄰缺陷（同一個寫入路徑上的下一個坑）
+
+`.github/scripts/activate-rental-marketplace-{pra,stage1,stages}-domain.mjs` 這三支**啟用腳本**
+（在容器內以 `docker exec … node /tmp/…-domain.mjs` 執行）仍然只 import `/app/src/db.js` 的
+**同步** `get/saveRentalMarketplaceFlags`。容器現在跑 `DB_DRIVER=postgres` ⇒ 那支同步函式寫的是
+**容器自己的 SQLite**，而站上讀的是 PG：腳本自己的 `getRentalMarketplaceFlags()` 覆核會通過
+（它讀的也是本機），於是**啟用回報成功、旗標其實沒生效**。同一個原因，
+`countDemandPosts()` 的「PRA 前置 0/0」也是讀本機（PG 模式下的假通過）。
+
+這一包沒有順手改的原因：那個改動不是換一行 import——`inspect`／補償路徑／證據檔的覆核全部
+建立在「本機 handle 就是真相」上，要一起改成 async 版本，還要處理 workflow 測試對
+`saveRentalMarketplaceFlags({ wish })` 這種**逐字**斷言（`activate-rental-marketplace-stages-workflow.test.js:233`
+的 `assert.match(domain, /saveRentalMarketplaceFlags\(\{ wish \}\)/)`）與 src manifest 測試。
+建議**單獨一包**處理，範圍是：三支 domain 腳本改用 `*Async` ＋ 讀回也改 PG ＋ 前置計數改 PG ＋
+對應的 workflow 測試逐字斷言更新。在這一包完成之前，PG 模式的啟用請改走
+`PUT /api/admin/rental-marketplace-flags`（本批已搬上 PG）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3518,13 +3597,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十二批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十三批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **32** |
+| MIXED | — | **31** |
 | 無直接DB | — | **20** |
-| PG | 22 | **233** |
-| **缺口（SQLite＋MIXED）** | — | **35** |
+| PG | 22 | **234** |
+| **缺口（SQLite＋MIXED）** | — | **34** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

@@ -115,7 +115,6 @@ import {
   applyRentalCatalogTemplate,
   mutateRentalCatalog,
   getRentalMarketplaceFlags,
-  saveRentalMarketplaceFlags,
   applyWishLifecycleFor,
   runWishLifecycleWorkerTick,
   getSpirit,
@@ -368,6 +367,7 @@ import {
   rentalMatchAdminRulesAsync,
   saveRentalCatalogAsync,
   saveRentalCatalogTemplateAsync,
+  saveRentalMarketplaceFlagsAsync,
 } from "./rentalCatalogAsync.js";
 // 站內公告與贊助活動的 PG 島嶼入口。
 import {
@@ -2330,9 +2330,9 @@ app.get("/api/admin/rental-marketplace-flags", requireAdminApi, async (_req, res
   res.json(publicRentalMarketplaceFlags(await getRentalMarketplaceFlagsAsync()));
 });
 
-app.put("/api/admin/rental-marketplace-flags", requireAdminApi, (req, res) => {
+app.put("/api/admin/rental-marketplace-flags", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveRentalMarketplaceFlags(req.body || {}));
+    res.json(await saveRentalMarketplaceFlagsAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

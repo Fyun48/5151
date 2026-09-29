@@ -1609,6 +1609,81 @@ const RENTALCAT_MUTATIONS = [
     to: "    return runSqlite();",
     expect: "strict：PG 失敗時必須往上丟",
   },
+  // 第六十三批：`PUT /api/admin/rental-marketplace-flags`（開關寫入 ＋ 啟用時的許願遷移）。
+  {
+    name: "開關寫入不讀現值（部分更新把其他旗標全關掉）",
+    file: RC_SRC,
+    from: "  const prev = await readFlagsPg(options);\n  const next = normalizeRentalMarketplaceFlags({",
+    to: "  const prev = normalizeRentalMarketplaceFlags({});\n  const next = normalizeRentalMarketplaceFlags({",
+    expect: "部分更新不得關掉其他旗標",
+  },
+  {
+    name: "開關寫入不逐段合併 wish 區塊（其他許願旗標被換掉）",
+    file: RC_SRC,
+    from: "    wish: { ...prev.wish, ...(src.wish || {}) },",
+    to: "    wish: { ...(src.wish || {}) },",
+    expect: "部分更新不得關掉其他旗標",
+  },
+  {
+    name: "啟用生命週期時不遷移既有許願（遠期到期永遠不會到期）",
+    file: RC_SRC,
+    from: "        if (hasLifecycle) await migrateOpenWishesOnActivationAsync(tx, now, { hasMarker });\n",
+    to: "",
+    expect: "既有許願要在 PG 交易內遷移",
+  },
+  {
+    name: "沒有 lifecycle 欄位時仍然硬跑遷移（對不存在的欄位寫入）",
+    file: RC_SRC,
+    from: "        if (hasLifecycle) await migrateOpenWishesOnActivationAsync(tx, now, { hasMarker });",
+    to: "        await migrateOpenWishesOnActivationAsync(tx, now, { hasMarker });",
+    expect: "沒有 lifecycle 欄位時",
+  },
+  {
+    // 注意兩個**等價變異**（殺不死，已刪除並留下理由）：
+    //   * 拿掉 SELECT 的 `WHERE status = 'open'`：純判斷第一行就檢查 status。
+    //   * 在純判斷裡把 `status` 硬改成 "open"：那些列根本不會被 SELECT 選進來。
+    // 真正會改錯資料的是「不看遷移標記」——已遷移過的列會被再遷一次（TTL 被往後推）。
+    name: "遷移不看標記（已遷移過的許願每次啟用都被再遷一次）",
+    file: RC_SRC,
+    from: "    const patch = migrateOpenWishOnActivation(row, now);\n    if (!patch) continue;",
+    to: '    const patch = migrateOpenWishOnActivation({ ...row, lifecycle_migrated_at: null }, now);\n    if (!patch) continue;',
+    expect: "逐列重用純判斷",
+  },
+  {
+    name: "本機 handle 不追上遷移（還沒搬完的讀取繼續顯示遠期到期）",
+    file: RC_SRC,
+    from: "      migrateOpenWishesOnActivation((await syncDb()).sqliteHandle(), now);\n",
+    to: "",
+    expect: "本機 handle 也要追上",
+  },
+  {
+    name: "欄位探測忽略標記欄位（對沒有標記欄位的舊庫用含標記的 UPDATE）",
+    file: RC_SRC,
+    from: '    const hasMarker = hasLifecycle && (await hasColumnAsync(exec, "lifecycle_migrated_at"));',
+    to: "    const hasMarker = hasLifecycle;",
+    expect: "只有標記欄位缺席時",
+  },
+  {
+    name: "欄位探測一律當成有（真的失敗也被吞成「有這個欄位」）",
+    file: RC_SRC,
+    from: "    if (isMissingRelation(error)) return false;\n    throw error;",
+    to: "    return true;",
+    expect: "沒有 lifecycle 欄位時",
+  },
+  {
+    name: "開關寫入後不更新行程內快取（同步路徑還是舊開關）",
+    file: RC_SRC,
+    from: "      await readStatePg(txOptions);\n    };",
+    to: "    };",
+    expect: "部分更新不得關掉其他旗標",
+  },
+  {
+    name: "開關寫入直接回內部形狀（跳過 publicRentalMarketplaceFlags）",
+    file: RC_SRC,
+    from: "    return publicRentalMarketplaceFlags(next);",
+    to: "    return next;",
+    expect: "部分更新不得關掉其他旗標",
+  },
 ];
 
 // comms（公告／贊助活動）PG 分支的變異集（v3/test/comms-async.test.js）。
