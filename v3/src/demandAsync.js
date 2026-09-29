@@ -54,10 +54,19 @@ import {
   applyReopenInPlaceAsync,
   applyReportHideEffects,
   applyReportHideEffectsAsync,
-  assertMatureAccount,
   assertNotCollapsed,
+  DEMAND_NEW_ACCOUNT_WAIT_MS,
+  userCreatedAt,
   assertPublishable,
   classifyWishPublishState,
+  DEMAND_INSERT_SQL,
+  DEMAND_INSERT_WITH_ID_SQL,
+  demandInsertParams,
+  LIFECYCLE_UPDATE_SQL,
+  lifecyclePatchParams,
+  insertRow,
+  publishExpiry,
+  throwDraftBesideOpen,
   closeDemandPost as closeDemandPostSync,
   contactFields,
   currentRentalMarketplaceFlags,
@@ -90,6 +99,13 @@ import {
 } from "./demand.js";
 // 生命週期的兩個純判斷：`reopen` 要與同步版逐條相同（completed 不能重開、blocked 不能重開）。
 import { isWishLifecycleEnabled } from "./rentalMarketplaceFlags.js";
+// `createDemand()` 的兩個 fixture 判斷（UAT 流程）：registry 在本機，所以傳本機 handle
+//（這是本檔唯一的已知同源落差；帳號成熟度已經改走 `assertMatureAccountAsync()` 讀 PG）。
+import { fixtureNamespaceFromIsolation, isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
+// 「之前有找到房 ⇒ wish_cloned」的計數（`db.js:1868` 的 `bumpAnalytics()` 對應這支）。
+import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+// SQLite 分支要呼叫 `db.js createDemand()`（延遲載入可避免與 db.js 的循環）。
+const createDemandSync = async (userId, input) => (await import("./db.js")).createDemand(userId, input);
 import { mapLegacyLifecycle } from "./wishLifecycle.js";
 // ⚠️ 這個 import 是**語意必需**、不是方便：`getWishConditionsAsync()` 會把 PG 上的
 // marketplace flags 與租屋目錄灌進 `demand.js` 的模組快取，而 `normalizeWishFields()`
@@ -228,15 +244,13 @@ export const POST_STATUS_SQL = "SELECT status FROM demand_posts WHERE id = ?";
 // PG 版把這三個查詢搬上 PG（同一批語句），其餘（登入、24 小時門檻、長度、間隔、每小時上限）
 // 全部沿用 demand.js 的共用判斷與常數，不重寫。
 //
-// ⚠️ 這裡**刻意**沒把 `assertMatureAccount()` 的查詢也寫成 PG 語句：那支吃 handle，
-// 所以 PG 模式下是用本機 SQLite 的 `users.created_at` 判斷。`users` 兩台本來就可能不同步，
-// 但這是**既有**的落差（`readSession` 那一類），不是這一批造成的；要一起解的話屬於
-// session／users 那一條線。先在這裡寫明，不假裝它已經同源。
+// 帳號成熟度走 `assertMatureAccountAsync()`（讀 PG 的 `users`）：本機 handle 只是備援，
+// 否則 PG 模式下「本機沒有那個會員」會讓 24 小時門檻靜默失效。
 export async function addDemandReplyAsync(userId, postId, body, options = {}) {
   return withFallback(options, { write: true }, async (run) => {
     const uid = Number(userId) || 0;
     if (!uid) throw httpError("請先登入才能回覆", 401);
-    assertMatureAccount(sqliteHandle(), uid, new Date(), "回覆");
+    await assertMatureAccountAsync(run, uid, new Date(), "回覆");
     const id = Number(postId) || 0;
     const post = one((await run(POST_STATUS_SQL, [id])).rows);
     if (!post || post.status !== "open") throw httpError("這則許願房已關閉或過期", 400);
@@ -335,13 +349,18 @@ function pgDecorateLoader(run, cache) {
       wish_edited_at: row.updated_at,
     },
     // 惰性補 token：與同步版相同，只有 public_token 是空的時候才會走到（那是 UPDATE）。
+    // ⚠️ 同一個 row 一定要回**同一個** token：`rowsToViews()` 補完之後會**再裝飾一次**
+    //（`row.public_token` 在記憶體裡仍然是空的），如果這裡每次都生一個新的，回傳值會是
+    // 「第二個 token」——那一個從來沒有落地 ⇒ 分享連結 404（2026-09-29 live PG 測試抓到：
+    // 建立許願房後回傳的 token 與 PG 上的那一列不同）。`tokenByRow` 就是那個記憶體。
     ensureToken: (row) => {
-      for (let i = 0; i < 5; i += 1) {
-        const token = createPublicToken();
-        cache.pendingTokenWrites.push({ token, id: Number(row.id) });
-        return token;
-      }
-      return "";
+      const id = Number(row.id);
+      const known = cache.tokenByRow.get(id);
+      if (known) return known;
+      const token = createPublicToken();
+      cache.tokenByRow.set(id, token);
+      cache.pendingTokenWrites.push({ token, id });
+      return token;
     },
     hasColumn: () => true,
   };
@@ -355,6 +374,7 @@ async function hydrateForRows(run, rows, viewerId) {
     authors: new Map(),
     signals: new Map(),
     writtenTokens: new Map(),
+    tokenByRow: new Map(),
     pendingTokenWrites: [],
   };
   const ids = rows.map((row) => Number(row.id));
@@ -632,9 +652,8 @@ export async function publishWishRoomAsync(userId, postId, input = {}, options =
     if (!uid) throw httpError("請先登入", 401);
     await getWishConditionsAsync(options);
     const now = nowOf(options);
-    // 與 `addDemandReplyAsync` 同一個已知落差：帳號成熟度讀的是**本機** `users.created_at`
-    // （`assertMatureAccount()` 吃 handle）。真正同源要跟 session／users 那條線一起解。
-    assertMatureAccount(sqliteHandle(), uid, now, "刊登許願房");
+    // 帳號成熟度讀 PG 的 `users`（本機 handle 只是備援）——反洗版的門檻不能在 PG 站靜默失效。
+    await assertMatureAccountAsync(run, uid, now, "刊登許願房");
     await expireOpenPostsAsync(run, now);
     const id = Number(postId) || 0;
     const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);
@@ -663,7 +682,7 @@ export async function reopenWishRoomAsync(userId, postId, options = {}) {
     if (!uid) throw httpError("請先登入", 401);
     await getWishConditionsAsync(options);
     const now = nowOf(options);
-    assertMatureAccount(sqliteHandle(), uid, now, "重新公開許願房");
+    await assertMatureAccountAsync(run, uid, now, "重新公開許願房");
     await expireOpenPostsAsync(run, now);
     const id = Number(postId) || 0;
     const row = one((await run(POST_OWNER_ROW_SQL, [id])).rows);
@@ -690,4 +709,194 @@ export async function reopenWishRoomAsync(userId, postId, options = {}) {
     applyReopenInPlace(sqliteHandle(), row, fields, now);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => reopenWishRoomSync(sqliteHandle(), userId, postId));
+}
+
+// `createDemandAsync` 專用：把「檢查一人一則 ＋ 插入」放進**同一個交易**
+//（同步版是 `BEGIN IMMEDIATE`）。注入式 exec（離線夾具）沒有交易，就照同一條連線的順序跑
+// ——與 `settingsAsync.js` 的 `runInTransaction()` 同一個處置。
+async function inDemandTransaction(options, fn) {
+  if (options.exec) {
+    const injected = async (sql, params = []) => normalizeResult(await options.exec(sql, params));
+    return fn(injected);
+  }
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  await ensureDemandStoreOnce(pgDriver);
+  return pgDriver.withTransaction(async (client) => {
+    const tx = async (sql, params = []) => normalizeResult(await client.query(toPostgresSql(sql), params));
+    return fn(tx);
+  });
+}
+
+const idOfAsync = async (tx, sql, uid) => Number(one((await tx(sql, [uid])).rows)?.id) || 0;
+
+// `demand.js assertMatureAccount()` 的 PG 版：語意逐條相同（「查不到 created_at 就不擋」），
+// 差別只在**讀 PG 的 `users`**。⚠️ 四條寫入路徑（建立／刊登／重開／回覆）原本都呼叫
+// `assertMatureAccount(sqliteHandle(), …)`：
+// PG 模式下本機沒有那個會員時 `userCreatedAt()` 回空字串 ⇒ `Date.parse()` 是 NaN ⇒ **完全不擋**
+// ——反洗版的 24 小時門檻會靜默失效。本機只是「還沒搬完的備援」，不能拿它當成熟度的來源。
+export const USER_CREATED_AT_SQL = "SELECT created_at FROM users WHERE id = ?";
+export async function assertMatureAccountAsync(run, uid, now, actionLabel) {
+  const row = one((await run(USER_CREATED_AT_SQL, [uid])).rows);
+  const local = row ? String(row.created_at || "") : String(userCreatedAt(sqliteHandle(), uid) || "");
+  const created = Date.parse(local);
+  const at = now instanceof Date ? now.getTime() : new Date(now ?? Date.now()).getTime();
+  if (Number.isFinite(created) && at - created < DEMAND_NEW_ACCOUNT_WAIT_MS) {
+    throw httpError(`新帳號註冊滿 24 小時後才能${actionLabel}，避免洗版`, 403);
+  }
+}
+
+// 本機 handle 追上（同步版 `insertRow()` 會做 `ensurePublicToken()`／`writeLifecycle()`／
+// `syncDemandMatchDistricts()` 與 fixture 註冊——那些都吃 handle）。PG 才是來源，所以鏡像失敗
+// **不能**讓使用者的刊登失敗：撞到既有 id 之類的情況只記一筆警告（`expired`／`aggregated`
+// 那些還沒搬完的讀取看的是本機，所以還是要盡量追上）。
+function mirrorInsertLocal(id, uid, fields, status, now, isolation) {
+  try {
+    insertRow(sqliteHandle(), uid, fields, status, now, {
+      ...(isolation || {}),
+      rowId: id,
+      // fixture 註冊已經在 PG 那一側處理過（同一支 `fixtureNamespaceFromIsolation()`），
+      // 這裡不要再註冊一次；hook 也不再重跑（呼叫端只該看到一次）。
+      registered: true,
+      onBeforeInsert: undefined,
+      onAfterInsert: undefined,
+    });
+  } catch (error) {
+    console.warn("許願房本機鏡像失敗（PG 已寫入）：", error.message);
+  }
+}
+
+// `insertRow()` 的 PG 版：同一組語句與參數順序（`demandInsertParams()`），只差 `RETURNING id`。
+async function insertRowAsync(tx, uid, fields, status, now, isolation) {
+  const fixtureNs = fixtureNamespaceFromIsolation(sqliteHandle(), uid, now, isolation);
+  const forcedId = Number(isolation?.rowId) || 0;
+  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ fixtureNs, rowId: forcedId });
+  const params = demandInsertParams(uid, fields, status, now, fixtureNs);
+  if (forcedId) params.unshift(forcedId);
+  const sql = forcedId ? DEMAND_INSERT_WITH_ID_SQL : DEMAND_INSERT_SQL;
+  const id = forcedId || Number(one((await tx(`${sql} RETURNING id`, params)).rows)?.id) || 0;
+  if (!id) throw new Error("許願房寫入沒有回傳 id");
+  const created = iso(now);
+  if (status === "open") {
+    await tx(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(id, {
+      lifecycle: "active",
+      last_confirmed_at: created,
+      last_active_at: created,
+      continuous_active_from: created,
+    }));
+    // 生命週期開關決定到期時間；開啟時也要補上遷移標記（同步版 `insertRow()` 同一個判斷）。
+    // PG 的 `demand_posts` 由 `ensurePgSchema` 鏡射建表，`lifecycle_migrated_at` 一定在
+    //（同步版要 `hasWishColumn()` 探測，那個探測在 PG 分支是多餘的）。
+    if (isWishLifecycleEnabled(currentRentalMarketplaceFlags())) {
+      await tx("UPDATE demand_posts SET expires_at = ? WHERE id = ?", [publishExpiry(now), id]);
+      await tx("UPDATE demand_posts SET lifecycle_migrated_at = COALESCE(lifecycle_migrated_at, ?) WHERE id = ?", [created, id]);
+    }
+  } else if (status === "draft") {
+    await tx(LIFECYCLE_UPDATE_SQL, lifecyclePatchParams(id, { lifecycle: "draft" }));
+  }
+  mirrorInsertLocal(id, uid, fields, status, now, isolation);
+  if (typeof isolation?.onAfterInsert === "function") isolation.onAfterInsert({ id, fixtureNs });
+  return id;
+}
+
+// ⚠️ PG 的交易一旦撞到 `23505` 就進入 aborted 狀態，**同一個交易內不能再查**（同步版是同一條
+// 連線 catch 之後直接重查）。所以競態的接手放在**新的交易**裡，邏輯與同步版的 catch 分支相同：
+// 先看有沒有搶先建立的草稿（有就地刊登／改寫），再看有沒有 open（就是 active limit）。
+async function recoverCreateRaceAsync(tx, uid, now, options, fields, asDraft, original) {
+  const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);
+  if (draftId) {
+    if (asDraft) {
+      const extra = { updated_at: iso(now) };
+      await tx(WRITE_ROW_SQL, writeRowParams(draftId, fields, extra));
+      writeRow(sqliteHandle(), draftId, fields, extra);
+    } else {
+      const row = one((await tx(POST_OWNER_ROW_SQL, [draftId])).rows);
+      await applyPublishInPlaceAsync(tx, row, fields, now);
+      applyPublishInPlace(sqliteHandle(), row, fields, now);
+    }
+    return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
+  }
+  if (await idOfAsync(tx, OPEN_ID_SQL, uid)) {
+    if (asDraft) throwDraftBesideOpen();
+    throwActiveLimit();
+  }
+  throw original; // 不是「一人一則」的競態（例：public_token 撞號）⇒ 原樣往上丟
+}
+
+// `createDemandPost()`（demand.js:1481）的 PG 版：跑在呼叫端給的交易內。
+async function createDemandPostAsync(tx, uid, input, now, options, fields, asDraft) {
+  const isolation = options.isolation;
+  if (asDraft) {
+    if (await idOfAsync(tx, OPEN_ID_SQL, uid)) throwDraftBesideOpen();
+    const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);
+    if (draftId) {
+      const extra = { updated_at: iso(now) };
+      await tx(WRITE_ROW_SQL, writeRowParams(draftId, fields, extra));
+      writeRow(sqliteHandle(), draftId, fields, extra);
+      return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
+    }
+    const id = await insertRowAsync(tx, uid, fields, "draft", now, isolation);
+    return getDemandPostAsync(id, { viewerId: uid }, nested(options, tx));
+  }
+  if (await idOfAsync(tx, OPEN_ID_SQL, uid)) throwActiveLimit();
+  const draftId = await idOfAsync(tx, DRAFT_ID_SQL, uid);
+  if (draftId) {
+    const row = one((await tx(POST_OWNER_ROW_SQL, [draftId])).rows);
+    await applyPublishInPlaceAsync(tx, row, fields, now);
+    applyPublishInPlace(sqliteHandle(), row, fields, now);
+    return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
+  }
+  const id = await insertRowAsync(tx, uid, fields, "open", now, isolation);
+  return getDemandPostAsync(id, { viewerId: uid }, nested(options, tx));
+}
+
+// 「一人一則」的部分唯一索引（PG 由 `ensureDemandStoreOnce()` 建）。
+export const DRAFT_ID_SQL = "SELECT id FROM demand_posts WHERE user_id = ? AND status = 'draft' ORDER BY id DESC LIMIT 1";
+export const OPEN_ID_SQL = "SELECT id FROM demand_posts WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1";
+// `db.js:1866` 的「之前有找到房的許願 ⇒ 記一次 wish_cloned」。
+export const COMPLETED_PRIOR_SQL = "SELECT 1 AS n FROM demand_posts WHERE user_id = ? AND COALESCE(lifecycle, '') = 'completed' AND id != ? LIMIT 1";
+
+/**
+ * `db.js:1863 createDemand()` 的 PG 版（`POST /api/demand` 與 `POST /api/wish-rooms` 共用的那一支）。
+ *
+ * 順序照抄同步版：成熟度 → 過期掃描 → 欄位淨化 → 交易內「一人一則 ＋ 插入」→ 回傳整則許願房。
+ * ⚠️ 一個**已知同源落差**：fixture 的 `stage1_fixture_registry` 在本機（那是 UAT 專用流程；
+ * HTTP 路由帶不進 `options.isolation`——那個符號鍵不可能從 JSON 來）。
+ * 帳號成熟度已經同源（`assertMatureAccountAsync()` 讀 PG 的 `users`）。
+ */
+export async function createDemandAsync(userId, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  return withFallback(options, { write: true }, async (run) => {
+    if (!uid) throw httpError("請先登入", 401);
+    // 同步版 `db.js:1864` 先 `getWishConditions()`（灌行程內快取）；PG 版對應這一支。
+    await getWishConditionsAsync(options);
+    const now = nowOf(options);
+    const asDraft = input?.draft === true || input?.status === "draft";
+    const maturity = options.maturity || options.isolation;
+    // fixture 的授權判斷讀本機 registry（UAT 專用流程），成熟度則讀 PG 的 `users`（見上）。
+    if (!asDraft && !isFixtureMaturityAuthorized(sqliteHandle(), uid, now, maturity)) {
+      await assertMatureAccountAsync(run, uid, now, "刊登許願房");
+    }
+    await expireOpenPostsAsync(run, now);
+    const fields = await wishFieldsAsync(run, uid, input || {}, {});
+    if (!asDraft) assertPublishable(fields);
+    else if (fields.body && fields.body.length && fields.body.length < 4) {
+      throw httpError("請寫一點找房條件（至少 4 個字）");
+    }
+    let created;
+    try {
+      created = await inDemandTransaction(options, (tx) => createDemandPostAsync(tx, uid, input || {}, now, options, fields, asDraft));
+    } catch (error) {
+      if (!isUniqueUserConstraintError(error)) throw error;
+      created = await inDemandTransaction(options, (tx) => recoverCreateRaceAsync(tx, uid, now, options, fields, asDraft, error));
+    }
+    // 與 `db.js:1866-1874` 同義：非草稿且先前有「已找到房」的許願 ⇒ 記一次 wish_cloned。
+    // 分析失敗不得讓刊登失敗（同步版也是 try/catch 吞掉）。
+    try {
+      if (created && created.status !== "draft") {
+        const prior = (await run(COMPLETED_PRIOR_SQL, [uid, created.id])).rows;
+        if (prior.length) await bumpAnalyticsAsync("wish_cloned", now, 1, nested(options, run));
+      }
+    } catch { /* analytics must not fail publish */ }
+    return created;
+  }, () => createDemandSync(userId, input));
 }

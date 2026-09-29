@@ -495,7 +495,8 @@ function isUniqueUserConstraint(error) {
   return String(error?.code || "") === "23505" && /idx_demand_one_(open|draft|mutable)/i.test(message);
 }
 
-function throwDraftBesideOpen() {
+// 匯出給 PG 版重用：`createDemandAsync` 的分支順序要與同步版完全相同（同一組錯誤）。
+export function throwDraftBesideOpen() {
   throw httpError("已有公開的許願房時不能再存草稿", 409, "wish_mutable_limit");
 }
 
@@ -1279,27 +1280,29 @@ export function nextDemandPostId(db) {
   return (Number(row?.n) || 0) + 1;
 }
 
-function insertRow(db, uid, fields, status, now, isolation) {
-  const created = iso(now);
-  const published = status === "open" ? created : null;
-  const expires = status === "open" ? WISH_FAR_EXPIRE : created;
-  const fixtureNs = fixtureNamespaceFromIsolation(db, uid, now, isolation);
-  const forcedId = Number(isolation?.rowId) || 0;
-  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ fixtureNs, rowId: forcedId });
-  const idSql = forcedId
-    ? `INSERT INTO demand_posts(
-      id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
-      city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
-      transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
-      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    : `INSERT INTO demand_posts(
+// 新許願房的 INSERT：語句與參數順序抽成常數／純函式，讓 PG 版（`demandAsync.createDemandAsync`）
+// 逐字共用——兩個 driver 的欄位對應不可能漂移（與 `WRITE_ROW_SQL`／`writeRowParams` 同一個做法）。
+// PG 版會在字尾接 `RETURNING id`（SQLite 也支援），所以這裡的字串必須停在 VALUES 之後。
+export const DEMAND_INSERT_SQL = `INSERT INTO demand_posts(
       user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
       city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
       transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
       contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-  const params = [
+// fixture 流程會指定 rowId（UAT 的可重現列），所以需要帶 id 的版本。
+export const DEMAND_INSERT_WITH_ID_SQL = `INSERT INTO demand_posts(
+      id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
+      city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
+      transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
+      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/** 新許願房的 INSERT 參數（不含 fixture 的 forced id；呼叫端要自己 `unshift`）。 */
+export function demandInsertParams(uid, fields, status, now, fixtureNs = "") {
+  const created = iso(now);
+  const published = status === "open" ? created : null;
+  const expires = status === "open" ? WISH_FAR_EXPIRE : created;
+  return [
     uid,
     JSON.stringify(fields.districts),
     fields.rent_max,
@@ -1331,8 +1334,18 @@ function insertRow(db, uid, fields, status, now, isolation) {
     JSON.stringify(fields.condition_choices || {}),
     fixtureNs || null,
   ];
+}
+
+// 匯出給 PG 版當「本機 handle 追上」那一半：它含 `ensurePublicToken()`／`writeLifecycle()`／
+// `syncDemandMatchDistricts()` 與 fixture 註冊（那些都吃 handle）。
+export function insertRow(db, uid, fields, status, now, isolation) {
+  const created = iso(now);
+  const fixtureNs = fixtureNamespaceFromIsolation(db, uid, now, isolation);
+  const forcedId = Number(isolation?.rowId) || 0;
+  if (typeof isolation?.onBeforeInsert === "function") isolation.onBeforeInsert({ fixtureNs, rowId: forcedId });
+  const params = demandInsertParams(uid, fields, status, now, fixtureNs);
   if (forcedId) params.unshift(forcedId);
-  const result = db.prepare(idSql).run(...params);
+  const result = db.prepare(forcedId ? DEMAND_INSERT_WITH_ID_SQL : DEMAND_INSERT_SQL).run(...params);
   const id = forcedId || Number(result.lastInsertRowid);
   ensurePublicToken(db, id);
   if (status === "open") {

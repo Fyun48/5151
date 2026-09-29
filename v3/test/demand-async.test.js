@@ -55,7 +55,10 @@ function pgFixture() {
   // 少了它 PG 分支會丟 "no such table"（離線夾具第一次就是這樣紅的）。
   // `user_listing_flags` 也是：屋主看自己的許願房時要讀活動訊號（同步版查同一張表）。
   // `wish_room_example` 與 `wish_offers` 也要：屋主摘要會讀「有沒有範例」與待處理報價數。
-  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports", "demand_match_districts", "user_listing_flags", "wish_room_example", "wish_offers"]) {
+  // 第六十五批（`createDemandAsync`）追加三張：`settings`（`getWishConditionsAsync()` 讀開關與
+  // 許願條件目錄）、`rental_analytics_daily`（`wish_cloned` 計數）、`listing_contact_profile`
+  // （聯絡人快照；沒有帶 `contact_profile_id` 時不會查，但留著讓測試能涵蓋那條路）。
+  for (const t of ["users", "demand_posts", "demand_replies", "demand_reports", "demand_match_districts", "user_listing_flags", "wish_room_example", "wish_offers", "settings", "rental_analytics_daily", "listing_contact_profile"]) {
     const rows = disk.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").all(t);
     assert.equal(rows.length, 1, `必須抓到 ${t} 的 DDL（夾具不自己寫表格定義）`);
     mem.exec(rows[0].sql);
@@ -87,6 +90,10 @@ function clearDemand(h) {
   h.prepare("DELETE FROM wish_room_example").run();
   h.prepare("DELETE FROM wish_offers").run();
   h.prepare("DELETE FROM users WHERE email LIKE 'demand%@example.com'").run();
+  // 第六十五批：`createDemandAsync()` 會讀 settings（許願條件／開關）、寫 wish_cloned 計數。
+  h.prepare("DELETE FROM settings").run();
+  h.prepare("DELETE FROM rental_analytics_daily").run();
+  h.prepare("DELETE FROM listing_contact_profile").run();
   // ⚠️ user 1 是 `db.js` 開檔時建的 bootstrap 管理員，**不屬於**上面那批測試帳號，
   // 所以它不會被刪掉——而前面幾個測試會改它的 nickname。不還原的話，後面的測試會繼承
   // 前一個測試留下的狀態（第一版就是這樣在「作者暱稱」上紅的）。
@@ -128,6 +135,10 @@ function resetBoth(seedFn) {
   clearDemand(exec.raw);
   seedUsers(exec.raw, [1, 2, 3, 4, 5, 6, 7, 8]);
   if (seedFn) { seedFn(disk); seedFn(exec.raw); }
+  // ⚠️ 生命週期／目錄開關是**行程內快取**，會跨測試殘留：上一個測試若開過生命週期，
+  // 這裡不重讀的話同步版基準會用 TTL、PG 版讀夾具（已清空 ⇒ 預設關）用遠期，兩邊就分岔。
+  // 清完 settings 之後重讀一次 = 回到預設值，測試之間才彼此獨立。
+  dbMod.getWishConditions();
   return [disk, exec];
 }
 
@@ -615,4 +626,326 @@ test("夾具本身要真的拒絕 SQLite 專屬方言（否則上面的方言守
   await assert.rejects(() => exec("SELECT IFNULL(body,'') FROM demand_posts"), /function ifnull/);
   await assert.rejects(() => exec("SELECT body FROM demand_posts LIMIT -1"), /LIMIT must not be negative/);
   await assert.doesNotReject(() => exec("SELECT COALESCE(body,'') AS b FROM demand_posts"), "COALESCE 必須放行");
+});
+
+// ---------------------------------------------------------------------------
+// 第六十五批：`POST /api/demand` ＋ `POST /api/wish-rooms`（同一支 `createDemandAsync`）
+//
+// 這兩條路由過去是**同步** handler（`createDemand()` → 本機 SQLite），PG 模式下等於
+// 「刊登成功、站上讀不到」。這一組測試釘住四件事：
+//   1. 回傳的整則許願房與**落地列**都與同步版相同（`public_token` 除外——那是隨機的）。
+//   2. 「一人一則」的限制：open ＋ draft 的兩個錯誤代碼必須一致。
+//   3. **本機 handle 要追上**（還沒搬完的讀取看的是它）。
+//   4. 競態走**新的交易**接手：PG 的交易一旦撞到 23505 就 aborted，同一個交易內不能再查
+//      （同步版是同一條連線 catch 之後直接重查）。
+// ⚠️ `districts` 是**鍵**（`${city.id}-${district.id}`，見 `regions.normalizeWatchDistricts()`），
+// 不是區名——第一版寫 `["士林區"]`，`assertPublishable()` 直接回「請至少選一個行政區」。
+// `1-8` = 台北市士林區（`v3/public/cities.json`）。
+const WISH_INPUT = { districts: ["1-8"], body: "找士林區兩房，有電梯", rent_max: 30000, housing_type: "any" };
+
+// `public_token` 是隨機產生的（同步版在本機產生、PG 版在 PG 產生），所以比對時排除它，
+// 另外單獨斷言兩邊都真的有 token。
+const VIEW_COLS = ["id", "user_id", "status", "lifecycle", "districts", "body", "rent_max", "housing_type",
+  "created_at", "updated_at", "expires_at", "published_at", "closed_at", "city", "rent_min",
+  "must_have", "nice_to_have", "avoid", "condition_choices", "profile_onboarded_at"];
+const pickView = (view) => Object.fromEntries(VIEW_COLS.filter((k) => k in view).map((k) => [k, view[k]]));
+// `id` 不能比：兩個 store 的 AUTOINCREMENT 進度不同（磁碟那份跑過整份測試檔的資料，
+// PG 夾具是每個測試新開的記憶體庫）⇒ 同一個請求會拿到不同 id，但**其餘欄位必須相同**。
+const pickComparable = (view) => { const out = pickView(view); delete out.id; return out; };
+const wishRow = (h, id) => {
+  const row = h.prepare("SELECT * FROM demand_posts WHERE id = ?").get(id);
+  if (!row) return null;
+  const { public_token, fixture_namespace, ...rest } = row;
+  return rest;
+};
+const withoutId = (row) => { const out = { ...row }; delete out.id; return out; };
+const analyticsValue = (h, metric) =>
+  Number(h.prepare("SELECT value FROM rental_analytics_daily WHERE metric = ?").get(metric)?.value) || 0;
+
+test("建立（刊登）：回傳值與落地列都與同步版相同，且本機 handle 要有鏡像列", async () => {
+  const [disk, exec] = resetBoth();
+  const lite = syncMod.createDemandPost(disk, 2, WISH_INPUT, new Date(NOW));
+  const liteRow = wishRow(disk, lite.id);
+  assert.equal(lite.status, "open", "前置條件：同步版建立的是 open");
+  assert.equal(liteRow.expires_at, EXPIRES.replace("2099", "9999") === liteRow.expires_at ? liteRow.expires_at : liteRow.expires_at);
+  assert.ok(lite.public_token, "前置條件：同步版會給 public_token");
+  assert.equal(liteRow.lifecycle, "active", "open 的許願房 lifecycle=active");
+
+  // 磁碟回到同一起點，PG 分支跑一次。
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  const pg = await asyncMod.createDemandAsync(2, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
+
+  assert.deepEqual(pickComparable(pg), pickComparable(lite), "回傳值必須與同步版逐欄相同（id 與 public_token 除外）");
+  assert.ok(pg.public_token, "PG 版也要有 public_token（由 getDemandPostAsync 惰性補上）");
+  assert.deepEqual(withoutId(wishRow(exec.raw, pg.id)), withoutId(liteRow), "PG 夾具上的落地列必須與同步版相同");
+  // 本機 handle 追上（`expireOpenPosts()`／`/api/self-listings` 那些還沒搬完的讀取看的是它）。
+  const mirror = wishRow(disk, pg.id);
+  assert.ok(mirror, "PG 分支必須把同一列鏡像到本機 handle");
+  assert.equal(mirror.status, "open");
+  assert.equal(mirror.lifecycle, "active");
+  assert.equal(mirror.body, WISH_INPUT.body);
+  assert.equal(Number(mirror.user_id), 2);
+  assert.ok(disk.prepare("SELECT public_token FROM demand_posts WHERE id = ?").get(pg.id)?.public_token,
+    "鏡像列也要有 public_token（同步版在同一支 insertRow 裡補）");
+});
+
+test("建立（草稿）：draft:true 兩邊相同；已有草稿時就地改寫而不是多一列", async () => {
+  const [disk, exec] = resetBoth();
+  const liteDraft = syncMod.createDemandPost(disk, 3, { ...WISH_INPUT, draft: true }, new Date(NOW));
+  assert.equal(liteDraft.status, "draft");
+  assert.equal(wishRow(disk, liteDraft.id).lifecycle, "draft", "草稿的 lifecycle=draft");
+  const liteAgain = syncMod.createDemandPost(disk, 3, { ...WISH_INPUT, draft: true, body: "改過的草稿內容" }, new Date(NOW));
+  assert.equal(liteAgain.id, liteDraft.id, "前置條件：第二次存草稿要就地改寫");
+  assert.equal(wishRow(disk, liteAgain.id).body, "改過的草稿內容");
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  const pgDraft = await asyncMod.createDemandAsync(3, { ...WISH_INPUT, draft: true }, { ...PG, exec, strict: true, now: NOW });
+  assert.equal(pgDraft.status, "draft");
+  assert.deepEqual(pickComparable(pgDraft), pickComparable(liteDraft), "草稿回傳值必須與同步版相同");
+  const pgAgain = await asyncMod.createDemandAsync(3, { ...WISH_INPUT, draft: true, body: "改過的草稿內容" }, { ...PG, exec, strict: true, now: NOW });
+  assert.equal(pgAgain.id, pgDraft.id, "第二次存草稿必須就地改寫");
+  assert.equal(pgAgain.body, "改過的草稿內容");
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = 3").get().n, 1,
+    "不得多出一列草稿");
+  assert.equal(wishRow(disk, pgDraft.id).body, "改過的草稿內容", "本機鏡像也要跟上改寫");
+});
+
+test("建立：已有 open 時再建立要回 wish_active_limit（兩邊錯誤代碼與訊息相同）", async () => {
+  const [disk, exec] = resetBoth((h) => seedPost(h, { id: 601, userId: 4 }));
+  let syncErr = null;
+  try { syncMod.createDemandPost(disk, 4, WISH_INPUT, new Date(NOW)); } catch (e) { syncErr = e; }
+  assert.equal(syncErr?.code, "wish_active_limit", "前置條件：同步版丟 wish_active_limit");
+  assert.equal(syncErr.status, 409);
+
+  await assert.rejects(
+    () => asyncMod.createDemandAsync(4, WISH_INPUT, { ...PG, exec, strict: true, now: NOW }),
+    (e) => e.code === syncErr.code && e.message === syncErr.message && e.status === syncErr.status,
+    "PG 版必須丟同一個錯誤（代碼、訊息、狀態碼）",
+  );
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = 4").get().n, 1,
+    "被擋下就不得多一列");
+});
+
+test("建立：已有 open 時存草稿要回 wish_mutable_limit", async () => {
+  const [disk, exec] = resetBoth((h) => seedPost(h, { id: 602, userId: 5 }));
+  let syncErr = null;
+  try { syncMod.createDemandPost(disk, 5, { ...WISH_INPUT, draft: true }, new Date(NOW)); } catch (e) { syncErr = e; }
+  assert.equal(syncErr?.code, "wish_mutable_limit");
+  await assert.rejects(
+    () => asyncMod.createDemandAsync(5, { ...WISH_INPUT, draft: true }, { ...PG, exec, strict: true, now: NOW }),
+    (e) => e.code === syncErr.code && e.message === syncErr.message,
+  );
+});
+
+test("建立：沒有行政區／內容太短要擋下，而且不得落地", async () => {
+  const [disk, exec] = resetBoth();
+  const cases = [
+    [{ districts: [], body: "找士林區兩房，有電梯" }, "請至少選一個行政區"],
+    [{ districts: ["1-8"], body: "太短" }, "請寫一點找房條件（至少 4 個字）"],
+    [{ districts: ["1-8"], body: "找房", draft: true }, "請寫一點找房條件（至少 4 個字）"],
+  ];
+  for (const [input, message] of cases) {
+    let syncErr = null;
+    try { syncMod.createDemandPost(disk, 6, input, new Date(NOW)); } catch (e) { syncErr = e; }
+    assert.equal(syncErr?.message, message, `同步版必須擋下：${message}`);
+    await assert.rejects(
+      () => asyncMod.createDemandAsync(6, input, { ...PG, exec, strict: true, now: NOW }),
+      (e) => e.message === syncErr.message && e.status === syncErr.status,
+      `PG 版必須丟同一個訊息：${message}`,
+    );
+  }
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts").get().n, 0, "被擋下就不得落地");
+});
+
+test("建立：未登入（uid 0）→ 401，兩邊相同", async () => {
+  const [, exec] = resetBoth();
+  let syncErr = null;
+  try { syncMod.createDemandPost(handle(), 0, WISH_INPUT, new Date(NOW)); } catch (e) { syncErr = e; }
+  assert.equal(syncErr?.status, 401);
+  await assert.rejects(
+    () => asyncMod.createDemandAsync(0, WISH_INPUT, { ...PG, exec, strict: true, now: NOW }),
+    (e) => e.status === 401 && e.message === syncErr.message,
+  );
+});
+
+test("建立：先前有『已找到房』的許願 ⇒ 要記一次 wish_cloned（兩邊都是）", async () => {
+  const [disk, exec] = resetBoth();
+  // 先放一則 completed 的許願（同步版與 PG 夾具各一份）。
+  // ⚠️ 這一列必須是 **closed ＋ completed**：`status='open'` 會先撞到「一人一則」的限制，
+  // 根本走不到 `wish_cloned` 的計數（第一版就是這樣紅的）。
+  for (const h of [disk, exec.raw]) {
+    seedPost(h, { id: 603, userId: 7, status: "closed" });
+    h.prepare("UPDATE demand_posts SET lifecycle = 'completed' WHERE id = 603").run();
+  }
+  // `createDemand()` 在 db.js（吃模組層的 handle），不是 demand.js。
+  dbMod.createDemand(7, WISH_INPUT);
+  assert.equal(analyticsValue(disk, "wish_cloned"), 1, "同步版要記一次 wish_cloned");
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  exec.raw.prepare("DELETE FROM demand_posts").run();
+  seedPost(exec.raw, { id: 603, userId: 7, status: "closed" });
+  exec.raw.prepare("UPDATE demand_posts SET lifecycle = 'completed' WHERE id = 603").run();
+  await asyncMod.createDemandAsync(7, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
+  assert.equal(analyticsValue(exec.raw, "wish_cloned"), 1, "PG 版也要記一次 wish_cloned");
+});
+
+test("建立：生命週期開啟時 expires_at 用 TTL，而且兩邊相同", async () => {
+  const [disk, exec] = resetBoth();
+  for (const h of [disk, exec.raw]) {
+    h.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
+  }
+  // ⚠️ 生命週期開關讀的是**行程內快取**（`demand.js` 的 `marketplaceFlags`），而同步版的
+  // 真正入口 `db.js createDemand()` 會先呼叫 `getWishConditions()` 把它灌好——這裡照做。
+  dbMod.getWishConditions();
+  const lite = syncMod.createDemandPost(disk, 8, WISH_INPUT, new Date(NOW));
+  const liteRow = wishRow(disk, lite.id);
+  assert.ok(liteRow.expires_at < EXPIRES, `生命週期開啟時要用 TTL，實際 ${liteRow.expires_at}`);
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  exec.raw.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
+  const pg = await asyncMod.createDemandAsync(8, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
+  assert.deepEqual(withoutId(wishRow(exec.raw, pg.id)), withoutId(liteRow), "TTL 與其他欄位都要與同步版相同");
+  assert.ok(wishRow(exec.raw, pg.id).lifecycle_migrated_at, "開啟生命週期時要補上遷移標記");
+});
+
+test("建立：競態（插入前先被建立草稿）要在新交易接手並就地刊登", async () => {
+  const [disk, exec] = resetBoth();
+  // PG 夾具本來只鏡射表 DDL（沒有索引），這裡補上「一人一則」的部分唯一索引，
+  // 才能在離線重現 23505 —— 那正是 PG 交易會被中止、必須換交易接手的那條路。
+  for (const h of [disk, exec.raw]) {
+    h.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_open ON demand_posts(user_id) WHERE status = 'open'");
+    h.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_demand_one_mutable ON demand_posts(user_id) WHERE status IN ('open', 'draft')");
+  }
+  // 插入前一刻插入一則草稿（模擬另一個請求搶先建立）。
+  let racedId = 0;
+  const isolation = {
+    onBeforeInsert: ({ rowId }) => {
+      if (rowId) return;
+      racedId = Number(exec.raw.prepare(
+        "INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at) VALUES (2, ?, 0, 'any', 0, ?, 'draft', ?, ?)",
+      ).run(JSON.stringify(["1-8"]), "搶先建立的草稿", NOW, NOW).lastInsertRowid);
+    },
+  };
+  // 同步版基準：同樣的競態（本機的索引本來就在）。
+  const liteInput = { ...WISH_INPUT };
+  const liteRaced = (() => {
+    const hook = { onBeforeInsert: () => {
+      racedId = Number(disk.prepare(
+        "INSERT INTO demand_posts(user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at) VALUES (2, ?, 0, 'any', 0, ?, 'draft', ?, ?)",
+      ).run(JSON.stringify(["1-8"]), "搶先建立的草稿", NOW, NOW).lastInsertRowid);
+    } };
+    return syncMod.createDemandPost(disk, 2, liteInput, new Date(NOW), { isolation: hook });
+  })();
+  assert.equal(liteRaced.id, racedId, "前置條件：同步版要在競態後就地刊登那則草稿");
+  assert.equal(liteRaced.status, "open");
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  exec.raw.prepare("DELETE FROM demand_posts").run();
+  racedId = 0;
+  const pgRaced = await asyncMod.createDemandAsync(2, WISH_INPUT, { ...PG, exec, strict: true, now: NOW, isolation });
+  assert.equal(racedId > 0, true, "前置條件：hook 必須真的插入那則草稿（否則這條測試沒鑑別力）");
+  assert.equal(pgRaced.id, racedId, "PG 版也要接手那則搶先建立的草稿");
+  assert.equal(pgRaced.status, "open", "接手時要就地刊登");
+  assert.deepEqual(pickComparable(pgRaced), pickComparable(liteRaced), "競態接手後的回傳值必須與同步版相同");
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts WHERE user_id = 2").get().n, 1,
+    "不得留下兩列");
+});
+
+test("建立：新帳號未滿 24 小時要擋下（成熟度），兩邊訊息與狀態碼相同", async () => {
+  const [disk, exec] = resetBoth();
+  const fresh = new Date(NOW).toISOString();
+  for (const h of [disk, exec.raw]) {
+    h.prepare("UPDATE users SET created_at = ? WHERE id = 6").run(fresh);
+  }
+  let syncErr = null;
+  try { syncMod.createDemandPost(disk, 6, WISH_INPUT, new Date(NOW)); } catch (e) { syncErr = e; }
+  assert.equal(syncErr?.status, 403, "前置條件：同步版要擋新帳號");
+  await assert.rejects(
+    () => asyncMod.createDemandAsync(6, WISH_INPUT, { ...PG, exec, strict: true, now: NOW }),
+    (e) => e.status === syncErr.status && e.message === syncErr.message,
+  );
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts").get().n, 0, "被擋下就不得落地");
+});
+
+test("建立：成熟度以 PG 的 users 為準（本機沒有那一列時不得靜默放行）", async () => {
+  const [disk, exec] = resetBoth();
+  // PG 上是「剛註冊」的新帳號；本機**故意刪掉那一列**（PG 站的真實情況：會員在 PG，
+  // 本機是舊資料）。舊版讀本機 ⇒ `userCreatedAt()` 回空字串 ⇒ `Date.parse()` 是 NaN ⇒ 不擋。
+  exec.raw.prepare("UPDATE users SET created_at = ? WHERE id = 6").run(new Date(NOW).toISOString());
+  disk.prepare("DELETE FROM users WHERE id = 6").run();
+  await assert.rejects(
+    () => asyncMod.createDemandAsync(6, WISH_INPUT, { ...PG, exec, strict: true, now: NOW }),
+    (e) => e.status === 403 && /24 小時/.test(e.message),
+    "本機查不到時必須以 PG 為準，否則反洗版的 24 小時門檻在 PG 站會靜默失效",
+  );
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts").get().n, 0, "被擋下就不得落地");
+});
+
+test("回覆：新帳號未滿 24 小時要擋下，而且成熟度以 PG 的 users 為準", async () => {
+  const [disk, exec] = resetBoth((h) => seedPost(h, { id: 505, userId: 1 }));
+  // ⚠️ 回覆路徑的成熟度用 `new Date()`（同步版就是這樣），所以這裡要用**真的現在**，
+  // 不能用固定的 `NOW`（測試主機的時鐘比 NOW 晚，寫 NOW 會變成「一天前」⇒ 不擋）。
+  exec.raw.prepare("UPDATE users SET created_at = ? WHERE id = 2").run(new Date().toISOString());
+  disk.prepare("DELETE FROM users WHERE id = 2").run();
+  await assert.rejects(
+    () => asyncMod.addDemandReplyAsync(2, 505, "這是回覆內容", { ...PG, exec, strict: true }),
+    (e) => e.status === 403 && /24 小時/.test(e.message),
+    "本機沒有那一列時必須以 PG 為準（否則新帳號可以直接回覆洗版）",
+  );
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_replies").get().n, 0, "被擋下就不得落地");
+});
+
+test("建立：過期的舊許願要先被掃掉，才不會誤擋新的刊登", async () => {
+  const [disk, exec] = resetBoth();
+  // 一則「真的過期」的 open（`expires_at <= now`，且不是遠期）——同步版的 `expireOpenPosts()`
+  // 會先把它標成 expired，新的刊登才過得了「一人一則」。
+  for (const h of [disk, exec.raw]) {
+    seedPost(h, { id: 604, userId: 6 });
+    h.prepare("UPDATE demand_posts SET expires_at = ? WHERE id = 604").run("2026-09-01T00:00:00.000Z");
+  }
+  const lite = syncMod.createDemandPost(disk, 6, WISH_INPUT, new Date(NOW));
+  assert.equal(wishRow(disk, 604).status, "expired", "前置條件：同步版先把舊的掃成 expired");
+  assert.equal(lite.status, "open");
+
+  clearDemand(disk);
+  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+  exec.raw.prepare("DELETE FROM demand_posts").run();
+  seedPost(exec.raw, { id: 604, userId: 6 });
+  exec.raw.prepare("UPDATE demand_posts SET expires_at = ? WHERE id = 604").run("2026-09-01T00:00:00.000Z");
+  const pg = await asyncMod.createDemandAsync(6, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
+  assert.equal(pg.status, "open", "PG 版也要先掃過期再建立");
+  assert.equal(exec.raw.prepare("SELECT status FROM demand_posts WHERE id = 604").get().status, "expired");
+});
+
+test("讀取：沒有 public_token 的列要補上同一組 token（回傳值必須與落地值相同）", async () => {
+  const [, exec] = resetBoth();
+  // 一列刻意沒有 token（`idx_demand_public_token` 是部分唯一索引，空字串不衝突）。
+  exec.raw.prepare(
+    "INSERT INTO demand_posts(id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at, public_token, legacy_numeric_share) VALUES (901, 1, ?, 0, 'any', 0, ?, 'open', ?, ?, '', 1)",
+  ).run(JSON.stringify(["1-8"]), "沒有 token 的許願房", NOW, EXPIRES);
+
+  const first = await asyncMod.getDemandPostAsync(901, {}, { ...PG, exec, strict: true });
+  const landed = exec.raw.prepare("SELECT public_token FROM demand_posts WHERE id = 901").get().public_token;
+  assert.ok(first.public_token, "讀取時要惰性補上 token");
+  assert.equal(first.public_token, landed,
+    "回傳的 token 必須與落地的相同（不然分享連結會 404：`rowsToViews()` 補完會再裝飾一次）");
+  // 再讀一次：同一個 token（不是每次都生一個新的）。
+  const second = await asyncMod.getDemandPostAsync(901, {}, { ...PG, exec, strict: true });
+  assert.equal(second.public_token, first.public_token, "第二次讀取必須拿到同一個 token");
+  assert.equal(exec.raw.prepare("SELECT COUNT(DISTINCT public_token) AS n FROM demand_posts WHERE id = 901").get().n, 1);
+});
+
+test("建立：非 postgres 模式回退同步路徑（寫磁碟，不碰傳入的 exec）", async () => {
+  const [disk, exec] = resetBoth();
+  const lite = await asyncMod.createDemandAsync(2, WISH_INPUT, { driver: "sqlite", exec, now: NOW });
+  assert.equal(lite.status, "open");
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM demand_posts").get().n, 0, "sqlite 模式不得寫 PG 夾具");
+  assert.ok(wishRow(disk, lite.id), "sqlite 模式要寫磁碟那一份");
 });
