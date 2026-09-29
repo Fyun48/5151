@@ -3349,6 +3349,85 @@ const WATCHLIMITS_MUTATIONS = [
   },
 ];
 
+// Ops 遞送 worker ＋ 傳輸佇列（第五十七批）的變異集。
+const OUTBOX_SRC = "v3/src/feedbackOutboxAsync.js";
+const OPSDL_SRC = "v3/src/opsDeliveryAsync.js";
+const OUTBOXASYNC_MUTATIONS = [
+  {
+    name: "claim 不用 FOR UPDATE SKIP LOCKED（多節點會重複認領）",
+    file: OUTBOX_SRC,
+    from: "      LIMIT $3\n      FOR UPDATE SKIP LOCKED\n   )\n   RETURNING *`;",
+    to: "      LIMIT $3\n   )\n   RETURNING *`;",
+    expect: "原子認領",
+  },
+  {
+    // 兩段式（先 SELECT 候選、再 UPDATE 認領）在 PG 上有窗口：SELECT 的鎖一結束就放掉，
+    // 另一個 worker 會看到同一批還是 pending ⇒ 重複認領（live 併發測試實測 30 筆被認領 31 次）。
+    name: "claim 改回兩段式（先查候選、再認領）＝重複認領",
+    file: OUTBOX_SRC,
+    from: "  return withFallback(options, async (exec) => {\n    const rows = (await exec(CLAIM_OUTBOX_SQL, [nowIso, staleBefore, cap])).rows;\n    return rows.map((row) => ({ ...row, attempts: Number(row.attempts) || 0 }));\n  }, () => claimOutboxBatchSync(sqliteHandle(), { limit, now, staleMs }), { write: true });",
+    to: "  return withFallback(options, async (exec) => {\n    const candidates = (await exec(CLAIM_OUTBOX_SQL, [nowIso, staleBefore, cap])).rows;\n    const ids = candidates.map((row) => Number(row.id));\n    const rows = (await exec(CLAIM_OUTBOX_SQL, [nowIso, staleBefore, cap])).rows.filter((row) => ids.includes(Number(row.id)));\n    return rows.map((row) => ({ ...row, attempts: Number(row.attempts) || 0 }));\n  }, () => claimOutboxBatchSync(sqliteHandle(), { limit, now, staleMs }), { write: true });",
+    expect: "原子認領",
+  },
+  {
+    name: "claim 忽略 stale 視窗（crash 留下的 sending 永遠救不回來）",
+    file: OUTBOX_SRC,
+    from: "  const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));\n  const cap = Math.max(1, Math.min(Number(limit) || 20, 200));",
+    to: "  const staleBefore = nowIso;\n  const cap = Math.max(1, Math.min(Number(limit) || 20, 200));",
+    expect: "原子認領",
+  },
+  {
+    name: "失敗次數門檻差一（少送一次就進 dead-letter）",
+    file: OUTBOX_SRC,
+    from: "  if (attempts >= max) {",
+    to: "  if (attempts > max) {",
+    expect: "markOutboxFailureAsync",
+  },
+  {
+    name: "stats 不把 bigint 轉數字（total 變成字串串接）",
+    file: OUTBOX_SRC,
+    from: "      out.total += Number(row.n) || 0;",
+    to: "      out.total += row.n;",
+    expect: "outboxStatsAsync",
+  },
+  {
+    name: "精簡 payload 不保留 sha256（事後無法追查）",
+    file: OUTBOX_SRC,
+    from: "      const slim = JSON.stringify({ compacted: true, feedback_id: row.feedback_id, payload_sha256: payloadHashHex(row.payload) });",
+    to: "      const slim = JSON.stringify({ compacted: true, feedback_id: row.feedback_id });",
+    expect: "compactSentOutboxPayloadsAsync",
+  },
+  {
+    // 停止鍵是**原生字串**：用 truthy 判斷會讓 "0" 也被當成停止（永遠送不出去）。
+    name: "停止鍵用 truthy 判斷（'0' 也被當成停止）",
+    file: OPSDL_SRC,
+    from: "    return String(row?.value || \"\") === \"1\";",
+    to: "    return Boolean(row?.value);",
+    expect: "只有原始字串 '1' 算停止",
+  },
+  {
+    name: "停止鍵用 JSON.stringify 寫入（開關永遠失效）",
+    file: OPSDL_SRC,
+    from: "    await exec(STOP_UPSERT_SQL, [OPS_DELIVERY_STOP_KEY, value]);",
+    to: "    await exec(STOP_UPSERT_SQL, [OPS_DELIVERY_STOP_KEY, JSON.stringify(value)]);",
+    expect: "UPSERT 原始字串",
+  },
+  {
+    name: "deliveryControlAsync 的 effective 忽略本地停止",
+    file: OPSDL_SRC,
+    from: "    effective: Boolean(envAllowed && configured && !localStopped),",
+    to: "    effective: Boolean(envAllowed && configured),",
+    expect: "deliveryControlAsync：欄位與同步版逐欄對應",
+  },
+  {
+    name: "worker 的 store 少了 isStopped（停止鍵形同虛設）",
+    file: OPSDL_SRC,
+    from: "    isStopped: () => isLocalDeliveryStoppedAsync(options),\n",
+    to: "",
+    expect: "本地停止鍵為 '1' 時完全不出手",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3357,7 +3436,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
+const MUTATIONS = /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
+  : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS

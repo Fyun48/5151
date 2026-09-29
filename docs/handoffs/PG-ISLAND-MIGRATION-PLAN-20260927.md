@@ -3226,6 +3226,73 @@ done
 - `deliverOutboxOnce` 會發 HTTP 到 Ops（`OPS_INGEST_URL`）——離線測試一律注入 `fetchImpl`。
 - 這一叢的 CRUD 測試夾具已有 `crmOutboxAsync` 那套可以照抄（同一個 outbox 形狀）。
 
+## 二之負二十七、2026-09-28 第五十七批：Ops 遞送 worker 重做成 PG（依第五十六批的設計）
+
+### 57.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /api/admin/ops-delivery` | `deliveryControlAsync` |
+| `PUT  /api/admin/ops-delivery` | `setLocalDeliveryStoppedAsync` ＋ `deliveryControlAsync` |
+| `POST /api/admin/ops-delivery/compact-outbox` | `compactSentOutboxPayloadsAsync` |
+| **（worker 本體）** | `startDeliveryLoopAsync` → `deliverWithStore` → `feedbackOutboxStoreAsync` |
+
+尺規：缺口 **49 → 46**、PG **219 → 222**、MIXED **45 → 42**（SQLite 4 不變）。
+**但這一包真正的價值不在 3 條路由**：它讓 PG 模式的 worker 第一次真的送 **PG 的佇列**。
+
+### 57.2 🚨 這一包最重要的發現：兩段式認領在 PG 上會重複認領
+
+第一版照 SQLite 的形狀翻成兩段式（先 `SELECT … FOR UPDATE SKIP LOCKED` 取候選，再
+`UPDATE … RETURNING *` 認領）。**live PG 的併發測試當場抓到**：30 筆被認領 **31 次**（重疊 1 筆）。
+
+根因：`pgDriver.query()` 每一句都是**自己的隱含交易**，`FOR UPDATE` 的鎖在 SELECT 結束就放掉；
+另一個 worker 因此在那句 UPDATE 之前看到的還是 `pending`。
+
+修法：**認領必須是一句**——
+`UPDATE feedback_outbox SET status='sending', claimed_at=$1 WHERE id IN (SELECT id … ORDER BY id LIMIT $3 FOR UPDATE SKIP LOCKED) RETURNING *`。
+條件與同步版逐條對應（`pending`／`failed` 且到期，或 stale 的 `sending`）。
+**教訓**：SQLite 的「先查再改」在單寫入者下是原子的；搬到 PG 之後，**凡是「先查再改」都要重新想一次**，
+而且要**用真的兩個連線同時跑**來驗（離線夾具永遠測不出這個）。
+
+### 57.3 這一包的形狀（政策一份、跑語句的人兩種）
+
+- `opsDelivery.js`：把「認領→送出→標記／退避／dead-letter／不重入／先問停止鍵」抽成
+  `deliverWithStore(store, cfg)` 與 `startDeliveryLoopWithStore(store, cfg, deps)`；
+  `deliverOutboxOnce(db, …)`／`startDeliveryLoop(db, …)` 變成 `storeFromDb(db)` 的薄包裝
+  （SQLite 站行為完全不變，await 非 Promise 值是 no-op）。
+- `feedbackOutboxAsync.js`：PG 版的 claim／markSent／markFailure／stats／capacity／compact
+  ＋ `ensureFeedbackOutboxStoreOnce`（鏡射 `feedback_outbox` 並補
+  **`delivery_id`／`idempotency_key` 的 UNIQUE 索引**——表約束鏡射不到，這個坑已中六次以上）。
+- `opsDeliveryAsync.js`：`isLocalDeliveryStoppedAsync`／`setLocalDeliveryStoppedAsync`／
+  `deliveryControlAsync`／`feedbackOutboxStoreAsync`／`startDeliveryLoopAsync`。
+- `server.js`：`GET/PUT /api/admin/ops-delivery`、`compact-outbox` 改 async；
+  **啟動時依 driver 選 worker**（PG ⇒ `startDeliveryLoopAsync`）。
+
+### 57.4 停止鍵是原生字串（紀律第 11 條，這次是「反過來」的版本）
+
+`ops_feedback_stop` 的讀者比對的是**原始文字** `"1"`。所以 PG 版**不能**用 `settingsKvAsync`
+（它會 `JSON.stringify` ⇒ 存成 `"\"1\""` ⇒ 開關永遠失效而且沒有錯誤）。這裡直接用
+`INSERT … ON CONFLICT DO UPDATE` 存原始字串，並在本機鏡射一份（還沒移植的同步讀者還在讀本機）。
+測試同時釘住「原始 `"1"` ⇒ 停止」與「JSON 化的 `'"1"'` ⇒ **不**停止」兩個方向。
+
+### 57.5 測試
+
+- `v3/test/feedback-outbox-async.test.js`（**13 項全綠**）：認領語句形狀（單句、`SKIP LOCKED`、
+  `RETURNING`、參數與 limit 夾範圍）、markSent／markFailure（退避、dead-letter、錯誤截短）、
+  stats（bigint 轉數字）、capacity 門檻、compact（保留 sha256）、
+  **worker 政策跑在一個小型 PG 模擬器上**（送出→sent、Ops 500→failed 並排重試、停止鍵⇒不發 HTTP）、
+  停止鍵 raw-vs-JSON、`deliveryControlAsync` 欄位、sqlite 模式不碰 exec。變異 **10 條全殺**。
+- `v3/test/ops-worker-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：
+  真 PG 上送一輪（30 筆全部 sent）、**兩個獨立連線同時認領不重疊也不漏**、
+  fresh 的 sending 不會被再認領、**crash 復原**（stale 的 sending 全部回收）、
+  失敗轉 failed 並寫下 `last_error` 與退避時間、停止鍵存的是原始字串。
+- 離線舊套件（`feedback-outbox.test.js` 等 40 項）在 worker 重構後全綠（政策一份、包裝兩層）。
+
+> 📌 **尚未做完（下一批）**：`GET /api/admin/feedback`（`listFeedback`／`feedbackStats`／
+> `deliveryControl`）、`PATCH /api/admin/feedback/:id`（`updateFeedback`＋CRM enqueue）、
+> `POST /api/feedback`（`createFeedbackWithOutbox`／`enqueueFeedbackOutbox`）、
+> `POST /api/admin/crm/from-feedback/:id`、以及最難的 `POST /api/ops/commands/apply`。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3236,13 +3303,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十五批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十七批）** |
 |---|---:|---:|
 | SQLite | 95 | **4** |
-| MIXED | — | **45** |
+| MIXED | — | **42** |
 | 無直接DB | — | **20** |
-| PG | 22 | **219** |
-| **缺口（SQLite＋MIXED）** | — | **49** |
+| PG | 22 | **222** |
+| **缺口（SQLite＋MIXED）** | — | **46** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

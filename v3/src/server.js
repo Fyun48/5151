@@ -477,6 +477,14 @@ import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rental
 import { startCrmDeliveryLoop } from "./crmDelivery.js";
 import { opsDeliveryDb } from "./db.js";
 import { crmOutboxOps } from "./crmOutboxAsync.js";
+// Ops 遞送（worker 與後台控制）的 PG 島嶼：PG 模式下 worker 必須送 **PG** 的佇列，
+// 否則 `POST /api/feedback` 寫進 PG 的事件永遠不會被送出（靜默失效）。
+import {
+  deliveryControlAsync,
+  setLocalDeliveryStoppedAsync,
+  startDeliveryLoopAsync,
+} from "./opsDeliveryAsync.js";
+import { compactSentOutboxPayloadsAsync, outboxCapacityAlertAsync } from "./feedbackOutboxAsync.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
   TICK_BUDGET_MS,
@@ -2340,13 +2348,23 @@ app.patch("/api/admin/feedback/:id", requireAdminApi, (req, res) => {
   }
 });
 
-app.get("/api/admin/ops-delivery", requireAdminApi, (_req, res) => {
-  res.json(getOpsDeliveryControl());
+app.get("/api/admin/ops-delivery", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await deliveryControlAsync());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
-app.put("/api/admin/ops-delivery", requireAdminApi, (req, res) => {
+app.put("/api/admin/ops-delivery", requireAdminApi, async (req, res) => {
   const stop = req.body?.stop === true || req.body?.stop === 1 || req.body?.stop === "1";
-  res.json(setOpsDeliveryStop(stop));
+  try {
+    // ⚠️ 這個鍵存的是**原始字串** `"1"`／`"0"`（原生 SQL 讀者比對原始文字），不可走 settingsKvAsync。
+    await setLocalDeliveryStoppedAsync(stop);
+    res.json(await deliveryControlAsync());
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/admin/remote-cs", requireAdminApi, async (_req, res) => {
@@ -2358,9 +2376,16 @@ app.put("/api/admin/remote-cs", requireAdminApi, async (req, res) => {
   res.json(await setRemoteCsStopAsync(stop));
 });
 
-app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, (req, res) => {
+app.post("/api/admin/ops-delivery/compact-outbox", requireAdminApi, async (req, res) => {
   const olderThanMs = Number(req.body?.older_than_ms);
-  res.json({ ok: true, ...compactOpsOutbox({ olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined }) });
+  try {
+    const result = await compactSentOutboxPayloadsAsync({
+      olderThanMs: Number.isFinite(olderThanMs) && olderThanMs >= 0 ? olderThanMs : undefined,
+    });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/admin/crm", requireAdminApi, async (req, res) => {
@@ -4652,7 +4677,12 @@ function startWorkerLoops() {
   // Phase 2：非同步 feedback → Ops 遞送。預設關閉（需 OPS_FEEDBACK_DELIVERY=1 + OPS_INGEST_URL + OPS_INGEST_SECRET）。
   const opsDelivery = deliveryConfigFromEnv();
   if (opsDelivery.enabled) {
-    startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    // PG 模式要送 PG 的佇列（同步版讀寫本機 ⇒ 送出的永遠是本機那一份，PG 的事件永遠 pending）。
+    if (resolveDbDriver() === "postgres") {
+      startDeliveryLoopAsync(opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    } else {
+      startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    }
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
   }
   startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
