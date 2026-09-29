@@ -3662,6 +3662,108 @@ const OAUTHCB_MUTATIONS = [
   },
 ];
 
+// 建立匯入（`POST /api/listing-imports`，第八十六批）。
+// 重點：匯入列與草稿都要落在 PG、狀態機與失敗落地要一致，而且寫入不得 fail-open。
+const IMPORTSTART_MUTATIONS = [
+  {
+    name: "匯入不建立草稿列（PG 只有匯入列、沒有草稿）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    await run(IMPORT_DRAFT_INSERT_SQL, importDraftInsertParams({",
+    to: "    void importDraftInsertParams; if (false) await run(IMPORT_DRAFT_INSERT_SQL, importDraftInsertParams({",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "草稿的 source_id 前綴錯（匯入列與草稿對不上）",
+    file: "v3/src/selfListings.js",
+    from: "  return [`import:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId];",
+    to: "  return [`draft:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId];",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "匯入草稿的狀態不是 draft（直接變成已公開）",
+    file: "v3/src/selfListings.js",
+    from: "export const IMPORT_DRAFT_UPDATE_SQL = `UPDATE listings SET\n      source = 'self',\n      source_id = ?,\n      listed_by_user_id = ?,\n      self_status = 'draft',",
+    to: "export const IMPORT_DRAFT_UPDATE_SQL = `UPDATE listings SET\n      source = 'self',\n      source_id = ?,\n      listed_by_user_id = ?,\n      self_status = 'open',",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "匯入列不進 ready_for_review（停在 fetching）",
+    file: "v3/src/listingImport.js",
+    from: "  return [\n    IMPORT_STATUSES.READY_FOR_REVIEW,\n    title,",
+    to: "  return [\n    IMPORT_STATUSES.FETCHING,\n    title,",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "匯入列不指回草稿（listing_id 留 0）",
+    file: "v3/src/listingImportAsync.js",
+    from: "        postId: listing.post_id,",
+    to: "        postId: 0,",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "匯入列掛在錯的會員身上",
+    file: "v3/src/listingImport.js",
+    from: "  return [uid, parsed.provider, parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp];",
+    to: "  return [Number(uid) + 1, parsed.provider, parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp];",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "照片預算歸零（匯入不帶任何照片）",
+    file: "v3/src/listingImportAsync.js",
+    from: "      const remaining = Math.max(0, mediaQuotaForPlan(plan) - used);",
+    to: "      const remaining = 0; void used;",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "同來源不查重（重複匯入會建出第二列）",
+    file: "v3/src/listingImportAsync.js",
+    from: "    const active = rowToImport(((await run(IMPORT_ACTIVE_BY_SOURCE_SQL, [uid, parsed.normalized, ...ACTIVE_IMPORT_STATUSES])).rows || [])[0]);",
+    to: "    const active = null; void IMPORT_ACTIVE_BY_SOURCE_SQL; void ACTIVE_IMPORT_STATUSES;",
+    expect: "同來源重複匯入回同一筆",
+  },
+  {
+    name: "不檢查贊助條件（免費用戶也能匯入）",
+    file: "v3/src/listingImportAsync.js",
+    from: "  assertSponsorMember(plan, role);",
+    to: "  if (false) assertSponsorMember(plan, role);",
+    expect: "非贊助會員 403",
+  },
+  {
+    // ⚠️ 這一條原本想殺「解析失敗的碼」那個分支，但實測是**等價變異**：
+    // `import591.js`／`import5168.js` 的解析器自己就會在標題與說明都空的時候丟
+    // `PARSE_FAILED`（同一支 `fetchParsedListing()`），所以抵達島嶼那一行之前就結束了。
+    // 島嶼那一行是「與同步版對稱」的防守性重複（同步版也有同一行）；要殺它得先讓某個
+    // provider 回「非空字串、但清洗後變空」的內容——目前兩個 provider 都做不到。
+    // 依 AGENT-RULES「等價變異要移除並寫明理由」，改成釘住匯入列的 provider 欄位。
+    name: "匯入列的 provider 寫錯（591 被記成 5168）",
+    file: "v3/src/listingImport.js",
+    from: "  return [uid, parsed.provider, parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp];",
+    to: "  return [uid, \"5168\", parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp];",
+    expect: "PG 分支：591 匯入",
+  },
+  {
+    name: "寫入改成 fail-open（PG 掛掉時偷偷寫本機）",
+    file: "v3/src/listingImportAsync.js",
+    from: "    if (!sqliteFallbackAllowed(options, { write })) throw error;",
+    to: "    if (!sqliteFallbackAllowed(options, {})) throw error;",
+    expect: "寫入 fail-closed",
+  },
+  {
+    name: "`POST /api/listing-imports` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    const row = await startListingImportAsync(session.userId, req.body || {}, { plan: session.plan || \"free\", role: session.role || \"\" });",
+    to: "    const row = await startListingImportFor(session.userId, req.body || {}, { plan: session.plan || \"free\", role: session.role || \"\" });",
+    expect: "路由接線",
+  },
+  {
+    name: "只刪 import、body 還在呼叫（量尺會誤判成 PG）",
+    file: "v3/src/server.js",
+    from: "  startListingImportAsync,\n",
+    to: "",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5092,6 +5194,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /self-listing-publish-async/.test(testFile) ? PUBLISHSELF_MUTATIONS
   : /self-listing-create-async/.test(testFile) ? CREATESELF_MUTATIONS
   : /oauth-callback-async/.test(testFile) ? OAUTHCB_MUTATIONS
+  : /listing-import-start-async/.test(testFile) ? IMPORTSTART_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

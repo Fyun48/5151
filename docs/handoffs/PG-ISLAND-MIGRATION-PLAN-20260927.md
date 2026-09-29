@@ -4588,6 +4588,53 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 - 踩點：本機 `users.oauth_provider`／`oauth_subject` 是 **NOT NULL** ⇒ 離線測試要驗「PG 模式不寫本機」
   時不能把欄位設成 NULL，要改設本機哨兵值再比對。
 
+## 二之負五十六、2026-09-29 第八十六批：建立外部物件匯入（`POST /api/listing-imports`）
+
+### 86.1 範圍與投報率
+
+同步版 `startListingImport()`（route 走 `db.js:startListingImportFor()`）把**匯入列與匯入草稿**
+都寫進節點本機，照片也存在本機的會員素材庫 ⇒ PG 模式下別的節點看不到這筆匯入
+（`GET /api/listing-imports/:id` 的 `listing` 永遠是 null），確認後的公開也找不到草稿。
+
+尺規：**MIXED（6 卡點）→ PG**；缺口總數 **2 → 1**（`PG` 266 → **267**、`MIXED` 2 → **1**）。
+
+### 86.2 做法
+
+- `v3/src/listingImport.js`：抽出 `IMPORT_ACTIVE_BY_SOURCE_SQL`／`IMPORT_INSERT_SQL`／
+  `IMPORT_READY_UPDATE_SQL`／`IMPORT_FAIL_UPDATE_SQL` ＋ `importInsertParams()`／
+  `importReadyParams()`／`importFailParams()`；`fetchParsedListing()` 改為匯出；
+  `importPhotos()` 增加 `deps.saveMedia` 注入點（**迴圈、預算、錯誤形狀與
+  `PHOTO_IMPORT_PARTIAL` 訊息只有一份**）。
+- `v3/src/selfListings.js`：抽出 `IMPORT_DRAFT_INSERT_SQL`／`IMPORT_DRAFT_UPDATE_SQL`／
+  `IMPORT_DRAFT_COMMUNITY_SQL` ＋ `importDraftInsertParams()`／`importDraftUpdateParams()`
+  （`import-draft:`／`import:` 的身分前綴只有一份）。
+- `v3/src/selfListingsAsync.js`：新增 `insertImportedDraftListingAsync()`（PG 寫入 ＋ 本機鏡射）。
+- `v3/src/listingImportAsync.js`：新增 `startListingImportAsync()`（`INSERT … RETURNING id`、
+  進行中匯入查重、草稿建立、狀態落地、失敗落地、照片走 `saveMemberMediaAsync()`）。
+- 🚨 **順手修掉一個潛在缺陷**：這個模組的 `withFallback()` 一律用 `sqliteFallbackAllowed(options, {})`
+  ⇒ 第二個參數才是 `write`，所以**這一叢的寫入在 PG 失敗時會 fail-open 回本機 SQLite**
+  （＝「匯入看起來成功、站上沒有」，正是 `sqliteFallback.js` 開頭要防的情況）。
+  已加上 `{ write }` 參數並讓 review／cancel／confirm／publish／start 五條寫入路徑標記
+  `{ write: true }`；讀取維持 fail-open。
+- `v3/src/server.js`：route 改走 `startListingImportAsync()`，移除同步 `startListingImportFor` import。
+
+### 86.3 測試
+
+- `v3/test/listing-import-start-async.test.js`（**7 項全綠**，新檔）：591 fixture 的完整匯入
+  （匯入列 `ready_for_review` ＋ 草稿 `source='self'`／`self_status='draft'`／
+  `source_id='import:{uid}:{postId}'` ＋ 照片進素材庫）、同來源回同一筆（`reused`）、
+  非贊助 403 且不留列、抓取被擋落 `SOURCE_UNAVAILABLE`、解析失敗落 `PARSE_FAILED`、
+  **寫入 fail-closed**、路由接線（含 import 斷言）。
+- `v3/test/listing-import-start-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  `INSERT … RETURNING id` 回得出 id、草稿與照片都落在 PG、`self_photos` 對得上
+  `member_media.storage_key`、本機鏡射跟上。
+- **變異 13 條全殺**（`IMPORTSTART_MUTATIONS`）。
+- 踩點一：離線夾具的 PG 替身 id 從 1 起算，**清世界要用 `user_id` 而不是 id 範圍**，
+  否則本機鏡射列會跨測試殘留（實測紅過）。
+- 踩點二：「解析不出標題與說明」那一條原本要殺島嶼裡的空內容守衛，實測是**等價變異**
+  ——`import591.js`／`import5168.js` 的解析器自己就丟 `PARSE_FAILED`，抵達島嶼那一行之前
+  就結束了（同步版也有同一行，屬對稱的防守性重複）⇒ 依規則移除並改釘 provider 欄位。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4598,13 +4645,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十五批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十六批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **2** |
+| MIXED | — | **1** |
 | 無直接DB | — | **20** |
-| PG | 22 | **266** |
-| **缺口（SQLite＋MIXED）** | — | **2** |
+| PG | 22 | **267** |
+| **缺口（SQLite＋MIXED）** | — | **1** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

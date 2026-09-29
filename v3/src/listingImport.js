@@ -168,12 +168,56 @@ export function listAdminListingImports(db, { limit = 50 } = {}) {
     .map(importAdminView);
 }
 
-export function findActiveImportBySource(db, userId, normalizedUrl) {
-  return rowToImport(db.prepare(
-    `SELECT * FROM listing_import
+// 進行中匯入的查詢（同步與 PG 版共用同一句；第八十六批抽出）。
+export const IMPORT_ACTIVE_BY_SOURCE_SQL = `SELECT * FROM listing_import
      WHERE user_id=? AND normalized_source_url=? AND status IN (${ACTIVE_IMPORT_STATUSES.map(() => "?").join(",")})
-     ORDER BY id DESC LIMIT 1`,
-  ).get(Number(userId), normalizedUrl, ...ACTIVE_IMPORT_STATUSES));
+     ORDER BY id DESC LIMIT 1`;
+
+export function findActiveImportBySource(db, userId, normalizedUrl) {
+  return rowToImport(db.prepare(IMPORT_ACTIVE_BY_SOURCE_SQL)
+    .get(Number(userId), normalizedUrl, ...ACTIVE_IMPORT_STATUSES));
+}
+
+// ---- 建立匯入（第八十六批抽出給 PG 版共用）---------------------------------
+//
+// 這三句是 `startListingImport()` 的落地點；抽成常數的理由與其他批次相同：
+// PG 版（`listingImportAsync.js`）要跑**逐字相同**的 SQL，參數順序也不能漂移。
+export const IMPORT_INSERT_SQL = `INSERT INTO listing_import(
+      user_id, provider, original_source_url, normalized_source_url, source_listing_id,
+      status, created_at
+    ) VALUES (?,?,?,?,?,?,?)`;
+
+export const IMPORT_READY_UPDATE_SQL = `UPDATE listing_import SET
+        status=?, imported_title=?, imported_text=?, listing_id=?, fetched_at=?,
+        failure_code=?, failure_reason=?, photo_errors=?, media_ids=?
+      WHERE id=?`;
+
+export const IMPORT_FAIL_UPDATE_SQL = "UPDATE listing_import SET status=?, failure_code=?, failure_reason=? WHERE id=?";
+
+/** INSERT 的參數（純函式）：欄位順序與 `IMPORT_INSERT_SQL` 逐字對應。 */
+export function importInsertParams(uid, parsed, stamp) {
+  return [uid, parsed.provider, parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp];
+}
+
+/** `ready_for_review` 的參數（純函式）；`photoErrors`／`mediaIds` 由呼叫端序列化。 */
+export function importReadyParams({ title, text, postId, stamp, failureCode, photoErrors, mediaIds, importId }) {
+  return [
+    IMPORT_STATUSES.READY_FOR_REVIEW,
+    title,
+    text,
+    postId,
+    stamp,
+    failureCode,
+    failureCode ? "部分照片未能匯入" : "",
+    photoErrors,
+    mediaIds,
+    Number(importId) || 0,
+  ];
+}
+
+/** 失敗落地的參數（純函式）：`failImport()` 的截斷規則只有一份。 */
+export function importFailParams(id, code, reason) {
+  return [IMPORT_STATUSES.FAILED, String(code || "FAILED").slice(0, 40), String(reason || "").slice(0, 240), Number(id)];
 }
 
 // 純組裝：PG 分支（listingImportAsync.js）用同一份，所以形狀不可能漂移。
@@ -221,7 +265,8 @@ function makePageFetcher(parsed, deps) {
   });
 }
 
-async function fetchParsedListing(parsed, deps) {
+// PG 版（`listingImportAsync.js`）呼叫同一支：解析與 provider 差異只有一份。
+export async function fetchParsedListing(parsed, deps) {
   const fetchText = makePageFetcher(parsed, deps);
   if (parsed.provider === "591") return fetchPublic591Listing(parsed.normalized, { fetchText });
   if (parsed.provider === "5168") return fetchPublic5168Listing(parsed.normalized, { fetchText });
@@ -237,7 +282,11 @@ function isAllowedImageUrl(raw, imageHosts) {
   }
 }
 
-async function importPhotos(db, userId, photoUrls, { plan, imageHosts, deps, remaining }) {
+// `deps.saveMedia(uid, body, opts)` 是給 PG 版（`listingImportAsync.js`）用的注入點：
+// 同步版走 `saveMemberMedia(db, ...)`，PG 版走 `saveMemberMediaAsync(...)`——**迴圈、
+// 預算、錯誤形狀與 `PHOTO_IMPORT_PARTIAL` 的訊息只有這一份**，兩邊不可能漂移。
+export async function importPhotos(db, userId, photoUrls, { plan, imageHosts, deps, remaining }) {
+  const saveMedia = deps.saveMedia || ((uid, body, opts) => saveMemberMedia(db, uid, body, opts));
   const errors = [];
   const items = [];
   const budget = Math.max(0, Math.min(FETCH_LIMITS.maxPhotos, Number(remaining) || 0));
@@ -257,7 +306,7 @@ async function importPhotos(db, userId, photoUrls, { plan, imageHosts, deps, rem
         lookupImpl: deps.lookupImpl,
       });
       assertUploadBytes(got.body);
-      const item = await saveMemberMedia(db, userId, got.body, {
+      const item = await saveMedia(userId, got.body, {
         plan,
         processor: deps.processor,
         originalName: url.split("/").pop() || "import.jpg",
@@ -286,12 +335,7 @@ export async function startListingImport(db, userId, input = {}, opts = {}) {
 
   const now = opts.now || new Date();
   const stamp = iso(now);
-  const insert = db.prepare(`
-    INSERT INTO listing_import(
-      user_id, provider, original_source_url, normalized_source_url, source_listing_id,
-      status, created_at
-    ) VALUES (?,?,?,?,?,?,?)
-  `).run(uid, parsed.provider, parsed.original, parsed.normalized, parsed.source_listing_id, IMPORT_STATUSES.PENDING, stamp);
+  const insert = db.prepare(IMPORT_INSERT_SQL).run(...importInsertParams(uid, parsed, stamp));
   const importId = Number(insert.lastInsertRowid);
   db.prepare("UPDATE listing_import SET status=? WHERE id=?").run(IMPORT_STATUSES.FETCHING, importId);
 
@@ -347,23 +391,16 @@ export async function startListingImport(db, userId, input = {}, opts = {}) {
     }
 
     const failureCode = photoResult.errors.length ? "PHOTO_IMPORT_PARTIAL" : "";
-    db.prepare(`
-      UPDATE listing_import SET
-        status=?, imported_title=?, imported_text=?, listing_id=?, fetched_at=?,
-        failure_code=?, failure_reason=?, photo_errors=?, media_ids=?
-      WHERE id=?
-    `).run(
-      IMPORT_STATUSES.READY_FOR_REVIEW,
+    db.prepare(IMPORT_READY_UPDATE_SQL).run(...importReadyParams({
       title,
       text,
-      listing.post_id,
-      iso(now),
+      postId: listing.post_id,
+      stamp: iso(now),
       failureCode,
-      failureCode ? "部分照片未能匯入" : "",
-      JSON.stringify(photoResult.errors),
-      JSON.stringify(photoResult.items.map((item) => item.id)),
+      photoErrors: JSON.stringify(photoResult.errors),
+      mediaIds: JSON.stringify(photoResult.items.map((item) => item.id)),
       importId,
-    );
+    }));
     return publicImport(db, getListingImport(db, importId), { listing });
   } catch (error) {
     const row = getListingImport(db, importId);
@@ -375,9 +412,7 @@ export async function startListingImport(db, userId, input = {}, opts = {}) {
 }
 
 function failImport(db, id, code, reason) {
-  db.prepare(
-    "UPDATE listing_import SET status=?, failure_code=?, failure_reason=? WHERE id=?",
-  ).run(IMPORT_STATUSES.FAILED, String(code || "FAILED").slice(0, 40), String(reason || "").slice(0, 240), Number(id));
+  db.prepare(IMPORT_FAIL_UPDATE_SQL).run(...importFailParams(id, code, reason));
 }
 
 // 純投影：PG 版（`listingImportAsync.js`）共用同一份，20 個鍵不可能漂移。

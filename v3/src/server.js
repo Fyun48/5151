@@ -183,7 +183,6 @@ import {
   updateContactProfileFor,
   deleteContactProfileFor,
   listingImportMeta,
-  startListingImportFor,
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
@@ -273,6 +272,7 @@ import {
   listAdminListingImportsAsync,
   listMineListingImportsAsync,
   reviewListingImportAsync,
+  startListingImportAsync,
 } from "./listingImportAsync.js";
 // 會員帳號的 PG 島嶼入口（登入、身分來源）。
 // `defaultUserIdAsync` 特別重要：沒有 session 時同步版會在**本機**建一個 admin 帳號、
@@ -3502,7 +3502,9 @@ app.post("/api/listing-imports", async (req, res) => {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
     assertImportAllowed(session.userId, clientIp(req));
-    const row = await startListingImportFor(session.userId, req.body || {}, { plan: session.plan || "free", role: session.role || "" });
+    // PG 島嶼（第八十六批）：匯入列與草稿都要落在 PG，否則別的節點看不到這筆匯入，
+    // 而且確認後公開不了（草稿在別台節點的本機檔裡）。
+    const row = await startListingImportAsync(session.userId, req.body || {}, { plan: session.plan || "free", role: session.role || "" });
     res.json(row);
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
