@@ -3193,6 +3193,80 @@ const MAPSDEMO_MUTATIONS = [
   },
 ];
 
+// 需求統計／首頁需求曝險（v3/test/demand-aggregate-async.test.js，第七十九批）。
+const DEMANDAGG_MUTATIONS = [
+  {
+    name: "需求統計改回同步版（PG 才有的許願房不算）",
+    file: "v3/src/demandAggregateAsync.js",
+    from: "  if (!isPg(options)) return aggregateDemandSync(sqliteHandle(), rawFilters, now);",
+    to: "  if (true) return aggregateDemandSync(sqliteHandle(), rawFilters, now);",
+    expect: "需求統計：兩個 driver 逐欄位相同",
+  },
+  {
+    name: "統計不回 PG 補水（別的節點關掉配對也照算）",
+    file: "v3/src/demandAggregateAsync.js",
+    from: "    await getWishConditionsAsync(options);\n    assertMatchingEnabled();",
+    to: "    void options;\n    assertMatchingEnabled();",
+    expect: "屋主配對關閉",
+  },
+  {
+    name: "行政區索引為空時不重建（舊資料的行政區統計永遠是 0）",
+    file: "v3/src/demandAggregateAsync.js",
+    from: "    if (filters.districts.length && (await demandMatchDistrictIndexCountAsync(run)) === 0) {\n      await rebuildDemandMatchDistrictsAsync(run);\n    }",
+    to: "    void filters;",
+    expect: "新建許願房要維護 PG 的行政區索引",
+  },
+  {
+    name: "建立許願房不維護 PG 的行政區索引",
+    file: "v3/src/demandAsync.js",
+    from: '    if (created && created.status !== "draft") await syncDemandMatchDistrictsAsync(run, created.id);',
+    to: "    void created;",
+    expect: "新建許願房要維護 PG 的行政區索引",
+  },
+  {
+    name: "修改許願房不搬 PG 的行政區索引（舊行政區多一筆、新行政區少一筆）",
+    file: "v3/src/demandAsync.js",
+    from: "    await syncDemandMatchDistrictsAsync(run, row.id);\n    // 本機 handle 追上（`writeRow()` 內含 `syncDemandMatchDistricts()`，那一支吃 handle）。",
+    to: "    // 本機 handle 追上（`writeRow()` 內含 `syncDemandMatchDistricts()`，那一支吃 handle）。",
+    expect: "新建許願房要維護 PG 的行政區索引",
+  },
+  {
+    name: "全量重建索引時什麼都不寫（懶重建變成空轉）",
+    file: "v3/src/demandAsync.js",
+    from: "      await run(MATCH_DISTRICTS_INSERT_SQL, [Number(row.id) || 0, key, Number(row.id) || 0, key]);\n      written += 1;",
+    to: "      void key;",
+    expect: "新建許願房要維護 PG 的行政區索引",
+  },
+  {
+    name: "首頁曝險改回同步版（PG 的樣本看不到）",
+    file: "v3/src/demandAggregateAsync.js",
+    from: "  if (!isPg(options)) return homepageDemandExposureSync(sqliteHandle(), now);",
+    to: "  if (true) return homepageDemandExposureSync(sqliteHandle(), now);",
+    expect: "首頁需求曝險",
+  },
+  {
+    name: "首頁曝險不看 PG 的配對開關（關掉了還照樣曝光）",
+    file: "v3/src/demandAggregateAsync.js",
+    from: "    if (!isWishOwnerMatchingEnabled(currentMatchFlags())) return { enabled: false, districts: [] };",
+    to: "    void currentMatchFlags;",
+    expect: "首頁需求曝險",
+  },
+  {
+    name: "`GET /api/demand/aggregate` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await aggregateDemandAsync({",
+    to: "    res.json(aggregateDemand({",
+    expect: "路由接線",
+  },
+  {
+    name: "`GET /api/demand/exposure` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await homepageDemandExposureAsync());",
+    to: "    res.json(homepageDemandExposure());",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4616,6 +4690,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /commute-snapshot-async/.test(testFile) ? COMMUTE_MUTATIONS
   : /route-cache-async/.test(testFile) ? ROUTECACHE_MUTATIONS
   : /admin-maps-demo-async/.test(testFile) ? MAPSDEMO_MUTATIONS
+  : /demand-aggregate-async/.test(testFile) ? DEMANDAGG_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

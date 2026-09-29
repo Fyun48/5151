@@ -104,7 +104,7 @@ function httpError(message, status = 400, code = "") {
   return err;
 }
 
-function assertMatchingEnabled() {
+export function assertMatchingEnabled() {
   if (!isWishOwnerMatchingEnabled(flagsCache)) {
     throw httpError("屋主配對尚未開放", 404, "owner_matching_disabled");
   }
@@ -628,11 +628,11 @@ export function attachOwnerMatchSummaries(db, listings, userId, now = new Date()
   }
 }
 
-function activeMatchingConditionIds(catalog) {
+export function activeMatchingConditionIds(catalog) {
   return new Set(matchingConditions(catalog).map((row) => row.id));
 }
 
-function wishMatchesAggregateFilters(row, filters, catalog) {
+export function wishMatchesAggregateFilters(row, filters, catalog) {
   const snap = wishMatchSnapshot(row, { catalog });
   const allowed = activeMatchingConditionIds(catalog);
   if (filters.districts.length) {
@@ -659,7 +659,7 @@ function wishMatchesAggregateFilters(row, filters, catalog) {
   return true;
 }
 
-function aggregateSql(filters, { afterId = 0, limit = AGGREGATE_SCAN_CHUNK } = {}) {
+export function aggregateSql(filters, { afterId = 0, limit = AGGREGATE_SCAN_CHUNK } = {}) {
   const params = [];
   let sql;
   const districts = filters.districts || [];
@@ -733,7 +733,7 @@ export function explainAggregatePlan(db, filters = {}) {
   return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params);
 }
 
-function assertAggregateConditions(filters, catalog) {
+export function assertAggregateConditions(filters, catalog) {
   const allowed = activeMatchingConditionIds(catalog);
   for (const id of filters.conditions) {
     if (!allowed.has(id)) {
@@ -742,17 +742,10 @@ function assertAggregateConditions(filters, catalog) {
   }
 }
 
-export function aggregateDemand(db, rawFilters = {}, now = new Date()) {
-  assertMatchingEnabled();
-  expireOpenPosts(db, now);
-  const filters = normalizeAggregateFilters(rawFilters);
-  const catalog = currentMatchCatalog();
-  assertAggregateConditions(filters, catalog);
+// 純彙總：同步與 PG 版拿到同一組「已篩選的列」之後跑的是這一份（隱私門檻、行政區／預算／
+// 格局／條件的分組與排序都只有一份實作）。
+export function aggregateDemandRows(rows = [], { catalog = currentMatchCatalog() } = {}) {
   const allowed = activeMatchingConditionIds(catalog);
-  const rows = queryAllAggregateWishes(db, filters).filter((row) => (
-    wishMatchesAggregateFilters(row, filters, catalog)
-  ));
-
   const total = rows.length;
   if (total < AGGREGATE_PRIVACY_THRESHOLD) {
     return {
@@ -823,17 +816,33 @@ export function aggregateDemand(db, rawFilters = {}, now = new Date()) {
   };
 }
 
-export function homepageDemandExposure(db, now = new Date()) {
-  if (!isWishOwnerMatchingEnabled(flagsCache)) {
-    return { enabled: false, districts: [] };
-  }
-  const agg = aggregateDemand(db, {}, now);
+export function aggregateDemand(db, rawFilters = {}, now = new Date()) {
+  assertMatchingEnabled();
+  expireOpenPosts(db, now);
+  const filters = normalizeAggregateFilters(rawFilters);
+  const catalog = currentMatchCatalog();
+  assertAggregateConditions(filters, catalog);
+  const rows = queryAllAggregateWishes(db, filters).filter((row) => (
+    wishMatchesAggregateFilters(row, filters, catalog)
+  ));
+  return aggregateDemandRows(rows, { catalog });
+}
+
+// 首頁曝險的**純組裝**（同步與 PG 版共用）。
+export function homepageExposureFromAggregate(agg = {}) {
   return {
     enabled: true,
     suppressed: agg.suppressed,
     message: agg.suppressed ? agg.message : "",
     districts: (agg.districts || []).slice(0, 6),
   };
+}
+
+export function homepageDemandExposure(db, now = new Date()) {
+  if (!isWishOwnerMatchingEnabled(flagsCache)) {
+    return { enabled: false, districts: [] };
+  }
+  return homepageExposureFromAggregate(aggregateDemand(db, {}, now));
 }
 
 export function matchRulesForAdmin() {
