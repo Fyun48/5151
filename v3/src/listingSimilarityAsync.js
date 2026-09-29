@@ -140,6 +140,13 @@ async function ensurePgSimilaritySchema(pgDriver) {
   await ensurePgSchema(pgDriver, sqliteHandle(), { tables: repo.SIMILARITY_TABLES });
 }
 
+// 🚨 注入式 `exec` 的形狀必須正規化：這一支的 PG runner 一律吃**裸陣列**，
+// 但呼叫端可能照 `crmOutboxAsync` 的慣例傳 `{ rows, rowCount }`。直接轉送的話
+// `firstRow()`／`Array.isArray()` 會把它當成「沒有資料列」⇒ **靜默少讀**（不是報錯）。
+// 2026-09-28 在 `contentDocumentsAsync` 的同型問題上由 live PG 測試抓到（版本算成 1 撞唯一鍵）。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+const injectedExec = (exec) => async (sql, params = []) => rowsOf(await exec(sql, params));
+
 // driver 分派：postgres → 注入的 exec（或 sharedPgDriver 的 pool）；讀取錯誤 fail-open 回 SQLite、
 // 寫入錯誤 fail-closed 往丟（options.write === true，見 sqliteFallback.js），
 // 除非呼叫端要求 strict（測試／探針）。
@@ -148,7 +155,9 @@ async function withFallback(options, runPostgres, runSqlite) {
   if (driver !== "postgres") return runSqlite();
   try {
     // 測試／探針可以自帶 exec（此時表由呼叫端準備，不連線也不建表）。
-    if (options.exec) return await runPostgres(options.exec);
+    // 🚨 一定要正規化成**裸陣列**：呼叫端若傳 `{ rows, rowCount }`，直接轉送會讓
+    // `Array.isArray()` 判定成「沒有資料列」而靜默少讀。
+    if (options.exec) return await runPostgres(injectedExec(options.exec));
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensurePgSimilaritySchema(pgDriver);
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);

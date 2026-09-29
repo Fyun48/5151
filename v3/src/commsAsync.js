@@ -196,8 +196,15 @@ export const PG_SCHEMA_STATEMENTS = [
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 const firstRow = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
 
+// 🚨 注入式 `exec` 要正規化成**裸陣列**（這個模組的 PG runner 一律吃陣列）；
+// 照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }` 時會被當成「沒有資料列」而靜默少讀。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => rowsOf(await injected(sql, params));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
@@ -237,7 +244,7 @@ async function withFallback(options, runPostgres, runSqlite) {
 async function withFallbackTx(options, runPostgres, runSqlite) {
   if (!isPg(options)) return runSqlite();
   try {
-    if (options.exec) return await runPostgres(options.exec);
+    if (options.exec) return await runPostgres(await pgExec(options));
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensureCommsStoreOnce(pgDriver);
     return await pgDriver.withTransaction(async (client) => {

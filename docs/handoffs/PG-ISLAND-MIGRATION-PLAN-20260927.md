@@ -2904,6 +2904,55 @@ node --test v3/test/legal-copy-live-pg.test.js
 - **Owner 未決**：`PUT /api/admin/mail`、`PUT /api/admin/oauth`（會寫節點本機 `auth.env`）、
   feedback／Ops 遞送那一叢（A：宣告尺規例外／B：worker 重做）。
 
+## 二之負二十一、2026-09-28 第五十一批：「注入式 exec 形狀」的橫向修正
+
+### 51.1 為什麼要單獨一批（不是為了讓測試變綠）
+
+第五十批在 `contentDocumentsAsync` 踩到第六次「exec 形狀」：`withFallbackTx()` 直接把
+`options.exec` 轉送給 runner，而那個模組的 runner 吃**裸陣列** ⇒ 呼叫端照 `crmOutboxAsync`
+慣例傳 `{ rows, rowCount }` 時，`nextVersionAsync()` 把整個物件當成「沒有資料列」，
+版本算成 1 ⇒ 撞 `idx_content_documents_type_version`。**只有 live PG 測試抓到。**
+
+同一個洞在別的模組還在，只是它們的（離線與 live）測試**剛好都傳裸陣列**，所以沒爆。
+這一輪把六個模組一次補上，並各留一條「還原這個洞」的變異。
+
+### 51.2 修法（每個模組照自己的 runner 形狀正規化）
+
+| 模組 | runner 形狀 | 修法 |
+|---|---|---|
+| `budgetGuardAsync` | 裸陣列 | 新增 `rowsOf()` ＋ `injectedExec()`；讀取與寫入兩條路都改 |
+| `commsAsync` | 裸陣列 | `pgExec()` 內把注入的 exec 包成陣列；`withFallbackTx` 改走 `pgExec()` |
+| `crmAsync` | 裸陣列 | 新增 `injectedExec()`；單一入口改掉 |
+| `listingEnrichQueueAsync` | 讀取＝裸陣列、寫入＝`{rows,rowCount}` | 讀取路徑補「轉回裸陣列」（**這裡差點改錯**：第一版寫成 `normalizeResult()`，方向剛好相反） |
+| `listingSimilarityAsync` | 裸陣列 | 新增 `injectedExec()` |
+| `listingToolsAsync` | 裸陣列 | `pgExec()` 內正規化；`withFallbackTx` 改走 `pgExec()` |
+
+> ⚠️ **每個模組的 runner 形狀不一定一樣**（`listingEnrichQueueAsync` 就是讀寫不同）。
+> 修之前先看那個模組自己怎麼建 `exec`，不要照抄別的模組。
+
+### 51.3 測試與變異
+
+- 六個測試檔各加一條「注入式 exec 的形狀不影響結果（裸陣列 vs `{ rows, rowCount }`）」：
+  `budget-parity`、`listing-enrich-parity`、`listing-similarity-admin-parity`、
+  `comms-async`、`crm-module-async`、`listing-tools-async`（**68 項全綠**）。
+  形狀測試要**比落地結果**，不是只比回傳值（`budget-parity` 走完整串 save／reserve／settle／
+  release／hold；`crm-module-async` 斷言讀回的值必須是剛寫的 `"0"` 而不是預設 `true`）。
+- 變異：新增 `BUDGET_MUTATIONS`(2)、`ENRICHQ_MUTATIONS`(1)、`SIMILARITY_MUTATIONS`(1)
+  三套，並在既有 `COMMS_MUTATIONS`／`CRMMOD_MUTATIONS`／`LISTINGTOOLS_MUTATIONS` 各加 1 條，
+  **40 條全殺**（`node v3/scripts/mutation-check.mjs <該測試檔>`）。
+- live PG：`listing-tools-live-pg`（2 項）、`legal-copy-live-pg`、`member-consents-live-pg`
+  都在隔離庫重跑過（改動只影響注入式分支，真 driver 的路徑不受影響，但照樣驗）。
+
+```bash
+node --test v3/test/budget-parity.test.js v3/test/listing-enrich-parity.test.js \
+  v3/test/listing-similarity-admin-parity.test.js v3/test/comms-async.test.js \
+  v3/test/crm-module-async.test.js v3/test/listing-tools-async.test.js
+for t in budget-parity listing-enrich-parity listing-similarity-admin-parity \
+         comms-async crm-module-async listing-tools-async; do
+  node v3/scripts/mutation-check.mjs v3/test/$t.test.js
+done
+```
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

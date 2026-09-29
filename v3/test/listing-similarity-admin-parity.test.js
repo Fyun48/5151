@@ -152,6 +152,22 @@ test("sqlite 模式：async 入口與原本的同步函式輸出完全相同", a
   assert.equal(await simAsync.isInsightApplyEnabledAsync({ driver: "sqlite" }), sim.isInsightApplyEnabled(db));
 });
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 這個模組的 PG runner 吃**裸陣列**；`{ rows, rowCount }`（crmOutboxAsync 慣例）若不經
+  // `rowsOf()` 正規化，admin payload 會少掉建議／洞察列，而且**不會報錯**。
+  const wrapped = async (sql, params = []) => {
+    const rows = await pgShimOn(db)(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const options = { driver: "postgres", exec: wrapped, strict: true };
+  assert.deepEqual(await simAsync.getSimilarityAdminAsync(options), await simAsync.getSimilarityAdminAsync(pgOptions),
+    "admin payload 必須相同");
+  assert.deepEqual(await simAsync.savePhashSettingsAsync({ enabled: true }, options),
+    { phash_enabled: true, insight_apply_enabled: false }, "設定寫入的結果也要相同");
+  assert.equal(await simAsync.shouldEnqueueSimilarityAsync(options), true, "寫完要讀得到（少讀時會是 false）");
+  await simAsync.savePhashSettingsAsync({ enabled: false }, options);
+});
+
 test("postgres 路徑（離線 exec）給出與 sqlite 相同的 admin payload", async () => {
   const viaPg = await simAsync.getSimilarityAdminAsync(pgOptions);
   assert.deepEqual(viaPg, sim.getSimilarityAdmin(db));

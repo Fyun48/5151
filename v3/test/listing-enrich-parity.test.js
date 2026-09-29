@@ -39,6 +39,19 @@ test("sqlite 模式：async 入口與同步函式輸出完全相同", async () =
   assert.deepEqual(await enrichAsync.getListingPrepAsync(db, 999999, { driver: "sqlite" }), enrich.getListingPrep(db, 999999));
 });
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 讀取路徑的 runner 吃**裸陣列**（寫入路徑才是 `{ rows, rowCount }`，見 `normalizeResult`）：
+  // 兩種形狀都要吃得下，否則照 `crmOutboxAsync` 慣例傳 `{rows}` 的呼叫端會拿到全 0 的統計。
+  const wrapped = async (sql, params = []) => {
+    const rows = await shim(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const viaWrapped = await enrichAsync.listingPrepAdminStatsAsync(db, { ...pgOptions, exec: wrapped });
+  const viaArray = await enrichAsync.listingPrepAdminStatsAsync(db, pgOptions);
+  assert.deepEqual(viaWrapped, viaArray, "兩種形狀的統計必須相同");
+  assert.deepEqual(viaWrapped, enrich.listingPrepAdminStats(db), "而且都要等於 SQLite 路徑");
+});
+
 test("postgres 路徑（離線 exec）給出與 sqlite 相同的統計", async () => {
   const viaPg = await enrichAsync.listingPrepAdminStatsAsync(db, pgOptions);
   const viaSqlite = enrich.listingPrepAdminStats(db);

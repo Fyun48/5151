@@ -44,6 +44,23 @@ function resetBoth() {
 
 const landed = (h) => h.prepare("SELECT value FROM settings WHERE key=?").get(CRM_ENABLED_KEY)?.value ?? null;
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 這個模組的 PG runner 吃**裸陣列**；`{ rows, rowCount }`（crmOutboxAsync 慣例）若不經
+  // `rowsOf()` 正規化，`firstRow()` 會把它當成「沒有資料列」⇒ 讀回預設值、看起來像成功。
+  const arrayExec = resetBoth();
+  const viaArray = await asyncMod.setCrmEnabledAsync(false, { ...PG, exec: arrayExec });
+  const wrappedExec = resetBoth();
+  const wrapped = async (sql, params = []) => {
+    const rows = await wrappedExec(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const viaWrapped = await asyncMod.setCrmEnabledAsync(false, { ...PG, exec: wrapped });
+  assert.deepEqual(viaWrapped, viaArray, "兩種形狀的結果必須逐欄相同");
+  assert.equal(viaWrapped.enabled, false, "必須真的讀到剛寫的 0（少讀時會退回預設 true）");
+  assert.equal(landed(wrappedExec.raw), landed(arrayExec.raw), "落地的值也要一樣");
+  assert.equal(landed(wrappedExec.raw), "0");
+});
+
 test("沒有存值：預設是啟用，且與同步版逐欄相同", async () => {
   const exec = resetBoth();
   const pg = await asyncMod.setCrmEnabledAsync(true, { ...PG, exec });
