@@ -53,8 +53,19 @@ const LOCAL_ID = 940003;
 
 let fixture = null;
 
+// ⚠️ 「回到起點」必須**每次**都跑（`loadFixture()` 第一次之後會回快取的 fixture）：
+// `upsertListing()` 是 upsert，前一條測試留下的 `offline`／`offline_confirmed`／`offline_at`
+// 會跟著進來，讓後面依賴「兩列起點相同」的 live 子測試紅掉（CI 實測踩過）。
+function resetListingState(db) {
+  db.prepare(`UPDATE listings SET offline = 0, offline_confirmed = 0, offline_at = NULL,
+      alive_checked_at = NULL, last_checked_at = NULL, last_event = 'new' WHERE post_id > 0`).run();
+}
+
 async function loadFixture() {
-  if (fixture) return fixture;
+  if (fixture) {
+    resetListingState(fixture.app.sqliteHandle());
+    return fixture;
+  }
   const app = await import("../src/db.js");
   const uid = app.defaultUserId();
   const stamp = "2026-09-07T00:00:00.000Z";
@@ -90,6 +101,7 @@ async function loadFixture() {
   seed(LOCAL_ID);
   const db = app.sqliteHandle();
   db.prepare("UPDATE listings SET geo_source = 'geocode', content_seq = 3 WHERE post_id > 0").run();
+  resetListingState(db);
   const jobKey = (postId) => `${postId}|to_work|distance|scooter|25.033,121.5654`;
   const insertJob = db.prepare("INSERT INTO route_jobs (job_key, post_id, direction, kind, commute_mode, job_state, updated_at) VALUES (?, ?, 'to_work', 'distance', 'scooter', 'failed', ?)");
   // One job per listing: the local test invalidates its own, so the mirrored (live) one survives.
