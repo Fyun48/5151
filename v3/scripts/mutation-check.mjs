@@ -1312,6 +1312,13 @@ const CRMMOD_MUTATIONS = [
     to: '    await exec(CRM_ENABLED_UPSERT_SQL, [repo.CRM_ENABLED_KEY, enabled ? "1" : "0"]);\n    return crmModuleSync(sqliteFor(options));',
     expect: "關閉",
   },
+  {
+    name: "注入式 exec 不經 rowsOf 正規化（{rows} 形狀會靜默少讀）",
+    file: "v3/src/crmAsync.js",
+    from: "    if (options.exec) return await runPostgres(injectedExec(options.exec));",
+    to: "    if (options.exec) return await runPostgres(options.exec);",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
 ];
 
 // reconciliation 進度狀態 PG 分支的變異集（v3/test/same-house-backfill-status.test.js）。
@@ -1720,6 +1727,14 @@ const COMMS_MUTATIONS = [
     to: "     dismissed_at TEXT\n   )`,",
     expect: "ensureCommsStoreOnce",
   },
+  {
+    // 注入式 exec 若不經 rowsOf 正規化，`{ rows, rowCount }` 形狀會被當成「沒有資料列」。
+    name: "注入式 exec 不經正規化（{rows} 形狀會靜默少讀）",
+    file: "v3/src/commsAsync.js",
+    from: "  if (options.exec) {\n    const injected = options.exec;\n    return async (sql, params = []) => rowsOf(await injected(sql, params));\n  }",
+    to: "  if (options.exec) return options.exec;",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
 ];
 
 // 內容文件 PG 分支的變異集（v3/test/content-documents-async.test.js）。
@@ -2060,6 +2075,13 @@ const LISTINGTOOLS_MUTATIONS = [
     from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    return runSqlite();",
     to: "    return runSqlite();",
     expect: "strict：PG 寫入失敗時必須往上丟",
+  },
+  {
+    name: "注入式 exec 不經 rowsOf 正規化（{rows} 形狀會靜默少讀）",
+    file: "v3/src/listingToolsAsync.js",
+    from: "  if (options.exec) {\n    const injected = options.exec;\n    return async (sql, params = []) => rowsOf(await injected(sql, params));\n  }",
+    to: "  if (options.exec) return options.exec;",
+    expect: "注入式 exec 的形狀不影響結果",
   },
 ];
 
@@ -2973,6 +2995,49 @@ const LEGALCOPY_MUTATIONS = [
   // 依紀律「等價變異要移除並寫下理由，不要硬追」。
 ];
 
+// 「注入式 exec 形狀」的變異集（2026-09-28，第五十一批）。
+//
+// 背景：`contentDocumentsAsync.withFallbackTx()` 直接把 `options.exec` 轉送給 runner，而那個
+// 模組的 runner 吃**裸陣列** ⇒ 呼叫端照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }` 時，
+// `nextVersionAsync()` 把整個物件當成「沒有資料列」，版本算成 1 而撞唯一鍵（live PG 測試抓到）。
+// 這一輪把同樣的洞在其它模組一併補上，並各留一條「還原這個洞」的變異。
+const BUDGET_MUTATIONS = [
+  {
+    name: "budgetGuardAsync 讀取路徑不經 rowsOf 正規化（{rows} 形狀會靜默少讀）",
+    file: "v3/src/budgetGuardAsync.js",
+    from: "    if (options.exec) return await runPostgres(injectedExec(options.exec));\n    const pgDriver = options.pgDriver || (await sharedPgDriver());\n    await ensureBudgetStoreOnce(pgDriver, options.sqliteHandle);\n    const exec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;",
+    to: "    if (options.exec) return await runPostgres(options.exec);\n    const pgDriver = options.pgDriver || (await sharedPgDriver());\n    await ensureBudgetStoreOnce(pgDriver, options.sqliteHandle);\n    const exec = async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
+  {
+    name: "budgetGuardAsync 寫入路徑不經 rowsOf 正規化（{rows} 形狀會靜默少讀）",
+    file: "v3/src/budgetGuardAsync.js",
+    from: "    if (options.exec) return await runPostgres(injectedExec(options.exec));\n    const pgDriver = options.pgDriver || (await sharedPgDriver());\n    await ensureBudgetStoreOnce(pgDriver, options.sqliteHandle);\n    return await pgDriver.withTransaction(async (client) => {",
+    to: "    if (options.exec) return await runPostgres(options.exec);\n    const pgDriver = options.pgDriver || (await sharedPgDriver());\n    await ensureBudgetStoreOnce(pgDriver, options.sqliteHandle);\n    return await pgDriver.withTransaction(async (client) => {",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
+];
+
+const ENRICHQ_MUTATIONS = [
+  {
+    name: "listingEnrichQueueAsync 讀取路徑不轉回裸陣列（{rows} 形狀會拿到全 0 統計）",
+    file: "v3/src/listingEnrichQueueAsync.js",
+    from: "    if (options.exec) {\n      const injected = options.exec;\n      return await runPostgres(async (sql, params = []) => {\n        const raw = await injected(sql, params);\n        return Array.isArray(raw) ? raw : (raw?.rows || []);\n      });\n    }",
+    to: "    if (options.exec) return await runPostgres(options.exec);",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
+];
+
+const SIMILARITY_MUTATIONS = [
+  {
+    name: "listingSimilarityAsync 不經 rowsOf 正規化（{rows} 形狀會少掉建議／洞察列）",
+    file: "v3/src/listingSimilarityAsync.js",
+    from: "    if (options.exec) return await runPostgres(injectedExec(options.exec));",
+    to: "    if (options.exec) return await runPostgres(options.exec);",
+    expect: "注入式 exec 的形狀不影響結果",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -2981,7 +3046,10 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS
+const MUTATIONS = /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
+  : /listing-enrich-parity/.test(testFile) ? ENRICHQ_MUTATIONS
+  : /listing-similarity-admin-parity/.test(testFile) ? SIMILARITY_MUTATIONS
+  : /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS
   : /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS
   : /member-consents-async/.test(testFile) ? CONSENTS_MUTATIONS
   : /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS

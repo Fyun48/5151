@@ -44,13 +44,20 @@ async function ensurePgCrmSchema(pgDriver) {
   await ensurePgSchema(pgDriver, sqliteHandle(), { tables: repo.CRM_READ_TABLES });
 }
 
+// 🚨 注入式 `exec` 的形狀必須正規化：這一支的 PG runner 一律吃**裸陣列**，
+// 但呼叫端可能照 `crmOutboxAsync` 的慣例傳 `{ rows, rowCount }`。直接轉送的話
+// `firstRow()`／`Array.isArray()` 會把它當成「沒有資料列」⇒ **靜默少讀**（不是報錯）。
+// 2026-09-28 在 `contentDocumentsAsync` 的同型問題上由 live PG 測試抓到（版本算成 1 撞唯一鍵）。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+const injectedExec = (exec) => async (sql, params = []) => rowsOf(await exec(sql, params));
+
 // driver 分派：postgres → 注入的 exec（測試）或 sharedPgDriver 的 pool；讀取出錯 fail-open 回 SQLite，
 // 寫入（options.write）則 fail-closed 往丟（見 sqliteFallback.js）。
 async function withFallback(options, runPostgres, runSqlite) {
   const driver = options.driver || resolveDbDriver();
   if (driver !== "postgres") return runSqlite();
   try {
-    if (options.exec) return await runPostgres(options.exec);
+    if (options.exec) return await runPostgres(injectedExec(options.exec));
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensurePgCrmSchema(pgDriver);
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);

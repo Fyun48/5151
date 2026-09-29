@@ -47,7 +47,17 @@ async function withFallback(options, runPostgres, runSqlite) {
   const driver = options.driver || resolveDbDriver();
   if (driver !== "postgres") return runSqlite();
   try {
-    if (options.exec) return await runPostgres(options.exec);
+    // 🚨 這一支（讀取）的 runner 形狀是**裸陣列**（與下面真正的 PG exec 一致）；
+    // 呼叫端可能照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }`，直接轉送會被
+    // `Array.isArray()` 判成「沒有資料列」而**靜默少讀**。這裡統一轉成裸陣列。
+    // （寫入路徑的 runner 形狀不同，是 `{ rows, rowCount }`，見 `normalizeResult()`。）
+    if (options.exec) {
+      const injected = options.exec;
+      return await runPostgres(async (sql, params = []) => {
+        const raw = await injected(sql, params);
+        return Array.isArray(raw) ? raw : (raw?.rows || []);
+      });
+    }
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
     return await runPostgres(exec);

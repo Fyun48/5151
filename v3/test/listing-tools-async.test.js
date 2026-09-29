@@ -122,6 +122,30 @@ const reasonOf = (error) => `${error.status}/${error.code || "-"}/${error.messag
 // ---------------------------------------------------------------------------
 // 說明範本
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 這個模組的 PG runner 吃**裸陣列**；`{ rows, rowCount }`（crmOutboxAsync 慣例）若不經
+  // `rowsOf()` 正規化，建立／列表會被當成「沒有資料列」而**靜默少讀**。
+  const input = { name: "形狀測試", body: "<p>形狀</p>" };
+  const arrayExec = resetBoth();
+  seedPair(arrayExec, { id: 111, email: "shape1@example.test" });
+  const viaArray = await asyncMod.createDescriptionTemplateAsync(111, input, { now: NOW, ...PG, exec: arrayExec });
+
+  const wrappedExec = resetBoth();
+  seedPair(wrappedExec, { id: 112, email: "shape2@example.test" });
+  const wrapped = async (sql, params = []) => {
+    const rows = await wrappedExec(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const viaWrapped = await asyncMod.createDescriptionTemplateAsync(112, input, { now: NOW, ...PG, exec: wrapped });
+  assert.deepEqual({ ...viaWrapped, id: 0, user_id: 0 }, { ...viaArray, id: 0, user_id: 0 },
+    "兩種形狀的結果必須相同（id／user_id 兩邊本來就不同）");
+  assert.equal(viaWrapped.name, "形狀測試");
+  // 落地的列也要一樣（`assertSameRows` 是「PG ↔ 本機」的比對，這裡要比的是「兩種 exec 形狀」）。
+  const rowsOf = (handle) => dump(handle, "listing_description_template").map((row) => ({ ...row, user_id: 0 }));
+  assert.deepEqual(rowsOf(wrappedExec.raw), rowsOf(arrayExec.raw),
+    "以兩種形狀建立的範本列必須逐欄相同（user_id 兩邊本來就不同，先歸零）");
+});
+
 test("建立範本：PG 與同步版的回傳形狀與落地列都相同（逐欄比對，不是只比 deepEqual）", async () => {
   const exec = resetBoth();
   seedPair(exec, { id: 101, email: "t1@example.test" });

@@ -132,6 +132,24 @@ test("sqlite 模式：budgetStore 與同步函式走出同一串結果", async (
   assert.equal(viaStore[1], "reserve1:true/1000000/day=20000000/1000000/0/month=100000000/1000000/0");
 });
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 這一支的 PG runner 吃**裸陣列**；照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }` 時，
+  // 讀取會被當成「沒有資料列」（保留金額、結算結果全部走錯分支），而且**不會報錯**。
+  // `drive()` 會走完 save／reserve／settle／release／hold，讀寫兩條路都涵蓋。
+  const wrapped = async (sql, params = []) => {
+    const rows = await shim(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const viaWrapped = await drive(budgetStoreModule.budgetStore({
+    sqliteDb: db, options: { ...pgOptions, exec: wrapped },
+  }));
+  const viaArray = await drive(budgetStoreModule.budgetStore({ sqliteDb: db, options: pgOptions }));
+  const viaSqlite = await drive(budgetStoreModule.budgetStore({ sqliteDb: db }));
+  assert.deepEqual(viaWrapped, viaArray, "兩種 exec 形狀必須走出同一串步驟");
+  assert.deepEqual(viaWrapped, viaSqlite, "而且都要等於 SQLite 路徑");
+  assert.equal(viaWrapped[2], "replay:true/true/reserved/day=20000000/1000000/0", "保留的金額要對（少讀時會變 none）");
+});
+
 test("postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相同", async () => {
   const viaPg = await drive(budgetStoreModule.budgetStore({ sqliteDb: db, options: pgOptions }));
   const viaSqlite = await drive(budgetStoreModule.budgetStore({ sqliteDb: db }));

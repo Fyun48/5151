@@ -110,6 +110,28 @@ const CAMP = { sponsor_name: "廠商", title: "活動", text: "說明", destinat
 // ---------------------------------------------------------------------------
 // 公告
 
+test("注入式 exec 的形狀不影響結果（裸陣列 vs { rows, rowCount }）", async () => {
+  // 🚨 這個模組的 PG runner 吃**裸陣列**；`{ rows, rowCount }`（crmOutboxAsync 慣例）若不經
+  // `rowsOf()` 正規化，會被當成「沒有資料列」而**靜默少讀**——同一天在 `contentDocumentsAsync`
+  // 中過一次（版本算成 1 撞唯一鍵，由 live PG 測試抓到）。
+  const arrayExec = resetBoth();
+  const viaArray = await asyncMod.createAnnouncementAsync(7, ANN, { now: NOW, ...PG, exec: arrayExec });
+
+  const wrappedExec = resetBoth();
+  const wrapped = async (sql, params = []) => {
+    const rows = await wrappedExec(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const viaWrapped = await asyncMod.createAnnouncementAsync(7, ANN, { now: NOW, ...PG, exec: wrapped });
+  assert.deepEqual(viaWrapped, viaArray, "兩種形狀的結果必須逐欄相同");
+  assert.equal(viaWrapped.version, 1, "版本必須從 0 往上算（少讀時會誤判成同一版）");
+  // 落地的列也要一樣（`assertSameRows` 是「PG ↔ 本機」的比對，這裡要比的是「兩種 exec 形狀」）。
+  assert.deepEqual(dump(wrappedExec.raw, "system_announcements"), dump(arrayExec.raw, "system_announcements"),
+    "以兩種形狀建立的公告列必須逐欄相同");
+  assert.deepEqual(dump(wrappedExec.raw, "comms_audit"), dump(arrayExec.raw, "comms_audit"),
+    "稽核列也要一樣");
+});
+
 test("建立公告：形狀、版本、落地列與稽核事件都與同步版相同", async () => {
   const exec = resetBoth();
   const pg = await asyncMod.createAnnouncementAsync(7, ANN, { now: NOW, ...PG, exec });

@@ -158,8 +158,15 @@ function requireUser(userId) {
   return uid;
 }
 
+// 🚨 注入式 `exec` 要正規化成**裸陣列**（這個模組的 PG runner 一律吃陣列）；
+// `{ rows, rowCount }` 形狀會被當成「沒有資料列」而靜默少讀。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => rowsOf(await injected(sql, params));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
@@ -227,7 +234,7 @@ async function withFallbackTx(options, runPostgres, runSqlite) {
   if (!isPg(options)) return runSqlite();
   try {
     // 注入式 exec 沒有交易（測試以「同一條連線連續執行」近似，與 budgetGuardAsync 相同）。
-    if (options.exec) return await runPostgres(options.exec);
+    if (options.exec) return await runPostgres(await pgExec(options));
     const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensureListingToolsStoreOnce(pgDriver);
     return await pgDriver.withTransaction(async (client) => {
