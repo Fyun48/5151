@@ -4422,6 +4422,49 @@ PG 模式下整條配對鏈讀的是**節點本機**：
   3. **CTA 的開關與資料要分開看**：開關讀的是行程內 flags 快取（PG 補水後兩邊相同），
      能鑑別 store 的是**心願／提案／封鎖名單**那三個查詢 —— 變異的 `expect` 要指向那一條。
 
+## 二之負五十二、2026-09-29 第八十二批：複製站內刊登（`POST /api/self-listings/:id/copy`）
+
+### 82.1 範圍與投報率
+
+同步版整條讀寫節點本機：來源列（`listings`）、冪等表（`listing_copy_idempotency`）、
+**素材所有權**（`member_media`）與新草稿列。PG 模式下：
+
+- 別的節點建立的刊登**複製不到**（404）；
+- 複製出來的草稿落在這台節點，別的節點看不到；
+- 素材所有權會誤判成「不是自己的」⇒ **照片整批被丟掉**（`reusableCopyPhotos()`）。
+
+尺規：**MIXED（6 卡點）→ PG**；缺口總數 **7 → 6**（`PG` 261 → **262**、`MIXED` 7 → **6**）。
+
+### 82.2 做法
+
+- `v3/src/selfListings.js`：草稿的兩句 SQL 與參數組裝抽成 `SELF_DRAFT_INSERT_SQL`／
+  `SELF_DRAFT_UPDATE_SQL`／`selfDraftInsertParams()`／`selfDraftUpdateParams()`／
+  `NEXT_SELF_POST_ID_SQL`（同步版改呼叫它們），並匯出 `catalogTraitExtras()`。
+- `v3/src/listingTools.js`：匯出 `copyResult()`（回傳外型由兩個 driver 共用）。
+- `v3/src/selfListingsAsync.js`：`copyOwnListingAsync()`／`insertSelfDraftListingAsync()`／
+  `reusableCopyPhotosAsync()`。**PG 區段整體包在一個 try 裡**：讀取（來源列／素材）與寫入
+  （草稿）用同一套回退政策 —— 否則 `fallback: "open"` 時 `getSelfRowAsync()` 會直接把連線錯誤
+  往上丟（實測）。本機鏡射是盡力而為（PG 已經寫成功就不該因為鏡射失敗而回錯）。
+
+### 82.3 測試
+
+- `v3/test/self-listing-copy-async.test.js`（**6 項全綠**，新檔）：複製結果逐欄位比對
+  （草稿列 ＋ 回傳表單）、**列／素材只放在 PG 時同步版 404 而 PG 版照樣複製得出來**、
+  素材所有權（自己的留著、別人的丟掉，而且**只讀 PG 的素材列**）、同冪等鍵第二次回同一份草稿、
+  403 `not_owner`／404／401 錯誤形狀、寫入 fail-closed（strict／預設都要丟、只有
+  `fallback: "open"` 才回退、sqlite 模式不碰注入的 exec）、路由接線。
+- `v3/test/self-listing-copy-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  「PG 的來源刊登 → 草稿落在 PG」（同步版在本機 404）、素材所有權查得到、同冪等鍵不重複。
+- **變異 7 條全殺**（`COPYSELF_MUTATIONS`）。
+
+### 82.4 ⚠️ 尺規的一個假綠風險（這一批實測踩到）
+
+尺規的路由判定只算「**已 import 的名字**」有沒有被提及。實作時如果把 `copyOwnListingFor`
+從 import 清單拿掉、卻忘了改路由本文（本文還在呼叫那個名字），尺規會**立刻顯示 PG**——
+而那個名字在執行期是 `undefined`（服務會 500）。這一包因此加了兩道：
+路由接線測試**同時**斷言「本文用 `await copyOwnListingAsync(`」與「`copyOwnListingAsync`
+真的有被 import」。**之後每一批的路由接線測試都應該照這個形狀寫。**
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4432,17 +4475,22 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十一批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十二批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **7** |
+| MIXED | — | **6** |
 | 無直接DB | — | **20** |
-| PG | 22 | **261** |
-| **缺口（SQLite＋MIXED）** | — | **7** |
+| PG | 22 | **262** |
+| **缺口（SQLite＋MIXED）** | — | **6** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
 
+> 🐌 **本機全套的偶發（2026-09-29 第八十二批）**：`v3/test/stage1-fixture-readiness.test.js` 的
+> 「P2-15 a hard-conflict registry row without its wish row fails the gate」在**全套平行**跑時紅過一次，
+> 單獨跑（連續兩次）全綠，且該檔與本批改動無關 ⇒ 判定為平行執行的互相污染（夾具 registry 共用狀態），
+> 看到時先單獨重跑那一個檔。
+>
 > 🐌 **已知的 CI flake（2026-09-29 實測，第七十七批 PR #575）**：同一個 commit 的 CI 出現
 > 「來源檔讀到**舊內容**」型的假紅——第一次是 `offline-report` 說 `db.js` 少了
 > `EXPIRED_OFFLINE_SWEEP_MS`，第二次是 `module-imports` 說 `usersAsync.js` 少了 6 個 export。

@@ -25,6 +25,18 @@ import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolati
 import {
   ABANDON_DRAFT_LISTING_SQL,
   BAN_SELF_PUBLISHER_SQL,
+  NEXT_SELF_POST_ID_SQL,
+  SELF_CONTACT_MAX,
+  SELF_DRAFT_INSERT_SQL,
+  SELF_DRAFT_UPDATE_SQL,
+  SELF_POST_ID_BASE,
+  SELF_POST_ID_END,
+  catalogTraitExtras,
+  digitsPhone,
+  listingFormFields,
+  normalizeLineUrl,
+  selfDraftInsertParams,
+  selfDraftUpdateParams,
   DRAFT_LISTING_UPDATE_SQL,
   HIDE_SELF_LISTING_SQL,
   REPORT_COUNT_SQL,
@@ -44,6 +56,19 @@ import {
   selfBanStamp,
 } from "./selfListings.js";
 import { sanitizeListingBodyHtml } from "./listingBody.js";
+import { isMemberMediaUrl } from "./memberMedia.js";
+import { isSelfPhotoPublicUrl } from "./selfPhotos.js";
+import { normalizeDeposit, normalizeSelfTraits } from "./selfTraits.js";
+import { ownsMediaUrlAsync } from "./memberMediaAsync.js";
+import { copyResult } from "./listingTools.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+
+// 複製的冪等表（同步 `listingTools.js:copyOwnListing()` 用的同一組語句）。
+export const COPY_IDEMPOTENCY_HIT_SQL =
+  "SELECT draft_id FROM listing_copy_idempotency WHERE user_id=? AND request_key=?";
+export const COPY_IDEMPOTENCY_INSERT_SQL =
+  "INSERT INTO listing_copy_idempotency(user_id, request_key, draft_id, created_at) VALUES (?,?,?,?)";
+const isoOf = (now) => (now ? new Date(now) : new Date()).toISOString();
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
@@ -239,4 +264,173 @@ export async function abandonImportedDraftListingAsync(userId, postId, { now = n
   await exec(ABANDON_DRAFT_LISTING_SQL, [stamp, row.post_id]);
   sqliteHandle().prepare(ABANDON_DRAFT_LISTING_SQL).run(stamp, row.post_id);
   return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
+}
+
+// ---- 複製自己的站內刊登（`POST /api/self-listings/:id/copy`，第八十二批）-------------------
+//
+// 同步版整條讀寫節點本機：來源列（`listings`）、冪等表（`listing_copy_idempotency`）、
+// 素材所有權（`member_media`）與新草稿列。PG 模式下刊登與素材都在 PG ⇒ 複製出來的草稿
+// 會落在**這台節點**，別的節點看不到（列表因此少一則），而且素材所有權會誤判成「不是自己的」。
+//
+// 語句與純組裝全部沿用 `selfListings.js`／`listingTools.js`（同一份），這裡只換「誰去跑」。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
+async function runWith(options, { write = false }, runPostgres, runSqlite) {
+  if (!isPg(options)) return runSqlite();
+  try {
+    return await runPostgres();
+  } catch (error) {
+    if (!sqliteFallbackAllowed(options, { write })) throw error;
+    return runSqlite();
+  }
+}
+
+// 注入式 exec 有兩種慣例（裸陣列／`{rows}`）⇒ 在邊界正規化成 `{rows}`。
+async function runnerFor(options = {}) {
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => {
+      const raw = await injected(sql, params);
+      return Array.isArray(raw) ? { rows: raw } : raw;
+    };
+  }
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
+}
+
+async function nextSelfPostIdAsync(run) {
+  const row = rowsOf(await run(NEXT_SELF_POST_ID_SQL, [SELF_POST_ID_BASE, SELF_POST_ID_END]))[0];
+  const current = Number(row?.n) || SELF_POST_ID_BASE;
+  const next = Math.max(SELF_POST_ID_BASE, current) + 1;
+  if (next >= SELF_POST_ID_END) throw httpError("站內刊登編號已滿", 500);
+  return next;
+}
+
+/** `listingTools.js:reusableCopyPhotos()` 的 PG 版（素材所有權讀 PG）。 */
+export async function reusableCopyPhotosAsync(userId, urls, options = {}) {
+  const out = [];
+  for (const raw of Array.isArray(urls) ? urls : []) {
+    const url = String(raw || "").trim();
+    if (!url || out.includes(url)) continue;
+    if (isMemberMediaUrl(url)) {
+      if (await ownsMediaUrlAsync(userId, url, options)) out.push(url);
+      continue;
+    }
+    if (isSelfPhotoPublicUrl(url)) out.push(url);
+  }
+  return out;
+}
+
+/** `selfListings.js:insertSelfDraftListing()` 的 PG 版（複製草稿的兩句寫入）。 */
+export async function insertSelfDraftListingAsync(uid, fields = {}, options = {}) {
+  const id = Number(uid) || 0;
+  if (!id) throw httpError("請先登入", 401);
+  const now = options.now ? new Date(options.now) : new Date();
+  const created = (now instanceof Date ? now : new Date(now)).toISOString();
+  const title = String(fields.title || "").trim().slice(0, SELF_TITLE_MAX) || "複製草稿";
+  const body = String(fields.body || "").trim().slice(0, SELF_BODY_MAX);
+  const photos = normalizePhotoList(fields.photos || []);
+  const rent = Math.max(0, Math.round(Number(fields.price_num || fields.rent) || 0));
+  const address = String(fields.address || "").trim().slice(0, 160);
+  const areaName = String(fields.area_name || "").trim().slice(0, 40);
+  const layout = String(fields.layout || "").trim().slice(0, 20);
+  const floorName = String(fields.floor_name || "").trim().slice(0, 20);
+  const kindName = String(fields.kind_name || "").trim().slice(0, 20);
+  const roleName = String(fields.role_name || "").trim().slice(0, 20);
+  const traits = normalizeSelfTraits(fields.traits, catalogTraitExtras({ includeInactive: true }).ids);
+  const deposit = normalizeDeposit(fields.deposit);
+  const contactName = String(fields.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  const phone = digitsPhone(fields.phone || fields.mobile);
+  let lineUrl = "";
+  try {
+    lineUrl = normalizeLineUrl(fields.line_url);
+  } catch {
+    lineUrl = "";
+  }
+  return runWith(options, { write: true }, async () => {
+    const run = await runnerFor(options);
+    const postId = await nextSelfPostIdAsync(run);
+    await run(SELF_DRAFT_INSERT_SQL, selfDraftInsertParams({
+      postId, title, rent, address, areaName, layout, floorName, kindName, roleName, cover: photos[0] || "", created,
+    }));
+    await run(SELF_DRAFT_UPDATE_SQL, selfDraftUpdateParams({
+      uid: id, postId, body, photos, traits, deposit, contactName, roleName, phone, lineUrl,
+    }));
+    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的草稿變成錯誤。
+    try {
+      const { insertSelfDraftListing } = await import("./selfListings.js");
+      insertSelfDraftListing(sqliteHandle(), id, { ...fields, title, body, photos, rent, price_num: rent, address, area_name: areaName, layout, floor_name: floorName, kind_name: kindName, role_name: roleName, traits, deposit, contact_name: contactName, phone, line_url: lineUrl }, now);
+    } catch { /* 本機鏡射盡力而為 */ }
+    return getSelfListingAsync(postId, { viewerId: id, ...options });
+  }, async () => {
+    const { insertSelfDraftListing } = await import("./selfListings.js");
+    return insertSelfDraftListing(sqliteHandle(), id, fields, now);
+  });
+}
+
+/** `listingTools.js:copyOwnListing()` 的 PG 版。 */
+export async function copyOwnListingAsync(userId, sourceId, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入", 401);
+  if (!isPg(options)) {
+    const { copyOwnListing } = await import("./listingTools.js");
+    return copyOwnListing(sqliteHandle(), uid, sourceId, input);
+  }
+  // PG 區段整體包在 try 裡：讀取（來源列／素材）與寫入（草稿）用**同一套**回退政策，
+  // 否則 `fallback: "open"` 時 `getSelfRowAsync()` 會直接把連線錯誤往上丟（實測）。
+  try {
+    return await copyOwnListingPg(uid, sourceId, input, options);
+  } catch (error) {
+    if (error?.status) throw error;   // 業務錯誤（401／403／404）直接往上丟
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
+    const { copyOwnListing } = await import("./listingTools.js");
+    return copyOwnListing(sqliteHandle(), uid, sourceId, input);
+  }
+}
+
+async function copyOwnListingPg(uid, sourceId, input, options) {
+  const run = await runnerFor(options);
+  const source = await getSelfRowAsync(sourceId, { ...options, exec: run, driver: "postgres", strict: true });
+  if (!source) throw httpError("找不到這則刊登", 404);
+  if (Number(source.listed_by_user_id) !== uid) throw httpError("只能複製自己的刊登", 403, "not_owner");
+  const key = String(input.idempotency_key || input.idempotencyKey || "").trim().slice(0, 80);
+  if (key) {
+    const hit = rowsOf(await run(COPY_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];
+    if (hit) {
+      const draft = await getSelfListingAsync(hit.draft_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
+      return { ...copyResult(null, uid, source, draft), reused: true };
+    }
+  }
+  const form = listingFormFields(source);
+  const photos = await reusableCopyPhotosAsync(uid, listingPhotoUrls(source), { ...options, exec: run, driver: "postgres", strict: true });
+  const draft = await insertSelfDraftListingAsync(uid, {
+    title: form.title,
+    body: form.body,
+    rent: form.rent,
+    price_num: form.rent,
+    address: form.address,
+    area_name: source.area_name,
+    layout: source.layout,
+    floor_name: source.floor_name,
+    kind_name: source.kind_name,
+    role_name: source.role_name,
+    traits: form.traits,
+    deposit: form.deposit,
+    contact_name: form.contact_name,
+    phone: form.phone,
+    line_url: form.line_url,
+    photos,
+  }, { ...options, exec: run, driver: "postgres", strict: true });
+  if (key) {
+    try {
+      await run(COPY_IDEMPOTENCY_INSERT_SQL, [uid, key, draft.post_id, isoOf(options.now)]);
+    } catch {
+      const again = rowsOf(await run(COPY_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];
+      if (again) {
+        const reusedDraft = await getSelfListingAsync(again.draft_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
+        return { ...copyResult(null, uid, source, reusedDraft), reused: true };
+      }
+    }
+  }
+  return copyResult(null, uid, source, draft);
 }

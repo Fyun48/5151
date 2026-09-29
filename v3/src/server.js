@@ -28,6 +28,8 @@ import {
   ownerListingMatchesAsync,
   rentalMatchOwnerMetaAsync,
 } from "./rentalMatchAsync.js";
+// 站內複製島嶼
+import { copyOwnListingAsync } from "./selfListingsAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
 import { readFileSync } from "node:fs";
@@ -168,7 +170,6 @@ import {
   runRentalNotifyWorkerTick,
   createSelfListing,
   listingToolsInfo,
-  copyOwnListingFor,
   publishOwnedDraftFor,
   listDescriptionTemplatesFor,
   createDescriptionTemplateFor,
@@ -3547,11 +3548,13 @@ app.get("/api/admin/listing-imports", requireAdminApi, async (req, res) => {
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 
-app.post("/api/self-listings/:id/copy", (req, res) => {
+app.post("/api/self-listings/:id/copy", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(copyOwnListingFor(session.userId, req.params.id, req.body || {}));
+    // 來源列、冪等表、素材所有權與新草稿列全部走 PG 島嶼（同步版只寫本機 ⇒ 別的節點看不到
+    // 複製出來的草稿，素材所有權還會誤判成「不是自己的」）（第八十二批）。
+    res.json(await copyOwnListingAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.post("/api/self-listings/:id/publish", (req, res) => {

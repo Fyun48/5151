@@ -83,5 +83,7 @@ test("server exposes listing tool routes with auth hooks", () => {
   assert.match(server, /app\.post\("\/api\/self-listings\/:id\/publish"/);
   assert.match(server, /app\.get\("\/api\/listing-description-templates"/);
   assert.match(server, /app\.post\("\/api\/listing-contact-profiles"/);
-  assert.match(server, /copyOwnListingFor\(session\.userId/);
+  // 第八十二批：複製改走 PG 島嶼（`copyOwnListingFor` 已移除）。
+  assert.match(server, /copyOwnListingAsync\(session\.userId/);
+  assert.match(server, /import \{ copyOwnListingAsync \} from "\.\/selfListingsAsync\.js";/);
 });
