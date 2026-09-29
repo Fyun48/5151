@@ -344,9 +344,74 @@ export async function rejectSuspectedMatchAsync(postId, userId, { peerId, admin 
 //   * `BACKFILL_STATUS_KEY`  存的是 `JSON.stringify({...})`（等於被 stringify 兩次）
 // 所以 `getSiteSettingAsync()`（JSON.parse 一次）在這裡是 `settingKey()` 的**直接替代**——
 // 兩邊取到的都是「再 parse 一次才拿到物件」的字串。判斷與回傳形狀完全照抄。
-import { getSiteSettingAsync } from "./settingsKvAsync.js";
-import { BACKFILL_SETTING_KEY, RECONCILE_BATCH } from "./sameHouseReconcile.js";
+import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
+import {
+  BACKFILL_SETTING_KEY,
+  NEXT_BACKFILL_BATCH_SQL,
+  RECONCILE_BATCH,
+  summarizeReconciliationBatch,
+} from "./sameHouseReconcile.js";
+import { reconcileListingByIdAsync } from "./listingMatchAsync.js";
 import { BACKFILL_STATUS_KEY } from "./db.js";
+
+// `db.js runSameHouseBackfill()` 的 PG 版（`POST /api/admin/same-house/reconcile`）。
+//
+// ⚠️ 為什麼一定要有：那個端點是管理員的「同房源重掃」，原本只寫本機 SQLite
+//（`reconcileListingById()` → `listing_groups`／`match_post_id`／稽核列都在本機）
+// ⇒ PG 模式下後台按了、站上（讀 PG）看不到任何變化，而且游標也只前進本機那一份。
+// 逐列的重掃本身已經是島嶼（`listingMatchAsync.reconcileListingByIdAsync`），這裡只補
+// 「挑批次 ＋ 游標 ＋ 摘要」——語句與摘要函式都逐字重用同步版。
+export async function runSameHouseBackfillAsync({ limit = RECONCILE_BATCH, cursor } = {}, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    const { runSameHouseBackfill } = await import("./db.js");
+    return runSameHouseBackfill({ limit, cursor });
+  }
+  const exec = await pgExec(options);
+  const readSetting = (key) => getSiteSettingAsync(key, { ...options, driver: "postgres" });
+  const writeSetting = (key, value) => setSiteSettingAsync(key, value, { ...options, driver: "postgres" });
+  const startCursor = cursor == null ? Number((await readSetting(BACKFILL_SETTING_KEY)) || 0) : Number(cursor) || 0;
+  const cap = Math.max(1, Math.min(Number(limit) || RECONCILE_BATCH, 200));
+  const batch = await exec(NEXT_BACKFILL_BATCH_SQL, [startCursor, cap]);
+  const results = [];
+  for (const row of batch) {
+    try {
+      const reconciled = await reconcileListingByIdAsync(row.post_id, { reason: "backfill" }, options);
+      results.push({ post_id: row.post_id, ...reconciled });
+    } catch (error) {
+      results.push({ post_id: row.post_id, error: error.message });
+    }
+  }
+  const nextCursor = batch.length ? Number(batch[batch.length - 1].post_id) : startCursor;
+  // 落地格式與同步版**逐字相同**：`writeSettingKey()` 會 JSON.stringify 一次，
+  // 所以 `setSiteSettingAsync()`（同一件事）直接吃同樣的值。
+  await writeSetting(BACKFILL_SETTING_KEY, String(nextCursor));
+  const summary = {
+    ...summarizeReconciliationBatch(results),
+    cursor: startCursor,
+    next_cursor: nextCursor,
+    done: batch.length < cap,
+    results: results.map((row) => ({
+      post_id: row.post_id,
+      skipped: row.skipped || false,
+      reason: row.reason || "",
+      level: row.best?.level || "",
+      error: row.error || "",
+    })),
+  };
+  await writeSetting(BACKFILL_STATUS_KEY, JSON.stringify({
+    cursor: summary.cursor,
+    next_cursor: summary.next_cursor,
+    done: summary.done,
+    scanned: summary.scanned,
+    candidate_pairs: summary.candidate_pairs,
+    auto_confirmed: summary.auto_confirmed,
+    suspected: summary.suspected,
+    no_match: summary.no_match,
+    skipped: summary.skipped,
+    errors: summary.errors,
+  }));
+  return summary;
+}
 
 export async function sameHouseBackfillStatusAsync(options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") {

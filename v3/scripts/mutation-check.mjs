@@ -2665,6 +2665,40 @@ const STATEWRITE_MUTATIONS = [
   },
 ];
 
+// 管理員「同房源重掃」PG 版（v3/test/admin-same-house-async.test.js，第六十九批）。
+const SAMEHOUSE_SRC = "v3/src/sameHouseAsync.js";
+const SAMEBACKFILL_MUTATIONS = [
+  {
+    name: "重掃不讀 PG 的游標（每次都從 0 開始重掃）",
+    file: SAMEHOUSE_SRC,
+    from: '  const startCursor = cursor == null ? Number((await readSetting(BACKFILL_SETTING_KEY)) || 0) : Number(cursor) || 0;',
+    to: "  const startCursor = Number(cursor) || 0;",
+    expect: "重掃：PG 分支的摘要",
+  },
+  {
+    name: "重掃不寫回游標（永遠掃同一批）",
+    file: SAMEHOUSE_SRC,
+    from: "  await writeSetting(BACKFILL_SETTING_KEY, String(nextCursor));\n",
+    to: "",
+    expect: "重掃：PG 分支的摘要",
+  },
+  {
+    name: "重掃逐列失敗不吞（單列錯誤讓整個批次 500）",
+    file: SAMEHOUSE_SRC,
+    from: "    } catch (error) {\n      results.push({ post_id: row.post_id, error: error.message });\n    }",
+    to: "    } catch (error) {\n      throw error;\n    }",
+    // 殺手是「單列失敗要吞掉」那條：摘要那條沒有失敗的列，走不到這個 catch。
+    expect: "單列失敗要吞掉",
+  },
+  {
+    name: "重掃不寫狀態鍵（後台列表永遠是舊的）",
+    file: SAMEHOUSE_SRC,
+    from: '  await writeSetting(BACKFILL_STATUS_KEY, JSON.stringify({',
+    to: '  await writeSetting("sameHouseBackfillStatusDisabled", JSON.stringify({',
+    expect: "重掃：PG 分支的摘要",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4047,6 +4081,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
   : /listing-enrich-parity/.test(testFile) ? ENRICHQ_MUTATIONS
   : /listing-state-writes/.test(testFile) ? STATEWRITE_MUTATIONS
+  : /admin-same-house-async/.test(testFile) ? SAMEBACKFILL_MUTATIONS
   : /listing-similarity-admin-parity/.test(testFile) ? SIMILARITY_MUTATIONS
   : /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS
   : /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS

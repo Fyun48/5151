@@ -44,7 +44,6 @@ import {
   listPublicListingsFast,
   publicSearchSettings,
   GUEST_MAX_DISTRICTS,
-  runSameHouseBackfill,
   sameHouseBackfillStatus,
   mergeSameHouseForUser,
   resetListings,
@@ -289,7 +288,7 @@ import {
   deleteOwnAccountAsync,
   listAdminMembersAsync,
 } from "./adminMembersAsync.js";
-import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
+import { runSameHouseBackfillAsync, sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { createCaseFromFeedbackAsync, setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
 import { closeSelfListingAsync, hideSelfListingAsync, reportSelfListingAsync } from "./selfListingsAsync.js";
@@ -2772,9 +2771,10 @@ app.get("/api/admin/same-house/reconcile", requireAdminApi, async (_req, res) =>
   });
 });
 
-app.post("/api/admin/same-house/reconcile", requireAdminApi, (req, res) => {
+app.post("/api/admin/same-house/reconcile", requireAdminApi, async (req, res) => {
   try {
-    const result = runSameHouseBackfill({
+    // 走 driver-aware 入口：PG 模式下「重掃的結果」與游標都必須落在站上讀的那一份。
+    const result = await runSameHouseBackfillAsync({
       limit: Number(req.body?.limit) || 50,
       cursor: req.body?.cursor,
     });

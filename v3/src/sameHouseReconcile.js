@@ -245,16 +245,18 @@ export function matchPatchFromEvaluation(evaluation) {
   };
 }
 
-export function nextBackfillBatch(db, { cursor = 0, limit = RECONCILE_BATCH } = {}) {
-  const cap = Math.max(1, Math.min(Number(limit) || RECONCILE_BATCH, 200));
-  const after = Number(cursor) || 0;
-  return db.prepare(
-    `SELECT post_id FROM listings
+// 語句抽成常數：PG 版（`sameHouseAsync.runSameHouseBackfillAsync()`）逐字共用同一句
+// （`?` 佔位由 `toPostgresSql()` 轉 `$n`；`IFNULL` 亦然）。
+export const NEXT_BACKFILL_BATCH_SQL = `SELECT post_id FROM listings
      WHERE post_id > ?
        AND IFNULL(offline_confirmed, 0) = 0
      ORDER BY post_id
-     LIMIT ?`,
-  ).all(after, cap);
+     LIMIT ?`;
+
+export function nextBackfillBatch(db, { cursor = 0, limit = RECONCILE_BATCH } = {}) {
+  const cap = Math.max(1, Math.min(Number(limit) || RECONCILE_BATCH, 200));
+  const after = Number(cursor) || 0;
+  return db.prepare(NEXT_BACKFILL_BATCH_SQL).all(after, cap);
 }
 
 export function summarizeReconciliationBatch(results) {

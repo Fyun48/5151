@@ -111,3 +111,77 @@ test("不足兩筆時要回 need_two（與同步版一致）", async () => {
   assert.deepEqual(asyncOut, syncOut);
   assert.equal(asyncOut.code, "need_two");
 });
+
+// ---------------------------------------------------------------------------
+// 第六十九批：`runSameHouseBackfill()`（管理員的「同房源重掃」）的 PG 版。
+// 原本只寫本機 SQLite ⇒ PG 模式下後台按了、站上（讀 PG）看不到變化，游標也只前進本機那一份。
+// ---------------------------------------------------------------------------
+
+test("重掃：sqlite 模式回退同步版（回傳形狀與游標一致）", async () => {
+  const { runSameHouseBackfillAsync } = await import("../src/sameHouseAsync.js");
+  const { BACKFILL_SETTING_KEY } = await import("../src/sameHouseReconcile.js");
+  resetBoth();
+  const resetCursor = () => db.sqliteHandle()
+    .prepare("DELETE FROM settings WHERE key = ? OR key = 'sameHouseBackfillStatus'").run(BACKFILL_SETTING_KEY);
+  // 兩邊都要從**同一個游標**開始（游標存在 settings，第一次呼叫會把它推進）。
+  resetCursor();
+  const viaAsync = await runSameHouseBackfillAsync({ limit: 10 }, { driver: "sqlite" });
+  resetCursor();
+  const viaSync = db.runSameHouseBackfill({ limit: 10 });
+  assert.deepEqual(viaAsync, viaSync, "sqlite 模式的結果必須與同步版完全相同");
+  assert.equal(viaAsync.scanned, 2, "兩列都要被掃到");
+});
+
+test("重掃：PG 分支的摘要、游標與落地旗標都與同步版相同", async () => {
+  const { runSameHouseBackfillAsync } = await import("../src/sameHouseAsync.js");
+  const settings = await import("../src/settingsKvAsync.js");
+  const { BACKFILL_SETTING_KEY, NEXT_BACKFILL_BATCH_SQL } = await import("../src/sameHouseReconcile.js");
+  const exec = resetBoth();
+  // PG 夾具也要有 settings 表（游標與狀態都寫在那裡）。
+  const mem = exec.raw;
+  mem.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const disk = db.sqliteHandle();
+  disk.prepare("DELETE FROM settings WHERE key LIKE 'sameHouseBackfill%'").run();
+  mem.prepare("DELETE FROM settings WHERE key LIKE 'sameHouseBackfill%'").run();
+
+  // 同步版基準（本機）：先跑一次拿摘要與游標，再重置。
+  const viaSync = db.runSameHouseBackfill({ limit: 10 });
+  const syncCursor = disk.prepare("SELECT value FROM settings WHERE key = ?").get(BACKFILL_SETTING_KEY)?.value;
+  disk.prepare("DELETE FROM settings WHERE key LIKE 'sameHouseBackfill%'").run();
+
+  // PG 分支：exec 就是夾具（同一句 SQL，`?` 佔位兩邊都合法）。
+  const pgOptions = { ...PG, exec, strict: true };
+  const viaPg = await runSameHouseBackfillAsync({ limit: 10 }, pgOptions);
+  assert.deepEqual(viaPg, viaSync, "摘要必須逐欄相同（含 cursor／next_cursor／done／results）");
+  assert.equal(viaPg.scanned, 2, "兩列都要被掃到（否則這條測試沒有鑑別力）");
+  const pgCursor = mem.prepare("SELECT value FROM settings WHERE key = ?").get(BACKFILL_SETTING_KEY)?.value;
+  assert.equal(pgCursor, syncCursor, "游標的落地格式必須與同步版相同");
+  // 游標要真的**從 PG 讀回來**（第二次呼叫要接在同一個位置上）。
+  const second = await runSameHouseBackfillAsync({ limit: 10 }, pgOptions);
+  assert.equal(second.cursor, viaPg.next_cursor, "第二次要從 PG 上的游標接續");
+  assert.equal(second.done, true, "沒有下一批了");
+  // 狀態鍵也要落到 PG（後台列表讀的是它）。
+  const status = await settings.getSiteSettingAsync("sameHouseBackfillStatus", { ...PG, exec });
+  assert.equal(typeof JSON.parse(status).scanned, "number", "狀態鍵要落在 PG 且能被解析");
+  assert.match(NEXT_BACKFILL_BATCH_SQL, /IFNULL\(offline_confirmed, 0\) = 0/, "語句要逐字沿用同步版");
+});
+
+test("重掃：單列失敗要吞掉並計入 errors，整批不能 500", async () => {
+  const { runSameHouseBackfillAsync } = await import("../src/sameHouseAsync.js");
+  const { BACKFILL_SETTING_KEY } = await import("../src/sameHouseReconcile.js");
+  const exec = resetBoth();
+  const mem = exec.raw;
+  mem.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  mem.prepare("DELETE FROM settings WHERE key LIKE 'sameHouseBackfill%'").run();
+  void BACKFILL_SETTING_KEY;
+  // 讓「逐列重掃」那條路一定失敗（群組表是它會碰、而這個批次流程本身不會碰的表）。
+  const failing = async (sql, params = []) => {
+    if (/listing_group/i.test(String(sql))) throw new Error("boom: 群組表暫時不可用");
+    return mem.prepare(sql).all(...params);
+  };
+  const result = await runSameHouseBackfillAsync({ limit: 10 }, { ...PG, exec: failing, strict: true });
+  assert.equal(result.scanned, 2, "兩列都要被掃到（失敗的那一列也要算）");
+  assert.equal(result.errors, 2, "每一列的失敗都要計入 errors");
+  assert.equal(result.results.length, 2);
+  assert.ok(result.results.every((row) => /boom/.test(row.error)), `每列都要帶回錯誤訊息：${JSON.stringify(result.results)}`);
+});
