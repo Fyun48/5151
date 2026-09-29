@@ -2758,6 +2758,41 @@ const SITERESET_MUTATIONS = [
   },
 ];
 
+// 通知 flush 迴圈的逐會員讀取（v3/test/notify-flush-settings.test.js，第七十四批）。
+const NOTIFYFLUSH_SRC = "v3/src/watcher.js";
+const NOTIFYFLUSH_MUTATIONS = [
+  {
+    name: "flush 的逐會員設定改讀本機（暫停通知的會員照樣被通知）",
+    file: NOTIFYFLUSH_SRC,
+    from: "    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;",
+    to: "    const userSettings = userId ? getSettings(userId) : settings;",
+    expect: "暫停旗標以 PG 為準",
+  },
+  {
+    name: "flush 的信箱改讀本機（寄到舊的／空的信箱）",
+    file: NOTIFYFLUSH_SRC,
+    from: '    const mailTo = String((await getUserByIdAsync(userId, options))?.email || "").trim();',
+    to: '    const mailTo = String(getUserById(userId)?.email || "").trim();',
+    // 殺手是原始碼接線那條（信箱本身在 silent 模式不會真的使用，所以行為面看不到差異）。
+    expect: "不得再用同步的",
+  },
+  {
+    name: "flush 不把 options 轉發給佇列（測試／探針注入無效）",
+    file: NOTIFYFLUSH_SRC,
+    from: "  const pending = await pendingNotifyEventsAsync({ limit: 400 }, options);",
+    to: "  const pending = await pendingNotifyEventsAsync({ limit: 400 });",
+    expect: "讀注入的 PG runner",
+  },
+  {
+    name: "flush 的站台設定改讀本機（整個迴圈用別台節點的設定決定通知）",
+    file: NOTIFYFLUSH_SRC,
+    from: "  settings = settings || await getSettingsAsync(0, options);",
+    to: "  settings = settings || getSettings();",
+    // 同上：站台設定的讀取在離線夾具裡的差異由接線那條守住。
+    expect: "不得再用同步的",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4177,6 +4212,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
   : /notify-queue-parity/.test(testFile) ? NOTIFYQ_MUTATIONS
   : /site-reset-async/.test(testFile) ? SITERESET_MUTATIONS
+  : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS

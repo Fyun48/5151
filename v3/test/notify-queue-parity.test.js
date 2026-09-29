@@ -260,7 +260,9 @@ test("the notification queue reads and writes through the driver-aware entry poi
   // Wiring: the flush loop awaits all three (no synchronous call left in watcher.js).
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /import \{ markEventNotifiedAsync, pendingNotifyEventsAsync, updateEventNotifyAsync \} from "\.\/notifyQueueAsync\.js";/);
-  assert.match(watcher, /const pending = await pendingNotifyEventsAsync\(\{ limit: 400 \}\);/);
+  // 第七十四批：`flushPendingNotifications()` 會把 `options` 一路轉發（測試才能注入 driver），
+  // 其餘呼叫端（crawler 的 40 筆那條）不變。
+  assert.match(watcher, /const pending = await pendingNotifyEventsAsync\(\{ limit: 400 \}, options\);/);
   assert.match(watcher, /const pending = await pendingNotifyEventsAsync\(\{ limit: 40 \}\);/);
   assert.match(watcher, /await updateEventNotifyAsync\(event\.id, \{ notify_decide: "cancelled"/);
   assert.match(watcher, /await markEventNotifiedAsync\(id\);/);
