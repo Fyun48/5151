@@ -137,3 +137,89 @@ test("live PG：註冊確認的 token 流程（成功 → 第二次 409）與忘
   const hashNow = (await query("SELECT password_hash FROM users WHERE id = $1", [uid]))[0].password_hash;
   if (forgot) assert.equal(hashNow, OLD_HASH, "503 時不得改動雜湊");
 });
+
+test("live PG：後台會員列表要算得出 PG 的關注數／刊登數／通知間隔，停權與改方案也落地", { skip }, async (t) => {
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  const adminAsync = await import("../src/adminMembersAsync.js");
+  const { sqliteHandle } = await import("../src/db.js");
+
+  const pgDriver = await createPostgresDriver({ connectionString: RAW });
+  const query = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  assert.equal((await query("SELECT current_database() AS db"))[0].db, DB, "連到的資料庫必須與 URL 一致");
+  // 這個隔離庫可能還沒有這幾張表（正式庫有）⇒ 照正式路徑鏡射（idempotent）。
+  await ensurePgSchema(pgDriver, sqliteHandle(), {
+    tables: ["users", "settings", "user_settings", "user_listing_flags", "listings"],
+    indexes: false,
+  });
+
+  const TOKEN = `livetest-adminmember-${Date.now()}`;
+  const EMAIL = `${TOKEN}@example.test`;
+  const POST_IDS = [930001, 930002];
+  const uid = Number((await query(
+    `INSERT INTO users(email, password_hash, role, plan, created_at, signup_count)
+     VALUES ($1, '', 'member', 'free', $2, 5) RETURNING id`,
+    [EMAIL, new Date().toISOString()],
+  ))[0].id);
+  t.after(async () => {
+    try { await query("DELETE FROM user_listing_flags WHERE user_id = $1", [uid]); } catch { /* 盡力而為 */ }
+    try { await query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [POST_IDS]); } catch { /* 盡力而為 */ }
+    try { await query("DELETE FROM settings WHERE key = $1", [`${TOKEN}-x`]); } catch { /* 盡力而為 */ }
+    try { await query("DELETE FROM users WHERE email LIKE $1", [`${TOKEN}%`]); } catch { /* 盡力而為 */ }
+    try { await pgDriver.close(); } catch { /* 已關就算了 */ }
+  });
+
+  // 兩筆關注（一筆已確認離線）＋ 一筆開著的自主刊登 ＋ 一筆過期的自主刊登
+  for (const [postId, offline, source, selfStatus, expiresAt] of [
+    [POST_IDS[0], 0, "591", null, null],
+    [POST_IDS[1], 1, "591", null, null],
+    [930003, 0, "self", "open", null],
+    [930004, 0, "self", "open", "2020-01-01T00:00:00.000Z"],
+  ]) {
+    if (postId === 930003 || postId === 930004) POST_IDS.push(postId);
+    // `listings` 有幾個 NOT NULL 欄位（url／first_seen_at／last_seen_at…），PG 這一側要自己補齊。
+    const now = new Date().toISOString();
+    await query(
+      `INSERT INTO listings(post_id, title, url, source, source_key, self_status, offline_confirmed,
+                            listed_by_user_id, self_expires_at, first_seen_at, last_seen_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [postId, `live ${postId}`, `https://example.test/${postId}`, source, `1|${postId}`, selfStatus, offline,
+        uid, expiresAt, now, now],
+    );
+  }
+  for (const postId of POST_IDS.slice(0, 2)) {
+    await query("INSERT INTO user_listing_flags(user_id, post_id, viewed, watched, hidden, watch_note) VALUES ($1,$2,0,1,0,'')", [uid, postId]);
+  }
+  await query("INSERT INTO user_settings(user_id, key, value) VALUES ($1,'intervalMinutes','42')", [uid]);
+  await query("INSERT INTO user_settings(user_id, key, value) VALUES ($1,'intervalAdminSet','true')", [uid]);
+
+  const exec = async (sql, params = []) => {
+    const res = await pgDriver.query(toPostgresSql(sql), params);
+    return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
+  };
+  const opts = { driver: "postgres", pgDriver, exec, strict: true };
+
+  const members = await adminAsync.listAdminMembersAsync({ q: TOKEN }, opts);
+  const me = members.find((m) => Number(m.id) === uid);
+  assert.ok(me, "必須列出這個 PG 才有的會員");
+  assert.equal(me.signup_count, 5);
+  assert.equal(me.watchCount, 1, "已確認離線的那筆不佔額度");
+  assert.equal(me.listingCount, 1, "過期的自主刊登不算（而且 expire 會先跑）");
+  assert.equal(me.intervalMinutes, 42, "通知間隔要讀 PG 的 user_settings");
+
+  const deleted = await adminAsync.adminDeleteMemberAsync(uid, { reasonCode: "abuse" }, opts);
+  assert.equal(deleted.member.deleted, true);
+  const row = (await query("SELECT deleted_at, deleted_by, deleted_reason_code FROM users WHERE id = $1", [uid]))[0];
+  assert.ok(String(row.deleted_at || "").trim(), "PG 的 deleted_at 必須寫入");
+  assert.equal(row.deleted_by, "admin");
+  assert.equal(row.deleted_reason_code, "abuse");
+
+  const restored = await adminAsync.adminRestoreMemberAsync(uid, opts);
+  assert.equal(restored.deleted, false);
+  assert.equal((await query("SELECT deleted_by FROM users WHERE id = $1", [uid]))[0].deleted_by, "");
+
+  const patched = await adminAsync.adminPatchMemberAsync(uid, { plan: "sponsor" }, opts);
+  assert.equal(patched.plan, "sponsor");
+  assert.equal((await query("SELECT plan FROM users WHERE id = $1", [uid]))[0].plan, "sponsor");
+});

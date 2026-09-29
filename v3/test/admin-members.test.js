@@ -108,7 +108,8 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /會員列表不得含密碼/);
   assert.match(src, /requireAdminApi/);
   assert.match(src, /queueSystemMail\("welcome"/);
-  assert.match(src, /queueSystemMail\("account_deleted"/);
+  // 停權通知在第五十四批改走 PG 島嶼（同步版讀本機的 SMTP／範本 ⇒ PG 站寄不出去）。
+  assert.match(src, /await queueSystemMailAsync\("account_deleted"/);
   assert.match(src, /app\.post\("\/api\/account\/delete"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
 });

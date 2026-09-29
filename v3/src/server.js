@@ -274,9 +274,18 @@ import {
 // 回傳**本機** id，之後拿它去讀 PG 設定就會跨店錯位。
 import {
   defaultUserIdAsync,
+  getUserByIdAsync,
   resumeIdleIfNeededAsync,
   touchLastLoginAsync,
 } from "./usersAsync.js";
+// 後台會員管理（列表／停權／復原／改方案）的 PG 島嶼入口。
+import {
+  adminDeleteMemberAsync,
+  adminPatchMemberAsync,
+  adminRestoreMemberAsync,
+  deleteOwnAccountAsync,
+  listAdminMembersAsync,
+} from "./adminMembersAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
@@ -1602,28 +1611,34 @@ app.get("/admin.html", (req, res, next) => {
   next();
 });
 
-app.get("/api/admin/members", requireAdminApi, (req, res) => {
-  const members = listAdminMembers({
-    q: req.query?.q,
-    sort: req.query?.sort,
-    order: req.query?.order,
-  });
-  const payload = { members, deleteReasons: ADMIN_DELETE_REASONS };
-  if (/password_hash|"password"|scrypt:/.test(JSON.stringify(payload))) {
-    res.status(500).json({ error: "會員列表不得含密碼" });
-    return;
+app.get("/api/admin/members", requireAdminApi, async (req, res) => {
+  try {
+    // 每一個人都要「PG 的 users ＋ PG 的 settings ＋ PG 的關注／刊登數」才算得出來；
+    // 同步版三份都讀本機 ⇒ 別的節點的會員在後台會顯示成 0 筆／預設間隔，而且不會報錯。
+    const members = await listAdminMembersAsync({
+      q: req.query?.q,
+      sort: req.query?.sort,
+      order: req.query?.order,
+    });
+    const payload = { members, deleteReasons: ADMIN_DELETE_REASONS };
+    if (/password_hash|"password"|scrypt:/.test(JSON.stringify(payload))) {
+      res.status(500).json({ error: "會員列表不得含密碼" });
+      return;
+    }
+    res.json(payload);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
   }
-  res.json(payload);
 });
 
-app.post("/api/admin/members/:id/delete", requireAdminApi, (req, res) => {
+app.post("/api/admin/members/:id/delete", requireAdminApi, async (req, res) => {
   try {
-    const result = adminDeleteMember(req.params.id, {
+    const result = await adminDeleteMemberAsync(req.params.id, {
       reasonCode: req.body?.reasonCode,
       reasonText: req.body?.reasonText,
     });
     schedule();
-    queueSystemMail("account_deleted", result.member.email, { reason: result.reason.text || result.reason.label });
+    await queueSystemMailAsync("account_deleted", result.member.email, { reason: result.reason.text || result.reason.label });
     auditReq(req, "member_delete", result.member.email, { id: result.member.id }, { deleted: true });
     res.json({ member: result.member, reason: result.reason });
   } catch (error) {
@@ -1631,9 +1646,9 @@ app.post("/api/admin/members/:id/delete", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/admin/members/:id/restore", requireAdminApi, (req, res) => {
+app.post("/api/admin/members/:id/restore", requireAdminApi, async (req, res) => {
   try {
-    const member = adminRestoreMember(req.params.id);
+    const member = await adminRestoreMemberAsync(req.params.id);
     schedule();
     res.json({ member });
   } catch (error) {
@@ -1641,7 +1656,7 @@ app.post("/api/admin/members/:id/restore", requireAdminApi, (req, res) => {
   }
 });
 
-app.post("/api/account/delete", (req, res) => {
+app.post("/api/account/delete", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -1649,7 +1664,7 @@ app.post("/api/account/delete", (req, res) => {
       err.status = 401;
       throw err;
     }
-    deleteOwnAccount(session.userId, req.body?.reason);
+    await deleteOwnAccountAsync(session.userId, req.body?.reason);
     schedule();
     sendLogout(req, res);
     res.json({ ok: true });
@@ -1658,13 +1673,13 @@ app.post("/api/account/delete", (req, res) => {
   }
 });
 
-app.patch("/api/admin/members/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/members/:id", requireAdminApi, async (req, res) => {
   try {
-    const before = getUserById(req.params.id);
-    const member = adminPatchMember(req.params.id, req.body || {});
+    const before = await getUserByIdAsync(req.params.id);
+    const member = await adminPatchMemberAsync(req.params.id, req.body || {});
     schedule();
     if ((before?.plan || "free") !== "sponsor" && member.plan === "sponsor") {
-      queueSystemMail("sponsor_thanks", member.email);
+      await queueSystemMailAsync("sponsor_thanks", member.email);
     }
     res.json({ member });
   } catch (error) {

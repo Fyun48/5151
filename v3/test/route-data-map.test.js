@@ -73,19 +73,23 @@ test("/api/health 必須是「無直接DB」——它只讀行程內計數器，
   assert.deepEqual(r.sqlite, [], "不該有任何 SQLite 函式");
 });
 
-test("函式本文被截斷的守衛：/api/admin/members 必須看得到 listAdminMembers", () => {
-  // 這一條專門鎖「函式本文起點算錯」的那個修法錯誤。
-  // 我第一版用「簽名後第一個 `{`」當起點，遇到 `function f(a, { b = "" } = {})` 會配對到
-  // **參數的 `}`** 就結束，本文被截斷 ⇒ `listAdminMembers`（`db.js:904`，內部用 global `db`）
-  // 掉了 DIRECT 判定 ⇒ 這條路由被誤降成「無直接DB」。
-  // 實測：那個錯誤版本會讓 55 條判定改變，但**我原本的 5 條 ground truth 一條都沒抓到**——
-  // 是變異測試把它逼出來的。
-  // 2026-09-27：判定由 `SQLite` 變 `MIXED`（session 改走 PG），但「看得到 listAdminMembers」
-  // 這個**缺陷 (1) 的可觀察點**沒變，所以斷言保留。
+test("函式本文被截斷的守衛：/api/admin/members 必須看得到它的呼叫（不得被判成「無直接DB」）", () => {
+  // 這一條鎖的是「函式本文起點算錯」的那個修法錯誤：第一版用「簽名後第一個 `{`」當起點，
+  // 遇到 `function f(a, { b = "" } = {})` 會配對到**參數的 `}`** 就結束 ⇒ 本文被截斷，
+  // 整段路由的呼叫都看不到，判定被誤降成「無直接DB」（實測會讓 55 條判定改變）。
+  //
+  // ⚠️ 這一條**換過三次真值**：`SQLite ＋ listAdminMembers`（原始）→ `MIXED`（session 改走 PG，
+  // 2026-09-27）→ 第五十四批把這條路由搬上 PG 之後**第九次過期**。
+  // 現在改成**不隨進度過期**的性質：這條路由的分析結果必須「看得到東西」——
+  // 被吞掉的路由會變成 `無直接DB` 而且 sqlite／pg 兩個集合都是空的
+  // （另外，缺陷 (1) 的行為本身由 `MAP_MUTATIONS` 的合成來源樹守衛負責）。
   const r = route("GET /api/admin/members");
-  assert.equal(r.verdict, "MIXED", `實際：${JSON.stringify(r)}`);
-  assert.ok(r.sqlite.includes("listAdminMembers"),
-    `必須看得到 listAdminMembers（db.js:904 內部用 global db）。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+  assert.notEqual(r.verdict, "無直接DB",
+    `路由本文被吞掉時會變成「無直接DB」。實際：${JSON.stringify(r)}`);
+  const seen = [...r.sqlite, ...r.pg];
+  assert.ok(seen.length > 0, `必須看得到至少一個呼叫。實際：${JSON.stringify(r)}`);
+  assert.ok(seen.some((name) => /AdminMember|readSession/.test(name)),
+    `必須看得到這一叢的進入點（listAdminMembers…Async／readSession…）。實際：${JSON.stringify(seen)}`);
 });
 
 test("傳參考的函式必須被看見：/api/demo 的 buildDemoState({ listUserIds, … })", () => {
@@ -156,7 +160,7 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 helper 必須被算進 sqlite", () => {
+test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destructured default 都要看得見", () => {
   // 📌 這一條**已經換過七次標的**，換的原因值得記下來（前六次都是「拿『目前還沒移植』
   // 當 ground truth」）：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
@@ -191,10 +195,16 @@ test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 
       '  return db.prepare("SELECT * FROM things").all();',
       "}",
       "",
+      // 缺陷 (1) 的標的：簽名裡有 destructured default（`{ limit = 10 } = {}`），
+      // 「簽名後第一個 `{`」會配對到**參數的 `}`** ⇒ 本文被截斷。
+      "export function loadPaged(db, { limit = 10 } = {}) {",
+      '  return db.prepare(`SELECT * FROM things LIMIT ${Number(limit) || 10}`).all();',
+      "}",
+      "",
     ].join("\n"));
     writeFileSync(path.join(tmp, "v3/src/server.js"), [
       'import { db, readThing } from "./db.js";',
-      'import { loadThing } from "./external.js";',
+      'import { loadPaged, loadThing } from "./external.js";',
       "",
       "const app = { get() {} };",
       "",
@@ -204,6 +214,10 @@ test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 
       "",
       'app.get("/api/other", (req, res) => {',
       "  res.json(readThing());",
+      "});",
+      "",
+      'app.get("/api/paged", (req, res) => {',
+      "  res.json(loadPaged(db));",
       "});",
       "",
     ].join("\n"));
@@ -220,6 +234,11 @@ test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 
     assert.equal(thing.verdict, "SQLite", `合成樹的 /api/thing 應該被判成 SQLite。實際：${JSON.stringify(thing)}`);
     assert.ok(thing.sqlite.includes("loadThing"),
       `db.js 以外的 handle helper 必須被看見。實際 sqlite=${JSON.stringify(thing.sqlite)}`);
+    // 缺陷 (1) 的標的：簽名有 destructured default 的 helper 也必須被看見。
+    const paged = fixed.get("GET /api/paged");
+    assert.equal(paged.verdict, "SQLite", `合成樹的 /api/paged 應該被判成 SQLite。實際：${JSON.stringify(paged)}`);
+    assert.ok(paged.sqlite.includes("loadPaged"),
+      `destructured default 的 helper 不得被截斷。實際 sqlite=${JSON.stringify(paged.sqlite)}`);
 
     // 套回缺陷 (2)：sqlite 歸屬只看 db.js ⇒ `loadThing` 必須消失（沒消失代表守衛沒有牙齒）。
     const rulerPath = path.join(tmp, "v3/scripts/route-data-map.mjs");
@@ -235,6 +254,32 @@ test("缺陷 (2) 的守衛（合成來源樹）：db.js 以外、吃 handle 的 
     // 對照：另一條路由（helper 住在 db.js）在缺陷下不受影響——確保上面驗的是「跨模組」而不是全部消失。
     assert.ok(defective.get("GET /api/other").sqlite.includes("readThing"),
       "db.js 內的 helper 在缺陷 (2) 下仍然要被看見（這才是缺陷的定義）");
+
+    // ---- 缺陷 (1)：函式本文起點算錯（「簽名後第一個 {」＝ 參數的 }） ----
+    const defect1From = `  let i = text.indexOf("(", start);
+  if (i === -1) return text.slice(start);
+  let parenDepth = 0;
+  for (; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === "\u0060") { i = skipString(text, i) - 1; continue; }
+    if (ch === "(") parenDepth += 1;
+    else if (ch === ")") {
+      parenDepth -= 1;
+      if (parenDepth === 0) { i += 1; break; }
+    }
+  }
+  const open = text.indexOf("{", i);`;
+    const defect1To = `  let i = start;
+  const open = text.indexOf("{", i);`;
+    assert.ok(original.includes(defect1From), "缺陷 (1) 的錨點必須還在（尺規改寫時要同步更新這一條）");
+    writeFileSync(rulerPath, original.replace(defect1From, defect1To));
+    const defective1 = runRuler();
+    const brokenPaged = defective1.get("GET /api/paged");
+    assert.deepEqual(brokenPaged.sqlite, [],
+      `缺陷 (1) 下 destructured default 的 helper 必須消失。實際：${JSON.stringify(brokenPaged)}`);
+    // 對照：沒有 destructured default 的那條在缺陷 (1) 下不受影響。
+    assert.ok(defective1.get("GET /api/thing").sqlite.includes("loadThing"),
+      "缺陷 (1) 只影響「簽名含 destructured default」的函式，其他 helper 仍要被看見");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

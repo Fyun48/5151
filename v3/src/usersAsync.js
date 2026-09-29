@@ -13,13 +13,20 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import {
+  assertMemberDeletable,
+  assertMemberRestorable,
+  deleteUser as deleteUserSync,
   findUserByEmail as findUserByEmailSync,
   getUserById as getUserByIdSync,
   isUserDeleted,
+  listUsers as listUsersSync,
+  restoreUser as restoreUserSync,
   setUserPassword as setUserPasswordSync,
+  setUserPlan as setUserPlanSync,
   touchLastLogin as touchLastLoginSync,
 } from "./members.js";
 import { ensureUser as ensureUserSync, adminEmailForUser } from "./personalFlags.js";
+import { publicUser } from "./members.js";
 import { hashPassword, normalizeEmail, validatePassword, verifyPassword } from "./password.js";
 import { defaultUserId as defaultUserIdSync, resumeIdleIfNeeded as resumeIdleIfNeededSync } from "./db.js";
 import { applyIdleResumeAsync } from "./idlePause.js";
@@ -180,3 +187,65 @@ export async function resumeIdleIfNeededAsync(userId, options = {}) {
 // 靜態匯入會形成循環；這一支只在 `resumeIdleIfNeededAsync()` 內用到，所以用動態匯入。
 const { getSettingsAsync, saveSettingsAsync, armMemberExternalFetchAsync } =
   await import("./settingsAsync.js");
+
+// ---- 後台會員管理用到的使用者表讀寫（第五十四批）-------------------------------
+
+export const USERS_LIST_SQL = `SELECT id, email, role, plan, created_at, accepted_disclaimer_at, disclaimer_version,
+            signup_count, deleted_at, deleted_by, deleted_reason, deleted_reason_code, last_login_at
+     FROM users ORDER BY %SORT% %DIR%, id %DIR%`;
+export const USER_SET_PLAN_SQL = "UPDATE users SET plan = ? WHERE id = ?";
+export const USER_DELETE_SQL =
+  `UPDATE users SET deleted_at = ?, deleted_by = ?, deleted_reason = ?, deleted_reason_code = ? WHERE id = ?`;
+export const USER_RESTORE_SQL =
+  "UPDATE users SET deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '' WHERE id = ?";
+
+// `members.js::listUsers()` 的 PG 版（排序與過濾都在 JS，與同步版逐字對應：
+// `sort` 只認 `created_at`，其餘一律用 `id`；`q` 是 email 的子字串、大小寫無關）。
+export async function listUsersAsync({ includeDeleted = true, sort = "id", order = "asc", q = "" } = {}, options = {}) {
+  const dir = String(order).toLowerCase() === "desc" ? "DESC" : "ASC";
+  const sortKey = String(sort) === "created_at" ? "created_at" : "id";
+  const sql = USERS_LIST_SQL.replaceAll("%SORT%", sortKey).replaceAll("%DIR%", dir);
+  const rows = await run(options, async (exec) => (await exec(sql, [])).rows, () => listUsersSync(sqliteHandle(), { includeDeleted, sort, order, q }));
+  const needle = String(q || "").trim().toLowerCase();
+  return rows.filter((row) => {
+    if (!includeDeleted && isUserDeleted(row)) return false;
+    if (!needle) return true;
+    return String(row.email || "").toLowerCase().includes(needle);
+  });
+}
+
+// `members.js::setUserPlan()`：只認 `sponsor`，其餘一律 `free`；回傳更新後的那一列。
+export async function setUserPlanAsync(userId, plan, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return null;
+  const next = plan === "sponsor" ? "sponsor" : "free";
+  await run(options, async (exec) => { await exec(USER_SET_PLAN_SQL, [next, id]); },
+    () => setUserPlanSync(sqliteHandle(), id, plan));
+  const row = await getUserByIdAsync(id, options);
+  return row ? publicUser(row) : null;
+}
+
+// `members.js::deleteUser()`：守衛（找不到／管理員／已刪除）與同步版共用同一組訊息。
+export async function deleteUserAsync(userId, { by = "self", reason = "", reasonCode = "" } = {}, options = {}) {
+  const id = Number(userId) || 0;
+  // SQLite 站直接走同步版（連守衛與 UPDATE 都是同一條路，不必自己重寫一遍）。
+  if (!isPg(options)) return deleteUserSync(sqliteHandle(), id, { by, reason, reasonCode });
+  const user = await getUserByIdAsync(id, options);
+  assertMemberDeletable(user);
+  const now = new Date().toISOString();
+  const who = by === "admin" ? "admin" : "self";
+  await run(options, async (exec) => {
+    await exec(USER_DELETE_SQL, [now, who, String(reason || "").slice(0, 2000), String(reasonCode || "").slice(0, 40), id]);
+  }, () => deleteUserSync(sqliteHandle(), id, { by, reason, reasonCode }));
+  return getUserByIdAsync(id, options);
+}
+
+// `members.js::restoreUser()`。
+export async function restoreUserAsync(userId, options = {}) {
+  const id = Number(userId) || 0;
+  if (!isPg(options)) return restoreUserSync(sqliteHandle(), id);
+  const user = await getUserByIdAsync(id, options);
+  assertMemberRestorable(user);
+  await run(options, async (exec) => { await exec(USER_RESTORE_SQL, [id]); }, () => restoreUserSync(sqliteHandle(), id));
+  return getUserByIdAsync(id, options);
+}

@@ -118,6 +118,7 @@ import { demoCommutePatch } from "./demo.js";
 import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
+import { adminMemberView } from "./adminMemberView.js";
 import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { applyIdlePauseToMembers, applyIdleResume } from "./idlePause.js";
@@ -878,27 +879,15 @@ export function writeSettingKey(key, value) {
   ).run(key, JSON.stringify(value));
 }
 
+// 純投影在 `adminMemberView.js`（同步版與 PG 版共用同一份，前端契約才不會漂移）；
+// 這裡只負責「把三個本機讀取準備好」。
 function publicAdminMember(user) {
   if (!user) return null;
-  const settings = getSettings(user.id);
-  return {
-    id: Number(user.id),
-    email: user.email,
-    role: user.role || "member",
-    plan: user.plan || "free",
-    created_at: user.created_at || "",
-    accepted_disclaimer_at: user.accepted_disclaimer_at || "",
-    signup_count: Number(user.signup_count) || 1,
-    deleted: isUserDeleted(user),
-    deleted_at: user.deleted_at || "",
-    deleted_by: user.deleted_by || "",
-    deleted_reason: user.deleted_reason || "",
-    last_login_at: user.last_login_at || "",
-    intervalMinutes: Number(settings.intervalMinutes) || planIntervalMinutes(user.plan),
-    intervalAdminSet: settings.intervalAdminSet === true,
+  return adminMemberView(user, {
+    settings: getSettings(user.id),
     watchCount: countWatched(db, user.id),
     listingCount: countOpenSelfListings(user.id),
-  };
+  });
 }
 
 export function listAdminMembers(query = {}) {
