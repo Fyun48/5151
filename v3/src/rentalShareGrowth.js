@@ -120,6 +120,66 @@ export function recordShareEvent(db, {
   return { recorded: true, is_bot: bot };
 }
 
+// 分享事件用到的語句（同步與 async 版本共用同一份文字，避免兩邊漂移）。
+export const SHARE_TOKEN_LOOKUP_SQL = "SELECT public_token FROM demand_posts WHERE public_token = ?";
+export const SHARE_DUP_BY_USER_SQL = `SELECT id FROM rental_share_events
+   WHERE share_token = ? AND event_type = ? AND user_id = ? AND created_at >= ?
+   LIMIT 1`;
+export const SHARE_DUP_BY_VISITOR_SQL = `SELECT id FROM rental_share_events
+   WHERE share_token = ? AND event_type = ? AND visitor_hash = ? AND created_at >= ?
+   LIMIT 1`;
+export const SHARE_EVENT_INSERT_SQL =
+  `INSERT INTO rental_share_events(public_token, share_token, event_type, user_id, visitor_hash, is_bot, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+// `recordShareEvent()` 的 async 版（PG 島嶼用，第五十三批）。
+//
+// 為什麼不「注入假 handle 給同步版」：同步版用 `db.prepare(...).get()/.run()`，
+// 而 PG 的 I/O 一定是 Promise ⇒ 餵它一個 async 假 handle，`row?.public_token` 會是 undefined，
+// 驗證會直接判成「找不到分享」（**靜默失效**）。所以規則留在這裡、跑語句的人換掉：
+// helper（`looksLikeBot`／`visitorHash`／`allowView`／`iso`）與事件類型政策全部共用，
+// 只有「跑哪幾句 SQL」不同。`bumpAnalytics` 由呼叫端注入（PG 要用 `bumpAnalyticsAsync`）。
+export async function recordShareEventAsync(exec, {
+  shareToken,
+  eventType,
+  userId = null,
+  ip = "",
+  userAgent = "",
+  now = new Date(),
+  source = "public",
+} = {}, { bump } = {}) {
+  const type = SHARE_EVENT_TYPES.includes(eventType) ? eventType : "";
+  const token = String(shareToken || "").trim();
+  if (!type || !token || /^\d+$/.test(token)) throw rentalNotifyHttpError("無法記錄", 404, "share_not_found");
+  if (source === "public" && !PUBLIC_SHARE_EVENT_TYPES.includes(type)) {
+    throw rentalNotifyHttpError("無法記錄轉換", 403, "share_conversion_forbidden");
+  }
+  if (source === "server" && !CONVERSION_SHARE_EVENT_TYPES.includes(type)) {
+    throw rentalNotifyHttpError("無法記錄", 404, "share_not_found");
+  }
+  const validRow = (await exec(SHARE_TOKEN_LOOKUP_SQL, [token]))[0] || null;
+  const valid = validRow?.public_token ? String(validRow.public_token) : "";
+  if (!valid) throw rentalNotifyHttpError("找不到分享", 404, "share_not_found");
+  const bot = looksLikeBot(userAgent);
+  const hash = visitorHash(ip, userAgent);
+  if (type === "view" && !allowView(hash, now)) throw rentalNotifyHttpError("請稍後再試", 429, "RATE_LIMITED");
+  const day = iso(now).slice(0, 10);
+  const since = `${day}T00:00:00.000Z`;
+  if (userId) {
+    const dup = (await exec(SHARE_DUP_BY_USER_SQL, [valid, type, Number(userId), since]))[0] || null;
+    if (dup) return { recorded: false, reason: "deduped", is_bot: bot };
+  } else if (type === "view") {
+    const dup = (await exec(SHARE_DUP_BY_VISITOR_SQL, [valid, type, hash, since]))[0] || null;
+    if (dup) return { recorded: false, reason: "deduped", is_bot: bot };
+  }
+  await exec(SHARE_EVENT_INSERT_SQL, [
+    randomBytes(12).toString("base64url"), valid, type,
+    userId ? Number(userId) : null, hash, bot ? 1 : 0, iso(now),
+  ]);
+  if (typeof bump === "function") await bump(bot ? `share_${type}_bot` : `share_${type}`, now);
+  return { recorded: true, is_bot: bot };
+}
+
 export function sharePageExtras(flags = {}) {
   const row = normalizeRentalMarketplaceFlags(flags);
   return {

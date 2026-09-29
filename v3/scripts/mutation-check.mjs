@@ -3131,6 +3131,96 @@ const IDLEPAUSE_MUTATIONS = [
   },
 ];
 
+// 註冊確認／忘記密碼／分享事件（第五十三批）的變異集。
+const VERIFY_DDL = "v3/src/emailVerifyAsync.js";
+const FORGOT_SRC = "v3/src/forgotPassword.js";
+const SHARE_SRC = "v3/src/rentalShareGrowth.js";
+const VERIFY_MUTATIONS = [
+  {
+    name: "確認連結不檢查「已用過」（同一個連結可以重複開通）",
+    file: VERIFY_DDL,
+    from: "  if (String(row.verify_used_at || \"\").trim() || Number(row.email_verified) === 1) {",
+    to: "  if (false) {",
+    expect: "已用過／已驗證",
+  },
+  {
+    name: "確認連結不檢查過期",
+    file: VERIFY_DDL,
+    from: "  if (Number.isFinite(exp) && exp <= now) {",
+    to: "  if (false) {",
+    expect: "過期：410 expired",
+  },
+  {
+    name: "確認連結空字串也放行（少了 missing 守衛）",
+    file: VERIFY_DDL,
+    from: "  if (!key) throw httpError(\"找不到這個開通連結\", 404, \"missing\");",
+    to: "  if (!key) return null;",
+    expect: "找不到：404 missing",
+  },
+  {
+    name: "確認成功卻不寫回旗標（連結可以一直用）",
+    file: VERIFY_DDL,
+    from: "    await exec(USER_CONFIRM_VERIFY_SQL, [usedAt, Number(row.id) || 0]);",
+    to: "    void usedAt;",
+    expect: "成功：回那一列",
+  },
+];
+const FORGOT_MUTATIONS = [
+  {
+    // 這三個回呼少了 await，`user` 會是 Promise ⇒ 靜默當成「查無此人」。
+    name: "注入回呼不 await（PG 的 findUser 回 Promise ⇒ 靜默查無此人）",
+    file: FORGOT_SRC,
+    from: "  const user = await findUser(key);",
+    to: "  const user = findUser(key);",
+    expect: "寄信成功：臨時密碼寫進 PG",
+  },
+  {
+    name: "寄信失敗不還原舊雜湊（使用者被鎖在外面）",
+    file: FORGOT_SRC,
+    from: "      await restoreHash(user.id, previousHash);",
+    to: "      void previousHash;",
+    expect: "寄信失敗：舊雜湊要寫回去",
+  },
+  {
+    name: "沒設定 SMTP 也先改密碼",
+    file: FORGOT_SRC,
+    from: "  if (!mailReady()) {",
+    to: "  if (false) {",
+    expect: "沒設定 SMTP：503",
+  },
+];
+const SHARE_EVENT_MUTATIONS = [
+  {
+    name: "分享事件不做去重（同一天同訪客一直記）",
+    file: SHARE_SRC,
+    from: "  } else if (type === \"view\") {\n    const dup = (await exec(SHARE_DUP_BY_VISITOR_SQL, [valid, type, hash, since]))[0] || null;\n    if (dup) return { recorded: false, reason: \"deduped\", is_bot: bot };",
+    to: "  } else if (type === \"view\") {\n    const dup = null;\n    if (dup) return { recorded: false, reason: \"deduped\", is_bot: bot };",
+    expect: "view：去重、bot 標記、速率限制",
+  },
+  {
+    name: "分享事件不驗 token 是否存在（偽造的也能記）",
+    file: SHARE_SRC,
+    from: "  const valid = validRow?.public_token ? String(validRow.public_token) : \"\";\n  if (!valid) throw rentalNotifyHttpError(\"找不到分享\", 404, \"share_not_found\");",
+    to: "  const valid = validRow?.public_token ? String(validRow.public_token) : token;",
+    expect: "政策守衛：偽造 token",
+  },
+  {
+    name: "分享事件不擋公開來源的轉換事件",
+    file: SHARE_SRC,
+    // 錨點必須一路含到 async 版才有的那一行（`validRow`），否則同步版那一處也會命中。
+    from: "  if (source === \"public\" && !PUBLIC_SHARE_EVENT_TYPES.includes(type)) {\n    throw rentalNotifyHttpError(\"無法記錄轉換\", 403, \"share_conversion_forbidden\");\n  }\n  if (source === \"server\" && !CONVERSION_SHARE_EVENT_TYPES.includes(type)) {\n    throw rentalNotifyHttpError(\"無法記錄\", 404, \"share_not_found\");\n  }\n  const validRow = (await exec(SHARE_TOKEN_LOOKUP_SQL, [token]))[0] || null;",
+    to: "  if (false) {\n    throw rentalNotifyHttpError(\"無法記錄轉換\", 403, \"share_conversion_forbidden\");\n  }\n  if (source === \"server\" && !CONVERSION_SHARE_EVENT_TYPES.includes(type)) {\n    throw rentalNotifyHttpError(\"無法記錄\", 404, \"share_not_found\");\n  }\n  const validRow = (await exec(SHARE_TOKEN_LOOKUP_SQL, [token]))[0] || null;",
+    expect: "政策守衛：偽造 token",
+  },
+  {
+    name: "分享事件不寫 analytics（計數永遠 0）",
+    file: SHARE_SRC,
+    from: "  if (typeof bump === \"function\") await bump(bot ? `share_${type}_bot` : `share_${type}`, now);",
+    to: "  void bump;",
+    expect: "signup 轉換：落地列與 analytics",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3139,7 +3229,10 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /idle-verify/.test(testFile) ? IDLEPAUSE_MUTATIONS
+const MUTATIONS = /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
+  : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS
+  : /share-events-async/.test(testFile) ? SHARE_EVENT_MUTATIONS
+  : /idle-verify/.test(testFile) ? IDLEPAUSE_MUTATIONS
   : /auth-member-async/.test(testFile) ? AUTHMEMBER_MUTATIONS
   : /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
   : /listing-enrich-parity/.test(testFile) ? ENRICHQ_MUTATIONS

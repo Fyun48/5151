@@ -253,6 +253,10 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+// 註冊信箱確認與忘記密碼的 PG 島嶼入口。
+import { confirmVerifyTokenAsync } from "./emailVerifyAsync.js";
+import { requestTempPasswordAsync } from "./forgotPasswordAsync.js";
+import { recordShareEventAsync } from "./rentalShareGrowthAsync.js";
 // 法律文案（免責聲明／個資說明）的 PG 島嶼入口：一份文案、兩個 store
 // （settings 與 content_documents），同步版在 PG 站是「寫本機、訪客讀不到」的靜默失效。
 import { getLegalCopyAsync, saveLegalCopyAsync } from "./legalCopyAsync.js";
@@ -1258,6 +1262,12 @@ function queueSystemMail(kind, to, vars = {}) {
   });
 }
 
+// `queueSystemMail()` 的 PG 版（範本與 SMTP 從 PG 的 settings 讀）。
+async function queueSystemMailAsync(kind, to, vars = {}, options = {}) {
+  const [templates, smtp] = await Promise.all([getMailTemplatesAsync(options), getStoredSmtpAsync(options)]);
+  return queueAccountMail({ kind, to, vars, templates, smtp });
+}
+
 function publicBaseUrl(req) {
   const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "https").split(",")[0].trim() || "https";
   const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
@@ -1354,15 +1364,34 @@ function attributeShare(req, userId, eventType) {
   } catch { /* attribution never blocks */ }
 }
 
-app.get("/verify-email", (req, res) => {
+// `attributeShare()` 的 PG 版：同步版寫的是節點本機的 `rental_share_events`
+// ⇒ PG 模式下「分享帶來的註冊」永遠是 0，而且是靜默的（catch 會把錯誤吞掉）。
+async function attributeShareAsync(req, userId, eventType, options = {}) {
+  const token = shareTokenFrom(req);
+  if (!token || !userId) return;
   try {
-    const user = confirmVerifyToken(String(req.query?.token || ""));
-    afterMemberSession(user);
-    attributeShare(req, user.id, "signup");
+    await recordShareEventAsync({
+      shareToken: token,
+      eventType,
+      userId,
+      ip: clientIp(req),
+      userAgent: req.get("user-agent") || "",
+      source: "server",
+    }, options);
+  } catch { /* attribution never blocks */ }
+}
+
+app.get("/verify-email", async (req, res) => {
+  try {
+    // 三段語意（找不到／已用過／過期）與 `emailVerify.js` 完全共用，只換資料層：
+    // 同步版讀本機 `users`，別的管理節點建立的新帳號會拿到「連結壞了」。
+    const user = await confirmVerifyTokenAsync(String(req.query?.token || ""));
+    await afterMemberSessionAsync(user);
+    await attributeShareAsync(req, user.id, "signup");
     setSession(req, res, user.email);
     const base = publicBaseUrl(req);
     try {
-      queueSystemMail("verified_welcome", user.email, {
+      await queueSystemMailAsync("verified_welcome", user.email, {
         spiritUrl: `${base}/spirit.html`,
       });
     } catch (error) {
@@ -1500,7 +1529,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
 app.post("/api/forgot-password", async (req, res) => {
   try {
     assertHuman(req.body);
-    const result = await requestTempPassword(req.body?.email);
+    const result = await requestTempPasswordAsync(req.body?.email);
     res.json({ ...result, captcha: captchaPayload() });
   } catch (error) {
     sendAuthError(res, error);

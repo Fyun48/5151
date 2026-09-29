@@ -3013,6 +3013,51 @@ done
 > 該函式已經是 async 且可注入，只需換掉 `findUser`／`setPassword`／`restoreHash`／`compose`）、
 > `recordShareEventAsync`、`attributeShareAsync`。
 
+## 二之負二十三、2026-09-28 第五十三批：註冊確認／忘記密碼／分享事件搬上 PG
+
+### 53.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /verify-email` | `confirmVerifyTokenAsync` ＋ `afterMemberSessionAsync` ＋ `attributeShareAsync` ＋ `queueSystemMailAsync` |
+| `POST /api/forgot-password` | `requestTempPasswordAsync` |
+
+尺規：缺口 **58 → 56**、PG **210 → 212**、SQLite **6 → 4**（MIXED 52 不變）。
+
+這一包讓**註冊流程整條**（登入 → 點信裡的連結 → 忘記密碼）都不再依賴節點本機的 `users`。
+在此之前，別的管理節點建立的新帳號點連結會拿到「找不到這個開通連結」——使用者看到的是
+「連結壞了」，真正的原因是讀錯 store。
+
+### 53.2 這一包的三個坑
+
+1. 🚨 **`requestTempPassword()` 是 async，但它對注入的回呼**沒有 `await`**。**
+   它寫 `const user = findUser(key);`，而 PG 島嶼傳進去的是 async 版本 ⇒ `user` 是 Promise
+   ⇒ `!user?.id` 成立 ⇒ **靜默地當成「查無此人」**（信不寄、密碼不改，卻回成功訊息）。
+   `forgotPassword.js` 已補上 `await findUser/setPassword/restoreHash`（同步回呼 await 也安全）。
+   **通則**：移植一個「已經是 async、且用注入回呼」的函式時，**逐一確認每個回呼都有 await**，
+   不要看到 `async` 就假設它準備好了。
+2. **同步核心不能餵 async 假 handle。** 分享事件第一版想「注入一個 async handle 給同步版
+   `recordShareEvent()`」，但同步版用 `db.prepare(...).get()`（不 await）⇒ 拿到 Promise ⇒
+   `row?.public_token` 是 undefined ⇒ 判成「找不到分享」，又是一種靜默失效。
+   正解是把 **async 版寫在同步模組裡**（`rentalShareGrowth.recordShareEventAsync()`），
+   私有 helper（bot 判斷、訪客雜湊、速率限制、事件類型政策）與同步版**共用同一份**。
+3. **等價變異**：`ensureUser` 的「先查再寫拿掉」殺不死（`users.email` 有唯一約束，INSERT 撞鍵
+   會走 catch 重讀）——已移除並改寫理由；換成「INSERT 少了 `RETURNING id`」。
+
+### 53.3 測試
+
+- `v3/test/email-verify-async.test.js`（**3 項全綠**）：成功（旗標落地 ＋ 與同步版逐欄相同）、
+  用過 409／已驗證 409／過期 410／找不到 404（三種錯誤的 status／code／message 都與同步版比對）、
+  sqlite 模式走同步版。變異 **4 條全殺**。
+- `v3/test/forgot-password-async.test.js`（**5 項全綠**）：寄信成功（臨時密碼寫進 PG、本機不得被動到）、
+  沒設定 SMTP 503 且不得先改密碼、寄信失敗要把**舊雜湊**寫回去（與同步版比對訊息）、
+  冷卻 429、查無此人不洩漏帳號存在。變異 **3 條全殺**。
+- `v3/test/share-events-async.test.js`（**4 項全綠**）：view 去重／bot 標記（含落地列逐欄比對）、
+  signup 轉換（落地列 ＋ analytics 兩邊相同）、政策守衛（偽造 token／公開來源記轉換／未知事件類型
+  的 status／code／message 都要與同步版相同）、sqlite 模式不碰 exec。變異 **4 條全殺**。
+- `v3/test/member-auth-live-pg.test.js`（**2 項全綠**）：新增「註冊確認 token 流程（成功 → 第二次 409）
+  ＋ 忘記密碼在沒有 SMTP 的隔離庫必須 503 且不得改雜湊」。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3023,13 +3068,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十二批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十三批）** |
 |---|---:|---:|
-| SQLite | 95 | **6** |
+| SQLite | 95 | **4** |
 | MIXED | — | **52** |
 | 無直接DB | — | **20** |
-| PG | 22 | **210** |
-| **缺口（SQLite＋MIXED）** | — | **58** |
+| PG | 22 | **212** |
+| **缺口（SQLite＋MIXED）** | — | **56** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
