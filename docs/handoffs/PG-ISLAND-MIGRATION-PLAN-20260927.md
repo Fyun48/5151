@@ -4218,6 +4218,53 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
      （`route.js:makeRouteKey`），手寫的猜測會讓「本機沒寫進去」的斷言假過。
   5. **`push_subscriptions` 有 FK**：離線夾具要先種 `users` 那一列。
 
+## 二之負四十八、2026-09-29 第七十八批：後台地圖開關 ＋ 訪客示範
+
+### 78.1 範圍與投報率
+
+兩條「讀寫本機、站上讀 PG」的路由：
+
+- **`PUT /api/admin/maps`**：`saveAdminMapsSettings()` 把 `googleDirectionsEnabled`／
+  `commuteRushEnabled` 寫進**節點本機**的 `settings` ⇒ 管理員以為開了 Google 路線，實際上只有
+  他按下去的那一台生效（另一台照樣走 OSRM），而 `queueGeoBackfill()` 也拿本機的值去跑整條補路線流程。
+- **`GET /api/demo`**：`buildDemoState()` 用同步的 `listUserIds()`／`getSettings()`／
+  `listListings()`／`stats()` ⇒ PG 模式下示範頁只顯示**這台節點**的會員與刊登，統計也只看得到本機。
+
+尺規：兩條都 **MIXED → PG**；缺口總數 **14 → 12**（`MIXED` 12 → **10**、`PG` 254 → **256**）。
+
+### 78.2 做法
+
+- `v3/src/adminSettingsAsync.js`：`saveAdminMapsSettingsAsync()`——兩個開關寫 PG 的 `settings`
+  （`clearKey` 一併歸零），金鑰仍落在這台節點的 `auth.env`（**基礎設施，刻意保留**，與同步版同一個行為）。
+  `db.js` 的 `persistGoogleKeyToAuthEnv()` 原本沒匯出，這次一併匯出。
+- `v3/src/demo.js`：抽出共用的 **`demoListArgs()`**（訪客視角、示範行政區、固定通勤設定）與
+  **`demoStateFrom()`**（統計合併與回應形狀），同步與 PG 版都呼叫同一份；`demoSourceUserIdFrom()`
+  是「挑來源會員」的純決策（通勤＋行政區 → 只行政區 → 預設帳號），`demoSourceUserId()` 改為委派它。
+  `buildDemoStateAsync()` 吃注入的 async 島嶼（`listUserIdsAsync`／`getSettingsAsync`／
+  `defaultUserIdAsync`／`listListingsAsync`／`statsAsync`）。
+- `v3/src/usersAsync.js`：`listUserIdsAsync()`（語句與 `notifyEnqueueQueries().listUserIds()` 相同）。
+- `v3/src/server.js`：`GET /api/demo` 改注入 async 島嶼，清單刻意走**訪客列表頁同一條管線**
+  （`searchPublicListingsAsync`），統計走 `listingStatsAsync`。
+
+### 78.3 測試
+
+- `v3/test/admin-maps-demo-async.test.js`（**6 項全綠**，新檔）：開關寫 PG／本機不動／回傳鍵與同步版相同、
+  `clearKey` 清 `auth.env` 與 `process.env`、sqlite 模式不碰 PG 夾具、`listUserIdsAsync` 看得到
+  PG 才有的會員、挑選順序（含「有通勤公里數但沒有工作點不算」）、`buildDemoStateAsync` 與同步版
+  逐欄位相同（含 `matched`／`shown`、示範行政區轉中文區名、挑不到人時要問預設帳號）、兩條路由接線。
+- `v3/test/admin-maps-demo-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上開關落在
+  `settings`、`listUserIdsAsync` 看得到新會員、示範整個跑得完（清單／統計／示範設定來自 PG）。
+- **變異 13 條全殺**（`MAPSDEMO_MUTATIONS`）。
+- 踩點：
+  1. **行政區鍵是 `<region>-<section>`**（`regions.js:districtKey`，例如 `"1-2"` = 台北市大同區）：
+     餵 `"taipei"` 會被 `normalizeWatchDistricts()` 靜默濾掉 ⇒ 測試要斷言「挑到的人有行政區」時會空過。
+  2. **注入式 exec 的形狀**：`listingStatsAsync`／`settingsAsync`／`usersAsync` 這幾個島嶼吃**純陣列**；
+     傳 `{rows, rowCount}` 會得到 `rows.find is not a function`（第七十七批的推播島嶼是相反的坑）。
+  3. **共用的隔離庫（repro）不能假設挑到誰**：示範的來源會員掃描取決於庫裡既有的會員 ⇒
+     測試要注入「只回這個 uid」的清單（設定仍從 PG 讀，store 的驗證不受影響）。
+  4. 「第二輪挑選不看行政區」這個突變的殺手是**訪客示範**那條，不是純決策那條（案例設計會讓
+     第二輪一定挑得到人）——寫在變異定義的註解裡。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4228,17 +4275,24 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十七批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十八批）** |
 |---|---:|---:|
 | SQLite | 95 | **2** |
-| MIXED | — | **12** |
+| MIXED | — | **10** |
 | 無直接DB | — | **20** |
-| PG | 22 | **254** |
-| **缺口（SQLite＋MIXED）** | — | **14** |
+| PG | 22 | **256** |
+| **缺口（SQLite＋MIXED）** | — | **12** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
 
+> 🐌 **已知的 CI flake（2026-09-29 實測，第七十七批 PR #575）**：同一個 commit 的 CI 出現
+> 「來源檔讀到**舊內容**」型的假紅——第一次是 `offline-report` 說 `db.js` 少了
+> `EXPIRED_OFFLINE_SWEEP_MS`，第二次是 `module-imports` 說 `usersAsync.js` 少了 6 個 export。
+> 兩者本機重跑都全綠、`gh run rerun --failed` 之後也全綠，且**沒有任何測試會改寫 `v3/src`**
+> （已逐一檢查 `writeFileSync`／`cpSync`／`git checkout` 的目標都是暫存目錄）
+> ⇒ 判定為 runner 端偶發，不是程式缺陷。看到這兩個測試紅時**先重跑**，不要往程式面找。
+>
 > 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
 > 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`
 > 給子程序 **30 秒**上限（2105 列 ＋ 路線計算），超時時 `result.status` 是 `null`

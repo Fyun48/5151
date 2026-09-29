@@ -20,6 +20,7 @@ import {
   findUserByEmail as findUserByEmailSync,
   getUserById as getUserByIdSync,
   isUserDeleted,
+  listUserIds as listUserIdsSync,
   listUsers as listUsersSync,
   restoreUser as restoreUserSync,
   setUserPassword as setUserPasswordSync,
@@ -146,6 +147,19 @@ export async function verifyUserPasswordAsync(email, password, options = {}) {
   if (!user || isUserDeleted(user)) return null;
   if (user.password_hash && verifyPassword(password, user.password_hash)) return user;
   return null;
+}
+
+// `db.js:listUserIds()` 的 PG 版（第七十八批）。
+// 語句與 `notifyEnqueueQueries().listUserIds()` 相同（同一份「哪些帳號算有效會員」的定義）。
+// 為什麼需要：訪客示範（`/api/demo`）與全會員掃描在 PG 模式下若讀本機，只會看到**這台節點**的
+// 帳號，別的節點建立的會員完全不算數。
+export const LIST_USER_IDS_SQL = "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id";
+
+export async function listUserIdsAsync(options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return listUserIdsSync(sqliteHandle());
+  return run(options, async (exec) => (await exec(LIST_USER_IDS_SQL, [])).rows
+    .map((row) => Number(row.id) || 0)
+    .filter(Boolean), () => listUserIdsSync(sqliteHandle()));
 }
 
 // `members.js::setUserPassword()`：驗證政策與雜湊都在 `password.js`（兩邊共用同一份）。

@@ -38,7 +38,11 @@ import {
   summarizeMapsUsage,
 } from "./mapsBilling.js";
 import { budgetStore } from "./budgetStore.js";
-import { sqliteHandle } from "./db.js";
+import {
+  persistGoogleKeyToAuthEnv,
+  saveAdminMapsSettings as saveAdminMapsSettingsSync,
+  sqliteHandle,
+} from "./db.js";
 import { sharedPgDriver as sharedDriverForMaps } from "./pgSharedDriver.js";
 import { toPostgresSql as toPgSqlForMaps } from "./sqlDialect.js";
 import { BRAND_SLOTS } from "./brandMascot.js";
@@ -169,6 +173,36 @@ export async function getAdminMapsSettingsAsync(options = {}) {
     warning: mapsBudgetWarning(baseWarning, { googleEnabled, dailyLimitMinor: cfg?.daily_limit_minor }),
     usage,
   };
+}
+
+// `db.js:saveAdminMapsSettings()` 的 PG 版（第七十八批）。
+//
+// ⚠️ 為什麼重要：後台這顆「開啟 Google 路線」的按鈕在 PG 模式下寫的是**節點本機**的
+// `settings` 鍵 ⇒ 管理員以為開了，實際上只有他按下去的那一台生效（另一台照樣走 OSRM），
+// 而且 `queueGeoBackfill()` 會拿本機的值去跑整條補路線流程。
+//
+// 兩個節點本機的副作用**刻意保留**（`persistGoogleKeyToAuthEnv` 寫的是這台節點的 `auth.env`、
+// 金鑰屬於基礎設施），其餘（兩個開關）一律寫 PG，回傳值也走 PG 版的讀取。
+export async function saveAdminMapsSettingsAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return saveAdminMapsSettingsSync(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  if (src.clearKey === true) {
+    persistGoogleKeyToAuthEnv("", { unset: true });
+    await setSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, false, options);
+    await setSiteSettingAsync(COMMUTE_RUSH_KEY, false, options);
+    return getAdminMapsSettingsAsync(options);
+  }
+  if (Object.prototype.hasOwnProperty.call(src, "googleEnabled")) {
+    await setSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, Boolean(src.googleEnabled), options);
+  }
+  if (Object.prototype.hasOwnProperty.call(src, "enabled")) {
+    await setSiteSettingAsync(COMMUTE_RUSH_KEY, Boolean(src.enabled), options);
+  }
+  if (Object.prototype.hasOwnProperty.call(src, "apiKey")) {
+    // 金鑰落在這台節點的 `auth.env`（基礎設施，與同步版同一個行為）。
+    persistGoogleKeyToAuthEnv(src.apiKey);
+  }
+  return getAdminMapsSettingsAsync(options);
 }
 
 // `db.js saveAdminMailSettings()` 的 PG 版（第五十五批）。

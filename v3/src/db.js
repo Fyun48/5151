@@ -955,7 +955,7 @@ function persistSmtpToAuthEnv(config) {
   writeFileSync(file, serializeEnvMap(merged), { encoding: "utf8", mode: 0o600 });
 }
 
-function persistGoogleKeyToAuthEnv(key, { unset = false } = {}) {
+export function persistGoogleKeyToAuthEnv(key, { unset = false } = {}) {
   const file = authEnvPath();
   if (unset) {
     delete process.env.GOOGLE_MAPS_API_KEY;

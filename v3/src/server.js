@@ -78,8 +78,6 @@ import {
   getAdminBroadcastsSettings,
   saveAdminBroadcastsSettings,
   publicBroadcastsSettings,
-  getAdminMapsSettings,
-  saveAdminMapsSettings,
   getAdminProviderSettings,
   saveAdminProviderSettings,
   saveAdminSiteBudget,
@@ -246,6 +244,7 @@ import {
   getAdminAdsSettingsAsync,
   getAdminBroadcastsSettingsAsync,
   getAdminMapsSettingsAsync,
+  saveAdminMapsSettingsAsync,
   saveAdminMailSettingsAsync,
   saveAdminOauthSettingsAsync,
 } from "./adminSettingsAsync.js";
@@ -273,6 +272,7 @@ import {
 import {
   changeUserPasswordAsync,
   defaultUserIdAsync,
+  listUserIdsAsync,
   getUserByIdAsync,
   resumeIdleIfNeededAsync,
   touchLastLoginAsync,
@@ -466,7 +466,7 @@ import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
 import { getCachedPublicListings } from "./publicListings.js";
-import { buildDemoState } from "./demo.js";
+import { buildDemoStateAsync } from "./demo.js";
 import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, listingEnrichHelpers, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
@@ -706,12 +706,14 @@ app.get("/api/demo", async (req, res) => {
       return;
     }
     assertDemoReadable(clientIp(req));
-    res.json(buildDemoState({
-      listUserIds,
-      getSettings,
-      defaultUserId,
-      listListings,
-      stats,
+    // 訪客示範的會員掃描、清單與統計全部走 PG 島嶼（同步版在 PG 模式下只看得到這台節點的資料）。
+    // 清單刻意用**訪客列表頁同一條管線**（`searchPublicListingsAsync`），兩個 driver 才會一致。
+    res.json(await buildDemoStateAsync({
+      listUserIdsAsync,
+      getSettingsAsync,
+      defaultUserIdAsync,
+      listListingsAsync: searchPublicListingsAsync,
+      statsAsync: listingStatsAsync,
     }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -2718,11 +2720,12 @@ app.get("/api/admin/maps", requireAdminApi, async (_req, res) => {
   }
 });
 
-app.put("/api/admin/maps", requireAdminApi, (req, res) => {
+app.put("/api/admin/maps", requireAdminApi, async (req, res) => {
   try {
     const body = req.body || {};
-    const before = getAdminMapsSettings();
-    const settings = saveAdminMapsSettings(body);
+    // 開關與用量都要讀寫 PG（同步版只寫本機 ⇒ 管理員以為開了，只有他按下去的那一台生效）。
+    const before = await getAdminMapsSettingsAsync();
+    const settings = await saveAdminMapsSettingsAsync(body);
     if (settings.enabled && body.clearKey !== true) queueGeoBackfill();
     auditReq(req, body.clearKey === true ? "maps_clear_key" : "maps_save", "maps", {
       googleEnabled: before.googleEnabled,
