@@ -3096,6 +3096,103 @@ const ROUTECACHE_MUTATIONS = [
   },
 ];
 
+// 後台地圖開關 ＋ 訪客示範（v3/test/admin-maps-demo-async.test.js，第七十八批）。
+const MAPSDEMO_MUTATIONS = [
+  {
+    name: "後台開關改回同步版（只有按下去的那一台生效）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "  if (!isPg(options)) return saveAdminMapsSettingsSync(partial);",
+    to: "  if (true) return saveAdminMapsSettingsSync(partial);",
+    expect: "後台地圖開關：PG 版寫進 PG",
+  },
+  {
+    name: "clearKey 不清 PG 的兩個開關（別台節點照樣打 Google）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    await setSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, false, options);\n    await setSiteSettingAsync(COMMUTE_RUSH_KEY, false, options);",
+    to: "    void options;",
+    expect: "後台地圖開關：PG 版寫進 PG",
+  },
+  {
+    name: "Google 開關不寫 PG（後台按了沒用）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    await setSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, Boolean(src.googleEnabled), options);",
+    to: "    void src.googleEnabled;",
+    expect: "後台地圖開關：PG 版寫進 PG",
+  },
+  {
+    name: "尖峰開關不寫 PG（別台節點照樣算尖峰路線）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    await setSiteSettingAsync(COMMUTE_RUSH_KEY, Boolean(src.enabled), options);",
+    to: "    void src.enabled;",
+    expect: "後台地圖開關：PG 版寫進 PG",
+  },
+  {
+    name: "會員清單改回同步版（PG 才有的會員看不到）",
+    file: "v3/src/usersAsync.js",
+    from: "  if ((options.driver || resolveDbDriver()) !== \"postgres\") return listUserIdsSync(sqliteHandle());",
+    to: "  if (true) return listUserIdsSync(sqliteHandle());",
+    expect: "listUserIds",
+  },
+  {
+    name: "示範來源會員的挑選順序反了（先挑只有行政區的）",
+    file: "v3/src/demo.js",
+    from: "    if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings) && (settings.watchDistricts || []).length) {\n      return id;\n    }",
+    to: "    if ((settings.watchDistricts || []).length) {\n      return id;\n    }",
+    expect: "示範來源會員",
+  },
+  {
+    name: "示範來源會員不檢查工作點（沒有工作點的人也被當成示範來源）",
+    file: "v3/src/demo.js",
+    from: "    if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings) && (settings.watchDistricts || []).length) {",
+    to: "    if (Number(settings.commuteKm) > 0 && (settings.watchDistricts || []).length) {",
+    expect: "示範來源會員",
+  },
+  {
+    name: "第二輪挑選不看行政區（沒有追蹤的人也被挑中）",
+    file: "v3/src/demo.js",
+    from: "    const row = await settingsOf(id);\n      if ((row.watchDistricts || []).length) { uid = id; break; }",
+    to: "    void settingsOf;\n      { uid = id; break; }",
+    // 殺手是「訪客示範」那條（單會員情境下同步版會挑到預設帳號、PG 版挑到該會員 ⇒ 輸出不同）；
+    // 純決策那條的案例裡第二輪一定挑得到人，所以不會紅（實測）。
+    expect: "訪客示範",
+  },
+  {
+    name: "訪客示範不問預設帳號（挑不到人時 uid 是 0）",
+    file: "v3/src/demo.js",
+    from: "  if (!uid) uid = await defaultUserIdAsync(options);",
+    to: "  if (!uid) uid = 0;",
+    expect: "訪客示範",
+  },
+  {
+    name: "訪客示範的行政區不帶（示範只顯示全部）",
+    file: "v3/src/demo.js",
+    from: "    districts: demoDistrictNames(source),",
+    to: "    districts: [],",
+    expect: "訪客示範",
+  },
+  {
+    name: "訪客示範的 matched 不算（前端統計對不上清單）",
+    file: "v3/src/demo.js",
+    from: "    stats: { ...listingStats, matched: listed.totalMatched, shown: (listed.listings || []).length },",
+    to: "    stats: { ...listingStats, matched: 0, shown: (listed.listings || []).length },",
+    expect: "訪客示範",
+  },
+  {
+    name: "`GET /api/demo` 改回同步的 buildDemoState（只看得到本機資料）",
+    file: "v3/src/server.js",
+    from: "    res.json(await buildDemoStateAsync({",
+    to: "    res.json(buildDemoState({",
+    expect: "路由接線",
+  },
+  {
+    name: "`PUT /api/admin/maps` 改回同步的寫入",
+    file: "v3/src/server.js",
+    from: "    const settings = await saveAdminMapsSettingsAsync(body);",
+    to: "    const settings = saveAdminMapsSettings(body);",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4518,6 +4615,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /register-async/.test(testFile) ? REGISTER_MUTATIONS
   : /commute-snapshot-async/.test(testFile) ? COMMUTE_MUTATIONS
   : /route-cache-async/.test(testFile) ? ROUTECACHE_MUTATIONS
+  : /admin-maps-demo-async/.test(testFile) ? MAPSDEMO_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

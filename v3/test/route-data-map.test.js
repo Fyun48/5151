@@ -92,19 +92,60 @@ test("函式本文被截斷的守衛：/api/admin/members 必須看得到它的�
     `必須看得到這一叢的進入點（listAdminMembers…Async／readSession…）。實際：${JSON.stringify(seen)}`);
 });
 
-test("傳參考的函式必須被看見：/api/demo 的 buildDemoState({ listUserIds, … })", () => {
-  // 🚨 缺陷 (6)：`callsIn()` 要求名字後面接 `(`，所以
-  // `buildDemoState({ listUserIds, getSettings, defaultUserId, listListings, stats })`
-  // 這種**把函式當參數傳**的寫法一條邊都建不起來——那 5 個全是 db.js 的 SQLite 讀取，
-  // `/api/demo` 卻被判成 PG。
-  // 這個低估被掩蓋了很久：`/api/demo` 本文有 `readSession(req)`，那條邊會拉到
-  // `findUserByEmail`，於是它「剛好」顯示成 SQLite。session 改成 PG 解析之後掩蓋消失，
-  // `/api/demo` 立刻變成 `PG` 且 `sqlite=[]`——**低估是真的，不是新壞的**。
-  const r = route("GET /api/demo");
-  assert.equal(r.verdict, "MIXED", `實際：${JSON.stringify(r)}`);
-  for (const fn of ["listUserIds", "listListings", "getSettings", "stats"]) {
-    assert.ok(r.sqlite.includes(fn),
-      `${fn} 是**傳參考**傳進 buildDemoState 的 db.js 函式，必須被看見。實際 sqlite=${JSON.stringify(r.sqlite)}`);
+test("傳參考的函式必須被看見（合成來源樹，不隨進度過期）", () => {
+  // 🚨 缺陷 (6)：`callsIn()` 要求名字後面接 `(`，所以「**把函式當參數傳**」的寫法
+  // （`buildDemoState({ listUserIds, getSettings, … })`）一條邊都建不起來——那些全是 db.js 的
+  // SQLite 讀取，路由卻被判成 PG。
+  //
+  // ⚠️ 這一條原本拿 `/api/demo` 當真值，**第七十八批把該路由搬上 PG 之後第十次過期**
+  // （路由本文已經只剩 `*Async` 名稱）。依既有紀律改成**合成來源樹**：在暫存目錄放一份尺規的
+  // 複本 ＋ 最小 app，直接鎖住「以參考傳入的名字要被看見」這個**行為**。
+  const tmp = mkdtempSync(path.join(tmpdir(), "v3-ruler-byref-"));
+  try {
+    mkdirSync(path.join(tmp, "v3/scripts"), { recursive: true });
+    mkdirSync(path.join(tmp, "v3/src"), { recursive: true });
+    copyFileSync(path.join(dir, "../scripts/route-data-map.mjs"), path.join(tmp, "v3/scripts/route-data-map.mjs"));
+    writeFileSync(path.join(tmp, "v3/src/db.js"), [
+      'import { DatabaseSync } from "node:sqlite";',
+      'export const db = new DatabaseSync(":memory:");',
+      "export function readThing() {",
+      '  return db.prepare("SELECT 1 AS n").get();',
+      "}",
+      "export function statsOf() {",
+      '  return db.prepare("SELECT COUNT(*) AS n FROM things").get();',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/builder.js"), [
+      'import { readThing, statsOf } from "./db.js";',
+      "",
+      "export function buildState({ readThing: read = readThing, statsOf: stats = statsOf } = {}) {",
+      "  return { n: read().n, s: stats().n };",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/server.js"), [
+      'import { readThing, statsOf } from "./db.js";',
+      'import { buildState } from "./builder.js";',
+      "const app = { get() {} };",
+      "",
+      'app.get("/api/byref", (req, res) => {',
+      "  res.json(buildState({ readThing, statsOf }));",
+      "});",
+      "",
+    ].join("\n"));
+    const json = JSON.parse(execFileSync(process.execPath, ["v3/scripts/route-data-map.mjs", "--json"], {
+      cwd: tmp, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+    }));
+    const row = json.rows.find((r) => r.path === "/api/byref");
+    assert.ok(row, "合成樹要抓得到 /api/byref");
+    assert.equal(row.verdict, "SQLite", `以參考傳入的 db.js 函式必須被看見。實際：${JSON.stringify(row)}`);
+    for (const fn of ["readThing", "statsOf"]) {
+      assert.ok(row.sqlite.includes(fn),
+        `${fn} 是**傳參考**傳進 buildState 的 db.js 函式，必須被看見。實際 sqlite=${JSON.stringify(row.sqlite)}`);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
