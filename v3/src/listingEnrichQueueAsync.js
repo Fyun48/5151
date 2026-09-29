@@ -34,8 +34,13 @@ import {
   seedRowMissing,
   stageSummary,
   summarizeEnrichMetrics as summarizeEnrichMetricsSync,
+  upsertListingPrep as upsertListingPrepSync,
+  upsertListingPrepAsync as upsertListingPrepRepo,
   WATCH_PRIORITY,
 } from "./listingEnrichQueue.js";
+// ⚠️ `upsertListingPrepAsync` 是 `listingEnrichQueue.js` 裡那支**同名**函式（PG 的 twin：同一份
+// 語句文字，吃 exec 而不是 handle）。註解刻意放在 import 之外——`module-imports.test.js` 是
+// 靜態掃描，import 清單裡的註解會被當成一個具名 import。
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -388,6 +393,18 @@ export function prepCheckedUpdateAsync(conn, { postId, reason, now = Date.now() 
   );
 }
 
+// listingEnrichQueue.js upsertListingPrep()（worker 寫 listing_prep 的那一列）。
+// ⚠️ 這一支是**補抓 worker 的完成條件**：PG 模式下若只寫本機 SQLite，站上的
+// `display_ready` 閘門永遠不會翻過來（房源補齊了卻不展示）。
+export function upsertPrepRowAsync(conn, { postId, listing, evalResult } = {}, options = {}) {
+  const opts = withConn(options, conn);
+  return withFallbackCounted(
+    opts,
+    (exec) => upsertListingPrepRepo(exec, { postId, listing, evalResult }),
+    () => upsertListingPrepSync(conn, postId, listing, evalResult),
+  );
+}
+
 // listingEnrichQueue.js requestClickRefresh()
 export function requestClickRefreshAsync(conn, listing, via = "click", options = {}) {
   const opts = withConn(options, conn);
@@ -425,6 +442,7 @@ export function listingEnrichQueueFacade(conn, options = {}) {
     ownsRun: (c, job) => jobStillOwnsRunAsync(useConn(c), job, opts),
     getPrep: (c, postId) => getListingPrepAsync(useConn(c), postId, opts),
     prepChecked: (c, args) => prepCheckedUpdateAsync(useConn(c), args, opts),
+    upsertPrep: (c, args) => upsertPrepRowAsync(useConn(c), args, opts),
   };
 }
 

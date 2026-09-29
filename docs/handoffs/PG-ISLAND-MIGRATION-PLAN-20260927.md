@@ -3714,6 +3714,75 @@ Owner 指定順序第 (3) 步的第一組（卡點集相同的兩條）。兩條
   走 23505 並被對應成 `wish_active_limit`、以及「交易內後續語句失敗時 INSERT 必須回滾」。
   ⚠️ 只碰自己那三個測試帳號。
 
+## 二之負三十六、2026-09-29 第六十六批：補抓 worker 的 driver-aware 收斂 ＋ 尺規缺陷 (8)
+
+### 66.1 範圍與投報率
+
+Owner 指定順序第 (3) 步的後半（`GET /go/:id` ＋ `POST /api/listings/:id/recheck`，兩條各 11 個卡點）
+——但實際動手後發現兩條的卡點**全部來自同一個同步核心**：`kickListingEnrich()` →
+`processListingEnrichBatch(db, listingEnrichHelpers(), …)`（補抓 worker）。所以這一包做的是那個核心：
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `GET /go/:id` | `kickListingEnrich()`（補抓 worker 的喚醒） | MIXED → **PG** |
+| `POST /api/listings/:id/recheck` | 同上 ＋ `probeListingAliveBySource()` | MIXED → **PG** |
+| `POST /api/listings/:id/report-gone` | 同上（順帶清掉） | MIXED → **PG** |
+
+尺規：缺口 **29 → 26**、PG **239 → 242**、MIXED **26 → 23**（SQLite 3、無直接DB 20 不變）。
+
+### 66.2 一個**真的**會讓補抓停擺的缺陷（其餘是收斂成一條路徑）
+
+1. 🚨 **擁有權判斷讀本機 handle**：`processOneEnrichJob()` 內有兩處直接呼叫同步的
+   `jobStillOwnsRun(conn, job)`（不是 bundle 的 `ownsRun`）。PG 模式下本機 SQLite **沒有那一列**
+   ⇒ `jobRunOwns(null, …)` 一律回 false ⇒ 每一個走到那兩條分支的 job 都被判成
+   `superseded`／`stale_write`（反覆重新排隊）。已改成 bundle 的 `queueOwnsRun()`（PG 讀 PostgreSQL）。
+   **離線測試釘住**：本機沒有 job 列、bundle 說還擁有 ⇒ 不得回 superseded；
+   **live PG 測試**則在真 PG 上放 job 列（本機刻意沒有）驗同一件事。
+2. **其餘三處是「同一個 store 有兩份實作」的收斂**（不是當下壞掉，而是隨時會壞）：
+   - `queueSeed／queueClaim／queueFinish／queueMetric／queueOwnsRun／queueGetPrep／queuePrepChecked`
+     原本在 bundle 缺席時**直接退回同步 SQLite 函式**。現在一律走 driver-aware 的
+     `listingEnrichQueueFacade()`（缺席時**動態載入**，避開與 `listingEnrichQueueAsync.js` 的循環）。
+   - `prepWrite()` 原本在 bundle 沒有 `upsertListingPrepAsync` 時退回同步 `upsertListingPrep(conn, …)`
+     ——那會把 `listing_prep.display_ready`（站上「要不要展示」的閘門）寫進本機 SQLite。
+     facade 新增 `upsertPrep`，改走同一條 driver-aware 路徑。
+   - `listingEnrichHelpers()` 原本同時提供同步與 async 變體（`runHelper()` 一律優先 async）
+     ⇒ PG 模式下同步那組是**死碼**，還讓尺規把整條路由算成 MIXED。現在依 driver 決定：
+     PG 只給 async、SQLite 兩種都給。
+
+### 66.3 尺規缺陷 (8)：driver 判斷在**同模組 helper** 裡
+
+`crawlerWrites.js` 的形狀是：
+```js
+export function markListingAliveAsync(postId, options = {}) {
+  return write(options, (exec) => markListingAliveRepo(…), () => markListingAliveSync(postId));
+}
+```
+真正的 `resolveDbDriver()` 在**同模組的 `write()`** 裡，不在這一支的本體 ⇒ 舊規則
+（`/resolveDbDriver\s*\(/.test(body)`）看不到，於是 `markListingAliveSync` 被算成 SQLite 節點，
+一路傳上去讓 `/api/listings/:id/recheck` 永遠留在缺口裡（**假陽性**：那個 fallback 是
+`sqliteFallbackAllowed(…, { write: true })` fail-closed 的緊急出口，正常情況跑不到）。
+
+修法（保守）：某個名字若**只**出現在「呼叫同模組 driver-aware 函式」的引數裡，就不算這個函式在用
+SQLite；**整條邊**都要跳過（含遞移展開——只跳過直接計入的話，`resolveNode(db.js::markListingAlive)`
+還是會把 `ensureUser`／`groupIdForPost` 那串拉回來，第一版就是這樣只降到 6 個卡點）。
+守衛搬進合成來源樹（缺陷 (8) 的模組 ＋ 一條委派路由），並加一條變異把規則套回去。
+
+⚠️ 另一個一起修掉的**靜默錯誤**：`processOneEnrichJob()` 用「區域變數與模組函式同名」的方式
+（`const finishJob = (c, j, patch) => queueFinish(…)`）把 driver 差異藏起來——**執行期**沒錯，
+但靜態尺規會把 `finishJob(...)` 認成模組層那個同步函式。已改名為
+`finishJobDriver`／`getListingPrepDriver`／`recordEnrichMetricDriver`（順便讓「同名兩義」這個陷阱消失）。
+
+### 66.4 測試
+
+- `v3/test/listing-enrich-parity.test.js`（**16 項全綠**，新增 4 條）：bundle 的形狀（PG 只有 async、
+  SQLite 兩種都有）、queue 管理走 bundle（含缺席時動態 facade）、**擁有權判斷走 bundle**、
+  facade 的 `upsertPrep` 與同步版落地列逐欄相同。變異 **5 條全殺**（新增 4 條；既有的 1 條保留）。
+- `v3/test/route-data-map.test.js`（**12 項全綠**）：合成來源樹擴充到缺陷 (8)（修好的尺規看不到、
+  套回缺陷就看得到），並新增對應變異。
+- `v3/test/listing-enrich-worker-live-pg.test.js`（**1 項全綠**，新檔）：真 PG 上驗
+  「擁有權問 PG（本機刻意沒有那一列）」與「prep 列真的落在 PG，且與 SQLite 逐欄相同」。
+  ⚠️ 只碰自己那兩個鍵（`listing_enrich_jobs.id`／`listing_prep.post_id`）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3724,13 +3793,13 @@ Owner 指定順序第 (3) 步的第一組（卡點集相同的兩條）。兩條
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十五批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十六批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **26** |
+| MIXED | — | **23** |
 | 無直接DB | — | **20** |
-| PG | 22 | **239** |
-| **缺口（SQLite＋MIXED）** | — | **29** |
+| PG | 22 | **242** |
+| **缺口（SQLite＋MIXED）** | — | **26** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

@@ -2414,6 +2414,15 @@ const MAP_SRC = "v3/scripts/route-data-map.mjs";
 // 現在一律改挑「**這個缺陷本身才會造成的可觀察差異**」，與該路由是否已移植無關。
 const MAP_MUTATIONS = [
   {
+    // 缺陷 (8)：driver-aware wrapper 把 driver 判斷放在**同模組 helper** 裡
+    //（`write(options, pg, () => syncFallback())`）⇒ 舊尺規把 fallback 算成 SQLite 卡點。
+    name: "還原缺陷 (8)：driver-aware 委派的同步 fallback 被算成 SQLite 卡點",
+    file: "v3/scripts/route-data-map.mjs",
+    from: "    if (delegated.size && onlyInsideDriverCalls(body, local, delegated)) continue;",
+    to: "    if (false) continue;",
+    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
+  },
+  {
     name: "還原缺陷 (1)：函式本文切到下一個 function 宣告（會吞掉整段路由）",
     file: MAP_SRC,
     from: "  for (const hit of text.matchAll(re)) fns.set(hit[1], sliceFunctionBody(text, hit.index));",
@@ -2445,7 +2454,7 @@ const MAP_MUTATIONS = [
     // ⚠️ 這條變異的殺手換過三次：舊斷言拿「當時還沒移植的 /api/admin/members」當真值，
     // 第五十四批把它搬上 PG 之後就失效了。現在由**合成來源樹**守衛負責（它自己造一個
     // 簽名含 destructured default 的 helper，套回缺陷 (1) 之後必須看不到）。
-    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
   },
   {
     // 缺陷 (7)：方法呼叫不是函式呼叫。舊版 `callsIn()` 用 `\bname\s*\(`，
@@ -2455,7 +2464,7 @@ const MAP_MUTATIONS = [
     file: MAP_SRC,
     from: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");",
     to: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");\n  if (true) return new RegExp(`\\\\b${escaped}\\\\s*\\\\(`).test(body);",
-    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
   },
   {
     name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
@@ -2466,7 +2475,7 @@ const MAP_MUTATIONS = [
     // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
     // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
     // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
-    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -3418,7 +3427,39 @@ const BUDGET_MUTATIONS = [
   },
 ];
 
+// 第六十六批：補抓 worker 的 driver-aware 收斂（bundle 的形狀、queue 管理、擁有權、prep 寫入）。
+const ENRICH_QUEUE_SRC = "v3/src/listingEnrichQueue.js";
+const ENRICH_WATCHER_SRC = "v3/src/watcher.js";
+const ENRICH_FACADE_SRC = "v3/src/listingEnrichQueueAsync.js";
 const ENRICHQ_MUTATIONS = [
+  {
+    name: "擁有權判斷回到同步版（PG 模式下本機沒有那一列就判成 superseded）",
+    file: ENRICH_QUEUE_SRC,
+    from: "    if (!(await queueOwnsRun(enrichQueue, conn, job))) {\n      await finishJobDriver(conn, job, { status: \"queued\", error: \"superseded\", errorClass: \"\" });",
+    to: "    if (!jobStillOwnsRun(conn, job)) {\n      await finishJobDriver(conn, job, { status: \"queued\", error: \"superseded\", errorClass: \"\" });",
+    expect: "擁有權判斷走 bundle",
+  },
+  {
+    name: "bundle 在 PG 模式仍提供同步變體（死碼，看不出走哪個 store）",
+    file: ENRICH_WATCHER_SRC,
+    from: "  if (driver === \"postgres\") return base;",
+    to: "  if (false) return base;",
+    expect: "PG 模式只提供 async 變體",
+  },
+  {
+    name: "facade 少了 upsertPrep（worker 的 prep 寫入沒有 driver-aware 路徑）",
+    file: ENRICH_FACADE_SRC,
+    from: "    upsertPrep: (c, args) => upsertPrepRowAsync(useConn(c), args, opts),\n",
+    to: "",
+    expect: "facade：upsertPrep",
+  },
+  {
+    name: "沒有 bundle 時不補 facade（queue 管理退回同步函式）",
+    file: ENRICH_QUEUE_SRC,
+    from: '  const { listingEnrichQueueFacade } = await import("./listingEnrichQueueAsync.js");\n  return listingEnrichQueueFacade(conn);',
+    to: "  return null;",
+    expect: "bundle 缺席時動態載入 facade",
+  },
   {
     name: "listingEnrichQueueAsync 讀取路徑不轉回裸陣列（{rows} 形狀會拿到全 0 統計）",
     file: "v3/src/listingEnrichQueueAsync.js",

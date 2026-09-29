@@ -190,8 +190,17 @@ test("the field writes go through the driver-aware entry point", async () => {
   }
   const queue = readFileSync(path.join(dir, "../src/listingEnrichQueue.js"), "utf8");
   assert.match(queue, /runHelper\(helpers, "persistHpListingFields", current\.post_id, next, \{/);
-  assert.match(queue, /function prepWrite\(helpers, conn, postId, listing, evalResult\)/);
+  // 第六十六批：prep 的寫入只有兩條路——bundle 的 async 變體，或 driver-aware facade 的
+  // `upsertPrep`。**不能**再退回同步的 `upsertListingPrep(conn, …)`（PG 模式下那會把
+  // `display_ready` 寫進本機 SQLite，站上的閘門永遠不翻）。
+  assert.match(queue, /async function prepWrite\(queue, helpers, conn, postId, listing, evalResult\)/);
   assert.match(queue, /helpers\.upsertListingPrepAsync\(postId, listing, evalResult\)/);
+  assert.match(queue, /\(await queueOf\(queue, conn\)\)\.upsertPrep\(conn, \{ postId, listing, evalResult \}\)/);
+  assert.doesNotMatch(queue, /return upsertListingPrep\(conn, postId, listing, evalResult\)/,
+    "不得直接呼叫同步的 upsertListingPrep");
+  assert.match(readFileSync(path.join(dir, "../src/listingEnrichQueueAsync.js"), "utf8"),
+    /upsertPrep: \(c, args\) => upsertPrepRowAsync\(useConn\(c\), args, opts\)/,
+    "facade 必須提供 upsertPrep");
   // The field writes the loops make all have an async twin now.
   for (const name of [
     "setListingDetailAsync",

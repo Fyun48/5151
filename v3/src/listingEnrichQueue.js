@@ -148,38 +148,46 @@ function parseJson(raw, fallback) {
 
 // --- 2.3b 第二段：寫入路徑的 driver-aware 分派 -----------------------------
 // helpers.enrichQueue 由呼叫端提供（listingEnrichQueueAsync.js 的 listingEnrichQueueFacade()）。
-// 沒有它時走本檔原本的同步函式，所以 SQLite-only 呼叫端與既有測試一行都不用改。
-function enrichQueueOf(helpers) {
-  return helpers?.enrichQueue || null;
+// ⚠️ 沒有它時**不再**直接退回本檔的同步函式，而是**動態**載入同一個 facade（PG → PostgreSQL、
+// SQLite → 同一組同步函式）。理由：那個 fallback 在 PG 模式下等於「寫進沒有人讀的本機 SQLite」
+// （`sqliteFallback.js` 的政策），而且會讓「這個 worker 到底走哪個 store」看不出來。
+// 動態載入是為了避開與 listingEnrichQueueAsync.js 的循環（它在頂層 import 本檔的同步函式）。
+async function queueOf(queue, conn) {
+  if (queue) return queue;
+  const { listingEnrichQueueFacade } = await import("./listingEnrichQueueAsync.js");
+  return listingEnrichQueueFacade(conn);
 }
 
-function queueFinish(queue, conn, job, patch) {
-  return queue ? queue.finish(conn, job, patch) : finishJob(conn, job, patch);
+async function queueFinish(queue, conn, job, patch) {
+  return (await queueOf(queue, conn)).finish(conn, job, patch);
 }
 
-function queueMetric(queue, conn, job, timings) {
-  return queue ? queue.metric(conn, job, timings) : recordEnrichMetric(conn, job, timings);
+async function queueMetric(queue, conn, job, timings) {
+  return (await queueOf(queue, conn)).metric(conn, job, timings);
 }
 
-function queueOwnsRun(queue, conn, job) {
-  return queue ? queue.ownsRun(conn, job) : jobStillOwnsRun(conn, job);
+async function queueOwnsRun(queue, conn, job) {
+  return (await queueOf(queue, conn)).ownsRun(conn, job);
 }
 
-function queueGetPrep(queue, conn, postId) {
-  return queue ? queue.getPrep(conn, postId) : getListingPrep(conn, postId);
+async function queueGetPrep(queue, conn, postId) {
+  return (await queueOf(queue, conn)).getPrep(conn, postId);
 }
 
-function queuePrepChecked(queue, conn, args) {
-  return queue ? queue.prepChecked(conn, args) : prepCheckedUpdate(conn, args);
+async function queuePrepChecked(queue, conn, args) {
+  return (await queueOf(queue, conn)).prepChecked(conn, args);
 }
 
-function queueSeed(queue, conn, opts) {
-  return queue ? queue.seed(conn, opts) : seedHousepriceEnrichJobs(conn, opts);
+async function queueSeed(queue, conn, opts) {
+  return (await queueOf(queue, conn)).seed(conn, opts);
 }
 
-function queueClaim(queue, conn, opts) {
-  return queue ? queue.claim(conn, opts) : claimEnrichJobs(conn, opts);
+async function queueClaim(queue, conn, opts) {
+  return (await queueOf(queue, conn)).claim(conn, opts);
 }
+
+// bundle 裡的 facade（呼叫端提供時就用它；沒有時 `queueOf()` 會動態補上）。
+const enrichQueueOf = (helpers) => helpers?.enrichQueue || null;
 
 // 全檔唯一直接寫 listing_prep 的手寫 UPDATE（processOneEnrichJob 的 PROBE_INCONCLUSIVE 分支）。
 function prepCheckedUpdate(conn, { postId, reason, now = Date.now() } = {}) {
@@ -263,12 +271,14 @@ export async function upsertListingPrepAsync(exec, { postId, listing, evalResult
 }
 
 // The prep row is written through the bundle when it has a driver-aware writer (PostgreSQL), and
-// through the handled connection otherwise - same statement either way (listingPrepPlan).
-function prepWrite(helpers, conn, postId, listing, evalResult) {
+// through the driver-aware facade otherwise - same statement either way (listingPrepPlan).
+// ⚠️ 不要再直接呼叫同步的 `upsertListingPrep()`：PG 模式下那會把「補齊」寫進本機 SQLite，
+// 而站上的 `display_ready` 閘門讀的是 PG ⇒ 房源永遠不會開始展示。
+async function prepWrite(queue, helpers, conn, postId, listing, evalResult) {
   if (typeof helpers?.upsertListingPrepAsync === "function") {
     return helpers.upsertListingPrepAsync(postId, listing, evalResult);
   }
-  return upsertListingPrep(conn, postId, listing, evalResult);
+  return (await queueOf(queue, conn)).upsertPrep(conn, { postId, listing, evalResult });
 }
 
 export function getListingPrep(conn, postId) {
@@ -610,17 +620,17 @@ export async function processOneEnrichJob(conn, helpers, job, {
   // 走 listingEnrichQueueAsync.js 的非同步版本；沒有時就是本檔原本的同步函式，
   // SQLite 模式的行為完全不變。下面三個區域變數刻意同名，讓呼叫端不必判斷 driver。
   const enrichQueue = enrichQueueOf(helpers);
-  const finishJob = (c, j, patch) => queueFinish(enrichQueue, c, j, patch);
-  const getListingPrep = (c, postId) => queueGetPrep(enrichQueue, c, postId);
-  const recordEnrichMetric = (c, j, timings) => queueMetric(enrichQueue, c, j, timings);
+  const finishJobDriver = (c, j, patch) => queueFinish(enrichQueue, c, j, patch);
+  const getListingPrepDriver = (c, postId) => queueGetPrep(enrichQueue, c, postId);
+  const recordEnrichMetricDriver = (c, j, timings) => queueMetric(enrichQueue, c, j, timings);
   const listing = await loadListingForRun(helpers, job.post_id);
   if (!listing) {
-    await finishJob(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
+    await finishJobDriver(conn, job, { status: "failed", error: "listing_missing", errorClass: "parse_failed" });
     return { skipped: true };
   }
   job.listing_seq = Number(listing.content_seq || 0);
   if (helpers.isSourceEnabled && !helpers.isSourceEnabled("houseprice")) {
-    await finishJob(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
+    await finishJobDriver(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
     return { skipped: true };
   }
   const attemptWaitMs = Math.max(0, t0 - (Date.parse(job.last_queued_at || job.started_at || job.created_at || "") || t0));
@@ -632,18 +642,20 @@ export async function processOneEnrichJob(conn, helpers, job, {
     inspected = await fetchDetail(listing.source_id || listing.url);
   } catch (error) {
     const message = String(error?.message || error || "fetch_failed");
-    await finishJob(conn, job, { status: "failed", error: message.slice(0, 240), errorClass: "transient" });
+    await finishJobDriver(conn, job, { status: "failed", error: message.slice(0, 240), errorClass: "transient" });
     return { outcome: PROBE_INCONCLUSIVE, errorClass: "transient" };
   }
   const fetchMs = metricNumber(inspected.fetch_ms) ?? Math.max(0, Date.now() - fetchStarted);
   const parseMs = metricNumber(inspected.parse_ms);
   const staleWrite = async () => {
-    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    await finishJobDriver(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   };
   if (!(await refreshFreshListing(conn, helpers, job))) {
-    if (!jobStillOwnsRun(conn, job)) {
-      await finishJob(conn, job, { status: "queued", error: "superseded", errorClass: "" });
+    // ⚠️ 這裡一定要走 bundle 的 `ownsRun`（PG 模式下讀 PostgreSQL）：直接用同步版的話
+    // 本機 SQLite 沒有那一列 ⇒ 一律 false ⇒ 每個 job 都被當成 superseded（補抓永遠不完成）。
+    if (!(await queueOwnsRun(enrichQueue, conn, job))) {
+      await finishJobDriver(conn, job, { status: "queued", error: "superseded", errorClass: "" });
       return { superseded: true, stale: true };
     }
     return staleWrite();
@@ -654,7 +666,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     await runHelper(helpers, "markGone", listing.post_id);
     syncJobListingSeq(job, await loadListingForRun(helpers, job.post_id));
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-    await finishJob(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
+    await finishJobDriver(conn, job, { status: "succeeded", timings: { ...timingBase, outcome: "succeeded" } });
     const goneRow = (await loadListingForRun(helpers, job.post_id)) || { ...listing, offline: 1 };
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
     helpers.onListingUpdated?.(goneRow, { outcome: PROBE_GONE, displayReady: false });
@@ -662,11 +674,11 @@ export async function processOneEnrichJob(conn, helpers, job, {
   }
   if (inspected.outcome === PROBE_INCONCLUSIVE) {
     if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-    const existingPrep = await getListingPrep(conn, listing.post_id);
+    const existingPrep = await getListingPrepDriver(conn, listing.post_id);
     if (!existingPrep || Number(existingPrep.display_ready) !== 1) {
       const evalPending = evaluateHpPrep(listing, { fetched: false });
-      await prepWrite(helpers, conn, listing.post_id, listing, evalPending);
-      await finishJob(conn, job, {
+      await prepWrite(enrichQueue, helpers, conn, listing.post_id, listing, evalPending);
+      await finishJobDriver(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
         errorClass: inspected.errorClass || "transient",
@@ -676,7 +688,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
       });
     } else {
       await queuePrepChecked(enrichQueue, conn, { postId: listing.post_id, reason: inspected.reason || "inconclusive" });
-      await finishJob(conn, job, {
+      await finishJobDriver(conn, job, {
         status: "failed",
         error: inspected.reason || "inconclusive",
         errorClass: inspected.errorClass || "transient",
@@ -685,7 +697,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
         retryAfterMs: inspected.retryAfterMs,
       });
     }
-    await recordEnrichMetric(conn, job, { ...timingBase, outcome: "failed" });
+    await recordEnrichMetricDriver(conn, job, { ...timingBase, outcome: "failed" });
     return { outcome: PROBE_INCONCLUSIVE };
   }
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
@@ -730,17 +742,18 @@ export async function processOneEnrichJob(conn, helpers, job, {
   });
   const locateMs = Date.now() - locateStarted;
   if (patched.stale) {
-    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+    await finishJobDriver(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
-  if (!jobStillOwnsRun(conn, job)) {
-    await finishJob(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
+  // 同上：擁有權判斷必須走 bundle（PG 模式讀 PostgreSQL）。
+  if (!(await queueOwnsRun(enrichQueue, conn, job))) {
+    await finishJobDriver(conn, job, { status: "queued", error: "stale_write", errorClass: "" });
     return { stale: true };
   }
   if (merged.locationChanged) await runHelper(helpers, "invalidateLocation", listing, merged.listing);
   const stored = (await loadListingForRun(helpers, job.post_id)) || merged.listing;
   if (!(await refreshFreshListing(conn, helpers, job))) return staleWrite();
-  const existingPrep = await getListingPrep(conn, listing.post_id);
+  const existingPrep = await getListingPrepDriver(conn, listing.post_id);
   const evalResult = evaluateHpPrep(stored, {
     fetched: true,
     parseFailed: false,
@@ -751,7 +764,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     facilityPartial: inspected.facilityPartial === true,
     buildingOnly: inspected.buildingOnly === true,
   });
-  const readyInfo = await prepWrite(helpers, conn, listing.post_id, stored, evalResult);
+  const readyInfo = await prepWrite(enrichQueue, helpers, conn, listing.post_id, stored, evalResult);
   if (readyInfo.becomingReady) await helpers.onFirstReady?.(stored, readyInfo);
   const firstQueuedAt = Date.parse(job.created_at || "") || t0;
   const firstReadyMs = readyInfo.becomingReady ? Math.max(0, Date.now() - firstQueuedAt) : null;
@@ -763,7 +776,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
     first_ready_ms: firstReadyMs,
     outcome: evalResult.displayReady ? "succeeded" : "failed",
   };
-  await recordEnrichMetric(conn, job, timings);
+  await recordEnrichMetricDriver(conn, job, timings);
   const jobStatus = evalResult.displayReady && evalResult.status === PREP_READY
     ? "succeeded"
     : evalResult.status === PREP_PARSE_FAILED
@@ -771,7 +784,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
       : evalResult.status === PREP_SOURCE_LIMITED
         ? "source_limited"
         : "failed";
-  await finishJob(conn, job, {
+  await finishJobDriver(conn, job, {
     status: jobStatus === "failed" && evalResult.missing.length ? "failed" : jobStatus,
     error: evalResult.withholdReason || "",
     errorClass: jobStatus === "succeeded" ? "" : (jobStatus === "parse_failed" ? "parse_failed" : (jobStatus === "source_limited" ? "source_limited" : "transient")),

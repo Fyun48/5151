@@ -160,7 +160,7 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destructured default 與方法呼叫", () => {
+test("缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）：跨模組 helper、destructured default、方法呼叫與 driver-aware 委派", () => {
   // 📌 這一條**已經換過七次標的**，換的原因值得記下來（前六次都是「拿『目前還沒移植』
   // 當 ground truth」）：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
@@ -211,6 +211,34 @@ test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destr
       "}",
       "",
     ].join("\\n"));
+    // 缺陷 (8) 的標的：driver 判斷在**同模組的另一支**（`writeThings()`），wrapper 本體看不到
+    // `resolveDbDriver()`，卻把同步 fallback 當引數傳進去。
+    writeFileSync(path.join(tmp, "v3/src/dbDriver.js"), [
+      "export function resolveDbDriver() { return process.env.DB_DRIVER || 'sqlite'; }",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/fallback.js"), [
+      "export function markThingDone(db) {",
+      '  return db.prepare("SELECT 1 AS n").get();',
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(path.join(tmp, "v3/src/writes.js"), [
+      'import { db } from "./db.js";',
+      'import { markThingDone } from "./fallback.js";',
+      'import { resolveDbDriver } from "./dbDriver.js";',
+      "",
+      "export function writeThings(options, runPostgres, runSqlite) {",
+      "  const driver = options.driver || resolveDbDriver();",
+      '  if (driver !== "postgres") return runSqlite();',
+      "  return runPostgres();",
+      "}",
+      "",
+      "export function markThingAsync(options = {}) {",
+      '  return writeThings(options, () => ({ ok: true }), () => markThingDone(db));',
+      "}",
+      "",
+    ].join("\n"));
     writeFileSync(path.join(tmp, "v3/src/store.js"), [
       "export function makeStore() {",
       "  return { saveThing: () => 1 };",
@@ -225,6 +253,7 @@ test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destr
       'import { loadPaged, loadThing } from "./external.js";',
       'import { saveThing } from "./saveThing.js";',
       'import { makeStore } from "./store.js";',
+      'import { markThingAsync } from "./writes.js";',
       "",
       "const app = { get() {} };",
       "",
@@ -242,6 +271,10 @@ test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destr
       "",
       'app.get("/api/methodcall", (req, res) => {',
       "  res.json(makeStore().saveThing());",
+      "});",
+      "",
+      'app.get("/api/driverdelegate", (req, res) => {',
+      "  res.json(markThingAsync({}));",
       "});",
       "",
     ].join("\n"));
@@ -310,6 +343,26 @@ test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destr
     assert.ok(brokenMethod.sqlite.includes("saveThing"), "缺陷 (7) 下會把同名方法算成 SQLite 節點");
     // 對照：真正呼叫那個函式的路由在缺陷 (7) 下仍然正確（缺陷只影響「方法呼叫」那一類）。
     assert.ok(defective7.get("GET /api/thing").sqlite.includes("loadThing"));
+
+    // ---- 缺陷 (8)：driver-aware 委派（driver 判斷在 helper 裡）----
+    // 修好的尺規：`markThingDone` 只出現在傳給同模組 `writeThings()`（它自己含 `resolveDbDriver()`）
+    // 的 fallback 引數裡 ⇒ 不算這條路由在用 SQLite。
+    const delegateFixed = fixed.get("GET /api/driverdelegate");
+    assert.equal(delegateFixed.verdict, "無直接DB",
+      `driver-aware 委派的同步 fallback 不得被算成 SQLite。實際：${JSON.stringify(delegateFixed)}`);
+    assert.deepEqual(delegateFixed.sqlite, [],
+      "只在 fallback 引數裡出現的同步函式（含它的遞移卡點）都要被排除");
+    // 套回缺陷 (8)：拿掉那條排除規則 ⇒ `markThingDone` 必須回來（沒回來代表守衛沒有牙齒）。
+    const skipLine = "    if (delegated.size && onlyInsideDriverCalls(body, local, delegated)) continue;";
+    assert.ok(original.includes(skipLine), "缺陷 (8) 的錨點必須還在（尺規改寫時要同步更新這一條）");
+    writeFileSync(rulerPath, original.replace(skipLine, "    if (false) continue;"));
+    const defective8 = runRuler();
+    const delegateBroken = defective8.get("GET /api/driverdelegate");
+    assert.equal(delegateBroken.verdict, "SQLite",
+      `缺陷 (8) 下 fallback 會被誤算成 SQLite。實際：${JSON.stringify(delegateBroken)}`);
+    assert.ok(delegateBroken.sqlite.includes("markThingDone"), "缺陷 (8) 下那個 fallback 會被算進去");
+    // 對照：不經 driver-aware 委派的路由在缺陷 (8) 下不受影響。
+    assert.ok(defective8.get("GET /api/thing").sqlite.includes("loadThing"));
 
     // ---- 缺陷 (1)：函式本文起點算錯（「簽名後第一個 {」＝ 參數的 }） ----
     const defect1From = `  let i = text.indexOf("(", start);

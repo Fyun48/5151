@@ -422,3 +422,126 @@ test("live：種子查詢讀的是 PostgreSQL，不是本機 SQLite", async (t) 
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// 第六十六批：補抓 worker 的 driver-aware 收斂
+//
+// 這一組釘住三件事（都是「PG 模式下悄悄走本機 SQLite」的形狀）：
+//   1. `listingEnrichHelpers()` 在 PG 模式**只**提供 async 變體（同步變體是 SQLite 專用）。
+//   2. worker 的 queue 管理一律走 bundle 的 facade（bundle 缺席時動態載入同一個 facade），
+//      不再有「直接退回同步函式」那條路。
+//   3. **擁有權判斷**走 bundle（`ownsRun`）：PG 模式下本機沒有那一列是正常的，
+//      不能因為本機查不到就判成 superseded／stale（那會讓補抓永遠不完成）。
+
+test("bundle：PG 模式只提供 async 變體，SQLite 模式兩種都給", async () => {
+  const { listingEnrichHelpers } = await import("../src/watcher.js");
+  const pg = listingEnrichHelpers({ driver: "postgres" });
+  for (const name of ["loadListing", "persistHpListingFields", "invalidateLocation", "markGone", "markAlive"]) {
+    assert.equal(typeof pg[name], "undefined", `PG 模式的 bundle 不該有同步變體 ${name}（那是死碼）`);
+  }
+  for (const name of ["loadListingAsync", "persistHpListingFieldsAsync", "invalidateLocationAsync", "markGoneAsync", "markAliveAsync", "upsertListingPrepAsync"]) {
+    assert.equal(typeof pg[name], "function", `PG 模式的 bundle 必須有 ${name}`);
+  }
+  assert.equal(typeof pg.enrichQueue, "object", "PG 模式的 bundle 必須有 driver-aware 的 enrichQueue facade");
+  const lite = listingEnrichHelpers({ driver: "sqlite" });
+  for (const name of ["loadListing", "persistHpListingFields", "invalidateLocation", "markGone", "markAlive", "loadListingAsync"]) {
+    assert.equal(typeof lite[name], "function", `SQLite 模式的 bundle 必須保留 ${name}（既有呼叫端不變）`);
+  }
+  assert.equal(typeof lite.enrichQueue, "object", "SQLite 模式的 bundle 也要有 facade");
+});
+
+test("worker：queue 管理走 bundle；bundle 缺席時動態載入 facade（不再直接退回同步函式）", async () => {
+  const calls = { seed: 0, claim: 0 };
+  const bundle = {
+    isSourceEnabled: () => true,
+    loadListingAsync: async () => null,
+    enrichQueue: {
+      seed: async () => { calls.seed += 1; },
+      claim: async () => { calls.claim += 1; return []; },
+      finish: async () => {},
+      metric: async () => {},
+      ownsRun: async () => true,
+      getPrep: async () => null,
+      prepChecked: async () => {},
+      upsertPrep: async () => {},
+    },
+  };
+  const viaBundle = await enrich.processListingEnrichBatch(db, { ...bundle }, { limit: 3 });
+  assert.deepEqual(calls, { seed: 1, claim: 1 }, "queue 管理必須呼叫 bundle 的 facade");
+  assert.equal(viaBundle.attempted, 0);
+
+  // bundle **沒有** enrichQueue（舊呼叫端／測試）⇒ 動態載入同一個 facade。
+  // SQLite driver 下那會走同一組同步函式，所以結果一樣是「沒有工作可做」而不是丟錯。
+  const noBundle = await enrich.processListingEnrichBatch(db, { isSourceEnabled: () => false }, { limit: 3 });
+  assert.equal(noBundle.attempted, 0, "沒有 bundle 時仍要能跑（動態 facade）");
+});
+
+test("worker：擁有權判斷走 bundle（PG 模式下本機沒有那一列不得判成 superseded）", async () => {
+  const { PROBE_INCONCLUSIVE } = await import("../src/probeOutcomes.js");
+  let loads = 0;
+  const makeBundle = (ownsRun) => ({
+    isSourceEnabled: () => true,
+    // 第一次回「目前的列」，第二次回更高 content_seq ⇒ `listingWriteIsFresh()` 判成 stale，
+    // 這樣才會走到「失去擁有權」那個分支。
+    loadListingAsync: async () => {
+      loads += 1;
+      return loads === 1 ? { post_id: 7, content_seq: 5, source_id: "src", url: "u", offline: 0 } : { post_id: 7, content_seq: 6 };
+    },
+    enrichQueue: {
+      seed: async () => {}, claim: async () => [], finish: async () => {}, metric: async () => {},
+      ownsRun: async () => ownsRun,
+      getPrep: async () => null, prepChecked: async () => {}, upsertPrep: async () => {},
+    },
+    onListingUpdated: () => {},
+  });
+  const job = { id: 4242, post_id: 7, run_seq: 1, request_seq: 1, status: "running" };
+  // 本機**沒有** id=4242 的 job 列（PG 模式的實況）⇒ 舊版同步檢查一律 false。
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listing_enrich_jobs WHERE id = 4242").get().n, 0, "前置條件：本機沒有那一列");
+
+  const kept = await enrich.processOneEnrichJob(db, makeBundle(true), { ...job }, { fetchDetail: async () => ({ outcome: PROBE_INCONCLUSIVE }) });
+  assert.equal(kept.superseded, undefined, "bundle 說還擁有 ⇒ 不得因為本機查不到就判成 superseded");
+  assert.equal(kept.stale, true, "應該走 stale_write 那條（重新排隊）");
+
+  loads = 0;
+  const lost = await enrich.processOneEnrichJob(db, makeBundle(false), { ...job }, { fetchDetail: async () => ({ outcome: PROBE_INCONCLUSIVE }) });
+  assert.equal(lost.superseded, true, "bundle 說失去擁有權 ⇒ 才是 superseded");
+});
+
+test("facade：upsertPrep 走 driver-aware 路徑（PG exec 與 SQLite 落地同一列）", async () => {
+  const prepMod = await import("../src/listingPrep.js");
+  const postId = 880001;
+  const listing = {
+    post_id: postId, source: "houseprice", source_id: "x1", url: "https://example.test/x1",
+    title: "測試", price: "20000", price_num: 20000, address: "台北市士林區天玉街9巷3號",
+    floor_name: "4/4", kind_name: "整層住家", tags: '["冰箱"]', lat: 25.11, lng: 121.52,
+    geo_source: "houseprice", has_natural_gas: 1, furnish_items: '["冰箱"]',
+  };
+  const evalResult = prepMod.evaluateHpPrep(listing, { fetched: true, detailRecognized: true, facilityBlock: true });
+  const readPrep = () => db.prepare("SELECT * FROM listing_prep WHERE post_id = ?").get(postId) || null;
+
+  db.prepare("DELETE FROM listing_prep WHERE post_id = ?").run(postId);
+  enrich.upsertListingPrep(db, postId, listing, evalResult);
+  const viaSqlite = readPrep();
+  assert.ok(viaSqlite, "前置條件：同步版要寫進一列");
+
+  db.prepare("DELETE FROM listing_prep WHERE post_id = ?").run(postId);
+  // ⚠️ 寫入路徑的替身要用 `pgWriteOptions`（counted shim）：PG 端會先用
+  // `information_schema.columns` 探測欄位，只回陣列的 `shim()` 會讓那個目錄檢視變成
+  // 「no such table」（離線用 `pragma_table_info` 回答，見檔頭說明）。
+  const facade = enrichAsync.listingEnrichQueueFacade(db, pgWriteOptions);
+  await facade.upsertPrep(db, { postId, listing, evalResult });
+  const viaPg = readPrep();
+  assert.ok(viaPg, "facade 的 upsertPrep 必須寫進一列（PG 模式下那才是站上讀的那一份）");
+  // 時間欄位是時鐘（兩次呼叫差幾十毫秒），其餘欄位必須逐欄相同。
+  const strip = (row) => {
+    const { checked_at, ready_at, ...rest } = row;
+    return { rest, stamps: [checked_at, ready_at] };
+  };
+  const { rest: pgRest, stamps: pgStamps } = strip(viaPg);
+  const { rest: liteRest, stamps: liteStamps } = strip(viaSqlite);
+  assert.deepEqual(pgRest, liteRest, "兩個 driver 的落地列必須逐欄相同（checked_at 除外）");
+  for (const stamp of [...pgStamps, ...liteStamps]) {
+    assert.ok(stamp == null || Date.parse(stamp), `時間欄位必須是時間戳，實際 ${stamp}`);
+  }
+  assert.equal(typeof facade.upsertPrep, "function", "facade 必須提供 upsertPrep");
+});

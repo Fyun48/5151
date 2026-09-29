@@ -182,7 +182,11 @@ test("the state writes go through the driver-aware entry point", async () => {
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /await markListingOfflineAsync\(postId\);/);
   assert.match(watcher, /await markListingAliveAsync\(row\.post_id, \{ wasOffline: Boolean\(listing\.offline\) \}\);/);
-  assert.match(watcher, /markGoneAsync: \(id\) => markListingOfflineAsync\(id\)/);
+  // 第六十六批：bundle 只在 PG 模式提供 async 變體（同步那組是 SQLite 專用），
+  // 而且 async 變體要**轉發 options**（測試／探針才能注入 driver）。
+  assert.match(watcher, /markGoneAsync: fwd\(markListingOfflineAsync\)/);
+  assert.match(watcher, /markAliveAsync: fwd\(markListingAliveAsync\)/);
+  assert.match(watcher, /if \(driver === "postgres"\) return base;/);
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(server, /await markListingOfflineAsync\(postId\);/);
   assert.match(server, /await markListingAliveAsync\(postId, \{ wasOffline: Boolean\(listing\.offline\) \}\);/);
