@@ -246,8 +246,10 @@ test("路由接線：複製路由用 PG 島嶼（而且真的有 import）", () 
   assert.ok(!/copyOwnListingFor\(/.test(body), "不得再用同步的 copyOwnListingFor()");
   // ⚠️ 尺規只看「有沒有提到已 import 的名字」⇒ 這裡明確驗 island 名稱真的被 import 進來
   // （否則會出現「判定 PG、實際上 undefined」的假綠）。
-  assert.ok(
-    /import \{ copyOwnListingAsync \} from "\.\/selfListingsAsync\.js";/.test(server),
-    "copyOwnListingAsync 必須真的被 import",
+  // import 可能是**多行**清單（第八十三批加了同一個模組的其他島嶼函式）⇒ 用區塊比對。
+  const importBlock = server.slice(
+    Math.max(0, server.indexOf('} from "./selfListingsAsync.js";') - 400),
+    server.indexOf('} from "./selfListingsAsync.js";'),
   );
+  assert.ok(importBlock.includes("copyOwnListingAsync"), "copyOwnListingAsync 必須真的被 import");
 });

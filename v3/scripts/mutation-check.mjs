@@ -3450,6 +3450,73 @@ const COPYSELF_MUTATIONS = [
   },
 ];
 
+// 公開站內刊登草稿／匯入的確認後刊登（v3/test/self-listing-publish-async.test.js，第八十三批）。
+const PUBLISHSELF_MUTATIONS = [
+  {
+    name: "公開草稿改回同步版（別的節點的草稿公開不了）",
+    file: "v3/src/selfListingsAsync.js",
+    from: '  if (!isPg(options)) {\n    const { publishImportedDraftListing } = await import("./selfListings.js");',
+    to: '  if (true) {\n    const { publishImportedDraftListing } = await import("./selfListings.js");',
+    expect: "草稿只放在 PG 時",
+  },
+  {
+    name: "可刊登條件不算停權（被停權的人照樣公開）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  if (Number.isFinite(banned) && banned > at) {",
+    to: "  if (false) {",
+    expect: "可刊登條件讀 PG",
+  },
+  {
+    name: "可刊登條件不算註冊未滿 24 小時",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  if (!skipWait && Number.isFinite(created) && at - created < SELF_NEW_ACCOUNT_WAIT_MS) {",
+    to: "  if (false) {",
+    expect: "可刊登條件讀 PG",
+  },
+  {
+    name: "可刊登條件不算同時上限（可以公開無限多則）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  if (open >= SELF_MAX_OPEN) {",
+    to: "  if (false) {",
+    expect: "可刊登條件讀 PG",
+  },
+  {
+    name: "素材所有權不查（可以拿別人的照片公開）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    if (!(await ownsMediaUrlAsync(userId, url, options))) {",
+    to: "    if (false) {",
+    expect: "素材所有權",
+  },
+  {
+    name: "匯入的確認後刊登改回同步版",
+    file: "v3/src/listingImportAsync.js",
+    from: "    return publishImportedDraftListingAsync(uid, row.listing_id, input, IMPORT_ROW_OPTIONS(options, run));",
+    to: "    void IMPORT_ROW_OPTIONS;\n    return (await import(\"./db.js\")).publishConfirmedImportFor(uid, row.id, input);",
+    expect: "匯入的確認後刊登",
+  },
+  {
+    name: "寫入失敗無條件回退本機（公開看起來成功、站上沒有）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    const { publishImportedDraftListing } = await import(\"./selfListings.js\");\n    return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {\n      matchCandidates: options.matchCandidates,\n    });",
+    to: "    const { publishImportedDraftListing } = await import(\"./selfListings.js\");\n    return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {\n      matchCandidates: options.matchCandidates,\n    });",
+    expect: "寫入是 fail-closed",
+  },
+  {
+    name: "`POST /api/self-listings/:id/publish` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, body, {",
+    to: "    res.json(publishOwnedDraftFor(session.userId, req.params.id, body)); void (({",
+    expect: "路由接線",
+  },
+  {
+    name: "`POST /api/listing-imports/:id/publish` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await publishConfirmedImportAsync(session.userId, req.params.id, body, {",
+    to: "    res.json(publishConfirmedImportFor(session.userId, req.params.id, body)); void (({",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4877,6 +4944,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /self-listing-match-async/.test(testFile) ? SELFLISTING_MATCH_MUTATIONS
   : /self-listing-matches-async/.test(testFile) ? SELFLISTING_MATCHES_MUTATIONS
   : /self-listing-copy-async/.test(testFile) ? COPYSELF_MUTATIONS
+  : /self-listing-publish-async/.test(testFile) ? PUBLISHSELF_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

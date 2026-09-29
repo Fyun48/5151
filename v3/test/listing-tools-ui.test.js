@@ -83,7 +83,16 @@ test("server exposes listing tool routes with auth hooks", () => {
   assert.match(server, /app\.post\("\/api\/self-listings\/:id\/publish"/);
   assert.match(server, /app\.get\("\/api\/listing-description-templates"/);
   assert.match(server, /app\.post\("\/api\/listing-contact-profiles"/);
-  // 第八十二批：複製改走 PG 島嶼（`copyOwnListingFor` 已移除）。
+  // 第八十二／八十三批：複製與公開都改走 PG 島嶼（同步的 `copyOwnListingFor`／
+  // `publishOwnedDraftFor` 已移除）。島嶼名稱必須真的在 `selfListingsAsync.js` 的 import 裡
+  // —— 尺規只看「已 import 的名字」，少了 import 會出現「判定 PG、實際 undefined」的假綠（§82.4）。
   assert.match(server, /copyOwnListingAsync\(session\.userId/);
-  assert.match(server, /import \{ copyOwnListingAsync \} from "\.\/selfListingsAsync\.js";/);
+  assert.match(server, /publishImportedDraftListingAsync\(session\.userId/);
+  const island = server.slice(
+    server.indexOf('} from "./selfListingsAsync.js";') - 400,
+    server.indexOf('} from "./selfListingsAsync.js";'),
+  );
+  for (const name of ["copyOwnListingAsync", "publishImportedDraftListingAsync", "assertOwnsMemberMediaUrlsAsync"]) {
+    assert.ok(island.includes(name), `${name} 必須在 selfListingsAsync.js 的 import 清單裡`);
+  }
 });

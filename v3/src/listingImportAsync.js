@@ -37,7 +37,12 @@ import {
   rowToImport,
 } from "./listingImport.js";
 import { sanitizeImportedText, sanitizeImportedTitle } from "./importSanitize.js";
-import { abandonImportedDraftListingAsync, getSelfListingAsync, updateImportedDraftListingAsync } from "./selfListingsAsync.js";
+import {
+  abandonImportedDraftListingAsync,
+  getSelfListingAsync,
+  publishImportedDraftListingAsync,
+  updateImportedDraftListingAsync,
+} from "./selfListingsAsync.js";
 import { deleteMemberMediaAsync } from "./memberMediaAsync.js";
 import { recordConsentAsync } from "./memberConsentsAsync.js";
 
@@ -172,6 +177,25 @@ export async function reviewListingImportAsync(userId, id, input = {}, options =
     sqliteHandle().prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);
     return publicImportAsync({ ...row, imported_title: title, imported_text: text }, { listing }, options, run);
   }, async () => (await import("./db.js")).reviewListingImportFor(userId, id, input));
+}
+
+// `db.js:publishConfirmedImportFor()` 的 PG 版（第八十三批）：確認聲明之後走一般刊登流程。
+//
+// ⚠️ 同步版整條讀寫節點本機：匯入列、草稿列、`assertCanPublish` 的 `users` 欄位、
+// 同時公開數與配對候選全在**這台節點** ⇒ PG 模式下別的節點建立的匯入草稿根本公開不了（404），
+// 而且公開完的刊登不在站上的清單裡（清單讀 PG）。驗證與寫入全部沿用 `selfListings.js`
+// 的純函式與 `publishImportedDraftListingAsync()`。
+export async function publishConfirmedImportAsync(userId, id, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能刊登", 401);
+  return withFallback(options, async (run) => {
+    const row = assertImportOwner(await readImportRow(run, id), uid);
+    if (row.status !== IMPORT_STATUSES.CONFIRMED) {
+      throw httpError("請先確認匯入聲明，才能走一般刊登流程", 409);
+    }
+    if (!row.listing_id) throw httpError("這筆匯入沒有草稿", 409);
+    return publishImportedDraftListingAsync(uid, row.listing_id, input, IMPORT_ROW_OPTIONS(options, run));
+  }, async () => (await import("./db.js")).publishConfirmedImportFor(userId, id, input));
 }
 
 // `db.js cancelListingImportFor()` 的 PG 版。
