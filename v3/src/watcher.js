@@ -12,9 +12,6 @@ import {
   listingCountForSearch,
   listMatchCandidates,
   listingHasTrustedGeo,
-  listingCommutePatch,
-  upsertRouteJob,
-  getRouteJob,
   markListingOffline,
   confirmExpiredOfflineListings,
   restoreListingOnline,
@@ -24,7 +21,6 @@ import {
   channelJobDone,
   db,
   saveSettings,
-  setCachedRoute,
   commuteRushEnabled,
   collectCommuteSettings,
   copyUserFlags,
@@ -33,13 +29,13 @@ import {
   persistHpListingFields,
   invalidateListingLocation,
   persistListing,
-  sendUserWebPush,
+  routeJobKeyFor,
   pushPayloadFromEvents,
 } from "./db.js";
 import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
 // 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
 // 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
-import { getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
 // 通知決策要讀站上那一份的會員與信件範本（PG 模式下讀本機等於用別台節點的資料做決定）。
 import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
@@ -56,6 +52,13 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
+import { listingCommutePatchesAsync } from "./listingCommuteAsync.js";
+import { sendUserWebPushAsync } from "./webPushAsync.js";
+import {
+  finishRouteAttemptAsync,
+  markRouteJobAsync,
+  setCachedRouteAsync,
+} from "./routeCacheAsync.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
@@ -379,7 +382,7 @@ async function ingestListingGeoBatch(postIds) {
   };
 }
 
-async function resolveListingRoute(listing, settings) {
+async function resolveListingRoute(listing, settings, options = {}) {
   const km = Number(settings.commuteKm);
   const workLat = Number(settings.workLat);
   const workLng = Number(settings.workLng);
@@ -388,20 +391,30 @@ async function resolveListingRoute(listing, settings) {
   const lat = Number(listing?.lat);
   const lng = Number(listing?.lng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return listing;
-  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
+  const wantRush = (await commuteRushEnabledAsync(options)) && googleDirectionsAllowed();
   const hasKm = Array.isArray(listing.route_kms) && listing.route_kms.length;
   const hasRush = Number.isFinite(Number(listing.rush_am_min)) && Number.isFinite(Number(listing.rush_pm_min));
   if (hasKm && (!wantRush || hasRush)) return listing;
   if (wantRush) {
     const rush = await fetchRushRoadRoutes(lat, lng, workLat, workLng, { mode });
     const distances = rush?.distances?.length ? rush.distances : listing.route_kms;
-    if (distances?.length) setCachedRoute(lat, lng, workLat, workLng, distances, rush, mode);
+    if (distances?.length) await setCachedRouteAsync(lat, lng, workLat, workLng, distances, rush, mode, "to_work", options);
     return listingForWatchAsync(listing.post_id);
   }
   const distances = await fetchRoadRoutes(lat, lng, workLat, workLng, { mode });
   if (!distances?.length) return listing;
-  setCachedRoute(lat, lng, workLat, workLng, distances, null, mode);
+  await setCachedRouteAsync(lat, lng, workLat, workLng, distances, null, mode, "to_work", options);
   return listingForWatchAsync(listing.post_id);
+}
+
+// `bindNotifyJobSnapshots()`（db.js）是**同步**的全會員迴圈（`listUserIds()` ＋
+// `getActiveSearchProfile()`），而且它填的那份 memo 只有**同步**的 enqueue 入口在讀
+// ——PG 模式的 enqueue 走 `repository/notifyEnqueue.js`（自己讀 PG 的 active profile）。
+// ⇒ PG 模式下這一圈只會讀到**節點本機**的會員與搜尋設定檔（別的節點建的會員不在裡面，
+// 而本機的舊 profile 會被拿去當通知範圍）。包成 driver-aware 的委派，兩個 driver 都保留原行為。
+async function bindNotifyJobSnapshotsFor(options = {}) {
+  if ((options.driver || resolveDbDriver()) === "postgres") return 0;
+  return bindNotifyJobSnapshots();
 }
 
 export async function flushPendingNotifications(settings = null, { silent = false, ...options } = {}) {
@@ -409,7 +422,7 @@ export async function flushPendingNotifications(settings = null, { silent = fals
   // 「暫停通知的會員照樣被通知」、信件寄到舊的（或空的）信箱，而且不會報錯。
   // `options` 一路轉發給島嶼，測試才能注入 driver（正式路徑不傳，行為不變）。
   settings = settings || await getSettingsAsync(0, options);
-  bindNotifyJobSnapshots();
+  await bindNotifyJobSnapshotsFor(options);
   const pending = await pendingNotifyEventsAsync({ limit: 400 }, options);
   const dockByUser = new Map();
   const hookByUser = new Map();
@@ -526,7 +539,7 @@ export async function flushPendingNotifications(settings = null, { silent = fals
     let pushState = "skipped";
     if (!silent && push.length) {
       try {
-        await sendUserWebPush(userId, pushPayloadFromEvents(push));
+        await sendUserWebPushAsync(userId, pushPayloadFromEvents(push), options);
         pushState = "accepted";
       } catch {
         pushState = "retry";
@@ -579,7 +592,7 @@ export async function flushPendingNotifications(settings = null, { silent = fals
   return ready;
 }
 
-async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}) {
+async function resolvePendingNotifyLocations(settings, { withRoute = true, ...options } = {}) {
   if (!needsListingGeo(settings)) return;
   const pending = await pendingNotifyEventsAsync({ limit: 40 });
   const ids = [];
@@ -594,7 +607,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
     if (!shouldNotify(userSettings, listing, event)) continue;
     if (decideNotifyDelivery(listing, {
       ...userSettings,
-      waitRushMinutes: commuteRushEnabled() && googleDirectionsAllowed(),
+      waitRushMinutes: (await commuteRushEnabledAsync(options)) && googleDirectionsAllowed(),
     }) !== "pending") continue;
     ids.push(event.post_id);
   }
@@ -602,7 +615,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true } = {}
   if (!withRoute) return;
   for (const postId of ids) {
     const listing = await listingForWatchAsync(postId);
-    if (listing) await resolveListingRoute(listing, settings);
+    if (listing) await resolveListingRoute(listing, settings, options);
   }
 }
 
@@ -695,7 +708,7 @@ export async function runWatch(options = {}) {
   if (!jobs.length) {
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
-  bindNotifyJobSnapshots();
+  await bindNotifyJobSnapshotsFor(options);
 
   const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
   const pages = CRAWL_PAGES_591;
@@ -921,7 +934,7 @@ export async function runWatch(options = {}) {
     await ingestListingGeoBatch(freshIds);
   }
 
-  await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true });
+  await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true, ...options });
   const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 20 });
 
   const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });
@@ -1005,7 +1018,9 @@ export async function runWatch(options = {}) {
   return result;
 }
 
-export async function backfillListingCoords(settings = getSettings(), { limit = LIST_PAGE_SIZE } = {}) {
+export async function backfillListingCoords(settings = null, { limit = LIST_PAGE_SIZE, ...options } = {}) {
+  // PG 模式下 `getSettings()` 讀的是節點本機 ⇒ 預設值改成向 PG 問（`getSettingsAsync`）。
+  settings = settings || await getSettingsAsync(0, options);
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
   const rows = await needing591GeoAsync({ limit });
   return ingestListingGeoBatch(rows.map((row) => row.post_id));
@@ -1013,35 +1028,21 @@ export async function backfillListingCoords(settings = getSettings(), { limit = 
 
 const routeInflight = new Set();
 
-function routeJobKey(row, direction, kind) {
-  return [
-    Number(row.post_id) || 0,
-    direction,
-    kind,
-    normalizeCommuteMode(row.commuteMode),
-    `${Math.round(Number(row.workLat) * 1e5) / 1e5},${Math.round(Number(row.workLng) * 1e5) / 1e5}`,
-  ].join("|");
+// 鍵的算法只有一份（db.js `routeJobKeyFor`）：同步與 PG 兩條路徑不可以各算各的，
+// 否則 route_jobs 會出現兩列同義的鍵。
+const routeJobKey = (row, direction, kind) => routeJobKeyFor(row, direction, kind);
+
+// ⚠️ 三個寫入都走 PG 島嶼（`routeCacheAsync.js`）：同步版在 PG 模式下把剛算好的路線寫進
+// **節點本機**，而卡片是從 PG 讀的 ⇒ 不論補幾輪，通勤欄位都算不出來（而且沒有錯誤訊息）。
+async function markRouteJob(row, direction, kind, patch, options = {}) {
+  await markRouteJobAsync(row, direction, kind, patch, options);
 }
 
-function markRouteJob(row, direction, kind, patch) {
-  const prev = getRouteJob(routeJobKey(row, direction, kind));
-  upsertRouteJob({
-    post_id: row.post_id,
-    direction,
-    kind,
-    commuteMode: row.commuteMode,
-    workLat: row.workLat,
-    workLng: row.workLng,
-    attempts: Number(prev?.attempts) || 0,
-    ...patch,
-  });
-}
-
-async function writeCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction = "to_work") {
+async function writeCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction = "to_work", options = {}) {
   for (let tryNo = 0; tryNo < 4; tryNo += 1) {
     try {
-      setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction);
-      return true;
+      const result = await setCachedRouteAsync(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction, options);
+      return Boolean(result?.ok);
     } catch (error) {
       if (!String(error.message || "").includes("locked") || tryNo === 3) throw error;
       await new Promise((resolve) => setTimeout(resolve, 400 * (tryNo + 1)));
@@ -1050,25 +1051,14 @@ async function writeCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush,
   return false;
 }
 
-function finishRouteAttempt(row, direction, kind, reason) {
+async function finishRouteAttempt(row, direction, kind, reason, options = {}) {
   const key = routeJobKey(row, direction, kind);
   routeInflight.delete(key);
-  const prev = getRouteJob(key);
-  const attempts = (Number(prev?.attempts) || 0) + 1;
-  const decision = routeRetryDecision(reason, attempts);
-  upsertRouteJob({
-    post_id: row.post_id,
-    direction,
-    kind,
-    commuteMode: row.commuteMode,
-    workLat: row.workLat,
-    workLng: row.workLng,
-    attempts,
-    ...decision,
-  });
+  await finishRouteAttemptAsync(row, direction, kind, reason, options);
 }
 
-export async function backfillListingRoutes(settings = getSettings(), { limit = 20, priorityIds = [] } = {}) {
+export async function backfillListingRoutes(settings = null, { limit = 20, priorityIds = [], ...options } = {}) {
+  settings = settings || await getSettingsAsync(0, options);
   const fallback = commuteWorkJobs([settings, ...collectCommuteSettings()])[0];
   if (limit <= 0) return { attempted: 0, located: 0, listings: [], postIds: [] };
   const rows = (await needingRouteAsync({ limit, priorityIds })).filter((row) => {
@@ -1081,7 +1071,7 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
   let attempted = 0;
   let located = 0;
   const locatedIds = [];
-  const wantRush = commuteRushEnabled() && googleDirectionsAllowed();
+  const wantRush = (await commuteRushEnabledAsync(options)) && googleDirectionsAllowed();
   const groups = new Map();
   for (const row of rows) {
     const workLat = Number(row.workLat || settings.workLat || fallback?.workLat);
@@ -1157,8 +1147,11 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
     ...settings,
     commuteKm: Number(settings.commuteKm) > 0 ? settings.commuteKm : 1,
   };
-  const listings = [...new Set([...locatedIds, ...rows.map((row) => row.post_id)])]
-    .map((id) => listingCommutePatch(id, null, patchSettings))
+  // 通勤 patch 走 PG 島嶼（第七十六批）：PG 模式下列表在 PG，同步版讀本機 ⇒ PG 才有的刊登
+  // 一律是 `null`（接著廣播出去的 `commute_updated` 就是空的）。`userId: null` 在兩邊都代表
+  // 「預設帳號」，PG 版會向 PG 問（`defaultUserIdAsync`）。
+  const patchIds = [...new Set([...locatedIds, ...rows.map((row) => row.post_id)])];
+  const listings = (await listingCommutePatchesAsync(patchIds, null, { settings: patchSettings, ...options }))
     .filter(Boolean);
   return {
     attempted,
@@ -1169,7 +1162,8 @@ export async function backfillListingRoutes(settings = getSettings(), { limit = 
   };
 }
 
-export async function backfillAddressGeo(settings = getSettings(), { limit = 12 } = {}) {
+export async function backfillAddressGeo(settings = null, { limit = 12, ...options } = {}) {
+  settings = settings || await getSettingsAsync(0, options);
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
   const rows = await needingAddressGeoAsync({ limit });
   let attempted = 0;

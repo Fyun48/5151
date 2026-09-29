@@ -93,12 +93,14 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /\/api\/admin\/maps/);
   const backfillFn = src.slice(src.indexOf("function queueGeoBackfill"), src.indexOf("async function tick"));
   assert.ok(backfillFn.indexOf("backfillListingRoutes") < backfillFn.indexOf("backfillListingCoords"));
-  assert.equal((backfillFn.match(/stats\(\)/g) || []).length, 1);
+  // 第七十七批：收尾的統計改用 PG 島嶼（`safeStats()` → `listingStatsAsync`）。
+  // 同步的 `stats()` 讀的是節點本機 ⇒ 推給瀏覽器的會是別台節點的統計。
+  assert.equal((backfillFn.match(/(?<!safe)stats\(\)/g) || []).length, 0, "不得再用同步的 stats()");
+  assert.match(backfillFn, /broadcast\(\{ type: "geo", stats: await safeStats\(0\), done: true \}\)/);
   assert.match(backfillFn, /holdStatsCache/);
   assert.match(backfillFn, /broadcast\(\{ type: "geo", routeBackfill: routes \}\)/);
   assert.match(backfillFn, /broadcast\(\{ type: "geo", geoBackfill: geo \}\)/);
   assert.match(backfillFn, /broadcast\(\{ type: "geo", mrtBackfill: mrt \}\)/);
-  assert.match(backfillFn, /broadcast\(\{ type: "geo", stats: stats\(\), done: true \}\)/);
   const listen = src.slice(src.indexOf("app.listen"));
   const afterJobs = listen.slice(listen.indexOf('console.log(`第一次檢查'));
   assert.ok(afterJobs.indexOf('tick("startup")') < afterJobs.indexOf("queueGeoBackfill()"));

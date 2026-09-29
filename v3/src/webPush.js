@@ -174,9 +174,13 @@ export function pushPayloadFromEvents(events = []) {
   };
 }
 
-export async function sendWebPush(db, userId, payload) {
-  const subs = listPushSubscriptions(db, userId);
-  if (!subs.length) return { sent: 0, skipped: "no-sub" };
+export const PUSH_DELETE_ENDPOINT_SQL = "DELETE FROM push_subscriptions WHERE endpoint = ?";
+
+// 送出一批訂閱（driver-agnostic）：PG 島嶼（`webPushAsync.js`）拿到 PG 的訂閱列之後跑同一份迴圈，
+// 所以「什麼算送成功、404／410 要清掉訂閱」只有一份實作。
+export async function deliverPushNotifications(subs, payload, { onGone = null } = {}) {
+  const list = Array.isArray(subs) ? subs : [];
+  if (!list.length) return { sent: 0, skipped: "no-sub" };
   const keys = loadVapidKeys();
   if (!keys.publicKey || !keys.privateKey) return { sent: 0, skipped: "no-vapid" };
   const webpush = await loadWebPushLib();
@@ -189,7 +193,7 @@ export async function sendWebPush(db, userId, payload) {
   }
   const body = JSON.stringify(payload || { title: APP_NAME, body: "有新的物件更新", url: "/" });
   let sent = 0;
-  for (const sub of subs) {
+  for (const sub of list) {
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
@@ -199,8 +203,17 @@ export async function sendWebPush(db, userId, payload) {
       sent += 1;
     } catch (error) {
       const status = Number(error?.statusCode || error?.status || 0);
-      if (status === 404 || status === 410) dropEndpoint(db, sub.endpoint);
+      if (status === 404 || status === 410) {
+        if (onGone) await onGone(sub.endpoint);
+        else dropEndpoint(undefined, sub.endpoint);
+      }
     }
   }
   return { sent };
+}
+
+export async function sendWebPush(db, userId, payload) {
+  return deliverPushNotifications(listPushSubscriptions(db, userId), payload, {
+    onGone: (endpoint) => dropEndpoint(db, endpoint),
+  });
 }

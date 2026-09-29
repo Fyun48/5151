@@ -553,6 +553,79 @@ for (const m of server.text.matchAll(routeRe)) {
 }
 
 const esc = (s) => String(s).replace(/\|/g, "\\|");
+// `--why=<路由子字串>`：印出「這條路由 → 某個 SQLite 卡點」的**最短路徑**（除錯用）。
+//
+// 為什麼要：卡點清單只說「這條路由碰得到 `stats()`」，但沒有說**經過誰**。第七十六批以前
+// 只能靠人工 grep 推測（實測：`broadcastNotify()` 裡的同步 `stats()` 汙染了整條 `queueGeoBackfill`
+// 的卡點清單，猜了三輪才找到）。這一支沿著**與判定完全相同的邊**做 BFS，所以答案不會與判定漂移。
+// ⚠️ 只印路徑，**不改判定**（`rows` 已經算完了）。
+const whyArg = process.argv.find((a) => a.startsWith("--why="));
+if (whyArg) {
+  const needle = whyArg.slice("--why=".length);
+  const targets = new Set(needle.includes(",") ? needle.split(",").map((t) => t.trim()).filter(Boolean) : []);
+  const routeRe2 = /app\.(get|post|put|delete|patch)\(\s*"([^"]+)"\s*,/g;
+  for (const m of server.text.matchAll(routeRe2)) {
+    const key = `${m[1].toUpperCase()} ${m[2]}`;
+    if (!targets.size && needle && !key.includes(needle)) continue;
+    const rest = server.text.slice(m.index);
+    const stop = rest.indexOf("\n});");
+    const body = stop === -1 ? rest.slice(0, 2500) : rest.slice(0, stop + 4);
+    const start = { rel: "server.js", name: `route:${key}`, body, path: [key] };
+    const seen = new Set([`server.js::route:${key}`]);
+    const queue = [start];
+    const found = new Map();
+    while (queue.length) {
+      const node = queue.shift();
+      const mod = mods.get(node.rel);
+      if (!mod) continue;
+      const push = (rel, name, label) => {
+        const k = `${rel}::${name}`;
+        if (seen.has(k)) return;
+        seen.add(k);
+        const child = mods.get(rel)?.fns.get(name);
+        queue.push({ rel, name, body: typeof child === "string" ? child : "", path: [...node.path, label || name] });
+      };
+      // ⚠️ 與判定同一條規則：driver-aware 的函式（本文有 `resolveDbDriver(`）不列為 SQLite 路徑，
+      // 也不往它裡面走——否則除錯輸出會指著島嶼的 sqlite 分支，而不是真正的病灶。
+      const isAware = (rel, name) => {
+        const b = mods.get(rel)?.fns.get(name);
+        return typeof b === "string" && /resolveDbDriver\s*\(/.test(b);
+      };
+      // ⚠️ 與 `resolveNode()` 完全同一條規則：只在 driver-aware 呼叫的**引數**裡出現的名字是
+      // fallback，不是這個函式在用 SQLite（`() => getUserByIdSync(...)` 就是這種）。
+      const awareNames = driverAwareLocalNames(node.rel);
+      const delegated = awareNames.size
+        ? new Set([...mod.fns.keys()].filter((o) => o !== node.name && awareNames.has(o) && callsIn(node.body, o)))
+        : new Set();
+      for (const [local, target] of mod.imports) {
+        if (!callsIn(node.body, local)) continue;
+        if (delegated.size && onlyInsideDriverCalls(node.body, local, delegated)) continue;
+        if (isAware(target.to, target.orig)) continue;
+        if (sqliteNodes.has(nodeKey(target.to, target.orig))) {
+          if (!found.has(target.orig)) found.set(target.orig, [...node.path, `${local}() → ${target.to}`]);
+        }
+        push(target.to, target.orig, `${local}() → ${target.to}`);
+      }
+      for (const other of mod.fns.keys()) {
+        if (other === node.name || !callsIn(node.body, other)) continue;
+        if (isAware(node.rel, other)) continue;
+        push(node.rel, other, `${other}()`);
+      }
+    }
+    if (process.env.ROUTE_MAP_WHY_DEBUG) console.log(`  [why] visited=${seen.size} found=${found.size} imports=${mods.get("server.js").imports.size} fns=${mods.get("server.js").fns.size}`);
+    if (targets.size) {
+      for (const t of targets) {
+        console.log(`${key} → ${t}: ${found.get(t) ? found.get(t).join(" → ") : "（在這個近似圖裡找不到路徑）"}`);
+      }
+    } else {
+      const row = rows.find((r) => `${r.method} ${r.path}` === key);
+      for (const t of (row?.sqlite || [])) {
+        console.log(`${key} → ${t}: ${found.get(t) ? found.get(t).join(" → ") : "（找不到路徑）"}`);
+      }
+    }
+  }
+}
+
 const tally = {};
 for (const r of rows) tally[r.verdict] = (tally[r.verdict] || 0) + 1;
 

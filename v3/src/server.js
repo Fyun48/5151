@@ -11,6 +11,7 @@ import {
   loadProfileAsync,
   saveAsProfileAsync,
   saveSettingsAsync,
+  settingsForGeoBackfillAsync,
 } from "./settingsAsync.js";
 // 帳號維護（過期驗證碼、閒置暫停）：PG 模式下與其他節點同源。
 import { expireStaleVerifyTokensAsync, pauseIdleMembersAsync } from "./accountMaintenanceAsync.js";
@@ -86,7 +87,6 @@ import {
   getAdminSimilaritySettings,
   saveAdminPhashSettings,
   reviewAdminSimilarity,
-  settingsForGeoBackfill,
   listingCommutePatch,
   getMemberMailSettings,
   getMemberSmtp,
@@ -3719,19 +3719,24 @@ function broadcast(payload, userId) {
   }
 }
 
-function broadcastWatch(result) {
+// ⚠️ 這幾處原本呼叫同步的 `stats()`（db.js）：PG 模式下它讀的是**節點本機**的
+// `listings`／`user_listing_flags`／`users` ⇒ 推給瀏覽器的統計是別台節點的（或空的），
+// 而且整條鏈（`countWatched`／`loadFlagMap`／`ensureUser`／`getUserById`／`listUserIds`／
+// `getActiveSearchProfile`／`sqlExcludeFixtureRows`）都被拉進 `queueGeoBackfill` 的卡點裡
+// （第七十七批）。改用既有的 `safeStats()`（`listingStatsAsync`，PG 讀 PG）。
+async function broadcastWatch(result) {
   for (const client of clients) {
     const events = (result.events || []).filter((event) => !event.user_id || event.user_id === client.userId);
     const payload = {
       type: "watch",
       result: { ...result, events },
-      stats: stats(undefined, client.userId),
+      stats: await safeStats(client.userId),
     };
     client.res.write(`data: ${JSON.stringify(payload)}\n\n`);
   }
 }
 
-function broadcastNotify(events) {
+async function broadcastNotify(events) {
   const byUser = new Map();
   for (const event of events || []) {
     const uid = Number(event.user_id) || 0;
@@ -3741,7 +3746,7 @@ function broadcastNotify(events) {
     byUser.set(uid, list);
   }
   for (const [userId, list] of byUser) {
-    broadcast({ type: "notify", events: list, stats: stats(undefined, userId) }, userId);
+    broadcast({ type: "notify", events: list, stats: await safeStats(userId) }, userId);
   }
 }
 
@@ -3784,7 +3789,7 @@ async function ensureWorkCoords() {
 // PG 模式（正式站）會拿到另一份設定。呼叫端若已經有 settings 就傳進來（不要重讀）。
 async function queueGeoBackfill(settings = null) {
   const resolved = settings || await getSettingsAsync(0);
-  settings = settingsForGeoBackfill(resolved);
+  settings = await settingsForGeoBackfillAsync(resolved);
   if (rememberBackfillRequest(geoBackfillState) === "queued") return;
   const needCommute = needsListingGeo(settings);
   geoBackfillBusy = true;
@@ -3811,7 +3816,7 @@ async function queueGeoBackfill(settings = null) {
         }
       }
       const notified = await flushPendingNotifications(settings);
-      if (notified.length) broadcastNotify(notified);
+      if (notified.length) await broadcastNotify(notified);
       return routes;
     }
     if (needCommute) {
@@ -3833,7 +3838,7 @@ async function queueGeoBackfill(settings = null) {
           const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
           if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
           const notified = await flushPendingNotifications(settings);
-          if (notified.length) broadcastNotify(notified);
+          if (notified.length) await broadcastNotify(notified);
           if (geo.located) await runRoutes();
           if (!geo.attempted) break;
         } catch (error) {
@@ -3846,7 +3851,7 @@ async function queueGeoBackfill(settings = null) {
           const geo = await backfillAddressGeo(settings, { limit: 12 });
           if (geo.attempted) broadcast({ type: "geo", addressGeo: geo });
           const notified = await flushPendingNotifications(settings);
-          if (notified.length) broadcastNotify(notified);
+          if (notified.length) await broadcastNotify(notified);
           if (geo.located) await runRoutes();
           if (!geo.attempted) break;
         } catch (error) {
@@ -3866,7 +3871,7 @@ async function queueGeoBackfill(settings = null) {
       }
     }
     try {
-      broadcast({ type: "geo", stats: stats(), done: true });
+      broadcast({ type: "geo", stats: await safeStats(0), done: true });
       broadcast({ type: "stats_invalidated" });
     } catch (error) {
       console.warn("補定位後統計失敗：", error.message);
@@ -3983,7 +3988,7 @@ async function tick(reason = "schedule") {
     lastRun = result;
     lastRun.reason = reason;
     // Independent background jobs must not inherit the finished crawl's owner.
-    broadcastWatch(lastRun);
+    await broadcastWatch(lastRun);
     if (reason !== "startup") queueGeoBackfill();
     return lastRun;
   } catch (error) {
@@ -4299,7 +4304,7 @@ app.post("/api/listings/:id/flags", async (req, res) => {
       }
       try { await probeListingAliveBySource(updated); } catch { /* 關注後狀態探測失敗不擋回寫 */ }
     }
-    res.json({ listing: updated, stats: stats(undefined, uid) });
+    res.json({ listing: updated, stats: await safeStats(uid) });
   } catch (error) {
     res.status(error.status || 400).json({
       error: error.message || "無法更新標記",
