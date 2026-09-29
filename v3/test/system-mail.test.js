@@ -90,7 +90,8 @@ test("change password rejects the current password and stores the new one", () =
 test("server register, change-password, and sponsor patch queue system mail", () => {
   const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
   assert.match(src, /queueSystemMail\("welcome"/);
-  assert.match(src, /queueSystemMail\("verified_welcome"/);
+  // 註冊確認的歡迎信在第五十三批改走 PG 島嶼（同步版讀本機的 SMTP／範本 ⇒ PG 站寄不出去）。
+  assert.match(src, /await queueSystemMailAsync\("verified_welcome"/);
   assert.match(src, /queueSystemMail\("verify_expired"/);
   assert.match(src, /queueSystemMail\("password_changed"/);
   assert.match(src, /queueSystemMail\("sponsor_thanks"/);
@@ -98,6 +99,9 @@ test("server register, change-password, and sponsor patch queue system mail", ()
   assert.match(src, /app\.post\("\/api\/change-password"/);
   const queue = src.slice(src.indexOf("function queueSystemMail"), src.indexOf('app.post("/api/register"'));
   assert.match(queue, /smtp:\s*getStoredSmtp\(\)/);
+  // async 版的來源必須是 PG 島嶼（不是同一個同步讀取）。
+  assert.match(queue, /async function queueSystemMailAsync/);
+  assert.match(queue, /getMailTemplatesAsync\(options\), getStoredSmtpAsync\(options\)/);
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /smtp: mailBundle\.smtp \|\| null/);
   assert.doesNotMatch(watcher, /mailBundle\.configured \|\| mailConfigured\(\)/);
