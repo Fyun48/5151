@@ -251,6 +251,8 @@ import {
 } from "./adminSettingsAsync.js";
 // 註冊信箱確認與忘記密碼的 PG 島嶼入口。
 import { confirmVerifyTokenAsync, issueVerifyTokenAsync } from "./emailVerifyAsync.js";
+// 通勤快照（地圖卡片的通勤欄位）的 PG 島嶼入口。
+import { listingCommutePatchesAsync } from "./listingCommuteAsync.js";
 import { requestTempPasswordAsync } from "./forgotPasswordAsync.js";
 import { recordShareEventAsync } from "./rentalShareGrowthAsync.js";
 // 法律文案（免責聲明／個資說明）的 PG 島嶼入口：一份文案、兩個 store
@@ -4174,8 +4176,10 @@ app.get("/api/commute/snapshot", async (req, res) => {
     .map(Number)
     .filter((id) => id > 0)
     .slice(0, 80);
+  // PG 模式下同步版讀的是節點本機：PG 才有的刊登會拿到 null（地圖卡片沒有通勤資訊），
+  // 觀看者旗標與個人同戶狀態也可能與另一台節點不同（第七十六批）。
   res.json({
-    listings: ids.map((id) => listingCommutePatch(id, uid)).filter(Boolean),
+    listings: await listingCommutePatchesAsync(ids, uid, { settings }),
     fingerprint: commuteSettingsFingerprint(settings),
   });
 });

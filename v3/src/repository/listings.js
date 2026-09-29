@@ -110,7 +110,8 @@ async function searchWith({ execute, buildSql, deps, args, driver }) {
   return pageEnvelope(built, plan, rows, totalMatched, driver);
 }
 
-function idPlaceholders(ids, driver) {
+// 匯出給 `listingCommuteAsync.js`（同一組 `$n`／`?` 佔位符規則，兩個路徑不要各寫一份）。
+export function idPlaceholders(ids, driver) {
   return ids.map((_, i) => (driver === "postgres" ? `$${i + 1}` : "?")).join(", ");
 }
 
