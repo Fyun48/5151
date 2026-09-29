@@ -79,7 +79,9 @@ export function ensureProfileSchema(db) {
   }
 }
 
-function cleanLine(value, max) {
+// 匯出給 PG 島嶼逐字重用：這三個是**輸入政策**（長度、允許的字元、URL 白名單），
+// 兩個 driver 必須用同一份，否則同一筆輸入在 PG 與 SQLite 會存出不同的值。
+export function cleanLine(value, max) {
   return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
@@ -103,7 +105,7 @@ export function normalizeGender(value) {
   return GENDER_OPTIONS.includes(raw) ? raw : "";
 }
 
-function mediaUrl(value, label) {
+export function mediaUrl(value, label) {
   const next = String(value || "").trim();
   if (!next) return "";
   if (/^\/media\/self\/[a-f0-9]{32}\.(jpg|png|webp)$/.test(next)) return next;

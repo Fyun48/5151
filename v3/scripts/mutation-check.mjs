@@ -1972,6 +1972,29 @@ const MEMBERMEDIA_MUTATIONS = [
     to: '" ").slice(0, 40);',
     expect: "建立標籤：同名會重用既有的",
   },
+  {
+    // 第六十二批：上傳＝「配額檢查 ＋ INSERT」必須在同一個交易裡。把配額查在交易外，
+    // 兩個並行上傳會各自通過檢查 ⇒ 超過方案上限。
+    name: "上傳不檢查配額（可以無限上傳）",
+    file: "v3/src/memberMediaAsync.js",
+    from: "      const used = countOf(await exec(COUNT_ACTIVE_MEDIA_SQL, [uid]));\n      if (used >= quota) {",
+    to: "      const used = 0;\n      if (used >= quota) {",
+    expect: "配額滿了回 409",
+  },
+  {
+    name: "上傳失敗時不清掉剛寫的檔（留下孤兒檔）",
+    file: "v3/src/memberMediaAsync.js",
+    from: "  } catch (error) {\n    await cleanup();\n    throw error;\n  }",
+    to: "  } catch (error) {\n    throw error;\n  }",
+    expect: "交易失敗時檔案與 CDN 物件都要清掉",
+  },
+  {
+    name: "上傳不回讀剛建立的那一列（回 id 而不是完整物件）",
+    file: "v3/src/memberMediaAsync.js",
+    from: "    return await getOwnedMediaAsync(uid, id, options);",
+    to: "    return { id };",
+    expect: "配額沒滿就寫入 PG",
+  },
 ];
 
 // 刊登生產力工具（說明範本／聯絡人）PG 分支的變異集
@@ -3614,6 +3637,46 @@ const SRCHIST_MUTATIONS = [
   },
 ];
 
+// 個人資料更新（第六十二批）的變異集。
+const PROFILEASYNC_SRC = "v3/src/profileAsync.js";
+const PROFILEASYNC_MUTATIONS = [
+  {
+    name: "個人資料更新不擋 email 變更（可以換掉註冊信箱）",
+    file: PROFILEASYNC_SRC,
+    from: "    if (next && next !== cur) throw httpError(\"註冊 Email 不能更改\", 400);",
+    to: "    if (false) throw httpError(\"註冊 Email 不能更改\", 400);",
+    expect: "驗證：email 不可改",
+  },
+  {
+    name: "個人資料更新不驗頭像 URL（可以塞任意網址）",
+    file: PROFILEASYNC_SRC,
+    from: "  const avatar = has(\"avatar_url\") ? mediaUrl(input.avatar_url, \"頭像\") : String(row.avatar_url || \"\");",
+    to: "  const avatar = has(\"avatar_url\") ? String(input.avatar_url || \"\") : String(row.avatar_url || \"\");",
+    expect: "驗證：email 不可改",
+  },
+  {
+    name: "個人資料更新不驗聯絡 Email",
+    file: PROFILEASYNC_SRC,
+    from: "    if (!ok) throw httpError(\"聯絡 Email 格式不對\", 400);",
+    to: "    if (false) throw httpError(\"聯絡 Email 格式不對\", 400);",
+    expect: "驗證：email 不可改",
+  },
+  {
+    name: "沒帶到的欄位也一起清空（沿用舊值的規則失效）",
+    file: PROFILEASYNC_SRC,
+    from: "  const home = has(\"home_address\") ? cleanLine(input.home_address, 120) : String(row.home_address || \"\");",
+    to: "  const home = has(\"home_address\") ? cleanLine(input.home_address, 120) : \"\";",
+    expect: "只改帶到的欄位",
+  },
+  {
+    name: "找不到會員不回 404（回 undefined 讓呼叫端爆掉）",
+    file: PROFILEASYNC_SRC,
+    from: "  if (!row) throw httpError(\"找不到這個會員\", 404);",
+    to: "  if (!row) return null;",
+    expect: "找不到會員 404",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3622,7 +3685,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS
+const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
+  : /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS
   : /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
   : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
   : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS

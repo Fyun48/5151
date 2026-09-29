@@ -284,6 +284,7 @@ import {
   getUserByIdAsync,
   resumeIdleIfNeededAsync,
   touchLastLoginAsync,
+  updateUserProfileWithLegalAsync,
 } from "./usersAsync.js";
 // 後台會員管理（列表／停權／復原／改方案）的 PG 島嶼入口。
 import {
@@ -411,6 +412,7 @@ import {
   listMemberMediaAsync,
   mediaUrlsForTagIdsAsync,
   renameMediaTagAsync,
+  saveMemberMediaAsync,
   setMediaTagsAsync,
 } from "./memberMediaAsync.js";
 
@@ -953,14 +955,15 @@ app.get("/api/me", async (req, res) => {
   });
 });
 
-app.patch("/api/profile", (req, res) => {
+app.patch("/api/profile", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    const user = updateUserProfile(session.userId, req.body || {});
+    // 個人資料在 PG 上；連法律文案（`withLegalProfile()`）也要讀 PG，否則會員看到的是本機那一份。
+    const user = await updateUserProfileWithLegalAsync(session.userId, req.body || {});
     res.json({ ok: true, ...user });
   } catch (error) {
     sendAuthError(res, error);
@@ -3414,7 +3417,12 @@ app.post("/api/media", express.raw({ type: () => true, limit: IMAGE_MAX_UPLOAD_B
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入才能上傳照片" }); return; }
     const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const item = await saveMemberMediaFor(session.userId, buf, { plan: session.plan || "free", originalName: String(req.query.name || "") });
+    // 上傳＝「配額檢查 ＋ INSERT」必須在同一個 PG 交易裡（同步版是 BEGIN IMMEDIATE），
+    // 否則兩個並行上傳會各自通過檢查而超過方案上限。
+    const item = await saveMemberMediaAsync(session.userId, buf, {
+      plan: session.plan || "free",
+      originalName: String(req.query.name || ""),
+    });
     res.json(item);
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });

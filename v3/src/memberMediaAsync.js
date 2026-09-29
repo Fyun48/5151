@@ -30,6 +30,11 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { randomBytes } from "node:crypto";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { applySiteWatermark, normalizeImage } from "./imageProcess.js";
+import { deleteMemberMediaObjects, putMemberMediaObjects } from "./media/mediaStore.js";
 import {
   MEDIA_PUBLIC_PREFIX,
   countActiveMedia as countActiveMediaSync,
@@ -48,8 +53,12 @@ import {
   ownsMediaUrl as ownsMediaUrlSync,
   publicMediaShape,
   publicTag,
+  memberMediaDir,
   removeMediaArtifacts,
   renameMediaTag as renameMediaTagSync,
+  safeName,
+  saveMemberMedia as saveMemberMediaSync,
+  watermarkPublicDerivative,
   setMediaTags as setMediaTagsSync,
   tagName,
 } from "./memberMedia.js";
@@ -265,6 +274,91 @@ async function withFallbackTx(options, runPostgres, runSqlite) {
 // 那會把「連線斷了」也報成「已有同名標籤」，在 PG 上不能照抄。
 function isDuplicate(error) {
   return error?.code === "23505" || /UNIQUE constraint failed|duplicate key/i.test(String(error?.message || ""));
+}
+
+// `memberMedia.js saveMemberMedia()` 的 PG 版（第六十二批）：照片上傳。
+//
+// 🚨 這是`POST /api/media` 的實作，同步版用 `BEGIN IMMEDIATE` 把「配額檢查 ＋ INSERT」包起來
+// （序列化並發上傳）。PG 版用 `withFallbackTx()`（真的交易）；**配額檢查一定要在交易內**，
+// 否則兩個並行上傳會各自通過檢查、都寫入 ⇒ 超過方案上限。
+//
+// ⚠️ 檔案與 CDN 物件的生命週期必須跟著交易成敗：
+//   - 交易成功 → 保留
+//   - 交易失敗 → 刪掉剛寫的檔與剛上傳的物件（同步版就是這樣，`_o.jpg` 原圖刻意不上 CDN）
+// 這一支刻意**不**走 `sqliteFallbackAllowed` 的 fail-open：寫入失敗要往上丟（政策是 fail-closed）。
+export const MEDIA_INSERT_SQL = `INSERT INTO member_media(user_id, storage_key, thumb_key, original_key, original_name, mime, format, width, height, bytes, digest, watermarked, created_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`;
+
+export async function saveMemberMediaAsync(userId, buffer, {
+  plan = "free",
+  processor = normalizeImage,
+  watermarker = applySiteWatermark,
+  now = new Date(),
+  originalName = "",
+  ...options
+} = {}) {
+  const uid = Number(userId) || 0;
+  if (!isPg(options)) {
+    return saveMemberMediaSync(sqliteHandle(), uid, buffer, { plan, processor, watermarker, now, originalName });
+  }
+  const quota = mediaQuotaForPlan(plan);
+  const processed = await processor(buffer);
+  if (!processed?.main?.buffer?.length || !processed?.thumb?.buffer?.length) {
+    const e = new Error("顯示圖處理失敗，未寫入損壞檔案");
+    e.status = 500;
+    e.code = "watermark_failed";
+    throw e;
+  }
+  const marked = await watermarkPublicDerivative(watermarker, processed.main.buffer, {
+    width: processed.main.width,
+    height: processed.main.height,
+  });
+  const markedThumb = await watermarkPublicDerivative(watermarker, processed.thumb.buffer);
+  const key = randomBytes(16).toString("hex");
+  const mainName = `${key}.jpg`;
+  const thumbName = `${key}_t.jpg`;
+  const originalNameKey = `${key}_o.jpg`;
+  const dir = memberMediaDir();
+  const ts = stampOf(now);
+  let wroteFiles = false;
+
+  const cleanup = async () => {
+    if (wroteFiles) {
+      for (const n of [mainName, thumbName, originalNameKey]) {
+        try { const p = path.join(dir, n); if (existsSync(p)) unlinkSync(p); } catch { /* ignore */ }
+      }
+    }
+    await deleteMemberMediaObjects([mainName, thumbName]).catch(() => {});
+  };
+
+  try {
+    const id = await withFallbackTx(options, async (exec) => {
+      const used = countOf(await exec(COUNT_ACTIVE_MEDIA_SQL, [uid]));
+      if (used >= quota) {
+        // 配額是**業務錯誤**（409），不該被 fallback 吞掉或改判 ⇒ 帶 status 往上丟。
+        throw httpError(`照片素材庫已達上限（${quota} 張）。可刪除舊照片或升級贊助會員（100 張）。`, 409, "quota_exceeded");
+      }
+      writeFileSync(path.join(dir, originalNameKey), processed.main.buffer);
+      writeFileSync(path.join(dir, mainName), marked.buffer);
+      writeFileSync(path.join(dir, thumbName), markedThumb.buffer);
+      wroteFiles = true;
+      // r2 模式下失敗＝整筆失敗：寧可請使用者重試，也不要出現「DB 有、CDN 沒有」的圖。
+      await putMemberMediaObjects([
+        { name: mainName, buffer: marked.buffer },
+        { name: thumbName, buffer: markedThumb.buffer },
+      ]);
+      const row = firstRow(await exec(MEDIA_INSERT_SQL, [
+        uid, mainName, thumbName, originalNameKey, safeName(originalName),
+        processed.mime, processed.format, processed.main.width, processed.main.height,
+        marked.buffer.length, processed.digest, marked.watermarked ? 1 : 0, ts,
+      ]));
+      return Number(row?.id) || 0;
+    }, () => saveMemberMediaSync(sqliteHandle(), uid, buffer, { plan, processor, watermarker, now, originalName }));
+    return await getOwnedMediaAsync(uid, id, options);
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 // ---- 讀取 ----

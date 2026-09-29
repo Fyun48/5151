@@ -30,6 +30,7 @@ import { publicUser } from "./members.js";
 import { hashPassword, normalizeEmail, validatePassword, verifyPassword } from "./password.js";
 import { defaultUserId as defaultUserIdSync, resumeIdleIfNeeded as resumeIdleIfNeededSync } from "./db.js";
 import { applyIdleResumeAsync } from "./idlePause.js";
+import { updateUserProfileAsync } from "./profileAsync.js";
 
 export const USER_BY_ID_SQL = "SELECT * FROM users WHERE id = ?";
 
@@ -248,4 +249,25 @@ export async function restoreUserAsync(userId, options = {}) {
   assertMemberRestorable(user);
   await run(options, async (exec) => { await exec(USER_RESTORE_SQL, [id]); }, () => restoreUserSync(sqliteHandle(), id));
   return getUserByIdAsync(id, options);
+}
+
+// `db.js updateUserProfile()`（＝ `profile.updateUserProfile()` ＋ `withLegalProfile()`）的 PG 版。
+// ⚠️ 同步版的 `withLegalProfile()` 會呼叫**同步**的 `getLegalCopy()`（讀本機）⇒ 這裡改用
+// `getLegalCopyAsync()`（讀 PG），否則會員改完資料後拿到的法律文案是節點本機那一份。
+export async function updateUserProfileWithLegalAsync(userId, input = {}, options = {}) {
+  const row = await updateUserProfileAsync(userId, input, options);
+  if (!row) return row;
+  const { getLegalCopyAsync } = await import("./legalCopyAsync.js");
+  const { publicUser } = await import("./members.js");
+  const { publicProfile } = await import("./profile.js");
+  const copy = await getLegalCopyAsync(options);
+  return {
+    ...publicUser(row),
+    ...publicProfile(row),
+    privacy_text: copy.privacy,
+    disclaimer_text: copy.disclaimer,
+    privacy_check: copy.privacyCheck,
+    disclaimer_check: copy.disclaimerCheck,
+    legal_version: copy.version,
+  };
 }
