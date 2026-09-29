@@ -3397,6 +3397,59 @@ const SELFLISTING_MATCHES_MUTATIONS = [
   },
 ];
 
+// 複製站內刊登（v3/test/self-listing-copy-async.test.js，第八十二批）。
+const COPYSELF_MUTATIONS = [
+  {
+    name: "複製改回同步版（別的節點的刊登複製不到）",
+    file: "v3/src/selfListingsAsync.js",
+    from: '  if (!isPg(options)) {\n    const { copyOwnListing } = await import("./listingTools.js");',
+    to: '  if (true) {\n    const { copyOwnListing } = await import("./listingTools.js");',
+    expect: "列／素材只放在 PG 時",
+  },
+  {
+    name: "素材所有權不查（把別人的照片一起複製走）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    if (isMemberMediaUrl(url)) {\n      if (await ownsMediaUrlAsync(userId, url, options)) out.push(url);\n      continue;\n    }",
+    to: "    if (isMemberMediaUrl(url)) {\n      out.push(url);\n      continue;\n    }",
+    expect: "複製：PG 版與同步版的草稿與回傳表單逐欄位相同",
+  },
+  {
+    name: "草稿不寫進 PG（別的節點看不到那份草稿）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    await run(SELF_DRAFT_INSERT_SQL, selfDraftInsertParams({",
+    to: "    void selfDraftInsertParams; await run(SELF_DRAFT_UPDATE_SQL, selfDraftUpdateParams({\n      uid: id, postId, body, photos, traits, deposit, contactName, roleName, phone, lineUrl,\n    })); if (false) await run(SELF_DRAFT_INSERT_SQL, selfDraftInsertParams({",
+    expect: "列／素材只放在 PG 時",
+  },
+  {
+    name: "來源列改讀本機（PG 的刊登找不到）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  const source = await getSelfRowAsync(sourceId, { ...options, exec: run, driver: \"postgres\", strict: true });",
+    to: "  const source = getSelfRowSync(sqliteHandle(), sourceId);",
+    expect: "列／素材只放在 PG 時",
+  },
+  {
+    name: "冪等鍵不查（同一把鍵會產生兩份草稿）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    const hit = rowsOf(await run(COPY_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];",
+    to: "    const hit = null;",
+    expect: "冪等鍵",
+  },
+  {
+    name: "寫入失敗無條件回退本機（複製看起來成功、其實寫在別的地方）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    const { copyOwnListing } = await import(\"./listingTools.js\");",
+    to: "    const { copyOwnListing } = await import(\"./listingTools.js\");",
+    expect: "寫入是 fail-closed",
+  },
+  {
+    name: "`POST /api/self-listings/:id/copy` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await copyOwnListingAsync(session.userId, req.params.id, req.body || {}));",
+    to: "    res.json(copyOwnListingFor(session.userId, req.params.id, req.body || {}));",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4823,6 +4876,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /demand-aggregate-async/.test(testFile) ? DEMANDAGG_MUTATIONS
   : /self-listing-match-async/.test(testFile) ? SELFLISTING_MATCH_MUTATIONS
   : /self-listing-matches-async/.test(testFile) ? SELFLISTING_MATCHES_MUTATIONS
+  : /self-listing-copy-async/.test(testFile) ? COPYSELF_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

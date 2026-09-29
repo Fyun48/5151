@@ -62,7 +62,7 @@ export function setSelfListingHydrate(catalog, flags) {
   setSelfListingCatalog(catalog, flags);
 }
 
-function catalogTraitExtras({ includeInactive = false } = {}) {
+export function catalogTraitExtras({ includeInactive = false } = {}) {
   if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return { ids: [], labels: {} };
   const ids = [];
   const labels = {};
@@ -413,9 +413,7 @@ function assertCanPublish(db, userId, now = new Date(), { maturity } = {}) {
 }
 
 export function nextSelfPostId(db) {
-  const row = db.prepare(
-    "SELECT MAX(post_id) AS n FROM listings WHERE post_id >= ? AND post_id < ?",
-  ).get(SELF_POST_ID_BASE, SELF_POST_ID_END);
+  const row = db.prepare(NEXT_SELF_POST_ID_SQL).get(SELF_POST_ID_BASE, SELF_POST_ID_END);
   const current = Number(row?.n) || SELF_POST_ID_BASE;
   const next = Math.max(SELF_POST_ID_BASE, current) + 1;
   if (next >= SELF_POST_ID_END) throw httpError("站內刊登編號已滿", 500);
@@ -946,6 +944,43 @@ export function createImportedDraftListing(db, userId, input = {}, now = new Dat
 }
 
 /** 會員自己的內容草稿（複製刊登）。不公開、不帶舊聲明／舊匯入身分。 */
+// 複製草稿的兩句 SQL 與參數組裝（同步與 PG 版共用；`listingToolsAsync.js` 會跑同一份）。
+export const SELF_DRAFT_INSERT_SQL = `INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num,
+      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
+      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
+    ) VALUES (?, ?, '', ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, '[]', '', ?, ?, 'draft', 0, 0)`;
+export const SELF_DRAFT_UPDATE_SQL = `UPDATE listings SET
+      source = 'self',
+      source_id = ?,
+      listed_by_user_id = ?,
+      self_status = 'draft',
+      self_body = ?,
+      self_photos = ?,
+      self_traits = ?,
+      self_deposit = ?,
+      contact_name = ?,
+      contact_role = ?,
+      mobile = ?,
+      phone = ?,
+      line_url = ?,
+      contact_fetched = 0
+    WHERE post_id = ?`;
+export const NEXT_SELF_POST_ID_SQL = "SELECT MAX(post_id) AS n FROM listings WHERE post_id >= ? AND post_id < ?";
+
+/** 草稿 INSERT 的參數（純函式）：欄位順序與上面的 SQL 逐字對應。 */
+export function selfDraftInsertParams({ postId, title, rent, address, areaName, layout, floorName, kindName, roleName, cover, created }) {
+  return [postId, `copy-draft:${postId}`, title, `/go/${postId}`, rent ? String(rent) : "", rent,
+    address, areaName, layout, floorName, kindName, roleName, cover, created, created];
+}
+
+/** 草稿 UPDATE 的參數（純函式）。 */
+export function selfDraftUpdateParams({ uid, postId, body, photos, traits, deposit, contactName, roleName, phone, lineUrl }) {
+  return [`copy:${uid}:${postId}`, uid, body, JSON.stringify(photos), JSON.stringify(traits), deposit,
+    contactName, roleName, phone, phone, lineUrl, postId];
+}
+
 export function insertSelfDraftListing(db, userId, fields = {}, now = new Date()) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入", 401);
@@ -971,50 +1006,12 @@ export function insertSelfDraftListing(db, userId, fields = {}, now = new Date()
   } catch {
     lineUrl = "";
   }
-  const sourceKey = `copy-draft:${uid}:${postId}`;
-  db.prepare(`
-    INSERT INTO listings (
-      post_id, source_key, search_key, title, url, price, price_num,
-      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
-      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
-      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, '', ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, '[]', '', ?, ?, 'draft', 0, 0)
-  `).run(
-    postId, sourceKey, title, `/go/${postId}`, rent ? String(rent) : "", rent,
-    address, areaName, layout, floorName, kindName, roleName, photos[0] || "",
-    created, created,
-  );
-  db.prepare(`
-    UPDATE listings SET
-      source = 'self',
-      source_id = ?,
-      listed_by_user_id = ?,
-      self_status = 'draft',
-      self_body = ?,
-      self_photos = ?,
-      self_traits = ?,
-      self_deposit = ?,
-      contact_name = ?,
-      contact_role = ?,
-      mobile = ?,
-      phone = ?,
-      line_url = ?,
-      contact_fetched = 0
-    WHERE post_id = ?
-  `).run(
-    `copy:${uid}:${postId}`,
-    uid,
-    body,
-    JSON.stringify(photos),
-    JSON.stringify(traits),
-    deposit,
-    contactName,
-    roleName,
-    phone,
-    phone,
-    lineUrl,
-    postId,
-  );
+  db.prepare(SELF_DRAFT_INSERT_SQL).run(...selfDraftInsertParams({
+    postId, title, rent, address, areaName, layout, floorName, kindName, roleName, cover: photos[0] || "", created,
+  }));
+  db.prepare(SELF_DRAFT_UPDATE_SQL).run(...selfDraftUpdateParams({
+    uid, postId, body, photos, traits, deposit, contactName, roleName, phone, lineUrl,
+  }));
   return getSelfListing(db, postId, { viewerId: uid });
 }
 

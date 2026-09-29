@@ -342,7 +342,7 @@ export function copyOwnListing(db, userId, sourceId, input = {}, now = new Date(
   return copyResult(db, uid, source, draft);
 }
 
-function copyResult(_db, _userId, source, draft) {
+export function copyResult(_db, _userId, source, draft) {
   const form = listingFormFields(source);
   form.photos = draft.photos || form.photos;
   form.title = draft.title;
