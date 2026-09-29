@@ -893,6 +893,46 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 }
 
 /** 匯入結果寫成草稿：不公開、不填聯絡／設施／聲明。工作者不得呼叫 publish。 */
+// 匯入草稿的兩句 SQL 與參數組裝（同步與 PG 版共用；PG 版在 `selfListingsAsync.js`）。
+// 抽出來的理由與其他批次相同：`source_key`／`source_id`（`import-draft:`／`import:` 前綴）
+// 與 `self_status='draft'` 是匯入流程的身分標記，兩邊漂移就會出現「草稿在、匯入列找不到」。
+export const IMPORT_DRAFT_INSERT_SQL = `INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num,
+      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
+      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
+    ) VALUES (?, ?, '', ?, ?, '', 0, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, '', ?, ?, '', ?, ?, 'draft', 0, 0)`;
+
+export const IMPORT_DRAFT_UPDATE_SQL = `UPDATE listings SET
+      source = 'self',
+      source_id = ?,
+      listed_by_user_id = ?,
+      self_status = 'draft',
+      self_body = ?,
+      self_photos = ?,
+      self_traits = '[]',
+      self_deposit = '',
+      contact_name = '',
+      contact_role = '',
+      mobile = '',
+      phone = '',
+      line_url = '',
+      contact_fetched = 0
+    WHERE post_id = ?`;
+
+export const IMPORT_DRAFT_COMMUNITY_SQL = "UPDATE listings SET community_name=? WHERE post_id=?";
+
+/** 匯入草稿 INSERT 的參數（純函式）：欄位順序與上面的 SQL 逐字對應。 */
+export function importDraftInsertParams({ postId, sourceKey, title, address, areaName, layout, floorName, kindName, photos, tags, created }) {
+  return [postId, sourceKey, title || "匯入草稿", `/go/${postId}`, address, areaName, layout,
+    floorName, kindName, photos[0] || "", JSON.stringify(tags), created, created];
+}
+
+/** 匯入草稿 UPDATE 的參數（純函式）：`source_id` 的 `import:` 前綴只有一份。 */
+export function importDraftUpdateParams({ uid, postId, body, photos }) {
+  return [`import:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId];
+}
+
 export function createImportedDraftListing(db, userId, input = {}, now = new Date()) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能匯入", 401);
@@ -910,34 +950,12 @@ export function createImportedDraftListing(db, userId, input = {}, now = new Dat
   const kindName = String(input.kind || input.kind_name || "").trim();
   const community = String(input.community || input.community_name || "").trim();
   const tags = ["吉比本站", community].filter(Boolean);
-  db.prepare(`
-    INSERT INTO listings (
-      post_id, source_key, search_key, title, url, price, price_num,
-      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
-      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
-      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched
-    ) VALUES (?, ?, '', ?, ?, '', 0, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, '', ?, ?, '', ?, ?, 'draft', 0, 0)
-  `).run(postId, sourceKey, title || "匯入草稿", `/go/${postId}`, address, areaName, layout, floorName, kindName, photos[0] || "", JSON.stringify(tags), created, created);
-  db.prepare(`
-    UPDATE listings SET
-      source = 'self',
-      source_id = ?,
-      listed_by_user_id = ?,
-      self_status = 'draft',
-      self_body = ?,
-      self_photos = ?,
-      self_traits = '[]',
-      self_deposit = '',
-      contact_name = '',
-      contact_role = '',
-      mobile = '',
-      phone = '',
-      line_url = '',
-      contact_fetched = 0
-    WHERE post_id = ?
-  `).run(`import:${uid}:${postId}`, uid, body, JSON.stringify(photos), postId);
+  db.prepare(IMPORT_DRAFT_INSERT_SQL).run(...importDraftInsertParams({
+    postId, sourceKey, title, address, areaName, layout, floorName, kindName, photos, tags, created,
+  }));
+  db.prepare(IMPORT_DRAFT_UPDATE_SQL).run(...importDraftUpdateParams({ uid, postId, body, photos }));
   if (community) {
-    try { db.prepare("UPDATE listings SET community_name=? WHERE post_id=?").run(community, postId); } catch { /* optional column */ }
+    try { db.prepare(IMPORT_DRAFT_COMMUNITY_SQL).run(community, postId); } catch { /* optional column */ }
   }
   return getSelfListing(db, postId, { viewerId: uid });
 }

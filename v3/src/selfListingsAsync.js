@@ -60,6 +60,11 @@ import {
   SELF_CONTACT_MAX,
   SELF_DRAFT_INSERT_SQL,
   SELF_DRAFT_UPDATE_SQL,
+  IMPORT_DRAFT_COMMUNITY_SQL,
+  IMPORT_DRAFT_INSERT_SQL,
+  IMPORT_DRAFT_UPDATE_SQL,
+  importDraftInsertParams,
+  importDraftUpdateParams,
   SELF_POST_ID_BASE,
   SELF_POST_ID_END,
   catalogTraitExtras,
@@ -419,6 +424,56 @@ export async function insertSelfDraftListingAsync(uid, fields = {}, options = {}
   }, async () => {
     const { insertSelfDraftListing } = await import("./selfListings.js");
     return insertSelfDraftListing(sqliteHandle(), id, fields, now);
+  });
+}
+
+/** `selfListings.js:createImportedDraftListing()` 的 PG 版（第八十六批）。
+ *
+ * 為什麼重要：外部匯入（591／5168）建立的是**草稿列**。同步版把它寫進節點本機 ⇒
+ * PG 模式下匯入列在 PG、草稿卻在本機（別的節點看不到、`GET /api/listing-imports/:id`
+ * 的 `listing` 永遠是 null、確認後也公開不了）。
+ *
+ * 驗證與身分標記（`import-draft:` 的 `source_key`、`import:` 的 `source_id`、
+ * `self_status='draft'`）全部沿用 `selfListings.js` 的共用常數與純函式，
+ * SQL／參數不可能與同步版漂移。
+ */
+export async function insertImportedDraftListingAsync(userId, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能匯入", 401);
+  const now = options.now ? new Date(options.now) : new Date();
+  const created = now.toISOString();
+  const title = String(input.title || "").trim().slice(0, SELF_TITLE_MAX);
+  const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
+  if (!title && listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError("匯入內容不足以建立草稿", 400);
+  const photos = normalizePhotoList(input.photos || []);
+  const address = String(input.address || "").trim();
+  const areaName = String(input.area_name || "").trim();
+  const layout = String(input.layout || "").trim();
+  const floorName = String(input.floor_name || "").trim();
+  const kindName = String(input.kind || input.kind_name || "").trim();
+  const community = String(input.community || input.community_name || "").trim();
+  const tags = ["吉比本站", community].filter(Boolean);
+  return runWith(options, { write: true }, async () => {
+    const run = await runnerFor(options);
+    const postId = await nextSelfPostIdAsync(run);
+    await run(IMPORT_DRAFT_INSERT_SQL, importDraftInsertParams({
+      postId, sourceKey: `import-draft:${uid}:${postId}`, title, address, areaName,
+      layout, floorName, kindName, photos, tags, created,
+    }));
+    await run(IMPORT_DRAFT_UPDATE_SQL, importDraftUpdateParams({ uid, postId, body, photos }));
+    if (community) {
+      // `community_name` 是選用欄位（舊庫還沒有）：與同步版同一個 try/catch。
+      try { await run(IMPORT_DRAFT_COMMUNITY_SQL, [community, postId]); } catch { /* optional column */ }
+    }
+    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的草稿變成錯誤。
+    try {
+      const { createImportedDraftListing } = await import("./selfListings.js");
+      createImportedDraftListing(sqliteHandle(), uid, input, now);
+    } catch { /* 本機鏡射盡力而為 */ }
+    return getSelfListingAsync(postId, { viewerId: uid, ...options });
+  }, async () => {
+    const { createImportedDraftListing } = await import("./selfListings.js");
+    return createImportedDraftListing(sqliteHandle(), uid, input, now);
   });
 }
 

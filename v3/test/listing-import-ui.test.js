@@ -29,7 +29,9 @@ test("sponsor import entry and review UI exist; normal members see locked hint",
 test("server exposes listing-import routes with sponsor/rate-limit hooks", () => {
   assert.match(server, /app\.post\("\/api\/listing-imports"/);
   assert.match(server, /assertImportAllowed\(session\.userId/);
-  assert.match(server, /startListingImportFor\(session\.userId/);
+  // 第八十六批：建立匯入改走 PG 島嶼（同步版把匯入列與草稿寫進節點本機）。
+  assert.match(server, /await startListingImportAsync\(session\.userId/);
+  assert.doesNotMatch(server, /startListingImportFor\(session\.userId/);
   assert.match(server, /app\.post\("\/api\/listing-imports\/:id\/confirm"/);
   assert.match(server, /app\.post\("\/api\/listing-imports\/:id\/publish"/);
   assert.match(server, /app\.get\("\/api\/admin\/listing-imports"/);
