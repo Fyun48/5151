@@ -222,7 +222,9 @@ import {
   saveCommsConfig,
   db,
 } from "./db.js";
-import { currentRevision, changesSince } from "./dataRevision.js";
+// 變更紀錄的讀取（PG 島嶼）：寫入端已經是 driver-aware（`createWritePath.bumpRevision`），
+// 這一半補上之後寫／讀才同源。
+import { changesSinceAsync, currentRevisionAsync } from "./dataRevisionAsync.js";
 import {
   announcementInboxForUser,
   bannerAnnouncements,
@@ -4482,14 +4484,18 @@ app.post("/api/watch", async (req, res) => {
 
 // Reconnect catch-up (Phase 11): a client that dropped its SSE stream asks
 // "what changed since revision N?" and re-reads only the delta, not the whole set.
-app.get("/api/events/revision", (req, res) => {
+app.get("/api/events/revision", async (req, res) => {
   const session = requireMember(req, res);
   if (!session) return;
-  const since = Math.max(0, Number(req.query.since) || 0);
-  res.json({
-    revision: currentRevision(db),
-    changes: changesSince(db, since, { limit: 500 }),
-  });
+  try {
+    const since = Math.max(0, Number(req.query.since) || 0);
+    res.json({
+      revision: await currentRevisionAsync(),
+      changes: await changesSinceAsync(since, { limit: 500 }),
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
 app.get("/api/events/stream", (req, res) => {

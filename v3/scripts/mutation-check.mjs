@@ -1154,6 +1154,54 @@ const IMPLIFE_MUTATIONS = [
   },
 ];
 
+// 變更紀錄（data revision）PG 分支的變異集（v3/test/data-revision-async.test.js）。
+const DATAREV_SRC = "v3/src/dataRevisionAsync.js";
+const DATAREV_SYNC_SRC = "v3/src/dataRevision.js";
+const DATAREV_MUTATIONS = [
+  {
+    name: "currentRevision 用 COUNT(*) 而不是 MAX(id)",
+    file: DATAREV_SRC,
+    from: 'export const CURRENT_REVISION_SQL = "SELECT MAX(id) AS n FROM data_revision";',
+    to: 'export const CURRENT_REVISION_SQL = "SELECT COUNT(*) AS n FROM data_revision";',
+    expect: "currentRevision：是 MAX(id)",
+  },
+  {
+    name: "changesSince 用 >= 而不是 >（同一筆會重複送）",
+    file: DATAREV_SRC,
+    from: "export const CHANGES_SINCE_SQL =\n  \"SELECT id, entity_type, entity_id, event_type, created_at FROM data_revision WHERE id > ? ORDER BY id ASC LIMIT ?\";",
+    to: "export const CHANGES_SINCE_SQL =\n  \"SELECT id, entity_type, entity_id, event_type, created_at FROM data_revision WHERE id >= ? ORDER BY id ASC LIMIT ?\";",
+    expect: "changesSince：嚴格大於",
+  },
+  {
+    name: "changesSince 排序反過來（客戶端會倒著套用）",
+    file: DATAREV_SRC,
+    from: "ORDER BY id ASC LIMIT ?\";",
+    to: "ORDER BY id DESC LIMIT ?\";",
+    expect: "changesSince：嚴格大於",
+  },
+  {
+    name: "changesSince 不夾上限（limit 999999 直接送進 SQL）",
+    file: DATAREV_SRC,
+    from: "  const cap = Math.max(1, Math.min(Number(limit) || 500, CHANGES_SINCE_MAX));",
+    to: "  const cap = Math.max(1, Number(limit) || 500);",
+    expect: "changesSince：上限是共用政策",
+  },
+  {
+    name: "同步版的 MAX(id) 改成 COUNT(*)",
+    file: DATAREV_SYNC_SRC,
+    from: '  const row = db.prepare("SELECT MAX(id) AS n FROM data_revision").get();',
+    to: '  const row = db.prepare("SELECT COUNT(*) AS n FROM data_revision").get();',
+    expect: "currentRevision：是 MAX(id)",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: DATAREV_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // 會員同意紀錄 ＋ 匯入確認 PG 分支的變異集（v3/test/member-consents-async.test.js）。
 const CONSENTS_SRC = "v3/src/memberConsentsAsync.js";
 const CONSENTS_SYNC_SRC = "v3/src/memberConsents.js";
@@ -2210,7 +2258,7 @@ const MAP_MUTATIONS = [
     // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
     // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
     // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
-    expect: "被低估的那一批",
+    expect: "缺陷 (2) 的守衛（合成來源樹）",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -2855,7 +2903,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /member-consents-async/.test(testFile) ? CONSENTS_MUTATIONS
+const MUTATIONS = /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS
+  : /member-consents-async/.test(testFile) ? CONSENTS_MUTATIONS
   : /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS
   : /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
   : /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
