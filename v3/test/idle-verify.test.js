@@ -119,7 +119,9 @@ test("idle pause stops crawl and notify; login resume does not mail", () => {
   assert.match(after, /resumeIdleIfNeeded/);
   assert.doesNotMatch(after, /queueSystemMail/);
   const me = src.slice(src.indexOf('app.get("/api/me"'), src.indexOf("app.patch(\"/api/profile\""));
-  assert.match(me, /touchLastLogin\(session\.userId/);
+  // 第七十一批：`/api/me` 改走 PG 島嶼（同步版讀本機 ⇒ PG 站會顯示別台節點看不到的舊資料），
+  // 但「同一個 12 小時節流」的契約不變。
+  assert.match(me, /await touchLastLoginAsync\(session\.userId/);
   assert.match(me, /minIntervalMs: 12 \* 60 \* 60 \* 1000/);
 });
 

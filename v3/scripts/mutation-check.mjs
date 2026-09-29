@@ -3723,6 +3723,28 @@ const SHARE_EVENT_MUTATIONS = [
 const ADMINMEMBERS_SRC = "v3/src/adminMembersAsync.js";
 const ADMINMEMBERS_MUTATIONS = [
   {
+    // 第七十一批（`GET /api/me`）：自主刊登數原本讀本機 ⇒ PG 站永遠顯示 0 筆。
+    name: "自主刊登數改讀本機（PG 站顯示 0 筆）",
+    file: "v3/src/adminMembersAsync.js",
+    from: "  if (!isPg(options)) return countOpenSelfListingsSync(uid);\n  const exec = await execFor(options);",
+    to: "  if (true || !isPg(options)) return countOpenSelfListingsSync(uid);\n  const exec = await execFor(options);",
+    expect: "PG 分支數的是 PG 的列",
+  },
+  {
+    name: "GET /api/me 的自主刊登數改回同步版",
+    file: "v3/src/server.js",
+    from: "    open_self_listings: session?.userId ? await countOpenSelfListingsAsync(session.userId) : 0,",
+    to: "    open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,",
+    expect: "GET /api/me 走 PG 島嶼",
+  },
+  {
+    name: "GET /api/me 的會員欄位改回同步版",
+    file: "v3/src/server.js",
+    from: "  const user = session?.userId ? await getUserByIdAsync(session.userId) : null;",
+    to: "  const user = session?.userId ? getUserById(session.userId) : null;",
+    expect: "GET /api/me 走 PG 島嶼",
+  },
+  {
     name: "後台列表不讀 PG 的會員設定（通知間隔永遠是預設值）",
     file: ADMINMEMBERS_SRC,
     from: "    getSettingsAsync(user.id, options),",

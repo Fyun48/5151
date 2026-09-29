@@ -36,7 +36,6 @@ import {
   recentEvents,
   registerUser,
   updateUserProfile,
-  countOpenSelfListings,
   issueVerifyToken,
   confirmVerifyToken,
   confirmSuspectedMatch,
@@ -285,6 +284,7 @@ import {
   adminDeleteMemberAsync,
   adminPatchMemberAsync,
   adminRestoreMemberAsync,
+  countOpenSelfListingsAsync,
   deleteOwnAccountAsync,
   listAdminMembersAsync,
 } from "./adminMembersAsync.js";
@@ -916,8 +916,10 @@ app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxA
 
 app.get("/api/me", async (req, res) => {
   const session = readSession(req);
-  if (session?.userId) touchLastLogin(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
-  const user = session?.userId ? getUserById(session.userId) : null;
+  // 這一頁的會員欄位與「開著的自主刊登數」都必須讀 PG（`readSession` 的身分也來自 PG）：
+  // 讀本機在 PG 站會顯示別台節點看不到的舊資料（第七十一批）。
+  if (session?.userId) await touchLastLoginAsync(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
+  const user = session?.userId ? await getUserByIdAsync(session.userId) : null;
   const nickname = String(user?.nickname || "").trim();
   // 法律文案走 PG 島嶼：這一頁顯示的是「使用者同意的那一份」，讀本機在 PG 站會顯示舊版。
   const legal = await getLegalCopyAsync();
@@ -946,7 +948,7 @@ app.get("/api/me", async (req, res) => {
     disclaimer_check: legal.disclaimerCheck,
     pending_documents: session?.userId ? pendingMemberDocuments(session.userId) : [],
     consents: session?.userId ? listMyConsents(session.userId) : [],
-    open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
+    open_self_listings: session?.userId ? await countOpenSelfListingsAsync(session.userId) : 0,
     configured: true,
     canRegister: true,
     hint: "",
