@@ -4149,6 +4149,75 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   4. `setCachedRoute()` 的距離是**公里數陣列**（`[8.4]`），不是 `[{km,min}]`：後者會被
      `parseRouteCacheRow()` 的 `map(Number)` 濾成空陣列 ⇒ 讀不到。
 
+## 二之負四十七、2026-09-29 第七十七批：背景補路線 worker（卡點相同的三條路由）
+
+### 77.1 範圍與投報率
+
+`POST /api/settings`、`POST /api/listings/:id/flags`、`POST /api/commute/focus` 的卡點集**完全相同**
+（各 20 個）——共同鏈是 `queueGeoBackfill()` → `backfillListingRoutes()` 這條**背景補路線 worker**，
+再加上推播與統計的廣播路徑。一條鏈一次清掉三條路由，另外 `PUT /api/admin/maps` 也從 23 降到 3。
+
+修掉的線上缺陷（全部同一類：寫本機、讀 PG）：
+
+- **路線快取**：worker 算好的通勤路線寫進**節點本機** `route_cache`，而卡片是從 PG 讀的 ⇒
+  **不論補幾輪，通勤欄位永遠算不出來**（同一筆反覆重算，沒有錯誤訊息）。
+- **路線工作狀態**：`route_jobs` 留在本機 ⇒ 另一台節點看到舊狀態、重複抓同一個路段。
+- **推播**：`flushPendingNotifications()` 讀本機 `push_subscriptions` ⇒ 會員在另一台節點按了
+  「允許通知」也收不到（`sent: 0` 看起來像「沒有訂閱」，不是錯誤）。
+- **通知／關注的統計**：`broadcastNotify()`／`broadcastWatch()`／`queueGeoBackfill()` 的收尾
+  用同步 `stats()` 讀本機 ⇒ 推給瀏覽器的統計是別台節點的（或空的）。
+- **尖峰時段開關**與**全會員通勤設定**：`commuteRushEnabled()`／`collectCommuteSettings()` 讀本機
+  ⇒ 別台節點開的功能等於沒開；別的節點上的會員完全不在「需要補路線」的清單裡。
+- **個人通知快照**：`bindNotifyJobSnapshots()` 是同步的全會員迴圈，而它填的 memo 只有**同步**的
+  enqueue 在讀（PG 走 `repository/notifyEnqueue.js`）⇒ PG 模式下包成 driver-aware 委派，直接跳過。
+
+尺規：三條路由 **MIXED（各 20 個卡點）→ PG**；`PUT /api/admin/maps` 23 → **3**；
+缺口總數 **17 → 14**（`MIXED` 15 → **12**、`PG` 251 → **254**、`SQLite` 2 不變）。
+
+### 77.2 做法
+
+- `v3/src/routeCacheAsync.js`（新檔）：`setCachedRouteAsync()`／`getRouteJobAsync()`／
+  `upsertRouteJobAsync()` ＋ worker 用的 `markRouteJobAsync()`／`finishRouteAttemptAsync()`。
+  語句與參數組裝留在 db.js（`ROUTE_CACHE_UPSERT_SQL`／`ROUTE_CACHE_UPSERT_RUSH_SQL`／
+  `ROUTE_JOB_SELECT_SQL`／`ROUTE_JOB_UPSERT_SQL`／`routeCacheUpsert()`／`routeJobUpsertParams()`／
+  `routeJobKeyFor()`），兩個 driver 只換「跑語句的人」。
+- `v3/src/settingsAsync.js`：`commuteRushEnabledAsync()`、`collectCommuteSettingsAsync()`、
+  `settingsForGeoBackfillAsync()`（全會員清單走 PG 的 `listUserIds` ＋ `getSettingsAsync`）。
+- `v3/src/webPush.js`：把「送出一批訂閱」抽成 `deliverPushNotifications()`（driver-agnostic）；
+  `v3/src/webPushAsync.js` 新增 `sendUserWebPushAsync()`（訂閱讀 PG，404／410 清 PG 那一列）。
+- `v3/src/watcher.js`：`markRouteJob()`／`finishRouteAttempt()`／`writeCachedRoute()` 改 async、
+  一律走島嶼；`resolveListingRoute()` 的 `setCachedRoute()` 與三處 `commuteRushEnabled()` 換掉；
+  三個 worker 的預設參數 `settings = getSettings()` 改成 `settings = null` ＋ `getSettingsAsync(0)`；
+  `bindNotifyJobSnapshotsFor(options)` 這個 driver-aware 委派擋掉 PG 模式的同步全會員迴圈；
+  推播改 `sendUserWebPushAsync()`。
+- `v3/src/server.js`：`broadcastNotify()`／`broadcastWatch()` 改 async ＋ `safeStats()`；
+  `queueGeoBackfill()` 的收尾統計與 flags 路由的 `stats()` 一併換掉。
+- `v3/scripts/route-data-map.mjs`：新增 **`--why=<路由>`** 除錯輸出（沿著**與判定完全相同的邊**
+  印出「路由 → 卡點」的最短路徑）。這一支是這一包能收斂的原因：卡點清單只說「碰得到 `stats()`」，
+  沒說經過誰；實測靠它才發現 `broadcastNotify()` 裡的同步 `stats()` 汙染了整條 worker 的卡點。
+
+### 77.3 測試
+
+- `v3/test/route-cache-async.test.js`（**7 項全綠**，新檔）：`route_cache` 逐欄位比對（含尖峰欄位與
+  `route_key` 的算法）、`route_jobs` 的 upsert 語意與 `attempts`／重試決策、寫入 fail-closed
+  （strict 與預設模式都要丟、只有 `fallback: "open"` 才寫本機、讀取才 fail-open）、尖峰開關讀 PG、
+  全會員清單看得到「PG 才有的會員」、推播讀 PG 的訂閱、以及 worker／廣播路徑的接線。
+- `v3/test/route-cache-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  **worker 寫入島嶼 → 卡片讀取島嶼**端到端（`commute_km` 8.4／state `done`）、`route_jobs` 的
+  `attempts` 累加、站台設定讀 PG、PG 的訂閱看得到。
+- **變異 14 條全殺**（`ROUTECACHE_MUTATIONS`）。
+- 踩點（都真的紅過）：
+  1. **注入式 exec 的形狀**：`listPushSubscriptionsAsync()` 原本把 `{rows, rowCount}` 當陣列用
+     ⇒ `subs.length` 是 `undefined`，明明有訂閱卻回 `no-sub`（**live PG 測試抓到的真缺陷**）。
+     這個模組的邊界一律用 `rowsOf()` 正規化。
+  2. **等價突變**：「`job_key` 少掉通勤模式」用 `normalizeCommuteMode("")` 會回預設 `scooter`，
+     鍵一模一樣 ⇒ 突變活得下來（已改成動座標，並在變異定義註解寫明）。
+  3. **時間戳不可比**：`route_cache.updated_at` 是各自的寫入時間，兩個 driver 在同一個毫秒內不一
+     定相同 ⇒ 比對前要投影掉（第一版會間歇紅）。
+  4. **`route_key` 不要手寫**：格式是 `v2:to_work:scooter:<lat>,<lng>><lat>,<lng>`
+     （`route.js:makeRouteKey`），手寫的猜測會讓「本機沒寫進去」的斷言假過。
+  5. **`push_subscriptions` 有 FK**：離線夾具要先種 `users` 那一列。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4159,13 +4228,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十六批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十七批）** |
 |---|---:|---:|
 | SQLite | 95 | **2** |
-| MIXED | — | **15** |
+| MIXED | — | **12** |
 | 無直接DB | — | **20** |
-| PG | 22 | **251** |
-| **缺口（SQLite＋MIXED）** | — | **17** |
+| PG | 22 | **254** |
+| **缺口（SQLite＋MIXED）** | — | **14** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

@@ -30,6 +30,8 @@ export const PUSH_INSERT_SQL =
      last_seen_at = excluded.last_seen_at`; // webPush.js:113
 export const PUSH_DELETE_SQL = "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?"; // webPush.js:128
 export const PUSH_LIST_SQL = "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?"; // webPush.js:133
+// 404／410（訂閱已失效）時要把那一列清掉（同步版是 `webPush.js:dropEndpoint()`）。
+export const PUSH_DROP_ENDPOINT_SQL = "DELETE FROM push_subscriptions WHERE endpoint = ?";
 
 export const PG_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -52,6 +54,9 @@ export const PG_CREATE_ENDPOINT_INDEX_SQL =
   "CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_key ON push_subscriptions(endpoint)";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
+// 注入式 exec 有兩種慣例（裸陣列／`{rows, rowCount}`）：這個模組的呼叫端一律吃**純陣列**，
+// 所以在邊界處正規化（否則 `subs.length` 是 undefined ⇒ 明明有訂閱卻回 `no-sub`）。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
 
 async function pgExec(options = {}) {
   if (options.exec) return options.exec;
@@ -140,5 +145,31 @@ export async function listPushSubscriptionsAsync(userId, options = {}) {
   if (!isPg(options)) return (await syncWebPush()).listPushSubscriptions((await import("./db.js")).sqliteHandle(), uid);
   const exec = await pgExec(options);
   if (!options.exec) await ensurePushStoreOnce(options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver()));
-  return exec(PUSH_LIST_SQL, [uid]);
+  return rowsOf(await exec(PUSH_LIST_SQL, [uid]));
+}
+
+// `db.js:sendUserWebPush()` 的 PG 版（第七十七批）：`flushPendingNotifications()` 的推播。
+//
+// ⚠️ 同步版在 PG 模式下讀的是**節點本機**的 `push_subscriptions` ⇒ 會員在另一台節點註冊的
+// 推播訂閱完全不會收到通知（而且 `sent: 0` 看起來像「沒有訂閱」，不是錯誤）。
+// VAPID 金鑰刻意沿用 `loadVapidKeys()`：那是**節點／容器的基礎設施**（env 或本機檔案），
+// 不是會員資料，兩個 driver 都一樣。
+export async function sendUserWebPushAsync(userId, payload, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return { sent: 0, skipped: "no-user" };
+  const { deliverPushNotifications } = await import("./webPush.js");
+  if (!isPg(options)) {
+    const { sendUserWebPush } = await import("./db.js");
+    return sendUserWebPush(uid, payload);
+  }
+  const subs = await listPushSubscriptionsAsync(uid, options);
+  if (!subs.length) return { sent: 0, skipped: "no-sub" };
+  const exec = await pgExec(options);
+  return deliverPushNotifications(subs, payload, {
+    onGone: async (endpoint) => {
+      try {
+        await exec(PUSH_DROP_ENDPOINT_SQL, [endpoint]);
+      } catch { /* 清不掉的舊訂閱不該讓整批推播失敗 */ }
+    },
+  });
 }

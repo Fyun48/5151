@@ -6098,6 +6098,52 @@ function mrtFields(row, settings, provider) {
   };
 }
 
+// `route_cache` 的兩句 upsert（有／沒有尖峰時段資料），抽出來給 PG 島嶼
+// （`routeCacheAsync.js`）跑同一份語句——兩個 driver 的欄位順序不可以漂移。
+export const ROUTE_CACHE_UPSERT_RUSH_SQL =
+  `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at, rush_am_min, rush_pm_min, rush_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(route_key) DO UPDATE SET
+         distances = excluded.distances,
+         min_km = excluded.min_km,
+         min_m = excluded.min_m,
+         updated_at = excluded.updated_at,
+         rush_am_min = excluded.rush_am_min,
+         rush_pm_min = excluded.rush_pm_min,
+         rush_updated_at = excluded.rush_updated_at`;
+export const ROUTE_CACHE_UPSERT_SQL =
+  `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(route_key) DO UPDATE SET
+         distances = excluded.distances,
+         min_km = excluded.min_km,
+         min_m = excluded.min_m,
+         updated_at = excluded.updated_at`;
+
+// 路線快取的落地參數（純函式）：同步版與 PG 版共用同一份「算什麼、怎麼存」。
+export function routeCacheUpsert(fromLat, fromLng, toLat, toLng, distances, rush = null, mode = "scooter", direction = "to_work", now = new Date()) {
+  const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (!list.length) return null;
+  const rushAm = Number(rush?.rushAm ?? rush?.am);
+  const rushPm = Number(rush?.rushPm ?? rush?.pm);
+  const hasRush = Number.isFinite(rushAm) && Number.isFinite(rushPm);
+  const stamp = (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+  return {
+    sql: hasRush ? ROUTE_CACHE_UPSERT_RUSH_SQL : ROUTE_CACHE_UPSERT_SQL,
+    params: hasRush
+      ? [makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction), JSON.stringify(list), Math.min(...list), kmListToMinMeters(list, null), stamp, rushAm, rushPm, stamp]
+      : [makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction), JSON.stringify(list), Math.min(...list), kmListToMinMeters(list, null), stamp],
+    key: makeRouteKey(fromLat, fromLng, toLat, toLng, mode, direction),
+    list,
+    minKm: Math.min(...list),
+    minM: kmListToMinMeters(list, null),
+    rushAm: hasRush ? rushAm : null,
+    rushPm: hasRush ? rushPm : null,
+    stamp,
+    hasRush,
+  };
+}
+
 export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush = null, mode = "scooter", direction = "to_work") {
   const list = (Array.isArray(distances) ? distances : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   if (!list.length) return;
@@ -6109,28 +6155,9 @@ export function setCachedRoute(fromLat, fromLng, toLat, toLng, distances, rush =
   const rushPm = Number(rush?.rushPm ?? rush?.pm);
   const hasRush = Number.isFinite(rushAm) && Number.isFinite(rushPm);
   if (hasRush) {
-    db.prepare(
-      `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at, rush_am_min, rush_pm_min, rush_updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(route_key) DO UPDATE SET
-         distances = excluded.distances,
-         min_km = excluded.min_km,
-         min_m = excluded.min_m,
-         updated_at = excluded.updated_at,
-         rush_am_min = excluded.rush_am_min,
-         rush_pm_min = excluded.rush_pm_min,
-         rush_updated_at = excluded.rush_updated_at`,
-    ).run(key, JSON.stringify(list), minKm, minM, stamp, rushAm, rushPm, stamp);
+    db.prepare(ROUTE_CACHE_UPSERT_RUSH_SQL).run(key, JSON.stringify(list), minKm, minM, stamp, rushAm, rushPm, stamp);
   } else {
-    db.prepare(
-      `INSERT INTO route_cache(route_key, distances, min_km, min_m, updated_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(route_key) DO UPDATE SET
-         distances = excluded.distances,
-         min_km = excluded.min_km,
-         min_m = excluded.min_m,
-         updated_at = excluded.updated_at`,
-    ).run(key, JSON.stringify(list), minKm, minM, stamp);
+    db.prepare(ROUTE_CACHE_UPSERT_SQL).run(key, JSON.stringify(list), minKm, minM, stamp);
   }
   if (routeCacheMemo && Date.now() - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) {
     const prev = routeCacheMemo.get(key);
@@ -6155,28 +6182,9 @@ function makeRouteJobKey(postId, direction, kind, mode, workLat, workLng) {
   ].join("|");
 }
 
-let routeJobByKeyStmt;
-export function getRouteJob(jobKey) {
-  if (!jobKey) return null;
-  try {
-    routeJobByKeyStmt ||= db.prepare("SELECT * FROM route_jobs WHERE job_key = ?");
-    return routeJobByKeyStmt.get(jobKey) || null;
-  } catch {
-    return null;
-  }
-}
-
-export function upsertRouteJob(partial = {}) {
-  const postId = Number(partial.post_id) || 0;
-  const direction = String(partial.direction || "to_work");
-  const kind = String(partial.kind || "distance");
-  const mode = normalizeCommuteMode(partial.commuteMode || partial.commute_mode);
-  const workLat = Number(partial.workLat ?? partial.work_lat);
-  const workLng = Number(partial.workLng ?? partial.work_lng);
-  const jobKey = partial.job_key || makeRouteJobKey(postId, direction, kind, mode, workLat, workLng);
-  const stamp = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO route_jobs(job_key, post_id, direction, kind, commute_mode, work_lat, work_lng, job_state, fail_reason, attempts, next_retry_at, updated_at)
+export const ROUTE_JOB_SELECT_SQL = "SELECT * FROM route_jobs WHERE job_key = ?";
+export const ROUTE_JOB_UPSERT_SQL =
+  `INSERT INTO route_jobs(job_key, post_id, direction, kind, commute_mode, work_lat, work_lng, job_state, fail_reason, attempts, next_retry_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(job_key) DO UPDATE SET
        job_state = excluded.job_state,
@@ -6185,21 +6193,57 @@ export function upsertRouteJob(partial = {}) {
        next_retry_at = excluded.next_retry_at,
        updated_at = excluded.updated_at,
        work_lat = excluded.work_lat,
-       work_lng = excluded.work_lng`,
-  ).run(
+       work_lng = excluded.work_lng`;
+
+// `route_jobs` 的落地參數（純函式）：同步版與 PG 版共用同一份欄位順序與預設值。
+export function routeJobUpsertParams(partial = {}, now = new Date()) {
+  const postId = Number(partial.post_id) || 0;
+  const direction = String(partial.direction || "to_work");
+  const kind = String(partial.kind || "distance");
+  const mode = normalizeCommuteMode(partial.commuteMode || partial.commute_mode);
+  const workLat = Number(partial.workLat ?? partial.work_lat);
+  const workLng = Number(partial.workLng ?? partial.work_lng);
+  const jobKey = partial.job_key || makeRouteJobKey(postId, direction, kind, mode, workLat, workLng);
+  const stamp = (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+  return {
     jobKey,
-    postId,
-    direction,
-    kind,
-    mode,
-    Number.isFinite(workLat) ? workLat : null,
-    Number.isFinite(workLng) ? workLng : null,
-    String(partial.job_state || COMMUTE_STATES.WAIT_ROUTE),
-    String(partial.fail_reason || ""),
-    Number(partial.attempts) || 0,
-    partial.next_retry_at || "",
-    stamp,
-  );
+    params: [
+      jobKey,
+      postId,
+      direction,
+      kind,
+      mode,
+      Number.isFinite(workLat) ? workLat : null,
+      Number.isFinite(workLng) ? workLng : null,
+      String(partial.job_state || COMMUTE_STATES.WAIT_ROUTE),
+      String(partial.fail_reason || ""),
+      Number(partial.attempts) || 0,
+      partial.next_retry_at || "",
+      stamp,
+    ],
+  };
+}
+
+// `watcher.js:routeJobKey()` 的共用實作（單一來源）：PG 島嶼與同步路徑必須算出同一把鍵，
+// 否則兩邊會各寫一列 route_jobs。
+export function routeJobKeyFor(row = {}, direction = "to_work", kind = "distance") {
+  return makeRouteJobKey(Number(row.post_id) || 0, direction, kind, row.commuteMode, row.workLat, row.workLng);
+}
+
+let routeJobByKeyStmt;
+export function getRouteJob(jobKey) {
+  if (!jobKey) return null;
+  try {
+    routeJobByKeyStmt ||= db.prepare(ROUTE_JOB_SELECT_SQL);
+    return routeJobByKeyStmt.get(jobKey) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function upsertRouteJob(partial = {}) {
+  const { jobKey, params } = routeJobUpsertParams(partial);
+  db.prepare(ROUTE_JOB_UPSERT_SQL).run(...params);
   return getRouteJob(jobKey);
 }
 

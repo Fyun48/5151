@@ -13,6 +13,10 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import * as repo from "./repository/memberSettings.js";
 import { ACTIVE_PROFILE_ORDER_SQL, DEACTIVATE_PROFILES_SQL, activateSearchProfile } from "./searchProfiles.js";
+import { demoCommutePatch } from "./demo.js";
+import { isCommuteRushEnabled } from "./mapsBilling.js";
+import { needsListingGeo } from "./geo.js";
+import { notifyEnqueueQueries } from "./db.js";
 import {
   ADMIN_MAX_PROFILES,
   MEMBER_MAX_PROFILES,
@@ -25,6 +29,8 @@ import {
 import {
   DEFAULTS,
   armMemberExternalFetch,
+  collectCommuteSettings as collectCommuteSettingsSync,
+  commuteRushEnabled as commuteRushEnabledSync,
   deleteProfile as deleteProfileSync,
   getSettings as getSettingsSync,
   loadProfile as loadProfileSync,
@@ -75,6 +81,52 @@ export async function getSettingsAsync(userId, options = {}) {
   const userRows = await exec(repo.USER_SETTINGS_SQL, [uid]);
   const user = await userRowAsync(exec, uid);
   return settingsFromRows({ globalRows, userRows, user, system });
+}
+
+// `db.js:commuteRushEnabled()` 的 PG 版：讀的是**站台層級**的 `settings.commuteRushEnabled`
+// （`settingKey()` 在 PG 模式下讀本機 ⇒ 別台節點開的尖峰時段功能等於沒開／亂開）。
+// 判斷本身是純函式（`mapsBilling.isCommuteRushEnabled`），兩個 driver 共用。
+export async function commuteRushEnabledAsync(options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return commuteRushEnabledSync();
+  const exec = await pgExec(options);
+  const rows = await exec("SELECT value FROM settings WHERE key = ?", ["commuteRushEnabled"]);
+  const raw = rows[0]?.value;
+  if (raw === undefined || raw === null) return isCommuteRushEnabled(undefined);
+  try {
+    return isCommuteRushEnabled(JSON.parse(raw));
+  } catch {
+    return isCommuteRushEnabled(raw);
+  }
+}
+
+// `db.js:collectCommuteSettings()` 的 driver-aware 版：**全會員**的通勤設定清單
+// （尾巴固定補站台設定與示範用補丁，順序與同步版相同）。
+//
+// ⚠️ 為什麼重要：PG 模式下同步版是「本機的會員 id 清單 ＋ 本機的設定」⇒ 別的節點上的會員
+// 完全不在清單裡，而本機殘留的舊會員設定會被當成「站上有人在通勤」。這一圈在
+// `settingsForGeoBackfill()` 與 `visibleRouteJobs()` 的路線上（第七十七批）。
+export async function collectCommuteSettingsAsync(options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return collectCommuteSettingsSync();
+  const exec = await pgExec(options);
+  const queries = notifyEnqueueQueries();
+  const ids = (await exec(queries.listUserIds().sql, queries.listUserIds().params))
+    .map((row) => Number(row.id) || 0)
+    .filter(Boolean);
+  const list = [];
+  for (const id of ids) list.push(await getSettingsAsync(id, { ...options, exec }));
+  list.push(await getSettingsAsync(0, { ...options, exec }));
+  list.push(demoCommutePatch());
+  return list;
+}
+
+// `db.js:settingsForGeoBackfill()` 的 driver-aware 版：挑一份「需要補地理資料」的設定
+// （優先序與同步版相同：先用呼叫端給的，再照 `collectCommuteSettings()` 的順序找第一份）。
+export async function settingsForGeoBackfillAsync(preferred, options = {}) {
+  if (preferred && needsListingGeo(preferred)) return preferred;
+  for (const settings of await collectCommuteSettingsAsync(options)) {
+    if (needsListingGeo(settings)) return settings;
+  }
+  return preferred || await getSettingsAsync(0, options);
 }
 
 // db.js saveSettings()（PG 分支）：同一個 applySettingPatch ＋ planSettingWrites，寫進 PG。

@@ -2786,8 +2786,10 @@ const NOTIFYFLUSH_MUTATIONS = [
   {
     name: "flush 的站台設定改讀本機（整個迴圈用別台節點的設定決定通知）",
     file: NOTIFYFLUSH_SRC,
-    from: "  settings = settings || await getSettingsAsync(0, options);",
-    to: "  settings = settings || getSettings();",
+    // ⚠️ 第七十七批起 watcher 有三處 worker 預設參數也是這一行 ⇒ 錨點要連下一行才唯一
+    // （`v3/test/mutation-anchors.test.js` 會檢查每個錨點恰好出現一次）。
+    from: "  settings = settings || await getSettingsAsync(0, options);\n  await bindNotifyJobSnapshotsFor(options);",
+    to: "  settings = settings || getSettings();\n  await bindNotifyJobSnapshotsFor(options);",
     // 同上：站台設定的讀取在離線夾具裡的差異由接線那條守住。
     expect: "不得再用同步的",
   },
@@ -2984,6 +2986,113 @@ const COMMUTE_MUTATIONS = [
     from: "    const uid = userId == null ? await defaultUserIdAsync(options) : Number(userId) || 0;",
     to: '    const uid = userId == null ? (await import("./db.js")).defaultUserId() : Number(userId) || 0;',
     expect: "userId: null",
+  },
+];
+
+// 路線快取／路線工作／全會員通勤設定／推播送出（v3/test/route-cache-async.test.js，第七十七批）。
+//
+// ⚠️ 「worker 有沒有接上島嶼」那一條只有**原始碼接線**殺得掉（離線夾具跑不動整個補路線 worker：
+// 它會打外部路徑服務）。
+const ROUTECACHE_MUTATIONS = [
+  {
+    name: "路線寫入改成 fail-open（PG 壞掉時偷偷改寫本機）",
+    file: "v3/src/routeCacheAsync.js",
+    from: "  }, () => {\n    setCachedRouteSync(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction);\n    return { ok: true, route_key: plan.key };\n  }, { write: true });",
+    to: "  }, () => {\n    setCachedRouteSync(fromLat, fromLng, toLat, toLng, distances, rush, mode, direction);\n    return { ok: true, route_key: plan.key };\n  }, { write: false });",
+    expect: "寫入是 fail-closed",
+  },
+  {
+    name: "路線根本沒寫進 PG（卡片路徑永遠算不出通勤）",
+    file: "v3/src/routeCacheAsync.js",
+    from: "    await exec(plan.sql, plan.params);",
+    to: "    void plan;",
+    expect: "route_cache：PG 版落地與同步版逐欄位相同",
+  },
+  {
+    name: "尖峰時段的欄位不寫（rush 資料在兩個 driver 分岔）",
+    file: "v3/src/db.js",
+    from: "  const hasRush = Number.isFinite(rushAm) && Number.isFinite(rushPm);\n  const stamp = (now instanceof Date ? now : new Date(now || Date.now())).toISOString();",
+    to: "  const hasRush = false;\n  const stamp = (now instanceof Date ? now : new Date(now || Date.now())).toISOString();",
+    expect: "route_cache：PG 版落地與同步版逐欄位相同",
+  },
+  {
+    // ⚠️ 第一版寫「把 mode 換成空字串」→ **等價突變**：`normalizeCommuteMode("")` 會回預設的
+    // `scooter`，鍵一模一樣（實測 SURVIVED）。改成動座標（鍵裡真的有它）才有鑑別力。
+    name: "job_key 的座標算錯（同一筆會有兩列工作）",
+    file: "v3/src/db.js",
+    from: "  const jobKey = partial.job_key || makeRouteJobKey(postId, direction, kind, mode, workLat, workLng);",
+    to: "  const jobKey = partial.job_key || makeRouteJobKey(postId, direction, kind, mode, workLat, 0);",
+    expect: "route_jobs：upsert 的更新語意",
+  },
+  {
+    name: "route_jobs 沒寫進 PG（狀態留在本機、別台節點重複抓）",
+    file: "v3/src/routeCacheAsync.js",
+    from: "    await exec(ROUTE_JOB_UPSERT_SQL, params);",
+    to: "    void params;",
+    expect: "route_jobs：upsert 的更新語意",
+  },
+  {
+    name: "markRouteJob 把 attempts 歸零（重試次數永遠是 0）",
+    file: "v3/src/routeCacheAsync.js",
+    from: "    attempts: Number(prev?.attempts) || 0,\n    ...patch,",
+    to: "    attempts: 0,\n    ...patch,",
+    expect: "route_jobs：upsert 的更新語意",
+  },
+  {
+    name: "finishRouteAttempt 不累加 attempts（退避重試永遠不會啟動）",
+    file: "v3/src/routeCacheAsync.js",
+    from: "  const attempts = (Number(prev?.attempts) || 0) + 1;",
+    to: "  const attempts = 1;",
+    expect: "route_jobs：upsert 的更新語意",
+  },
+  {
+    name: "尖峰時段開關改讀本機（別台節點開的功能等於沒開）",
+    file: "v3/src/settingsAsync.js",
+    from: "  if ((options.driver || resolveDbDriver()) !== \"postgres\") return commuteRushEnabledSync();",
+    to: "  if (true) return commuteRushEnabledSync();",
+    expect: "commuteRushEnabled",
+  },
+  {
+    name: "全會員通勤設定改讀本機（PG 才有的會員被漏掉）",
+    file: "v3/src/settingsAsync.js",
+    from: "  if ((options.driver || resolveDbDriver()) !== \"postgres\") return collectCommuteSettingsSync();",
+    to: "  if (true) return collectCommuteSettingsSync();",
+    expect: "全會員通勤設定",
+  },
+  {
+    name: "settingsForGeoBackfill 不找 PG 的會員（永遠挑不到需要補的人）",
+    file: "v3/src/settingsAsync.js",
+    from: "  for (const settings of await collectCommuteSettingsAsync(options)) {\n    if (needsListingGeo(settings)) return settings;\n  }",
+    to: "  void needsListingGeo;",
+    expect: "全會員通勤設定",
+  },
+  {
+    name: "推播送出改讀本機（別台節點的訂閱收不到通知）",
+    file: "v3/src/webPushAsync.js",
+    from: "  if (!isPg(options)) {\n    const { sendUserWebPush } = await import(\"./db.js\");",
+    to: "  if (true) {\n    const { sendUserWebPush } = await import(\"./db.js\");",
+    expect: "推播送出：讀的是 PG 的訂閱",
+  },
+  {
+    name: "補路線 worker 不寫路線快取（整條通勤補齊失效）",
+    file: "v3/src/watcher.js",
+    from: "  await setCachedRouteAsync(lat, lng, workLat, workLng, distances, null, mode, \"to_work\", options);",
+    to: "  void distances;",
+    expect: "worker 接線",
+  },
+  {
+    name: "補路線 worker 改回同步的推播（PG 模式的推播全漏）",
+    file: "v3/src/watcher.js",
+    from: "        await sendUserWebPushAsync(userId, pushPayloadFromEvents(push), options);",
+    to: "        void push; void userId;",
+    expect: "worker 接線",
+  },
+  {
+    name: "通知廣播改回同步的 stats()（推給瀏覽器的是本機統計）",
+    file: "v3/src/server.js",
+    from: "    broadcast({ type: \"notify\", events: list, stats: await safeStats(userId) }, userId);",
+    to: "    broadcast({ type: \"notify\", events: list, stats: stats(undefined, userId) }, userId);",
+    expect: "worker 接線",
   },
 ];
 
@@ -4408,6 +4517,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /site-reset-async/.test(testFile) ? SITERESET_MUTATIONS
   : /register-async/.test(testFile) ? REGISTER_MUTATIONS
   : /commute-snapshot-async/.test(testFile) ? COMMUTE_MUTATIONS
+  : /route-cache-async/.test(testFile) ? ROUTECACHE_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
