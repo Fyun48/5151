@@ -3161,6 +3161,71 @@ done
 - `v3/test/admin-settings-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：真 PG 上寫入 →
   讀回來 → 本機同步讀者也看到同一份；前後快照／還原三個設定鍵。
 
+## 二之負二十六、2026-09-28 第五十六批（**只做設計，尚未實作**）：Ops 遞送 worker 重做成 PG
+
+### 56.1 Owner 的決定
+
+未決事項 (a) 的答案是 **B：把 worker 重做成 PG**（不採「把 node-local 宣佈成尺規例外」的 A 案）。
+這一段先把設計與風險寫清楚，讓下一個 session 可以直接動手（依紀律：動手前先看既有範例）。
+
+### 56.2 現況：這一叢為什麼還在缺口裡
+
+| 路由 | 卡點（全部是本機 store） |
+|---|---|
+| `GET /api/admin/feedback` | `deliveryControl`、`feedbackStats`、`listFeedback`、`outboxCapacityAlert` |
+| `PATCH /api/admin/feedback/:id` | `crmDeliveryControl`、`crmOutboxStats`、`enqueueCrmFromFeedback`、`enqueueCrmOutbox`、`updateFeedback` |
+| `GET/PUT /api/admin/ops-delivery` | `deliveryControl`、`outboxCapacityAlert`、`setLocalDeliveryStopped` |
+| `POST /api/admin/ops-delivery/compact-outbox` | `compactSentOutboxPayloads` |
+| `POST /api/feedback` | `createFeedbackWithOutbox`、`enqueueFeedbackOutbox` |
+| `POST /api/admin/crm/from-feedback/:id` | `createCaseFromFeedback`、`crmDeliveryControl`、`crmOutboxStats`、`enqueueCrmOutbox` |
+| `POST /api/ops/commands/apply` | `addNote`、`crmDeliveryControl`、`crmOutboxStats`、`enqueueCrmOutbox`、`ensureCrmSchema`、`ensureFeedbackSchema`、`handleApplyRequest`、`updateFeedback` |
+
+**worker 本體**：`server.js:4653` 起，`startDeliveryLoop(opsDeliveryDb(), …)`（`opsDelivery.js:149`）
+＋ `startCrmDeliveryLoop(opsDeliveryDb(), …)`（CRM 那一支）。每一個 tick 會：
+`isLocalDeliveryStopped(db)`（讀本機 `settings.ops_feedback_stop`）→ `deliverOutboxOnce(db, …)`
+→ `claimOutboxBatch`／`markOutboxSent`／`markOutboxFailure`（全部是本機 `feedback_outbox` 的同步 SQL）。
+
+也就是說：PG 模式下**送出的永遠是本機那一份 outbox**，而 PG 的 `feedback_outbox` 沒有人送
+——`POST /api/feedback`（走 PG 之後）會把事件寫進 PG，然後**永遠躺在 pending**。這是這一叢
+最嚴重的那個靜默失效。
+
+### 56.3 設計（照 `crmOutboxAsync.js` 的既有形狀）
+
+1. **新增 `v3/src/feedbackOutboxAsync.js`（PG 島嶼）**，把 outbox 的六個操作做成 async：
+   `ensureFeedbackOutboxStoreOnce`（`ensurePgSchema(pgDriver, sqliteHandle(), {tables:["feedback_outbox"]})`
+   ＋補 `CREATE UNIQUE INDEX`——**表約束／隱式索引鏡射不到，六次踩過的坑**）、
+   `claimOutboxBatchAsync`、`markOutboxSentAsync`、`markOutboxFailureAsync`、`outboxStatsAsync`、
+   `outboxCapacityAlertAsync`、`compactSentOutboxPayloadsAsync`。
+2. **claim 的併發語意要重寫，不是逐字照抄。** SQLite 版是「先 SELECT 候選，再一句帶 status 條件的
+   UPDATE 搶」。
+
+   PG 的正解是 `FOR UPDATE SKIP LOCKED`（或 `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)
+   RETURNING *`），否則多節點同時送會重複認領。
+   離線夾具（SQLite）**不支援** `SKIP LOCKED` ⇒ 這個分支要用「假 handle 直接驗語句文字」的方式測
+   （與 `listing-enrich-parity` 的 `shimCounted` 同一招），live PG 才是真正的併發驗證。
+3. **`ops_feedback_stop` 是原生字串鍵，不可以走 `settingsKvAsync`。**
+   `isLocalDeliveryStopped()` 比對的是**原始文字** `"1"`（交接紀律第 11 條）。
+   PG 版要自己寫 `SELECT value FROM settings WHERE key='ops_feedback_stop'`（或
+   `setSiteSettingAsync` 存**字串** `"1"`/`"0"`——但更安全的是直接下 UPSERT SQL）。
+4. **worker 改成 driver-aware，但保留同步版**：新增 `startDeliveryLoopAsync(store, config, deps)`；
+   `server.js` 依 `resolveDbDriver()` 選一個（SQLite 站行為完全不變）。`deliverOutboxOnce` 的
+   at-least-once／退避／dead-letter 語意**逐條沿用**（`backoffMs` 是純函式，兩邊共用）。
+5. **routes**：`deliveryControlAsync`／`setLocalDeliveryStoppedAsync`／`outboxCapacityAlertAsync`／
+   `compactSentOutboxPayloadsAsync`；`GET/PUT /api/admin/ops-delivery`、
+   `POST /api/admin/ops-delivery/compact-outbox`、`GET /api/admin/feedback` 先搬。
+   `PATCH /api/admin/feedback/:id` 與 `POST /api/admin/crm/from-feedback/:id` 另外還需要
+   `updateFeedbackAsync`／`createCaseFromFeedbackAsync`／`enqueueCrmOutboxAsync`（CRM 那一支
+   `crmOutboxAsync` 已經有了，接線即可）。
+6. **`POST /api/ops/commands/apply`（SQLite，8 個卡點）**是 Ops 反向套用指令的入口，
+   牽涉 `handleApplyRequest`（跨多張表），建議**最後**再做，或獨立成一批。
+
+### 56.4 風險與前置
+
+- **兩個 worker 同時跑**（多節點）是目前沒被驗證過的情境；claim 語意是這一批的核心風險，
+  live PG 測試必須**真的併發**（兩個 driver 同時 claim，斷言兩邊拿到的 id 不重疊）。
+- `deliverOutboxOnce` 會發 HTTP 到 Ops（`OPS_INGEST_URL`）——離線測試一律注入 `fetchImpl`。
+- 這一叢的 CRUD 測試夾具已有 `crmOutboxAsync` 那套可以照抄（同一個 outbox 形狀）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
