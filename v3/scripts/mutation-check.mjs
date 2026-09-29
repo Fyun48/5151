@@ -374,8 +374,10 @@ const SELFLIST_MUTATIONS = [
   {
     name: "找不到時不回 404 而是回 null",
     file: SELFLIST_SRC,
-    from: '  if (!row) throw httpError("找不到這則站內刊登", 404);',
-    to: "  if (!row) return null;",
+    // ⚠️ 同一行在 `selfListingsAsync.js` 出現**四次**（四個入口各有一次）⇒ 錨點要含前兩行才唯一。
+    // 這一條還原的是舊缺陷：找不到時回 null（呼叫端會把 null 當成「沒有這則」而靜默走錯分支）。
+    from: '  await expireOpenSelfListingsAsync(exec, now);\n  const row = await getSelfRowAsync(postId, { ...options, exec });\n  if (!row) throw httpError("找不到這則站內刊登", 404);',
+    to: '  await expireOpenSelfListingsAsync(exec, now);\n  const row = await getSelfRowAsync(postId, { ...options, exec });\n  if (!row) return null;',
     expect: "找不到",
   },
   // 刻意**沒有**「非 postgres 不回退」這一條：實測它是**等價變異**。
@@ -1226,8 +1228,9 @@ const CONSENTS_MUTATIONS = [
   {
     name: "同意紀錄不鏡射本機（同步的註冊流程看不到）",
     file: CONSENTS_SRC,
-    from: "    if (!local.prepare(CONSENT_EXISTS_SQL).get(uid, documentId, hash)) {\n      local.prepare(CONSENT_INSERT_SQL).run(uid, type, documentId, version, hash, source, isoOf(now));\n    }\n",
-    to: "",
+    // ⚠️ 錨點跟著實作更新（`mirror()` 在第四十八批之後多了 `LOCAL_USER_SQL` 守衛與 try/catch）。
+    from: "    mirror({ document_type: type, version, source, agreed_at: isoOf(now) }, version);",
+    to: "    void mirror;",
     expect: "同意紀錄：列表、idempotent",
   },
   {
@@ -2896,8 +2899,10 @@ const USERS_MUTATIONS = [
   {
     name: "沒有 id 時照樣查（送出 id = 0 的查詢）",
     file: USERS_SRC,
-    from: "  if (!id) return null;",
-    to: "  if (false) return null;",
+    // ⚠️ 錨點要含函式簽章那一行：`if (!id) return null;` 在第五十四批之後出現**兩次**
+    // （`getUserByIdAsync` 與 `setUserPlanAsync`），只寫那一行的話前置檢查會中止整套變異。
+    from: "export async function getUserByIdAsync(userId, options = {}) {\n  const id = Number(userId) || 0;\n  if (!id) return null;",
+    to: "export async function getUserByIdAsync(userId, options = {}) {\n  const id = Number(userId) || 0;\n  if (false) return null;",
     expect: "查不到人",
   },
   {
@@ -3692,6 +3697,15 @@ function failingNames(out) {
     console.error("\n[mutation] 未套用任何變異就中止。請先確認原始碼是乾淨的（例如 git diff）。");
     removeBackups();
     process.exit(2);
+  }
+  // `--check-anchors-only`：只跑前置檢查就結束（給 `v3/test/mutation-anchors.test.js` 用）。
+  // 為什麼需要：錨點一旦變成**不唯一**（改動到別的函式剛好寫了同一行），整個套件會靜靜地中止，
+  // 而「沒有跑變異」跟「變異全殺」在輸出上長得很像。實例：第五十四批之後
+  // `usersAsync.js` 有兩處 `if (!id) return null;`，`USERS_MUTATIONS` 就再也沒真正跑過。
+  if (process.argv.includes("--check-anchors-only")) {
+    removeBackups();
+    console.log(`[mutation] 錨點檢查通過：${MUTATIONS.length} 條`);
+    process.exit(0);
   }
 }
 
