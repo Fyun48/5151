@@ -3341,6 +3341,62 @@ const SELFLISTING_MATCH_MUTATIONS = [
   },
 ];
 
+// 配對清單（v3/test/self-listing-matches-async.test.js，第八十一批）。
+const SELFLISTING_MATCHES_MUTATIONS = [
+  {
+    name: "配對清單改回同步版（別的節點的刊登與心願看不到）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: '  if (!isPg(options)) {\n    const { ownerListingMatches } = await import("./db.js");',
+    to: '  if (true) {\n    const { ownerListingMatches } = await import("./db.js");',
+    expect: "配對清單：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "CTA 改回同步版（PG 的提案狀態不反映在按鈕上）",
+    file: "v3/src/wishOffersAsync.js",
+    from: '  const list = Array.isArray(items) ? items : [];\n  const enabled = flags ? flags.wish?.offer_enabled === true : isWishOfferEnabled(currentRentalMarketplaceFlags());',
+    to: '  const list = Array.isArray(items) ? items : [];\n  return attachOfferCtas(sqliteHandle(), list, { listingId, ownerUserId, now });\n  const enabled = flags ? flags.wish?.offer_enabled === true : isWishOfferEnabled(currentRentalMarketplaceFlags());',
+    // 殺手是「配對清單」那條的**列只留在 PG** 段落：同步版讀本機時找不到那些心願與提案，
+    // CTA 會全部變成 `unavailable`（實測；「提案功能關閉時」那條反而抓不到，因為兩邊讀的是
+    // 同一個行程內 flags 快取）。
+    expect: "配對清單：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "翻頁前不重驗心願生命週期（失效的心願照樣翻得到）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "      await assertUpcomingCursorWishesMatchableAsync(run, stored, cursor, limit);",
+    to: "      void stored;",
+    expect: "游標分頁：兩頁的內容都與同步版相同",
+  },
+  {
+    name: "生命週期查詢的佔位符寫成 `$n`（注入式 exec 會整個失敗）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "  for (const chunk of chunkIds(list, chunkSize)) {\n    const marks = placeholders(chunk);",
+    to: '  for (const chunk of chunkIds(list, chunkSize)) {\n    const marks = chunk.map((_, i) => `$${i + 1}`).join(",");',
+    expect: "游標分頁：兩頁的內容都與同步版相同",
+  },
+  {
+    name: "CTA 的 pending 分支拿掉（等待回覆變成可提供）",
+    file: "v3/src/wishOffers.js",
+    from: '  if (active?.status === "pending") {',
+    to: '  if (false) {',
+    expect: "配對清單：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "配對清單不剝內部評分欄位（把內部分數外洩給屋主）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "    const items = page.items.map(ownerPublicMatchItem);\n    return {\n      listing_id: listing.id,\n      total: snapshot.total,",
+    to: "    const items = page.items;\n    return {\n      listing_id: listing.id,\n      total: snapshot.total,",
+    expect: "配對清單：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "`GET /api/self-listings/:id/matches` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await ownerListingMatchesAsync(req.params.id, session.userId, {",
+    to: "    res.json(ownerListingMatches(req.params.id, session.userId, {",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4766,6 +4822,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /admin-maps-demo-async/.test(testFile) ? MAPSDEMO_MUTATIONS
   : /demand-aggregate-async/.test(testFile) ? DEMANDAGG_MUTATIONS
   : /self-listing-match-async/.test(testFile) ? SELFLISTING_MATCH_MUTATIONS
+  : /self-listing-matches-async/.test(testFile) ? SELFLISTING_MATCHES_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

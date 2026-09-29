@@ -517,7 +517,7 @@ export function ownerListingMatchSummary(db, postId, userId, now = new Date()) {
   return ownerMatchSummaryFrom(listing.id, snapshot);
 }
 
-function ownerPublicMatchItem(row) {
+export function ownerPublicMatchItem(row) {
   const safe = { ...row };
   for (const key of OWNER_INTERNAL_SCORE_KEYS) delete safe[key];
   return safe;
