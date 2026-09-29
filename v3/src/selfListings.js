@@ -468,7 +468,7 @@ export function digitsPhone(value) {
   return String(value || "").replace(/[^\d+]/g, "");
 }
 
-function normalizePhotoUrl(value) {
+export function normalizePhotoUrl(value) {
   const raw = String(value || "").trim().slice(0, SELF_PHOTO_URL_MAX);
   if (!raw) return "";
   if (isSelfPhotoPublicUrl(raw)) return raw;
@@ -539,14 +539,14 @@ export function floorText(input) {
   return String(input.floor_name || "").trim().slice(0, 20);
 }
 
-function selfSourceKey({ regionId, sectionId, address, floorName, areaName, layout }) {
+export function selfSourceKey({ regionId, sectionId, address, floorName, areaName, layout }) {
   const addr = String(address || "").replace(/\s+/g, "").toLowerCase();
   const floor = String(floorName || "").split("/")[0].trim();
   const area = String(areaName || "").replace(/坪/g, "");
   return [regionId || "", sectionId || "", "", addr, floor, area, layout].join("|");
 }
 
-function selfSearchKey(regionId, sectionId) {
+export function selfSearchKey(regionId, sectionId) {
   return coverToListUrl({
     regionId,
     sectionIds: [sectionId],
@@ -729,6 +729,59 @@ export function createSelfListing(db, userId, input = {}, now = new Date(), { ma
   }
 }
 
+// 「建立並公開」的兩句 SQL 與參數組裝（同步與 PG 版共用；`selfListingsAsync.js` 會跑同一份）。
+export const SELF_OPEN_INSERT_SQL = `INSERT INTO listings (
+      post_id, source_key, search_key, title, url, price, price_num,
+      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
+      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
+      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched,
+      fixture_namespace
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0, ?)`;
+
+export function selfOpenInsertParams({
+  postId, sourceKey, searchKey, title, priceText, rent, address, areaName, layout, floorName,
+  kindName, roleName, cover, tags, created, fixtureNs,
+}) {
+  return [
+    postId, sourceKey, searchKey, title, `/go/${postId}`, priceText, rent,
+    address, areaName, layout, floorName, kindName, roleName, cover,
+    JSON.stringify(tags || []), created, created, fixtureNs || null,
+  ];
+}
+
+export const SELF_OPEN_UPDATE_SQL = `UPDATE listings SET
+      source = 'self',
+      source_id = ?,
+      listed_by_user_id = ?,
+      self_status = 'open',
+      self_expires_at = ?,
+      self_body = ?,
+      self_photos = ?,
+      self_traits = ?,
+      self_deposit = ?,
+      self_pledge_at = ?,
+      contact_name = ?,
+      contact_role = ?,
+      mobile = ?,
+      phone = ?,
+      line_url = ?,
+      contact_fetched = 1
+    WHERE post_id = ?`;
+
+export function selfOpenUpdateParams({ uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl }) {
+  return [
+    `self:${uid}:${postId}`, uid, expires, body, JSON.stringify(storedPhotos), JSON.stringify(traitIds),
+    deposit, created, contactName || roleName, roleName, phone, phone, lineUrl, postId,
+  ];
+}
+
+export const MATCH_SET_SQL = "UPDATE listings SET match_post_id=?, match_level=?, match_detail=?, match_rejected=0 WHERE post_id=?";
+export const LISTING_BY_POST_ID_SQL = "SELECT * FROM listings WHERE post_id = ?";
+export const SELF_CREATE_IDEMPOTENCY_HIT_SQL =
+  "SELECT payload_hash, post_id FROM self_listing_create_idempotency WHERE user_id=? AND idempotency_key=?";
+export const SELF_CREATE_IDEMPOTENCY_INSERT_SQL = `INSERT INTO self_listing_create_idempotency(user_id, idempotency_key, payload_hash, post_id, created_at)
+     VALUES (?,?,?,?,?)`;
+
 function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCandidates, maturity, isolation } = {}) {
   assertCanPublish(db, uid, now, { maturity: maturity || isolation });
   void input.fixture_namespace;
@@ -803,70 +856,16 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
   const searchKey = selfSearchKey(district.region, district.id);
   const priceText = String(rent);
 
-  db.prepare(`
-    INSERT INTO listings (
-      post_id, source_key, search_key, title, url, price, price_num,
-      extra_fee, extra_fee_text, price_contain_text, extra_fees, extra_fees_fetched,
-      address, area_name, layout, floor_name, kind_name, role_name, cover, tags,
-      refresh_time, first_seen_at, last_seen_at, last_event, viewed, watched,
-      fixture_namespace
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '', '', '[]', 1, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 'new', 0, 0, ?)
-  `).run(
-    postId,
-    sourceKey,
-    searchKey,
-    title,
-    `/go/${postId}`,
-    priceText,
-    rent,
-    address,
-    areaName,
-    layout,
-    floorName,
-    kindName,
-    roleName,
-    storedPhotos[0] || cover,
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
-    created,
-    created,
-    fixtureNs || null,
-  );
+  db.prepare(SELF_OPEN_INSERT_SQL).run(...selfOpenInsertParams({
+    postId, sourceKey, searchKey, title, priceText, rent, address, areaName, layout, floorName,
+    kindName, roleName, cover: storedPhotos[0] || cover,
+    tags: ["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean),
+    created, fixtureNs,
+  }));
 
-  db.prepare(`
-    UPDATE listings SET
-      source = 'self',
-      source_id = ?,
-      listed_by_user_id = ?,
-      self_status = 'open',
-      self_expires_at = ?,
-      self_body = ?,
-      self_photos = ?,
-      self_traits = ?,
-      self_deposit = ?,
-      self_pledge_at = ?,
-      contact_name = ?,
-      contact_role = ?,
-      mobile = ?,
-      phone = ?,
-      line_url = ?,
-      contact_fetched = 1
-    WHERE post_id = ?
-  `).run(
-    `self:${uid}:${postId}`,
-    uid,
-    expires,
-    body,
-    JSON.stringify(storedPhotos),
-    JSON.stringify(traitIds),
-    deposit,
-    created,
-    contactName || roleName,
-    roleName,
-    phone,
-    phone,
-    lineUrl,
-    postId,
-  );
+  db.prepare(SELF_OPEN_UPDATE_SQL).run(...selfOpenUpdateParams({
+    uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+  }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     registerFixtureRow(db, {
       namespace: fixtureNs,
@@ -886,16 +885,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
     : [];
   const hit = bestMatch(listing, candidates);
   if (hit?.listing) {
-    db.prepare(
-      `UPDATE listings
-       SET match_post_id = ?, match_level = ?, match_detail = ?, match_rejected = 0
-       WHERE post_id = ?`,
-    ).run(
-      hit.listing.post_id,
-      hit.level,
-      hit.detail,
-      postId,
-    );
+    db.prepare(MATCH_SET_SQL).run(hit.listing.post_id, hit.level, hit.detail, postId);
   }
 
   persistListingValues(db, postId, resolved.listingValues);

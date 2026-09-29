@@ -25,6 +25,17 @@ import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolati
 import {
   ABANDON_DRAFT_LISTING_SQL,
   BAN_SELF_PUBLISHER_SQL,
+  LISTING_BY_POST_ID_SQL,
+  MATCH_SET_SQL,
+  SELF_CREATE_IDEMPOTENCY_HIT_SQL,
+  SELF_CREATE_IDEMPOTENCY_INSERT_SQL,
+  SELF_OPEN_INSERT_SQL,
+  SELF_OPEN_UPDATE_SQL,
+  normalizePhotoUrl,
+  selfOpenInsertParams,
+  selfOpenUpdateParams,
+  selfSearchKey,
+  selfSourceKey,
   OPEN_SELF_COUNT_SQL,
   PERSIST_LISTING_VALUES_SQL,
   PUBLISHER_AVATAR_SQL,
@@ -85,6 +96,22 @@ import { isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { isSelfPhotoPublicUrl } from "./selfPhotos.js";
 import { normalizeDeposit, normalizeSelfTraits } from "./selfTraits.js";
+import { SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
+import {
+  SELF_LISTING_IDEMPOTENCY_KEY_RE,
+  normalizeSelfListingIdempotencyKey,
+  selfListingCreateFingerprint,
+} from "./selfListingIdempotency.js";
+import {
+  FIXTURE_ISOLATION,
+  FIXTURE_MATURITY,
+  REGISTRY_ACTIVE_USER_SQL,
+  REGISTRY_INSERT_SQL,
+  STAGE1_FIXTURE_KIND,
+  STAGE1_FIXTURE_NAMESPACE,
+  STAGE1_FIXTURE_STATUS,
+  STAGE1_FIXTURE_TTL_MS,
+} from "./stage1FixtureRegistry.js";
 import { depositLabel, selfTraitLabels } from "./selfTraits.js";
 import { ownsMediaUrlAsync } from "./memberMediaAsync.js";
 import { copyResult } from "./listingTools.js";
@@ -632,4 +659,214 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
       matchCandidates: options.matchCandidates,
     });
   }
+}
+
+// ---- 建立並公開站內刊登（`POST /api/self-listings`，第八十四批）-----------------------------
+//
+// 同步版整條讀寫節點本機：可刊登條件（`users`）、同時公開數、草稿列、夾具 registry、
+// 頭像／條件值與配對候選 ⇒ PG 模式下新刊登落在這台節點，**站上的清單讀 PG ⇒ 剛刊登的物件
+// 不在站上**（而且 `assertCanPublish()` 讀的是本機的停權與註冊時間）。
+//
+// 驗證與欄位正規化全部沿用 `selfListings.js` 的純函式；這裡只換「跑語句的人」。
+
+/** `stage1FixtureRegistry.js:isActiveRegistryFixtureUser()` 的 PG 版。 */
+export async function isActiveRegistryFixtureUserAsync(run, userId, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) return false;
+  try {
+    const rows = rowsOf(await run(REGISTRY_ACTIVE_USER_SQL, [
+      STAGE1_FIXTURE_NAMESPACE, STAGE1_FIXTURE_KIND.USER, uid, STAGE1_FIXTURE_STATUS.ACTIVE, isoOf(now),
+    ]));
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** `stage1FixtureRegistry.js:fixtureNamespaceFromIsolation()` 的 PG 版。 */
+export async function fixtureNamespaceFromIsolationAsync(run, userId, now = new Date(), isolation = null) {
+  if (
+    !isolation
+    || typeof isolation !== "object"
+    || isolation[FIXTURE_ISOLATION] !== true
+    || Number(isolation.userId) !== Number(userId)
+    || !(await isActiveRegistryFixtureUserAsync(run, userId, now))
+  ) {
+    return "";
+  }
+  const ns = String(isolation.namespace || "").trim();
+  return ns === STAGE1_FIXTURE_NAMESPACE ? ns : "";
+}
+
+/** `stage1FixtureRegistry.js:isFixtureMaturityAuthorized()` 的 PG 版。 */
+export async function isFixtureMaturityAuthorizedAsync(run, userId, now = new Date(), maturity = null) {
+  return Boolean(
+    maturity
+    && typeof maturity === "object"
+    && maturity[FIXTURE_MATURITY] === true
+    && Number(maturity.userId) === Number(userId)
+    && (await isActiveRegistryFixtureUserAsync(run, userId, now)),
+  );
+}
+
+/** `stage1FixtureRegistry.js:registerFixtureRow()` 的 PG 版（回傳那一列）。 */
+export async function registerFixtureRowAsync(run, {
+  namespace = STAGE1_FIXTURE_NAMESPACE,
+  runId,
+  kind,
+  role,
+  rowId,
+  now = new Date(),
+  ttlMs = STAGE1_FIXTURE_TTL_MS,
+} = {}) {
+  const id = Number(rowId) || 0;
+  if (!id) throw new Error("fixture registry row_id is required");
+  if (!runId) throw new Error("fixture registry run_id is required");
+  if (!kind || !role) throw new Error("fixture registry kind and role are required");
+  const created = isoOf(now);
+  const expires = new Date((now instanceof Date ? now.getTime() : Date.parse(now) || Date.now()) + Number(ttlMs || STAGE1_FIXTURE_TTL_MS)).toISOString();
+  await run(REGISTRY_INSERT_SQL, [namespace, runId, kind, role, id, created, expires, STAGE1_FIXTURE_STATUS.ACTIVE]);
+  return { namespace, run_id: runId, kind, role, row_id: id, created_at: created, expires_at: expires, cleaned_at: null, status: STAGE1_FIXTURE_STATUS.ACTIVE };
+}
+
+/** `selfListings.js:createSelfListing()` 的 PG 版（含冪等鍵）。 */
+export async function createSelfListingAsync(userId, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能刊登", 401);
+  const now = options.now ? new Date(options.now) : new Date();
+  if (!isPg(options)) {
+    const { createSelfListing } = await import("./selfListings.js");
+    return createSelfListing(sqliteHandle(), uid, input, now, {
+      matchCandidates: options.matchCandidates, maturity: options.maturity, isolation: options.isolation,
+    });
+  }
+  try {
+    await getWishConditionsAsync(options);
+    const run = await runnerFor(options);
+    const key = normalizeSelfListingIdempotencyKey(input.idempotency_key ?? input.idempotencyKey);
+    const payloadHash = key ? selfListingCreateFingerprint(input) : "";
+    if (key) {
+      const hit = rowsOf(await run(SELF_CREATE_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];
+      if (hit) {
+        if (String(hit.payload_hash) !== payloadHash) {
+          throw httpError("同一操作不能改成不同內容", 409, "IDEMPOTENCY_CONFLICT");
+        }
+        return getSelfListingAsync(hit.post_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
+      }
+    }
+    const created = await insertOpenSelfListingAsync(run, uid, input, now, options);
+    if (key) {
+      try {
+        await run(SELF_CREATE_IDEMPOTENCY_INSERT_SQL, [uid, key, payloadHash, created.post_id, isoOf(now)]);
+      } catch {
+        const again = rowsOf(await run(SELF_CREATE_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];
+        if (again) {
+          if (String(again.payload_hash) !== payloadHash) {
+            throw httpError("同一操作不能改成不同內容", 409, "IDEMPOTENCY_CONFLICT");
+          }
+          return getSelfListingAsync(again.post_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
+        }
+      }
+    }
+    return created;
+  } catch (error) {
+    if (error?.status) throw error;
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
+    const { createSelfListing } = await import("./selfListings.js");
+    return createSelfListing(sqliteHandle(), uid, input, now, {
+      matchCandidates: options.matchCandidates, maturity: options.maturity, isolation: options.isolation,
+    });
+  }
+}
+
+/** `selfListings.js:insertOpenSelfListing()` 的 PG 版（建立並公開一則站內刊登）。 */
+export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new Date(), options = {}) {
+  const id = Number(uid) || 0;
+  const maturity = options.maturity || options.isolation;
+  await assertCanPublishAsync(run, id, now, { maturity, options });
+  const isolation = options.isolation || null;
+  const fixtureNs = await fixtureNamespaceFromIsolationAsync(run, id, now, isolation);
+
+  const districts = normalizeWatchDistricts(input.district ? [input.district] : input.districts).slice(0, 1);
+  if (!districts.length) throw httpError("請選一個行政區");
+  const district = lookupDistrict(districts[0]);
+  if (!district) throw httpError("請選一個有效行政區");
+  const rent = Math.round(Number(input.rent || input.price_num) || 0);
+  if (!(rent >= 1000 && rent <= 200000)) throw httpError("請填每月租金（1,000～200,000）");
+  const ping = Number(String(input.ping || input.area || "").replace(/坪/g, ""));
+  if (!(ping > 0 && ping <= 500)) throw httpError("請填坪數");
+  if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
+
+  const address = composeSelfAddress(district, input.street || input.address);
+  const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
+  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  const kind = kindId(input.kind || input.housing_type);
+  const role = roleId(input.role);
+  const layout = layoutText(input);
+  const floorName = floorText(input);
+  if (!floorName) throw httpError("請填出租樓層");
+  let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+  if (!contactName) {
+    try {
+      contactName = String(rowsOf(await run("SELECT nickname FROM users WHERE id = ?", [id]))[0]?.nickname || "").trim();
+    } catch {
+      contactName = "";
+    }
+  }
+  const phone = digitsPhone(input.phone || input.mobile);
+  const lineUrl = normalizeLineUrl(input.line_url);
+  if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
+  const extra = catalogTraitExtras({ includeInactive: true });
+  const resolved = resolveListingTraits(input);
+  const traitIds = resolved.traitIds;
+  const deposit = normalizeDeposit(input.deposit);
+  const photos = normalizePhotoList(input.photos || input.photo_urls);
+  const cover = normalizePhotoUrl(input.cover || input.photo_url) || photos[0] || "";
+  if (cover && !photos.includes(cover)) photos.unshift(cover);
+  const storedPhotos = photos.slice(0, SELF_PHOTO_MAX_COUNT);
+  const kindName = kindLabel(kind);
+  const roleName = roleLabel(role);
+  const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
+  const title = requireListingTitle(input.title);
+  const created = isoOf(now);
+  const expires = new Date((now instanceof Date ? now.getTime() : Date.parse(now) || Date.now()) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const postId = Number(isolation?.rowId) || await nextSelfPostIdAsync(run);
+  const sourceKey = selfSourceKey({
+    regionId: district.region, sectionId: district.id, address, floorName, areaName, layout,
+  });
+  const searchKey = selfSearchKey(district.region, district.id);
+  await run(SELF_OPEN_INSERT_SQL, selfOpenInsertParams({
+    postId, sourceKey, searchKey, title, priceText: String(rent), rent, address, areaName, layout,
+    floorName, kindName, roleName, cover: storedPhotos[0] || cover,
+    tags: ["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean),
+    created, fixtureNs,
+  }));
+  await run(SELF_OPEN_UPDATE_SQL, selfOpenUpdateParams({
+    uid: id, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+  }));
+  if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
+    await registerFixtureRowAsync(run, {
+      namespace: fixtureNs, runId: isolation.runId, kind: isolation.kind, role: isolation.role, rowId: postId, now,
+    });
+  }
+  if (typeof isolation?.onAfterInsert === "function") isolation.onAfterInsert({ postId, fixtureNs });
+  await setPublisherFaceAsync(run, postId, id);
+  const listing = rowsOf(await run(LISTING_BY_POST_ID_SQL, [postId]))[0];
+  const candidateExec = async (sql, params = []) => rowsOf(await run(sql, params));
+  const candidates = typeof options.matchCandidates === "function"
+    ? await options.matchCandidates(listing)
+    : await matchCandidatesAsync(listing.post_id, listing, { ...options, driver: "postgres", exec: candidateExec });
+  const hit = bestMatch(listing, candidates);
+  if (hit?.listing) {
+    await run(MATCH_SET_SQL, [hit.listing.post_id, hit.level, hit.detail, postId]);
+  }
+  await persistListingValuesAsync(run, postId, resolved.listingValues);
+  // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的刊登回錯。
+  try {
+    const { insertOpenSelfListing } = await import("./selfListings.js");
+    void insertOpenSelfListing;
+    const { createSelfListing } = await import("./selfListings.js");
+    createSelfListing(sqliteHandle(), id, input, now, { matchCandidates: () => [], maturity });
+  } catch { /* 本機鏡射盡力而為 */ }
+  return getSelfListingAsync(postId, { viewerId: id, ...options, exec: run, driver: "postgres", strict: true });
 }

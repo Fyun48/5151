@@ -120,11 +120,8 @@ export function registerFixtureRow(db, {
   if (!kind || !role) throw new Error("fixture registry kind and role are required");
   const created = iso(now);
   const expires = new Date(nowMs(now) + Number(ttlMs || STAGE1_FIXTURE_TTL_MS)).toISOString();
-  const result = db.prepare(`
-    INSERT INTO stage1_fixture_registry(
-      namespace, run_id, kind, role, row_id, created_at, expires_at, cleaned_at, status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
-  `).run(namespace, runId, kind, role, id, created, expires, STAGE1_FIXTURE_STATUS.ACTIVE);
+  const result = db.prepare(REGISTRY_INSERT_SQL)
+    .run(namespace, runId, kind, role, id, created, expires, STAGE1_FIXTURE_STATUS.ACTIVE);
   return {
     id: Number(result.lastInsertRowid),
     namespace,
@@ -209,20 +206,25 @@ export function listStaleRegistryRows(db, {
   `).all(namespace, iso(now));
 }
 
-export function isActiveRegistryFixtureUser(db, userId, now = new Date()) {
-  const uid = Number(userId) || 0;
-  if (!uid) return false;
-  ensureStage1FixtureSchema(db);
-  const row = db.prepare(`
-    SELECT id FROM stage1_fixture_registry
+// 這一句抽成常數：PG 島嶼（`selfListingsAsync.js`）要跑同一句（同一個「有效夾具使用者」的定義）。
+export const REGISTRY_ACTIVE_USER_SQL = `SELECT id FROM stage1_fixture_registry
     WHERE namespace = ?
       AND kind = ?
       AND row_id = ?
       AND cleaned_at IS NULL
       AND status = ?
       AND expires_at > ?
-    LIMIT 1
-  `).get(
+    LIMIT 1`;
+
+export const REGISTRY_INSERT_SQL = `INSERT INTO stage1_fixture_registry(
+      namespace, run_id, kind, role, row_id, created_at, expires_at, cleaned_at, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`;
+
+export function isActiveRegistryFixtureUser(db, userId, now = new Date()) {
+  const uid = Number(userId) || 0;
+  if (!uid) return false;
+  ensureStage1FixtureSchema(db);
+  const row = db.prepare(REGISTRY_ACTIVE_USER_SQL).get(
     STAGE1_FIXTURE_NAMESPACE,
     STAGE1_FIXTURE_KIND.USER,
     uid,

@@ -32,6 +32,7 @@ import {
 import {
   assertOwnsMemberMediaUrlsAsync,
   copyOwnListingAsync,
+  createSelfListingAsync,
   publishImportedDraftListingAsync,
 } from "./selfListingsAsync.js";
 // 匯入的「確認後刊登」PG 島嶼入口（第八十三批）。
@@ -176,7 +177,6 @@ import {
   runWishOfferExpiryWorkerTick,
   recordShareEventFor,
   runRentalNotifyWorkerTick,
-  createSelfListing,
   listingToolsInfo,
   listDescriptionTemplatesFor,
   createDescriptionTemplateFor,
@@ -199,7 +199,6 @@ import {
   deleteMediaTagFor,
   setMediaTagsFor,
   mediaUrlsForTagIdsFor,
-  assertOwnsMemberMediaUrls,
   closeSelfListing,
   selfListingMeta,
   saveUserPushSubscription,
@@ -3343,7 +3342,7 @@ app.get("/api/self-listings/:id", async (req, res) => {
   }
 });
 
-app.post("/api/self-listings", (req, res) => {
+app.post("/api/self-listings", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -3352,9 +3351,14 @@ app.post("/api/self-listings", (req, res) => {
     }
     // 安全：素材庫照片必須屬於本人（擋以猜測 URL 盜連他人 media）。
     const body = req.body || {};
-    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
-    const created = createSelfListing(session.userId, body);
-    attributeShare(req, session.userId, "listing");
+    const media = [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean);
+    // 可刊登條件、草稿列、夾具 registry、頭像／條件值與配對候選全部走 PG 島嶼：
+    // 同步版只寫本機 ⇒ **剛刊登的物件不在站上的清單裡**（第八十四批）。
+    await assertOwnsMemberMediaUrlsAsync(session.userId, media);
+    const created = await createSelfListingAsync(session.userId, body, {
+      matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
+    });
+    await attributeShareAsync(req, session.userId, "listing");
     res.json(created);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });

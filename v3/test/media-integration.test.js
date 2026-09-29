@@ -32,8 +32,16 @@ test("server exposes media library + public sharing routes with ownership check"
   assert.match(server, /app\.get\("\/media\/lib\/:file", servePublicMemberMedia\)/);
   assert.match(server, /app\.get\("\/api\/public\/self-listing\/:id"/);
   assert.match(server, /app\.get\("\/l\/:id"/);
-  // 刊登時驗證素材所有權（擋盜連他人 media）
-  assert.match(server, /assertOwnsMemberMediaUrls\(session\.userId/);
+  // 刊登時驗證素材所有權（擋盜連他人 media）。
+  // 第八十四批：三條刊登／公開路由改用 PG 島嶼版（`assertOwnsMemberMediaUrlsAsync`），
+  // 同步版已完全移除 ⇒ 這裡改驗島嶼版，並要求它真的被 import（尺規的假綠風險，見 §82.4）。
+  assert.match(server, /assertOwnsMemberMediaUrlsAsync\(session\.userId/);
+  assert.ok(
+    server.slice(Math.max(0, server.indexOf('} from "./selfListingsAsync.js";') - 500), server.indexOf('} from "./selfListingsAsync.js";'))
+      .includes("assertOwnsMemberMediaUrlsAsync"),
+    "assertOwnsMemberMediaUrlsAsync 必須真的被 import",
+  );
+  assert.doesNotMatch(server, /\bassertOwnsMemberMediaUrls\(session\.userId/);
   assert.match(memberMedia, /export function servePublicMemberMedia/);
   assert.match(memberMedia, /memberMediaPublicFilePath\(req\.params\?\.file\)/);
   assert.match(memberMedia, /max-age=31536000, immutable/);
