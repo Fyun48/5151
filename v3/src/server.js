@@ -33,7 +33,6 @@ import {
   hideMany,
   listListings,
   loadProfile,
-  recentEvents,
   registerUser,
   updateUserProfile,
   issueVerifyToken,
@@ -429,6 +428,8 @@ import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint }
 import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
 // 「已下線但還沒確認」的自動確認掃描（原本只寫本機 SQLite）。
 import { confirmExpiredOfflineAsync } from "./crawlerWrites.js";
+// 通知佇列的 PG 島嶼入口（`GET /api/state` 的事件清單讀 `user_events`）。
+import { recentEventsAsync } from "./notifyQueueAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
 import { publicListingView } from "./selfListings.js";
@@ -4131,7 +4132,8 @@ app.get("/api/state", async (req, res) => {
     });
     listings = page.listings;
     listingStats = page.stats;
-    events = recentEvents(30, uid);
+    // 事件清單要走 PG：站上的通知事件在 `user_events`（PG），讀本機只看得到這一台的。
+    events = await recentEventsAsync(uid, 30);
   } catch (error) {
     if (sendListingSearchUnavailable(res, error)) return;
     console.warn("讀取物件列表失敗：", error.message);

@@ -20,6 +20,28 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
+// `db.js recentEvents()` 的 PG 版（`GET /api/state` 的事件清單）。
+//
+// 同步版是 `SELECT * FROM user_events WHERE user_id = ? ORDER BY id DESC LIMIT ?`，而且會先
+// `resolveUserId()`（那條路會 `ensureUser()` 讀本機 `users`）。PG 模式下兩個都在本機 ⇒
+// **會員在畫面上看不到自己的通知事件**（別台節點送出的更看不到）。這裡直接吃呼叫端已經
+// 解析好的 uid（`readSession` 的身分來自 PG），所以不需要再碰 `users`。
+export const RECENT_EVENTS_SQL =
+  "SELECT * FROM user_events WHERE user_id = ? ORDER BY id DESC LIMIT ?";
+
+export async function recentEventsAsync(userId, limit = 40, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return [];
+  const cap = Math.max(1, Number(limit) || 40);
+  return withFallback(options, async (exec) => {
+    const rows = await exec(RECENT_EVENTS_SQL, [uid, cap]);
+    return Array.isArray(rows) ? rows : (rows?.rows || []);
+  }, async () => {
+    const { recentEvents } = await import("./db.js");
+    return recentEvents(cap, uid);
+  });
+}
+
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
   const pgDriver = options.pgDriver || (await sharedPgDriver());
