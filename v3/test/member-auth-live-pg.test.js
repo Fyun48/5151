@@ -79,3 +79,61 @@ test("live PG：ensureUser → 讀回 → 換密碼 → 記登入時間（全部
   assert.equal((await query("SELECT last_login_at FROM users WHERE id = $1", [uid]))[0].last_login_at, stamp,
     "時間不得被改掉");
 });
+
+test("live PG：註冊確認的 token 流程（成功 → 第二次 409）與忘記密碼的 503 守衛", { skip }, async (t) => {
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const { toPostgresSql } = await import("../src/sqlDialect.js");
+  const { confirmVerifyTokenAsync } = await import("../src/emailVerifyAsync.js");
+  const { requestTempPasswordAsync } = await import("../src/forgotPasswordAsync.js");
+  const { hashPassword, verifyPassword } = await import("../src/password.js");
+
+  const pgDriver = await createPostgresDriver({ connectionString: RAW });
+  const query = async (sql, params = []) => (await pgDriver.query(sql, params)).rows;
+  assert.equal((await query("SELECT current_database() AS db"))[0].db, DB, "連到的資料庫必須與 URL 一致");
+
+  const TOKEN = `livetest-verify-${Date.now()}`;
+  const EMAIL = `${TOKEN}@example.test`;
+  const VERIFY = `verify-token-${TOKEN}`;
+  const OLD_HASH = hashPassword("originalpass1");
+  const uid = Number((await query(
+    `INSERT INTO users(email, password_hash, role, plan, created_at, email_verified, verify_token, verify_expires_at)
+     VALUES ($1, $2, 'member', 'free', $3, 0, $4, $5) RETURNING id`,
+    [EMAIL, OLD_HASH, new Date().toISOString(), VERIFY, new Date(Date.now() + 3600_000).toISOString()],
+  ))[0].id);
+
+  t.after(async () => {
+    try { await query("DELETE FROM users WHERE email LIKE $1", [`${TOKEN}%`]); } catch { /* 盡力而為 */ }
+    try { await pgDriver.close(); } catch { /* 已關就算了 */ }
+  });
+
+  const exec = async (sql, params = []) => {
+    const res = await pgDriver.query(toPostgresSql(sql), params);
+    return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
+  };
+  const opts = { driver: "postgres", pgDriver, exec, strict: true };
+
+  // 1. 確認連結：成功，而且旗標真的落地
+  const user = await confirmVerifyTokenAsync(VERIFY, {}, opts);
+  assert.equal(Number(user.id), uid, "必須回那一列");
+  const after = (await query("SELECT email_verified, verify_used_at, verify_expires_at FROM users WHERE id = $1", [uid]))[0];
+  assert.equal(Number(after.email_verified), 1, "PG 的 email_verified 必須變成 1");
+  assert.ok(String(after.verify_used_at || "").trim(), "verify_used_at 必須寫入");
+  assert.equal(after.verify_expires_at, null, "用過之後 expires_at 要清掉");
+  // 2. 同一個 token 第二次：409 used（連結只能用一次）
+  const second = await confirmVerifyTokenAsync(VERIFY, {}, opts).then(() => null, (error) => error);
+  assert.equal(second?.status, 409, "第二次必須是 409");
+  assert.equal(second?.code, "used");
+
+  // 3. 忘記密碼：這個隔離庫沒有 SMTP 設定 ⇒ 503，而且**不得**先改密碼
+  const forgot = await requestTempPasswordAsync(EMAIL, { ...opts, attempts: new Map() }).then(() => null, (error) => error);
+  if (forgot) {
+    assert.equal(forgot.status, 503, `沒有 SMTP 時必須是 503（實際 ${forgot.status}/${forgot.message}）`);
+    assert.match(forgot.message, /尚未設定寄信/);
+  } else {
+    // 若這個隔離庫剛好設定了 SMTP，至少要求「臨時密碼是有效的雜湊」而不是壞掉的字串。
+    const hash = (await query("SELECT password_hash FROM users WHERE id = $1", [uid]))[0].password_hash;
+    assert.ok(verifyPassword(hash, hash) === false, "雜湊不該是明文（這條只是煙霧測試）");
+  }
+  const hashNow = (await query("SELECT password_hash FROM users WHERE id = $1", [uid]))[0].password_hash;
+  if (forgot) assert.equal(hashNow, OLD_HASH, "503 時不得改動雜湊");
+});

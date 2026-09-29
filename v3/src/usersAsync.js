@@ -133,6 +133,18 @@ export async function setUserPasswordAsync(userId, password, options = {}) {
   }, () => setUserPasswordSync(sqliteHandle(), id, password));
 }
 
+// 直接寫入「已經算好的」雜湊（`forgotPassword.js` 寄信失敗時要把舊雜湊寫回去）。
+// 這一支**不**做 validate／hash——那不是它的工作，拿 `setUserPasswordAsync()` 代替會改變語意。
+export async function setPasswordHashAsync(userId, hash, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  return run(options, async (exec) => {
+    await exec(USER_SET_PASSWORD_SQL, [String(hash || ""), id]);
+  }, () => {
+    sqliteHandle().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(String(hash || ""), id);
+  });
+}
+
 // `members.js::touchLastLogin()`：best-effort（同步版把任何錯誤吞掉回 false），
 // `minIntervalMs` 之內不重寫。PG 版照抄同樣的語意。
 export async function touchLastLoginAsync(userId, { now = Date.now(), minIntervalMs = 0 } = {}, options = {}) {

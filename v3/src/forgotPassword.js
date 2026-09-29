@@ -52,7 +52,10 @@ export async function requestTempPassword(conn, email, opts = {}) {
     throw err;
   }
 
-  const user = findUser(key);
+  // ⚠️ 這三個回呼都要 `await`：預設是同步的（`findUserByEmail`／`setUserPassword`），
+  // 但 PG 島嶼傳進來的是 async 版本。少了 await，`user` 會是一個 Promise ⇒
+  // `!user?.id` 成立 ⇒ **靜默地當成「查無此人」**（信不寄、密碼不改，卻回成功訊息）。
+  const user = await findUser(key);
   const result = { ok: true, message: forgotPasswordMessage() };
   if (!user?.id || String(user.deleted_at || "").trim()) {
     attempts.set(key, now);
@@ -61,7 +64,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
 
   const tempPassword = makePassword();
   const previousHash = user.password_hash;
-  setPassword(user.id, tempPassword);
+  await setPassword(user.id, tempPassword);
   try {
     const mail = compose({ tempPassword, email: user.email || key });
     await send({
@@ -72,7 +75,7 @@ export async function requestTempPassword(conn, email, opts = {}) {
     });
   } catch (error) {
     try {
-      restoreHash(user.id, previousHash);
+      await restoreHash(user.id, previousHash);
     } catch {
       // 還原失敗仍回傳寄信錯誤
     }
