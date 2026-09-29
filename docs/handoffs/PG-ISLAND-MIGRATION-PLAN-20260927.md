@@ -3947,6 +3947,28 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   測試永遠紅；要先把 `XxxAsync(` 整個拿掉再找 `Xxx(`。
 - 變異 **11 條全殺**（`ADMINMEMBERS_MUTATIONS` 新增 3 條：自主刊登數改讀本機、`/api/me` 兩支改回同步版）。
 
+## 二之負四十二、2026-09-29 第七十二批：`GET /api/state`（事件清單）搬上 PG
+
+### 72.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `GET /api/state` | `recentEventsAsync()`（新，`notifyQueueAsync.js`） | MIXED → **PG** |
+
+尺規：缺口 **22 → 21**、PG **246 → 247**、MIXED **19 → 18**（SQLite 3、無直接DB 20 不變）。
+
+**缺陷形狀**：`recentEvents()` 讀本機 `user_events`，而且會先 `resolveUserId()`（那條路會
+`ensureUser()` 讀本機 `users`）⇒ PG 模式下**會員在畫面上看不到自己的通知事件**（別台節點送出的
+更看不到）。島嶼直接吃呼叫端已經解析好的 uid（`readSession` 的身分來自 PG），所以順帶把
+`ensureUser` 這條依賴也拿掉。
+
+### 72.2 測試
+
+- `v3/test/notify-queue-parity.test.js`（**4 項全綠**，新增 2 條）：PG 分支把 PG 的列原樣回傳、
+  語句與參數順序（uid, limit）逐字相同、uid 0 不查詢、sqlite 模式等於同步版且不碰 PG runner；
+  `GET /api/state` 的接線斷言。
+- 變異 **3 條全殺**（新增 `NOTIFYQ_MUTATIONS`：改讀本機／參數順序顛倒／路由改回同步版）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3957,13 +3979,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十一批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十二批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **19** |
+| MIXED | — | **18** |
 | 無直接DB | — | **20** |
-| PG | 22 | **246** |
-| **缺口（SQLite＋MIXED）** | — | **22** |
+| PG | 22 | **247** |
+| **缺口（SQLite＋MIXED）** | — | **21** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

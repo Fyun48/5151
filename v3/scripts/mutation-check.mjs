@@ -2699,6 +2699,32 @@ const SAMEBACKFILL_MUTATIONS = [
   },
 ];
 
+// 通知佇列的事件清單（v3/test/notify-queue-parity.test.js，第七十二批）。
+const NOTIFYQ_SRC = "v3/src/notifyQueueAsync.js";
+const NOTIFYQ_MUTATIONS = [
+  {
+    name: "事件清單改讀本機（PG 站看不到自己的通知事件）",
+    file: NOTIFYQ_SRC,
+    from: "  return withFallback(options, async (exec) => {\n    const rows = await exec(RECENT_EVENTS_SQL, [uid, cap]);",
+    to: "  return withFallback({ ...options, driver: \"sqlite\" }, async (exec) => {\n    const rows = await exec(RECENT_EVENTS_SQL, [uid, cap]);",
+    expect: "PG 分支讀的是 PG 的 user_events",
+  },
+  {
+    name: "事件清單的參數順序顛倒（limit 當 uid）",
+    file: NOTIFYQ_SRC,
+    from: "    const rows = await exec(RECENT_EVENTS_SQL, [uid, cap]);",
+    to: "    const rows = await exec(RECENT_EVENTS_SQL, [cap, uid]);",
+    expect: "PG 分支讀的是 PG 的 user_events",
+  },
+  {
+    name: "GET /api/state 的事件清單改回同步版",
+    file: "v3/src/server.js",
+    from: "    events = await recentEventsAsync(uid, 30);",
+    to: "    events = recentEvents(uid, 30);",
+    expect: "/api/state 的事件清單走 PG 島嶼",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4116,6 +4142,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
   : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
+  : /notify-queue-parity/.test(testFile) ? NOTIFYQ_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS

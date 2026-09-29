@@ -307,3 +307,48 @@ test("live PostgreSQL: the notification queue drains the same store it writes", 
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 第七十二批：`recentEventsAsync()`（`GET /api/state` 的事件清單）。
+// 同步版除了讀本機 `user_events`，還會先 `resolveUserId()`（→ `ensureUser()` 讀本機 `users`）
+// ⇒ PG 模式下會員在畫面上看不到自己的通知事件。
+// ---------------------------------------------------------------------------
+
+test("recentEventsAsync：PG 分支讀的是 PG 的 user_events（本機不同也不影響）", async () => {
+  const { app, uid } = await loadFixture();
+  const queue = await import("../src/notifyQueueAsync.js");
+  const db = app.sqliteHandle();
+  // PG 夾具只有這個會員的事件；本機刻意插入**不同**的一列（id 也不一樣）。
+  const localOnly = app.addEvent({
+    post_id: 950001, type: "new", title: "只有本機有", detail: "", source_key: "local-only", created_at: "2026-09-20T00:00:00.000Z",
+  }, uid);
+  const lite = app.recentEvents(30, uid);
+  assert.equal(lite[0].id, localOnly, "前置條件：同步版看到的是本機最新那一列");
+
+  // 離線替身：PG 那幾列（與本機不同）走同一顆 SQLite 的另一張表太麻煩，這裡直接比對
+  // **兩條路徑的形狀**：PG 分支用注入的 exec 回傳自製列，函式必須原樣回傳（不排序、不補欄位）。
+  const rows = [{ id: 4242, user_id: uid, type: "new", title: "PG 的事件" }, { id: 4241, user_id: uid, type: "new", title: "PG 的舊事件" }];
+  const seen = [];
+  const shim = async (sql, params = []) => { seen.push([String(sql), params]); return rows; };
+  const viaPg = await queue.recentEventsAsync(uid, 30, { driver: "postgres", exec: shim, strict: true });
+  assert.deepEqual(viaPg, rows, "PG 分支要把 PG 的列原樣回傳");
+  assert.match(seen[0][0], /FROM user_events WHERE user_id = \? ORDER BY id DESC LIMIT \?/, "語句要與同步版逐字相同");
+  assert.deepEqual(seen[0][1], [uid, 30], "參數順序（uid, limit）");
+  assert.deepEqual(await queue.recentEventsAsync(0, 30, { driver: "postgres", exec: shim }), [], "uid 0 ⇒ 空陣列（與同步版同義，不查詢）");
+  assert.equal(seen.length, 1, "uid 0 不該查詢");
+
+  // sqlite 模式：回退同步版、不碰傳入的 exec。
+  const viaSqlite = await queue.recentEventsAsync(uid, 30, { driver: "sqlite", exec: shim });
+  assert.deepEqual(viaSqlite, app.recentEvents(30, uid), "sqlite 模式必須等於同步版");
+  assert.equal(seen.length, 1, "sqlite 模式不得呼叫 PG runner");
+  db.prepare("DELETE FROM user_events WHERE id = ?").run(localOnly);
+});
+
+test("GET /api/state 的事件清單走 PG 島嶼", () => {
+  const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  const start = src.indexOf('app.get("/api/state"');
+  const end = src.indexOf("\n});", start);
+  const body = src.slice(start, end === -1 ? undefined : end + 4);
+  assert.ok(body.includes("await recentEventsAsync(uid, 30)"), "/api/state 必須用 recentEventsAsync");
+  assert.ok(!/(?<![A-Za-z])recentEvents\(/.test(body), "/api/state 不得再用同步的 recentEvents()");
+});
