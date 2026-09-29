@@ -198,6 +198,85 @@ test("the state writes go through the driver-aware entry point", async () => {
   assert.match(queue, /function runHelper\(helpers, name, \.\.\.args\)/);
 });
 
+
+// ---------------------------------------------------------------------------
+// 第六十七批：`confirmExpiredOfflineListings()`（已下線 N 天後自動確認）的 driver-aware 版本。
+// 這一支是**讀取路徑**順手跑的掃描（`/api/listings`、`/api/state`），原本只寫本機 SQLite。
+// ---------------------------------------------------------------------------
+
+test("逾期下線掃描：PG 分支改的列數與落地狀態都與同步版相同", async () => {
+  const writes = await import("../src/crawlerWrites.js");
+  const { app } = await loadFixture();
+  const db = app.sqliteHandle();
+  const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  // 三種列：已下線且逾期（要改）、已下線但還新（不改）、已確認過（不改）。
+  const seed = (id, offline, confirmed, stamp) => db.prepare(
+    "UPDATE listings SET offline = ?, offline_confirmed = ?, offline_at = ?, last_checked_at = ? WHERE post_id = ?",
+  ).run(offline, confirmed, stamp, stamp, id);
+  seed(LOCAL_ID, 1, 0, old);
+  seed(SQLITE_ID, 1, 0, new Date().toISOString());
+  seed(PG_ID, 1, 1, old);
+  const read = (id) => {
+    const row = db.prepare("SELECT offline_confirmed, last_event FROM listings WHERE post_id = ?").get(id);
+    return { confirmed: Number(row.offline_confirmed) || 0, event: String(row.last_event || "") };
+  };
+  const before = { [LOCAL_ID]: read(LOCAL_ID), [SQLITE_ID]: read(SQLITE_ID), [PG_ID]: read(PG_ID) };
+  const baseline = { local: before[LOCAL_ID], sqlite: before[SQLITE_ID], pg: before[PG_ID] };
+
+  // 同步版基準（走本機 handle）。
+  const syncCount = app.confirmExpiredOfflineListings(7);
+  const afterSync = { local: read(LOCAL_ID), sqlite: read(SQLITE_ID), pg: read(PG_ID) };
+  assert.equal(syncCount, 1, "同步版：只有逾期那一列被確認");
+  assert.deepEqual(afterSync.local, { confirmed: 1, event: "offline" });
+
+  // 回到起點（把三個欄位寫回同步版跑之前的值），改走 PG 分支。
+  const restore = (id, confirmed) => db.prepare(
+    "UPDATE listings SET offline_confirmed = ?, last_event = ? WHERE post_id = ?",
+  ).run(confirmed, before[id].event, id);
+  restore(LOCAL_ID, before[LOCAL_ID].confirmed);
+  restore(SQLITE_ID, before[SQLITE_ID].confirmed);
+  restore(PG_ID, before[PG_ID].confirmed);
+  assert.deepEqual({ local: read(LOCAL_ID), sqlite: read(SQLITE_ID), pg: read(PG_ID) }, baseline, "前置條件：已還原");
+  const calls = [];
+  const shim = async (sql, params = []) => {
+    calls.push(sql);
+    return db.prepare(String(sql)).all(...params);
+  };
+  writes.resetExpiredOfflineSweepForTests();
+  const pgCount = await writes.confirmExpiredOfflineAsync({ days: 7, now: Date.now() }, { driver: "postgres", exec: shim, strict: true });
+  assert.equal(pgCount, syncCount, "PG 分支改的列數必須與同步版相同");
+  assert.deepEqual({ local: read(LOCAL_ID), sqlite: read(SQLITE_ID), pg: read(PG_ID) }, afterSync,
+    "PG 分支的落地狀態必須與同步版相同");
+  assert.match(calls[0], /RETURNING 1/);
+  assert.match(calls[0], /IFNULL/, "語句文字要逐字沿用同步版（PG 端由 toPostgresSql 轉 COALESCE）");
+});
+
+test("逾期下線掃描：60 秒內第二次不重掃（節流），而且 sqlite 模式回退同步版", async () => {
+  const writes = await import("../src/crawlerWrites.js");
+  const { app } = await loadFixture();
+  let updates = 0;
+  const spy = async (sql, params = []) => {
+    if (/^\s*UPDATE/i.test(String(sql))) updates += 1;
+    return app.sqliteHandle().prepare(String(sql)).all(...params);
+  };
+  const at = Date.now();
+  writes.resetExpiredOfflineSweepForTests();
+  await writes.confirmExpiredOfflineAsync({ days: 7, now: at }, { driver: "postgres", exec: spy, strict: true });
+  assert.equal(updates, 1, "第一次要真的掃");
+  await writes.confirmExpiredOfflineAsync({ days: 7, now: at + 5_000 }, { driver: "postgres", exec: spy, strict: true });
+  assert.equal(updates, 1, "同一個 60 秒窗口內不得再掃一次");
+  await writes.confirmExpiredOfflineAsync({ days: 7, now: at + 61_000 }, { driver: "postgres", exec: spy, strict: true });
+  assert.equal(updates, 2, "超過 60 秒之後可以再掃");
+
+  // sqlite 模式：回退同步版（同一支 db.js 函式），不碰傳入的 exec。
+  writes.resetExpiredOfflineSweepForTests();
+  const before = app.sqliteHandle().prepare("SELECT COUNT(*) AS n FROM listings WHERE offline_confirmed = 1").get().n;
+  const n = await writes.confirmExpiredOfflineAsync({ days: 7 }, { driver: "sqlite", exec: spy });
+  const after = app.sqliteHandle().prepare("SELECT COUNT(*) AS n FROM listings WHERE offline_confirmed = 1").get().n;
+  assert.equal(typeof n, "number");
+  assert.equal(after >= before, true, "sqlite 模式必須寫本機那一份");
+});
+
 test("live PostgreSQL: the state writes land where the site reads", { skip }, async (t) => {
   const { app, uid } = await loadFixture();
   const writes = await import("../src/crawlerWrites.js");
@@ -229,6 +308,22 @@ test("live PostgreSQL: the state writes land where the site reads", { skip }, as
       await writes.touchListingCheckedAsync(PG_ID, pgOptions(pgDriver));
       app.touchListingChecked(SQLITE_ID);
       assert.deepEqual(await stateOf(app, uid, PG_ID, pgRead(pgDriver)), await stateOf(app, uid, SQLITE_ID));
+    });
+  });
+
+  await t.test("逾期下線掃描在 PG 上真的改到那一列（並回報列數）", async () => {
+    await withMirroredSchema(app, async (pgDriver) => {
+      const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+      await pgDriver.query(
+        "UPDATE listings SET offline = 1, offline_confirmed = 0, offline_at = $1, last_checked_at = $1 WHERE post_id = $2",
+        [old, PG_ID],
+      );
+      writes.resetExpiredOfflineSweepForTests();
+      const n = await writes.confirmExpiredOfflineAsync({ days: 7 }, pgOptions(pgDriver));
+      assert.equal(n, 1, "PG 分支要回報 1 列（RETURNING 1 的列數，不是空陣列）");
+      const row = await pgDriver.query("SELECT offline_confirmed, last_event FROM listings WHERE post_id = $1", [PG_ID]);
+      assert.equal(Number(row.rows[0].offline_confirmed), 1);
+      assert.equal(String(row.rows[0].last_event), "offline");
     });
   });
 

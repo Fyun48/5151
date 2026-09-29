@@ -2414,13 +2414,21 @@ const MAP_SRC = "v3/scripts/route-data-map.mjs";
 // 現在一律改挑「**這個缺陷本身才會造成的可觀察差異**」，與該路由是否已移植無關。
 const MAP_MUTATIONS = [
   {
+    // 缺陷 (9)：字串裡的名字不是引用（`res.setHeader("Server-Timing", `… stats;dur=…`)`）。
+    name: "還原缺陷 (9)：字串裡的函式名被當成引用",
+    file: "v3/scripts/route-data-map.mjs",
+    from: '  .replace(/`(?:[^`\\\\]|\\\\.)*`/g, "``");',
+    to: '  .replace(/__never__/g, "`");',
+    expect: "缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）",
+  },
+  {
     // 缺陷 (8)：driver-aware wrapper 把 driver 判斷放在**同模組 helper** 裡
     //（`write(options, pg, () => syncFallback())`）⇒ 舊尺規把 fallback 算成 SQLite 卡點。
     name: "還原缺陷 (8)：driver-aware 委派的同步 fallback 被算成 SQLite 卡點",
     file: "v3/scripts/route-data-map.mjs",
     from: "    if (delegated.size && onlyInsideDriverCalls(body, local, delegated)) continue;",
     to: "    if (false) continue;",
-    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）",
   },
   {
     name: "還原缺陷 (1)：函式本文切到下一個 function 宣告（會吞掉整段路由）",
@@ -2454,7 +2462,7 @@ const MAP_MUTATIONS = [
     // ⚠️ 這條變異的殺手換過三次：舊斷言拿「當時還沒移植的 /api/admin/members」當真值，
     // 第五十四批把它搬上 PG 之後就失效了。現在由**合成來源樹**守衛負責（它自己造一個
     // 簽名含 destructured default 的 helper，套回缺陷 (1) 之後必須看不到）。
-    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）",
   },
   {
     // 缺陷 (7)：方法呼叫不是函式呼叫。舊版 `callsIn()` 用 `\bname\s*\(`，
@@ -2464,7 +2472,7 @@ const MAP_MUTATIONS = [
     file: MAP_SRC,
     from: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");",
     to: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");\n  if (true) return new RegExp(`\\\\b${escaped}\\\\s*\\\\(`).test(body);",
-    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）",
   },
   {
     name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
@@ -2475,7 +2483,7 @@ const MAP_MUTATIONS = [
     // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
     // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
     // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
-    expect: "缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -2496,8 +2504,8 @@ const MAP_MUTATIONS = [
   {
     name: "還原缺陷 (6) 的物件鍵誤判：`stats:` 被當成 db.js 的 stats()",
     file: MAP_SRC,
-    from: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])(?!\\\\s*:)`).test(body)) return false;",
-    to: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])`).test(body)) return false;",
+    from: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])(?!\\\\s*:)`).test(stripStrings(body))) return false;",
+    to: "  if (!new RegExp(`(?<![\\\\w$.])${n}(?![\\\\w$])`).test(stripStrings(body))) return false;",
     // reject-match 的 `res.json({ stats: await listingStatsAsync(…) })` 會把 db.js 的
     // `stats()` 整條鏈拉進來（countWatched／loadFlagMap／sqlExcludeFixtureRows…）。
     expect: "已完全移植的路由必須是 PG",

@@ -16,6 +16,7 @@ import {
   setCommunityCache as setCommunityCacheSync,
   setListingDetail as setListingDetailSync,
   touchListingChecked as touchListingCheckedSync,
+  confirmExpiredOfflineListings as confirmExpiredOfflineListingsSync,
   persistHpListingFields as persistHpListingFieldsSync,
   listingFieldsBuildContext,
 } from "./db.js";
@@ -40,6 +41,7 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { normalizeOfflineConfirmDays } from "./offline.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -186,6 +188,43 @@ export function markSourceKitRetryAsync(postId, { error = "", delayMs = 15 * 60 
       return true;
     },
     () => markSourceKitRetrySync(postId, { error, delayMs }),
+  );
+}
+
+// db.js confirmExpiredOfflineListings(): 「已下線但還沒被確認」的房源在 N 天後自動確認為下線。
+// 這一支是**站上讀取路徑**會順手跑的掃描（`/api/listings`、`/api/state`），原本只寫本機 SQLite
+// ⇒ PG 模式下那個 UPDATE 永遠不會落到站上讀的那一份（清單上的「已確認下線」永遠不翻）。
+//
+// ⚠️ 回傳值要是「改了幾個列」：PG 的 `query()` 對沒有 RETURNING 的 UPDATE 只回空陣列，
+// 所以語句尾端接 `RETURNING 1` 再數列數（SQLite 也支援 RETURNING，兩邊同一句文字）。
+// 節流與同步版同義（每個節點每 60 秒最多掃一次；`options.now` 是測試用的時間縫）。
+// ⚠️ 語句文字**逐字沿用** `db.js:5098-5105`（含 SQLite 的 `IFNULL`）——真 PG 路徑由
+// `postgresExec()` 的 `toPostgresSql()` 轉成 `COALESCE`；改成 COALESCE 反而會讓「同一句」有兩份。
+export const EXPIRED_OFFLINE_SQL = `UPDATE listings
+       SET offline_confirmed = 1,
+           last_event = 'offline',
+           last_checked_at = ?
+       WHERE IFNULL(offline, 0) = 1
+         AND IFNULL(offline_confirmed, 0) = 0
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) != ''
+         AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) <= ?`;
+export const EXPIRED_OFFLINE_SWEEP_MS = 60_000;
+let lastExpiredOfflineSweepAt = 0;
+export function resetExpiredOfflineSweepForTests() {
+  lastExpiredOfflineSweepAt = 0;
+}
+
+export async function confirmExpiredOfflineAsync({ days = 7, now = Date.now() } = {}, options = {}) {
+  const at = Number(now) || Date.now();
+  if (at - lastExpiredOfflineSweepAt < EXPIRED_OFFLINE_SWEEP_MS) return 0;
+  lastExpiredOfflineSweepAt = at;
+  const n = normalizeOfflineConfirmDays(days);
+  const cutoff = new Date(at - n * 86_400_000).toISOString();
+  const stamp = new Date(at).toISOString();
+  return write(
+    options,
+    async (exec) => (await exec(`${EXPIRED_OFFLINE_SQL} RETURNING 1`, [stamp, cutoff])).length,
+    () => confirmExpiredOfflineListingsSync(days),
   );
 }
 
