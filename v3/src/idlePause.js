@@ -28,6 +28,21 @@ export function applyIdlePauseToMembers(ids, { getSettings, saveSettings } = {})
 }
 
 /** 恢復閒置暫停。不寄信；呼叫端也不該為此排隊系統信。 */
+/** `applyIdleResume()` 的 async 版（PG 島嶼用）：規則完全相同，只是每一步可以 await。
+ *  兩份務必同步修改——`v3/test/idle-verify.test.js` 會比對兩邊的結果。 */
+export async function applyIdleResumeAsync(userId, { getSettings, saveSettings, armFetch } = {}) {
+  const uid = Number(userId) || 0;
+  const current = typeof getSettings === "function" ? await getSettings(uid) : null;
+  if (!uid || !shouldResumeIdle(current)) {
+    return { resumed: false, mailed: false, settings: current };
+  }
+  let settings = typeof saveSettings === "function" ? await saveSettings(uid, idleResumeFlags()) : current;
+  if (settings?.notificationsPaused !== true && typeof armFetch === "function") {
+    settings = (await armFetch(uid)) || settings;
+  }
+  return { resumed: true, mailed: false, settings };
+}
+
 export function applyIdleResume(userId, { getSettings, saveSettings, armFetch } = {}) {
   const uid = Number(userId) || 0;
   const current = typeof getSettings === "function" ? getSettings(uid) : null;

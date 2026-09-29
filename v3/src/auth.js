@@ -6,6 +6,12 @@ import {
   verifyUserPassword,
 } from "./db.js";
 import { normalizeEmail } from "./password.js";
+import {
+  defaultUserIdAsync,
+  findUserByEmailAsync,
+  setUserPasswordAsync,
+  verifyUserPasswordAsync,
+} from "./usersAsync.js";
 import { assertNotLocked, clearAuthFailures, recordAuthFailure } from "./rateLimit.js";
 import { isEmailVerified } from "./emailVerify.js";
 import { resolveDbDriver } from "./dbDriver.js";
@@ -202,7 +208,47 @@ export function clearSessionCookie(req) {
   ];
 }
 
+// `verifyLogin()` 的 PG 版：**同一串規則**（鎖定 → 雜湊比對 → 未驗證擋下 → env admin 後備），
+// 只把「跑語句的人」換成 PG 島嶼。非 postgres 直接走同步版，SQLite 站行為完全不變。
+//
+// 為什麼需要：登入讀的是 `users`（已在 PG 上），同步版在 PG 模式下讀的是**節點本機**的
+// users ⇒ 只有剛好在本機建過帳號的人登得進去，其他節點建立的成員一律「帳號或密碼不正確」。
+export async function verifyLoginAsync(email, password, { keys, now, ...options } = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return verifyLogin(email, password, { keys, now });
+  if (keys?.length) assertNotLocked(keys, now);
+  const key = normalizeEmail(email);
+  const pass = String(password || "");
+  const hashed = await verifyUserPasswordAsync(key, pass, options);
+  if (hashed) {
+    if (!isEmailVerified(hashed)) {
+      const err = new Error("請先到信箱點確認連結才能登入");
+      err.status = 403;
+      throw err;
+    }
+    if (keys?.length) clearAuthFailures(keys);
+    return publicUser(hashed);
+  }
+  if (envAdminConfigured() && safeEqual(key, adminEmail()) && safeEqual(pass.trim(), adminPassword().trim())) {
+    const user = await findUserByEmailAsync(key, options);
+    if (user && !String(user.password_hash || "").trim()) {
+      try {
+        await setUserPasswordAsync(user.id, pass, options);
+      } catch {
+        // env 密碼短於 8 碼時略過寫入，下次仍可用 AUTH_PASSWORD（與同步版同義）
+      }
+    }
+    if (keys?.length) clearAuthFailures(keys);
+    return publicUser(user) || { id: 0, email: adminEmail(), role: "admin", plan: "free" };
+  }
+  if (keys?.length) recordAuthFailure(keys, now);
+  const err = new Error("帳號或密碼不正確");
+  err.status = 401;
+  throw err;
+}
+
 export function verifyLogin(email, password, { keys, now } = {}) {
+  // 同步版（SQLite 站）：行為完全不變。
+
   if (keys?.length) assertNotLocked(keys, now);
   const key = normalizeEmail(email);
   const pass = String(password || "");

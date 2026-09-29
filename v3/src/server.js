@@ -246,7 +246,7 @@ import {
   updateCampaign,
 } from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
-import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin } from "./auth.js";
+import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin, verifyLoginAsync } from "./auth.js";
 // 刊登生產力工具（說明範本／聯絡人）的 PG 島嶼入口。
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
@@ -265,6 +265,14 @@ import {
   listMineListingImportsAsync,
   reviewListingImportAsync,
 } from "./listingImportAsync.js";
+// 會員帳號的 PG 島嶼入口（登入、身分來源）。
+// `defaultUserIdAsync` 特別重要：沒有 session 時同步版會在**本機**建一個 admin 帳號、
+// 回傳**本機** id，之後拿它去讀 PG 設定就會跨店錯位。
+import {
+  defaultUserIdAsync,
+  resumeIdleIfNeededAsync,
+  touchLastLoginAsync,
+} from "./usersAsync.js";
 import { sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
 import { setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
@@ -782,6 +790,14 @@ function actorUserId(req) {
   return defaultUserId();
 }
 
+// `actorUserId()` 的 PG 版。沒有 session 時同步版會呼叫 `defaultUserId()`：
+// 那會在**節點本機**建一個 admin 帳號並回傳**本機** id，PG 模式下等於拿錯 store 的 id。
+async function actorUserIdAsync(req) {
+  const session = readSession(req);
+  if (session?.userId) return session.userId;
+  return defaultUserIdAsync();
+}
+
 function sessionUserId(req) {
   return Number(readSession(req)?.userId) || 0;
 }
@@ -1218,12 +1234,13 @@ app.get("/api/captcha", (req, res) => {
   }
 });
 
-app.post("/api/login", (req, res) => {
+app.post("/api/login", async (req, res) => {
   const keys = authAttemptKeys(req, req.body?.email);
   try {
     assertHuman(req.body);
-    const user = verifyLogin(req.body?.email, req.body?.password, { keys });
-    afterMemberSession(user);
+    // PG 模式要讀 PG 的 users；同步版只讀得到節點本機（別的節點建立的成員一律登不進去）。
+    const user = await verifyLoginAsync(req.body?.email, req.body?.password, { keys });
+    await afterMemberSessionAsync(user);
     setSession(req, res, user.email);
     res.json({ ok: true, email: user.email, role: user.role, plan: user.plan });
   } catch (error) {
@@ -1301,6 +1318,15 @@ function afterMemberSession(user) {
   if (!id) return;
   touchLastLogin(id);
   resumeIdleIfNeeded(id);
+}
+
+// `afterMemberSession()` 的 PG 版：登入後的兩個副作用（記登入時間、恢復閒置暫停）。
+// 同步版在 PG 模式會把「最後登入時間」寫進本機、並讀本機的會員設定。
+async function afterMemberSessionAsync(user, options = {}) {
+  const id = Number(user?.id) || 0;
+  if (!id) return;
+  await touchLastLoginAsync(id, {}, options);
+  await resumeIdleIfNeededAsync(id, options);
 }
 
 function shareTokenFrom(req) {
@@ -2321,7 +2347,7 @@ app.get("/api/admin/crm/contacts/:id", requireAdminApi, async (req, res) => {
 
 app.post("/api/admin/crm/contacts", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(await createCrmContact(req.body || {}, { actorUserId: actorUserId(req) }));
+    res.status(201).json(await createCrmContact(req.body || {}, { actorUserId: await actorUserIdAsync(req) }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2353,7 +2379,7 @@ app.patch("/api/admin/crm/cases/:id", requireAdminApi, async (req, res) => {
 
 app.post("/api/admin/crm/contacts/:id/notes", requireAdminApi, async (req, res) => {
   try {
-    res.status(201).json(await addCrmNote(req.params.id, req.body || {}, { actorUserId: actorUserId(req) }));
+    res.status(201).json(await addCrmNote(req.params.id, req.body || {}, { actorUserId: await actorUserIdAsync(req) }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2563,7 +2589,7 @@ app.post("/api/admin/similarity/:id/review", requireAdminApi, async (req, res) =
   try {
     res.json({
       ok: true,
-      item: await reviewAdminSimilarity(req.params.id, req.body || {}, actorUserId(req)),
+      item: await reviewAdminSimilarity(req.params.id, req.body || {}, await actorUserIdAsync(req)),
       overview: await getAdminSimilaritySettings(),
     });
   } catch (error) {
@@ -3610,7 +3636,8 @@ function visibleFocusIds() {
 let geoBackfillBusy = false;
 
 async function ensureWorkCoords() {
-  const uid = defaultUserId();
+  // 身分來源必須與設定同一個 store：本機 id 拿去讀 PG 設定會錯位（同一個人的兩份資料）。
+  const uid = await defaultUserIdAsync();
   // 上班地址與座標是會員設定，必須與其他節點同源：PG 模式下讀寫本機 SQLite 會讓
   // 「在 A 儲存的地址、B 讀不到」而重複補座標或覆蓋新值。
   const current = await getSettingsAsync(uid);

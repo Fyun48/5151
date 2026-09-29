@@ -12,7 +12,17 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { getUserById as getUserByIdSync } from "./members.js";
+import {
+  findUserByEmail as findUserByEmailSync,
+  getUserById as getUserByIdSync,
+  isUserDeleted,
+  setUserPassword as setUserPasswordSync,
+  touchLastLogin as touchLastLoginSync,
+} from "./members.js";
+import { ensureUser as ensureUserSync, adminEmailForUser } from "./personalFlags.js";
+import { hashPassword, normalizeEmail, validatePassword, verifyPassword } from "./password.js";
+import { defaultUserId as defaultUserIdSync, resumeIdleIfNeeded as resumeIdleIfNeededSync } from "./db.js";
+import { applyIdleResumeAsync } from "./idlePause.js";
 
 export const USER_BY_ID_SQL = "SELECT * FROM users WHERE id = ?";
 
@@ -53,3 +63,108 @@ export async function getUserByIdAsync(userId, options = {}) {
   return run(options, async (exec) => one((await exec(USER_BY_ID_SQL, [id])).rows),
     () => getUserByIdSync(sqliteHandle(), id) || null);
 }
+
+// ---- 會員帳號的讀寫（2026-09-28，第五十二批）---------------------------------
+//
+// 這一組是「會員／後台那一叢」的地基：`findUserByEmail`（登入、忘記密碼、驗證信）、
+// `ensureUser`／`defaultUserId`（`actorUserId()` 在沒有 session 時的身分來源）、
+// `setUserPassword`／`touchLastLogin`（登入流程的副作用）。
+//
+// 🚨 `defaultUserId()` 是**模組層級以外的 lazy 寫入**：它會在第一次被呼叫時
+// `INSERT` 一個管理員帳號到**節點本機**的 SQLite。PG 模式下那筆寫入「沒有人讀」，
+// 而且回傳的 id 是**本機**的 id——`ensureWorkCoords()` 就拿這個 id 去 `getSettingsAsync()`
+// 讀 PG（跨店錯位的經典形狀）。所以 `defaultUserIdAsync()` 是必要的，不是為了量尺。
+
+export const USER_BY_EMAIL_SQL = "SELECT * FROM users WHERE email = ?";
+export const USER_INSERT_SQL =
+  "INSERT INTO users(email, password_hash, role, plan, created_at) VALUES (?, '', ?, 'free', ?) RETURNING id";
+export const USER_SET_PASSWORD_SQL = "UPDATE users SET password_hash = ? WHERE id = ?";
+export const USER_LAST_LOGIN_SQL = "UPDATE users SET last_login_at = ? WHERE id = ?";
+export const USER_LAST_LOGIN_READ_SQL = "SELECT last_login_at FROM users WHERE id = ?";
+
+// `members.js::findUserByEmail()` 的 PG 版（空字串要先短路，同步版就是這樣）。
+export async function findUserByEmailAsync(email, options = {}) {
+  const key = normalizeEmail(email);
+  if (!key) return null;
+  return run(options, async (exec) => one((await exec(USER_BY_EMAIL_SQL, [key])).rows),
+    () => findUserByEmailSync(sqliteHandle(), email) || null);
+}
+
+// `personalFlags.js::ensureUser()` 的 PG 版：不存在就建（`role` 決定 admin／member）。
+// PG 沒有「INSERT OR IGNORE」，所以先查再寫；同時建立時撞唯一鍵就重讀一次。
+export async function ensureUserAsync(email, { role } = {}, options = {}) {
+  const key = String(email || "").trim().toLowerCase();
+  if (!key) return 0;
+  return run(options, async (exec) => {
+    const existing = one((await exec(USER_BY_EMAIL_SQL, [key])).rows);
+    if (existing) return Number(existing.id);
+    const isAdmin = role === "admin" || key === adminEmailForUser();
+    try {
+      const row = one((await exec(USER_INSERT_SQL, [key, isAdmin ? "admin" : "member", new Date().toISOString()])).rows);
+      return Number(row?.id) || 0;
+    } catch (error) {
+      const again = one((await exec(USER_BY_EMAIL_SQL, [key])).rows);
+      if (again) return Number(again.id);
+      throw error;
+    }
+  }, () => ensureUserSync(sqliteHandle(), email, { role }));
+}
+
+// `db.js::defaultUserId()` 的 PG 版。**刻意不快取**：同步版用模組層級的快取，
+// 那在測試裡會讓不同夾具互相污染；這裡每次只多一句 SELECT，換來可預測的行為。
+export async function defaultUserIdAsync(options = {}) {
+  return ensureUserAsync(adminEmailForUser(), { role: "admin" }, options);
+}
+
+// `members.js::verifyUserPassword()`：查人 → 已刪除不算 → 比對雜湊（純判斷兩邊共用）。
+export async function verifyUserPasswordAsync(email, password, options = {}) {
+  const user = await findUserByEmailAsync(email, options);
+  if (!user || isUserDeleted(user)) return null;
+  if (user.password_hash && verifyPassword(password, user.password_hash)) return user;
+  return null;
+}
+
+// `members.js::setUserPassword()`：驗證政策與雜湊都在 `password.js`（兩邊共用同一份）。
+export async function setUserPasswordAsync(userId, password, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  return run(options, async (exec) => {
+    await exec(USER_SET_PASSWORD_SQL, [hashPassword(validatePassword(password)), id]);
+  }, () => setUserPasswordSync(sqliteHandle(), id, password));
+}
+
+// `members.js::touchLastLogin()`：best-effort（同步版把任何錯誤吞掉回 false），
+// `minIntervalMs` 之內不重寫。PG 版照抄同樣的語意。
+export async function touchLastLoginAsync(userId, { now = Date.now(), minIntervalMs = 0 } = {}, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return false;
+  if (!isPg(options)) return touchLastLoginSync(sqliteHandle(), id, { now, minIntervalMs });
+  try {
+    return await run(options, async (exec) => {
+      if (minIntervalMs > 0) {
+        const row = one((await exec(USER_LAST_LOGIN_READ_SQL, [id])).rows);
+        const prev = row?.last_login_at ? Date.parse(row.last_login_at) : 0;
+        if (Number.isFinite(prev) && prev > 0 && now - prev < minIntervalMs) return false;
+      }
+      await exec(USER_LAST_LOGIN_SQL, [new Date(now).toISOString(), id]);
+      return true;
+    }, () => touchLastLoginSync(sqliteHandle(), id, { now, minIntervalMs }));
+  } catch {
+    return false; // 與同步版同義：登入時間寫不進去不該擋住登入
+  }
+}
+
+// `db.js::resumeIdleIfNeeded()` 的 PG 版：規則在 `idlePause.js`（兩邊共用同一份）。
+export async function resumeIdleIfNeededAsync(userId, options = {}) {
+  if (!isPg(options)) return resumeIdleIfNeededSync(userId);
+  return applyIdleResumeAsync(userId, {
+    getSettings: (uid) => getSettingsAsync(uid, options),
+    saveSettings: (uid, patch) => saveSettingsAsync(patch, uid, options),
+    armFetch: (uid) => armMemberExternalFetchAsync(uid, {}, options),
+  });
+}
+
+// ⚠️ `settingsAsync.js` 反過來會匯入 `db.js`（而 `db.js` 匯入 `members.js`），
+// 靜態匯入會形成循環；這一支只在 `resumeIdleIfNeededAsync()` 內用到，所以用動態匯入。
+const { getSettingsAsync, saveSettingsAsync, armMemberExternalFetchAsync } =
+  await import("./settingsAsync.js");
