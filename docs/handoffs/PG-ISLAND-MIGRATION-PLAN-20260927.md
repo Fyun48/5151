@@ -3587,6 +3587,77 @@ done
 對應的 workflow 測試逐字斷言更新。在這一包完成之前，PG 模式的啟用請改走
 `PUT /api/admin/rental-marketplace-flags`（本批已搬上 PG）。
 
+## 二之負三十四、2026-09-29 第六十四批：geo 快取（三條卡點同一個）
+
+### 64.1 範圍與投報率
+
+| 路由 | 進入點 | 卡點 |
+|---|---|---|
+| `GET /api/public/listings` | `resolveGuestWorkPoint()`（訪客的上班地址距離篩選） | `getCachedGeo`／`setCachedGeo` |
+| `POST /api/exclude-region` | `boxFromRoadDescription()`（路名 → 方位框） | 同上 |
+| `POST /api/profiles` | `persistSettings()`（`POST /api/settings` 也走同一支） | `setCachedGeo` |
+
+這是 Owner 指定順序的第 (2) 步。`geo_cache` 是**跨節點共用**的快取：PG 模式下讀寫本機 SQLite
+⇒ 同一條路名 A 節點剛查到的座標，B 節點要再花一次外部 geocoding（配額與延遲都是真的成本），
+而 `POST /api/exclude-region` 正是連續好幾個路名查詢。
+
+尺規：缺口 **34 → 31**、PG **234 → 237**、MIXED **31 → 28**（SQLite 3、無直接DB 20 不變）。
+
+### 64.2 這一包的三個關鍵設計
+
+1. **`geo.js` 的 lookup／save 改成可 await**。原本是同步呼叫
+   （`lookup?.(address) || lookup?.(text) || …`、`options.save?.(road, lat, lng)`），直接塞 async
+   版本會拿到 **Promise 當真相值**（永遠 truthy、`lat`/`lng` 是 `undefined`）⇒ 症狀是
+   「快取明明有、卻每次都當成沒命中」，而且不會報錯，只會外部查詢暴增。
+   現在 `geocodeAddressUnshared()` 走 `firstCachedGeo()`（逐一 await，候選順序不變，
+   address → 正規化文字 → 門牌鍵 → 路段鍵），`boxFromRoadDescription()` 對 lookup／save 都 await。
+   同步函式（crawler 傳的本機 `getCachedGeo`）完全相容——`await` 非 Promise 只是原值。
+2. **落地值抽成純函式 `geoQueue.geoCacheRow()`**：`quality`／`cache_kind`／`address_version` 的推導
+   原本寫死在 `db.js setCachedGeo()` 裡。PG 版若自己再寫一份，兩個 driver 就會寫出不同形狀的快取
+   （例：`cache_kind` 從 `location_class` 推導的規則）。現在同步版與 PG 版逐欄吃同一個回傳值。
+3. **`ensureGeoCacheOnce()` 三件事依序做**：`ensureGeoCacheSchema(sqliteHandle())`（來源先補齊）
+   → `ensurePgSchema(…, { tables: ["geo_cache"], indexes: false })`（建表 ＋ `address` 主鍵）
+   → 九個 `ALTER TABLE … ADD COLUMN IF NOT EXISTS`。⚠️ 第二步**不會**替既有的表補欄位
+   （`ensurePgSchema` 只送 `CREATE TABLE IF NOT EXISTS`），所以第三步是必要的；反過來說，
+   第 2 步不可省——沒有表的話第 3 步是 `42P01`（`ensureGeoCacheOnce` 的離線測試就釘這三件事）。
+
+### 64.3 這一包的五個坑
+
+1. 🚨 **「缺欄位」在 SQLite 的 INSERT 上是另一個字串**：SELECT 是 `no such column: x`，
+   INSERT 是 `table t has no column named x`（PG 兩者都是 42703）。只比對前者會讓
+   「舊形狀的表寫不進去」在離線夾具裡變成一個未預期的 throw（實測中過）。
+2. 🚨 **等價變異**：把 `ensurePgSchema(…, { tables: ["geo_cache"] })` 改成 `{ tables: [] }`
+   是**等價**的——`tables: []` 在 `pgSchema.js` 代表「鏡射全部表」，geo_cache 照樣被建出來
+   （實測 SURVIVED）。已改成「乾脆不建表」並留下理由。
+3. 🚨 **殺手要挑對**：「候選鍵不 await」的變異不會被『非同步 lookup 命中』那條殺死——
+   `firstCachedGeo()` 自己是 async，回傳的 Promise 會被外層 `await` 解掉；真正會紅的是
+   「候選鍵順序」那條（miss 時 `if (hit)` 對 Promise 恆真 ⇒ 整條鏈提早結束、路段鍵問不到）。
+4. **測試的 `save` 要真的非同步**：`async (…) => { saved.push(…) }` 在被呼叫的瞬間就會同步 push，
+   所以「忘記 await save」的變異會活下來；要先 `await` 一次（setTimeout）再 push。
+5. **`boxFromRoadDescription` 的兩個路名不能回同一個經度**：「以東」的路名提供西界、
+   「以西」的路名提供東界，同一個經度會讓 `west < east` 不成立（那是正確的守衛），
+   測試的 fetch 假件要回不同座標。
+
+### 64.4 測試
+
+- `v3/test/geo-cache-async.test.js`（**10 項全綠**，新檔）：落地值與同步版逐欄相同（含
+  `quality`／`cache_kind` 推導）、正規化變體命中同一列、舊形狀的表讀得到也寫得進去、
+  非法輸入兩邊都不落地、sqlite 模式、strict 失敗不得回退、`ensureGeoCacheOnce` 的 DDL
+  與「同一個 driver 只做一次」、`geocodeAddress` 的非同步 lookup（含候選鍵順序）、
+  `boxFromRoadDescription` 的 async lookup／save。變異 **12 條全殺**。
+- `v3/test/geo-cache-live-pg.test.js`（**1 項全綠**，新檔）：真 PG 上驗
+  `ADD COLUMN IF NOT EXISTS` 真的把九個欄位補上、`address` 主鍵真的存在（upsert 的衝突目標，
+  少了它是 42P10）、13 個參數的順序、就地更新、與 SQLite 落地值逐欄相同。
+  ⚠️ 這一檔只碰自己那一列（`geo_cache` 在 repro 上有近三百列真實資料）。
+
+### 64.5 本批刻意**沒有**動的相鄰部分
+
+crawler 那一側（`watcher.js` 的 `setCachedGeo`／`updateListingsGeoByAddress`、`geoQueue.js` 的
+佇列 worker）仍然只寫**本機** SQLite：請求路徑與 crawler 因此各有一份快取。這不是正確性問題
+（快取只是加速，`shouldRefreshGeo()` 用 TTL＋品質判斷），但兩邊會各自重複地理編碼；
+`updateListingsGeoByAddress()` 還會一起寫 `listings`（那是第 (4) 步的 35 卡點叢），所以留到那一批
+一起處理。在那之前：**同一個地址在網頁請求路徑與 crawler 之間不會共用快取**。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3597,13 +3668,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十三批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十四批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **31** |
+| MIXED | — | **28** |
 | 無直接DB | — | **20** |
-| PG | 22 | **234** |
-| **缺口（SQLite＋MIXED）** | — | **34** |
+| PG | 22 | **237** |
+| **缺口（SQLite＋MIXED）** | — | **31** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
