@@ -4549,6 +4549,45 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 - **變異 8 條全殺**（`CREATESELF_MUTATIONS`）。
 - 踩點：`getSelfListing()` 回的是**裝飾過的視圖**（沒有 `self_status`）⇒ 斷言狀態要直接查那一列。
 
+## 二之負五十五、2026-09-29 第八十五批：社群登入回呼（`GET /auth/:provider/callback`）
+
+### 85.1 範圍與投報率
+
+同步版整條 callback 的落地點都在**節點本機**：`findUserByEmail()`（找帳號）、
+`linkOauthIdentity()`（綁定 provider／subject）、註冊分支的 `registerUserWithConsents()`、
+寄信分支的 `issueVerifyToken()`／`queueSystemMail()`、登入副作用 `afterMemberSession()`、
+歸因 `attributeShare()` ⇒ PG 模式下社群登入**看不到 PG 上已有的帳號**（會在本機多建一列）、
+綁定紀錄沒有人讀得到、開通 token 寫在本機（會員點信裡的連結永遠是「找不到這個開通連結」）。
+
+尺規：**MIXED（19 卡點）→ PG**；缺口總數 **3 → 2**（`PG` 265 → **266**、`MIXED` 3 → **2**）。
+
+### 85.2 做法
+
+- `v3/src/usersAsync.js`：新增 `USER_OAUTH_LINK_SQL` ＋ `linkOauthIdentityAsync()`（本批唯一新島嶼）。
+  ⚠️ 這支**刻意維持同步版「綁定失敗只吞掉、不擋登入」的語意**（其他寫入是 fail-closed）：
+  同步版就是這個取捨，改成往外丟會讓社群登入整條掛掉。
+- `v3/src/server.js`：callback 改走既有島嶼——`findUserByEmailAsync()`／
+  `registerUserWithConsentsAsync()`／`updateUserProfileWithLegalAsync()`（暱稱分支）／
+  `issueVerifyTokenAsync()`／`queueSystemMailAsync()`／`afterMemberSessionAsync()`／
+  `attributeShareAsync()`／`getStoredSmtpAsync()`，並移除同步 `linkOauthIdentity`／
+  `findUserByEmail`／`updateUserProfile`／`issueVerifyToken` 的 import。
+- 同步版 `afterMemberSession()`（server.js 的區域函式）最後一個呼叫端就是這條路由 ⇒ 連同
+  `touchLastLogin`／`resumeIdleIfNeeded` 的同步 import 一起移除，不留「沒有人呼叫卻把同步路徑
+  拉在檔案裡」的死碼。
+
+### 85.3 測試
+
+- `v3/test/oauth-callback-async.test.js`（**6 項全綠**，新檔）：島嶼 SQL 用 `?` 佔位、參數與同步版
+  逐字相同（含 40／120 截斷、缺欄位送空字串）、id 0 短路、**綁定失敗只吞掉（strict 也不例外）**、
+  sqlite 模式不碰 runner、路由接線（含 import 斷言，防「只刪 import」的假綠）。
+- `v3/test/oauth-callback-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上綁定落地、
+  `findUserByEmailAsync()` 讀得到、**本機不得多出這一列**、暱稱更新落在 PG 且法律文案讀 PG。
+- **變異 11 條全殺**（`OAUTHCB_MUTATIONS`）。
+- 既有來源文字測試同步更新：`v3/test/oauth.test.js` 的 `queueSystemMail("welcome")`／
+  `mailConfigured(getStoredSmtp())` 兩條斷言改成 async 版（不改會紅）。
+- 踩點：本機 `users.oauth_provider`／`oauth_subject` 是 **NOT NULL** ⇒ 離線測試要驗「PG 模式不寫本機」
+  時不能把欄位設成 NULL，要改設本機哨兵值再比對。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4559,13 +4598,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十四批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十五批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **3** |
+| MIXED | — | **2** |
 | 無直接DB | — | **20** |
-| PG | 22 | **265** |
-| **缺口（SQLite＋MIXED）** | — | **3** |
+| PG | 22 | **266** |
+| **缺口（SQLite＋MIXED）** | — | **2** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

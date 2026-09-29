@@ -2916,15 +2916,18 @@ const REGISTER_MUTATIONS = [
   {
     name: "註冊路由改回同步的 issueVerifyToken（token 寫本機）",
     file: "v3/src/server.js",
-    from: "    const issued = await issueVerifyTokenAsync(user.id);",
-    to: "    const issued = issueVerifyToken(user.id);",
+    // ⚠️ 錨點要帶下一行：第八十五批之後 OAuth callback 也有同一句（縮排不同、下一行不同），
+    //    只寫那一句會變成 2 次 ⇒ 整套變異會靜靜中止（`mutation-anchors.test.js` 會抓）。
+    from: "    const issued = await issueVerifyTokenAsync(user.id);\n    const base = publicBaseUrl(req);",
+    to: "    const issued = issueVerifyToken(user.id);\n    const base = publicBaseUrl(req);",
     expect: "路由接線",
   },
   {
     name: "註冊路由的 SMTP 設定改讀本機（PG 站說沒設定、擋掉註冊）",
     file: "v3/src/server.js",
-    from: "    if (!mailConfigured(await getStoredSmtpAsync())) {",
-    to: "    if (!mailConfigured(getStoredSmtp())) {",
+    // ⚠️ 同上：帶上「註冊確認信」那句錯誤訊息，才與 OAuth callback 的兩處區隔開。
+    from: "    if (!mailConfigured(await getStoredSmtpAsync())) {\n      const err = new Error(\"尚未設定寄信，無法寄出註冊確認信。",
+    to: "    if (!mailConfigured(getStoredSmtp())) {\n      const err = new Error(\"尚未設定寄信，無法寄出註冊確認信。",
     expect: "路由接線",
   },
 ];
@@ -3573,6 +3576,88 @@ const CREATESELF_MUTATIONS = [
     file: "v3/src/server.js",
     from: "    const created = await createSelfListingAsync(session.userId, body, {",
     to: "    const created = createSelfListing(session.userId, body); void (({",
+    expect: "路由接線",
+  },
+];
+
+// OAuth callback（`GET /auth/:provider/callback`，第八十五批）。
+// 這一條的重點是「綁定欄位要寫 PG」與「不得偷偷改成 fail-closed 而擋掉社群登入」。
+const OAUTHCB_MUTATIONS = [
+  {
+    name: "provider 不截斷（與同步版的落地值不同）",
+    file: "v3/src/usersAsync.js",
+    from: "  const params = [String(provider || \"\").slice(0, 40), String(subject || \"\").slice(0, 120), id];",
+    to: "  const params = [String(provider || \"\"), String(subject || \"\").slice(0, 120), id];",
+    expect: "逐字相同",
+  },
+  {
+    name: "subject 不截斷（與同步版的落地值不同）",
+    file: "v3/src/usersAsync.js",
+    from: "  const params = [String(provider || \"\").slice(0, 40), String(subject || \"\").slice(0, 120), id];",
+    to: "  const params = [String(provider || \"\").slice(0, 40), String(subject || \"\"), id];",
+    expect: "逐字相同",
+  },
+  {
+    name: "provider／subject 寫反（欄位對調）",
+    file: "v3/src/usersAsync.js",
+    from: "  const params = [String(provider || \"\").slice(0, 40), String(subject || \"\").slice(0, 120), id];",
+    to: "  const params = [String(subject || \"\").slice(0, 120), String(provider || \"\").slice(0, 40), id];",
+    expect: "逐字相同",
+  },
+  {
+    name: "缺欄位時送 undefined（同步版送空字串）",
+    file: "v3/src/usersAsync.js",
+    from: "  const params = [String(provider || \"\").slice(0, 40), String(subject || \"\").slice(0, 120), id];",
+    to: "  const params = [String(provider).slice(0, 40), String(subject || \"\").slice(0, 120), id];",
+    expect: "缺欄位時同步版送空字串",
+  },
+  {
+    name: "沒有 id 也送 UPDATE（WHERE id = 0）",
+    file: "v3/src/usersAsync.js",
+    from: "  if (!id) return;\n  const params =",
+    to: "  if (false) return;\n  const params =",
+    expect: "id 0 直接短路",
+  },
+  {
+    name: "綁定失敗改成往外丟（社群登入會整條掛掉）",
+    file: "v3/src/usersAsync.js",
+    from: "  } catch { /* 與同步版一致：舊庫還沒加欄位時吞掉，不擋登入 */ }",
+    to: "  } catch (error) { throw error; }",
+    expect: "綁定失敗只吞掉",
+  },
+  {
+    name: "sqlite 模式改走 PG runner（不碰 runner 的契約破掉）",
+    file: "v3/src/usersAsync.js",
+    from: "  if (!isPg(options)) return linkOauthIdentitySync(sqliteHandle(), id, { provider, subject });",
+    to: "  if (false) return linkOauthIdentitySync(sqliteHandle(), id, { provider, subject });",
+    expect: "sqlite 模式走同步路徑",
+  },
+  {
+    name: "`/auth/:provider/callback` 的綁定改回同步版",
+    file: "v3/src/server.js",
+    from: "    await linkOauthIdentityAsync(user.id, { provider, subject: profile.subject });",
+    to: "    linkOauthIdentity(user.id, { provider, subject: profile.subject });",
+    expect: "路由接線",
+  },
+  {
+    name: "callback 的開通 token 改回同步版",
+    file: "v3/src/server.js",
+    from: "      const issued = await issueVerifyTokenAsync(user.id);",
+    to: "      const issued = issueVerifyToken(user.id);",
+    expect: "路由接線",
+  },
+  {
+    name: "callback 的 SMTP 讀取改回本機（PG 站會說「尚未設定寄信」）",
+    file: "v3/src/server.js",
+    from: "      if (!mailConfigured(await getStoredSmtpAsync())) {\n        const err = new Error(\"尚未設定寄信，無法完成社群註冊開通信。",
+    to: "      if (!mailConfigured(getStoredSmtp())) {\n        const err = new Error(\"尚未設定寄信，無法完成社群註冊開通信。",
+    expect: "路由接線",
+  },
+  {
+    name: "只刪 import、body 還在呼叫（量尺會誤判成 PG）",
+    file: "v3/src/server.js",
+    from: "  linkOauthIdentityAsync,\n",
+    to: "",
     expect: "路由接線",
   },
 ];
@@ -5006,6 +5091,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /self-listing-copy-async/.test(testFile) ? COPYSELF_MUTATIONS
   : /self-listing-publish-async/.test(testFile) ? PUBLISHSELF_MUTATIONS
   : /self-listing-create-async/.test(testFile) ? CREATESELF_MUTATIONS
+  : /oauth-callback-async/.test(testFile) ? OAUTHCB_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

@@ -22,6 +22,7 @@ import {
   isUserDeleted,
   listUserIds as listUserIdsSync,
   listUsers as listUsersSync,
+  linkOauthIdentity as linkOauthIdentitySync,
   restoreUser as restoreUserSync,
   setUserPassword as setUserPasswordSync,
   setUserPlan as setUserPlanSync,
@@ -106,6 +107,7 @@ export const USER_INSERT_SQL =
 export const USER_SET_PASSWORD_SQL = "UPDATE users SET password_hash = ? WHERE id = ?";
 export const USER_LAST_LOGIN_SQL = "UPDATE users SET last_login_at = ? WHERE id = ?";
 export const USER_LAST_LOGIN_READ_SQL = "SELECT last_login_at FROM users WHERE id = ?";
+export const USER_OAUTH_LINK_SQL = "UPDATE users SET oauth_provider = ?, oauth_subject = ? WHERE id = ?";
 
 // `members.js::findUserByEmail()` 的 PG 版（空字串要先短路，同步版就是這樣）。
 export async function findUserByEmailAsync(email, options = {}) {
@@ -113,6 +115,27 @@ export async function findUserByEmailAsync(email, options = {}) {
   if (!key) return null;
   return run(options, async (exec) => one((await exec(USER_BY_EMAIL_SQL, [key])).rows),
     () => findUserByEmailSync(sqliteHandle(), email) || null);
+}
+
+// `members.js::linkOauthIdentity()` 的 PG 版（第八十五批）。
+// 同步版把 provider／subject 寫進**節點本機**的 users，而 PG 模式登入讀的是 PG
+// ⇒ 社群帳號的綁定紀錄寫進本機後沒有人讀得到，而且同步版那個 try/catch 會把它吞掉，
+// 是「靜默失效」。
+// ⚠️ 這裡**刻意維持同步版「不擋登入」的語意**（失敗只吞掉，不像其他寫入 fail-closed）：
+// 綁定欄位只是加分項，社群登入不該因為它而整條失敗——同步版就是這個取捨。
+export async function linkOauthIdentityAsync(userId, { provider, subject } = {}, options = {}) {
+  const id = Number(userId) || 0;
+  if (!id) return;
+  const params = [String(provider || "").slice(0, 40), String(subject || "").slice(0, 120), id];
+  if (!isPg(options)) return linkOauthIdentitySync(sqliteHandle(), id, { provider, subject });
+  try {
+    if (options.exec) {
+      await options.exec(USER_OAUTH_LINK_SQL, params);
+      return;
+    }
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
+    await pgDriver.query(toPostgresSql(USER_OAUTH_LINK_SQL), params);
+  } catch { /* 與同步版一致：舊庫還沒加欄位時吞掉，不擋登入 */ }
 }
 
 // `personalFlags.js::ensureUser()` 的 PG 版：不存在就建（`role` 決定 admin／member）。

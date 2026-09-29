@@ -109,7 +109,8 @@ test("admin API routes exist and members payload is guarded", () => {
   assert.match(src, /publicSponsorSettings/);
   assert.match(src, /會員列表不得含密碼/);
   assert.match(src, /requireAdminApi/);
-  assert.match(src, /queueSystemMail\("welcome"/);
+  // 第八十五批：OAuth callback 也改走島嶼，`queueSystemMail("welcome")` 只剩 async 版。
+  assert.match(src, /await queueSystemMailAsync\("welcome"/);
   // 停權通知在第五十四批改走 PG 島嶼（同步版讀本機的 SMTP／範本 ⇒ PG 站寄不出去）。
   assert.match(src, /await queueSystemMailAsync\("account_deleted"/);
   assert.match(src, /app\.post\("\/api\/account\/delete"/);

@@ -56,8 +56,6 @@ import {
   listListings,
   loadProfile,
   registerUser,
-  updateUserProfile,
-  issueVerifyToken,
   confirmVerifyToken,
   confirmSuspectedMatch,
   listPublicListings,
@@ -79,7 +77,6 @@ import {
   deleteOwnAccount,
   ADMIN_DELETE_REASONS,
   getUserById,
-  findUserByEmail,
   getMailTemplates,
   getAdminMailSettings,
   getStoredSmtp,
@@ -136,9 +133,6 @@ import {
   getCrawlSources,
   saveCrawlSources,
   armMemberExternalFetch,
-  touchLastLogin,
-  resumeIdleIfNeeded,
-  linkOauthIdentity,
   publicWishRoomView,
   demandMeta,
   submitFeedback,
@@ -286,8 +280,10 @@ import {
 import {
   changeUserPasswordAsync,
   defaultUserIdAsync,
+  findUserByEmailAsync,
   listUserIdsAsync,
   getUserByIdAsync,
+  linkOauthIdentityAsync,
   resumeIdleIfNeededAsync,
   touchLastLoginAsync,
   updateUserProfileWithLegalAsync,
@@ -1388,15 +1384,10 @@ function cookieNamed(req, name) {
   return "";
 }
 
-function afterMemberSession(user) {
-  const id = Number(user?.id) || 0;
-  if (!id) return;
-  touchLastLogin(id);
-  resumeIdleIfNeeded(id);
-}
-
-// `afterMemberSession()` 的 PG 版：登入後的兩個副作用（記登入時間、恢復閒置暫停）。
-// 同步版在 PG 模式會把「最後登入時間」寫進本機、並讀本機的會員設定。
+// 登入後的兩個副作用（記登入時間、恢復閒置暫停）。
+// 第八十五批之後**只剩 PG 版**：`afterMemberSession()` 同步版最後一個呼叫端（OAuth callback）
+// 已改走島嶼，留著會是「沒有人呼叫、卻把同步 `touchLastLogin`／`resumeIdleIfNeeded` 拉進
+// 檔案」的死碼，所以連同那兩個同步 import 一起移除。
 async function afterMemberSessionAsync(user, options = {}) {
   const id = Number(user?.id) || 0;
   if (!id) return;
@@ -1525,7 +1516,7 @@ app.get("/auth/:provider/callback", async (req, res) => {
       clientId: cfg.clientId,
       clientSecret: cfg.clientSecret,
     });
-    let user = findUserByEmail(profile.email);
+    let user = await findUserByEmailAsync(profile.email);
     const signup = planOauthSignup({ user, accept: state.accept === true });
     const oauthIsNewRegister = signup.action === "register";
     if (signup.action === "closed") {
@@ -1538,12 +1529,12 @@ app.get("/auth/:provider/callback", async (req, res) => {
       return;
     }
     if (signup.action === "register") {
-      if (!mailConfigured(getStoredSmtp())) {
+      if (!mailConfigured(await getStoredSmtpAsync())) {
         const err = new Error("尚未設定寄信，無法完成社群註冊開通信。請聯絡管理員到後台填 SMTP。");
         err.status = 503;
         throw err;
       }
-      user = registerUserWithConsents({
+      user = await registerUserWithConsentsAsync({
         email: profile.email,
         password: randomOauthPassword(),
         acceptDisclaimer: true,
@@ -1552,12 +1543,12 @@ app.get("/auth/:provider/callback", async (req, res) => {
         emailVerified: false,
       });
     }
-    linkOauthIdentity(user.id, { provider, subject: profile.subject });
+    await linkOauthIdentityAsync(user.id, { provider, subject: profile.subject });
     if (!String(user.nickname || "").trim()) {
       const nick = nicknameFromOauthName(profile.name);
       if (nick) {
         try {
-          updateUserProfile(user.id, { nickname: nick });
+          await updateUserProfileWithLegalAsync(user.id, { nickname: nick });
           user = { ...user, nickname: nick };
         } catch {
           // 顯示名不合暱稱規則就略過，不擋開通信
@@ -1565,21 +1556,21 @@ app.get("/auth/:provider/callback", async (req, res) => {
       }
     }
     if (planOauthSession(user, { verified: isEmailVerified(user) }).action === "pending_verify") {
-      if (!mailConfigured(getStoredSmtp())) {
+      if (!mailConfigured(await getStoredSmtpAsync())) {
         const err = new Error("尚未設定寄信，無法寄出開通信。請改用信箱註冊或聯絡管理員。");
         err.status = 503;
         throw err;
       }
-      const issued = issueVerifyToken(user.id);
-      queueSystemMail("welcome", user.email, {
+      const issued = await issueVerifyTokenAsync(user.id);
+      await queueSystemMailAsync("welcome", user.email, {
         verifyUrl: `${base}/verify-email?token=${encodeURIComponent(issued.token)}`,
       });
       res.setHeader("Set-Cookie", oauthStateCookie(req, "", { clear: true }));
       res.redirect(303, `/login.html?oauth=pending&email=${encodeURIComponent(user.email)}`);
       return;
     }
-    afterMemberSession(user);
-    if (oauthIsNewRegister) attributeShare(req, user.id, "signup");
+    await afterMemberSessionAsync(user);
+    if (oauthIsNewRegister) await attributeShareAsync(req, user.id, "signup");
     res.setHeader("Set-Cookie", [
       oauthStateCookie(req, "", { clear: true }),
       sessionCookie(req, user.email),

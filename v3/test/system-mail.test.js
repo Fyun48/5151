@@ -89,7 +89,8 @@ test("change password rejects the current password and stores the new one", () =
 
 test("server register, change-password, and sponsor patch queue system mail", () => {
   const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(src, /queueSystemMail\("welcome"/);
+  // 第八十五批：最後一個同步的 `queueSystemMail("welcome")`（OAuth callback）也改走島嶼了。
+  assert.match(src, /await queueSystemMailAsync\("welcome"/);
   // 註冊確認的歡迎信在第五十三批改走 PG 島嶼（同步版讀本機的 SMTP／範本 ⇒ PG 站寄不出去）。
   assert.match(src, /await queueSystemMailAsync\("verified_welcome"/);
   assert.match(src, /queueSystemMail\("verify_expired"/);
