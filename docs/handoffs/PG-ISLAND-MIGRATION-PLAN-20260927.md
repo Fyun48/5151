@@ -3293,6 +3293,56 @@ done
 > `POST /api/feedback`（`createFeedbackWithOutbox`／`enqueueFeedbackOutbox`）、
 > `POST /api/admin/crm/from-feedback/:id`、以及最難的 `POST /api/ops/commands/apply`。
 
+## 二之負二十八、2026-09-28 第五十八批：回饋（feedback）送出／列表／更新搬上 PG
+
+### 58.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `POST  /api/feedback` | `submitFeedbackAsync`（**同一個交易**寫 feedback ＋ 初始 outbox 事件） |
+| `GET   /api/admin/feedback` | `feedbackStatsAsync` ＋ `listFeedbackAsync` ＋ `deliveryControlAsync` |
+| `PATCH /api/admin/feedback/:id` | `updateFeedbackAsync`（＋可選的 CRM 連結，仍走同步 hook） |
+
+尺規：缺口 **46 → 43**、PG **222 → 225**、MIXED **42 → 39**（SQLite 4 不變）。
+
+### 58.2 🚨 這一包的核心是那個不變式
+
+`feedback.js` 寫得很清楚：**「一筆成功寫入的 feedback ⇔ 一筆初始 outbox 事件」**
+（同步版用 `BEGIN IMMEDIATE` 包住兩句 INSERT）。PG 版**必須用真的交易**
+（`pgDriver.withTransaction`）——`pgDriver.query()` 每句都是自己的隱含交易，
+分兩句寫就會出現「回饋進去了、事件沒進去」的半套狀態，而那個事件是 Ops **唯一的來源**。
+測試用一個「outbox 一定失敗」的觸發器把回滾釘死（`feedback` 那一列必須消失）。
+
+### 58.3 這一包的四個坑
+
+1. **`$n` 可以重複引用同一個參數**：`FEEDBACK_INSERT_SQL` 是 `VALUES (…, $6, $6)`。
+   離線夾具若把 `$n` 一律換成 `?`，佔位值會少一個（症狀是 `NOT NULL constraint failed: updated_at`）。
+   夾具要**依索引重排參數**（`translate()` 回 `[sql, orderedParams]`）。
+2. **`normalizeFeedbackContext()` 只留白名單**（`route`／`view`／`role`／`plan`／`version`／`viewport`／
+   `ua`／`lang`／`q`／`filter`／`errors`）。測試第一版用 `{ path: … }` ⇒ 被丢掉，
+   斷言 `payload.context.path` 是 undefined。**這不是 bug，是政策**：情境資料刻意只留受控欄位。
+3. **PG 的聚合回傳 bigint 字串，SQLite 回數字**：夾具要模擬 PG 的型別
+   （`asPgRow()` 把 `n` 轉字串），否則「忘記 `Number()`」的變異永遠殺不死（實測存活過一次）。
+4. **更新後重讀要 join users**：`decorateFeedback()` 的 email／nickname 來自 `users`；
+   只 `SELECT * FROM feedback` 會讓後台顯示空白（與同步版行為不同）。
+   另外 `updated_at` 是「當下時間」，兩個 driver 各呼一次本來就會差幾毫秒 ⇒ parity 比對要排除它，
+   但要另外確認兩邊都真的更新了。
+
+### 58.4 測試
+
+- `v3/test/feedback-async.test.js`（**9 項全綠**）：送出（PG 兩列 ＋ 與同步版逐欄比對 payload）、
+  **不變式（outbox 失敗 ⇒ feedback 回滾）**、honeypot、內容驗證與洪水限制（訊息與同步版相同）、
+  列表（篩選／排序／join 出來的 email、nickname、context 形狀）、統計（bigint → number）、
+  更新（只改帶到的欄位、404、備註截斷、noop 不動 `updated_at`）、exec 兩種形狀、sqlite 模式。
+  變異 **8 條全殺**。
+- `v3/test/feedback-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：真 PG 上送出（兩列 ＋
+  不變式）、**用一句會失敗的 SQL 逼出回滾**（feedback 不得留下）、列表／統計／更新、
+  以及 outbox 的 `idempotency_key` 唯一鍵真的擋得住第二次。
+
+> 📌 **尚未做完**：`POST /api/admin/crm/from-feedback/:id`（`createCaseFromFeedback` 的
+> `assertCrmOpen`／猜聯絡人／建 case 那一串）與 `POST /api/ops/commands/apply`
+> （8 個卡點、`handleApplyRequest` 跨多表）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3303,13 +3353,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十七批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十八批）** |
 |---|---:|---:|
 | SQLite | 95 | **4** |
-| MIXED | — | **42** |
+| MIXED | — | **39** |
 | 無直接DB | — | **20** |
-| PG | 22 | **222** |
-| **缺口（SQLite＋MIXED）** | — | **46** |
+| PG | 22 | **225** |
+| **缺口（SQLite＋MIXED）** | — | **43** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

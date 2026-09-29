@@ -485,6 +485,14 @@ import {
   startDeliveryLoopAsync,
 } from "./opsDeliveryAsync.js";
 import { compactSentOutboxPayloadsAsync, outboxCapacityAlertAsync } from "./feedbackOutboxAsync.js";
+// 回饋（feedback）的 PG 島嶼：送出時「feedback ＋ 初始 outbox 事件」必須在同一個交易裡，
+// 否則會出現「回饋進去了、事件沒進去」的半套狀態（Ops 唯一來源就是那個事件）。
+import {
+  feedbackStatsAsync,
+  listFeedbackAsync,
+  submitFeedbackAsync,
+  updateFeedbackAsync,
+} from "./feedbackAsync.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
   TICK_BUDGET_MS,
@@ -2331,18 +2339,26 @@ app.get("/api/admin/wish-offer-reports", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/feedback", requireAdminApi, (req, res) => {
-  res.json({
-    ...feedbackMeta(),
-    stats: getFeedbackStats(),
-    items: listFeedbackItems({ status: req.query?.status, kind: req.query?.kind }),
-    ops_delivery: getOpsDeliveryControl(),
-  });
+app.get("/api/admin/feedback", requireAdminApi, async (req, res) => {
+  try {
+    res.json({
+      ...feedbackMeta(),
+      // 名單、統計與遞送狀態三者都必須來自 PG：同步版會顯示「別的節點送的回饋 0 筆」。
+      stats: await feedbackStatsAsync(),
+      items: await listFeedbackAsync({ status: req.query?.status, kind: req.query?.kind }),
+      ops_delivery: await deliveryControlAsync(),
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
-app.patch("/api/admin/feedback/:id", requireAdminApi, (req, res) => {
+app.patch("/api/admin/feedback/:id", requireAdminApi, async (req, res) => {
   try {
-    res.json(updateFeedbackItem(req.params.id, req.body || {}));
+    const row = await updateFeedbackAsync(req.params.id, req.body || {});
+    // CRM 連結是可選的（同步版也是 try/catch 後忽略）：失敗不該擋住狀態更新。
+    try { enqueueCrmFromFeedback(opsDeliveryDb(), Number(req.params.id) || 0); } catch { /* 可選 */ }
+    res.json(row);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
@@ -2921,7 +2937,7 @@ app.get("/api/feedback/meta", (_req, res) => {
   res.json(feedbackMeta());
 });
 
-app.post("/api/feedback", (req, res) => {
+app.post("/api/feedback", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -2933,7 +2949,7 @@ app.post("/api/feedback", (req, res) => {
       ...(body.context && typeof body.context === "object" ? body.context : {}),
       role: session.role || "member",
     };
-    res.json(submitFeedback(session.userId, { ...body, context }));
+    res.json(await submitFeedbackAsync(session.userId, { ...body, context }));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
