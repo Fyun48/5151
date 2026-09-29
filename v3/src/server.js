@@ -63,7 +63,6 @@ import {
   getUserById,
   findUserByEmail,
   getMailTemplates,
-  changeUserPassword,
   getAdminMailSettings,
   getStoredSmtp,
   saveAdminMailSettings,
@@ -274,6 +273,7 @@ import {
 // `defaultUserIdAsync` 特別重要：沒有 session 時同步版會在**本機**建一個 admin 帳號、
 // 回傳**本機** id，之後拿它去讀 PG 設定就會跨店錯位。
 import {
+  changeUserPasswordAsync,
   defaultUserIdAsync,
   getUserByIdAsync,
   resumeIdleIfNeededAsync,
@@ -4053,7 +4053,7 @@ app.get("/api/member-mail", async (req, res) => {
   }
 });
 
-app.post("/api/change-password", (req, res) => {
+app.post("/api/change-password", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -4061,8 +4061,9 @@ app.post("/api/change-password", (req, res) => {
       err.status = 401;
       throw err;
     }
-    changeUserPassword(session.userId, req.body?.currentPassword, req.body?.newPassword);
-    queueSystemMail("password_changed", session.email);
+    // 密碼必須寫進「登入讀的那一份」（`verifyLoginAsync` 讀 PG）；通知則走 async 的寄信佇列。
+    await changeUserPasswordAsync(session.userId, req.body?.currentPassword, req.body?.newPassword);
+    await queueSystemMailAsync("password_changed", session.email);
     res.json({ ok: true });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message || "變更密碼失敗" });

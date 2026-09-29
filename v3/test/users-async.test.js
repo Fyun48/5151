@@ -280,3 +280,69 @@ test("非 postgres：新入口全部走同步路徑（完全不碰 exec）", asy
   assert.equal(await usersAsync.touchLastLoginAsync(MEMBER.id, {}, sqlite), true);
   assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
 });
+
+// ---------------------------------------------------------------------------
+// 第七十批：`changeUserPasswordAsync()`（`POST /api/change-password`）。
+// PG 模式下這一條原本只寫本機 SQLite，而登入讀的是 PG ⇒ 使用者改了密碼卻只能用舊密碼登入。
+// ---------------------------------------------------------------------------
+
+const NEW_PASSWORD = "newpass1234";
+const OLD_PASSWORD = "oldpass1234";
+
+test("改密碼：PG 分支驗的是 PG 的雜湊（本機那一份不同也不影響）", async () => {
+  const [db, exec] = resetWorld();
+  const password = await import("../src/password.js");
+  const goodHash = password.hashPassword(OLD_PASSWORD);
+  // PG 上是真正的舊密碼；本機刻意放**不同**的雜湊（PG 模式的實況：本機是舊資料）。
+  exec.raw.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(goodHash, UID);
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(password.hashPassword("something-else"), UID);
+
+  const result = await usersAsync.changeUserPasswordAsync(UID, OLD_PASSWORD, NEW_PASSWORD, { ...PG, exec, strict: true });
+  assert.equal(result?.id, UID, "成功時要回 publicUser（與同步版同形狀）");
+  const pgHash = exec.raw.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash;
+  assert.equal(password.verifyPassword(NEW_PASSWORD, pgHash), true, "PG 上的雜湊必須換成新密碼");
+  assert.equal(password.verifyPassword(OLD_PASSWORD, pgHash), false, "舊密碼必須失效");
+  const localHash = db.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash;
+  assert.equal(password.verifyPassword(NEW_PASSWORD, localHash), false, "PG 模式不得改動本機那一份（那是無聲的分歧）");
+});
+
+test("改密碼：錯誤情境的訊息與狀態碼都與同步版相同", async () => {
+  const [db, exec] = resetWorld();
+  const password = await import("../src/password.js");
+  const hash = password.hashPassword(OLD_PASSWORD);
+  for (const h of [db, exec.raw]) h.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, UID);
+
+  const cases = [
+    [UID, "wrong-password", NEW_PASSWORD],
+    [UID, OLD_PASSWORD, OLD_PASSWORD],
+    [UID, OLD_PASSWORD, "short"],
+    [UID + 999, OLD_PASSWORD, NEW_PASSWORD],
+  ];
+  for (const [uid, current, next] of cases) {
+    let syncErr = null;
+    try { dbMod.changeUserPassword(uid, current, next); } catch (e) { syncErr = e; }
+    assert.ok(syncErr, `同步版必須擋下：${current} → ${next}`);
+    await assert.rejects(
+      () => usersAsync.changeUserPasswordAsync(uid, current, next, { ...PG, exec, strict: true }),
+      (e) => e.message === syncErr.message && e.status === syncErr.status,
+      `PG 版必須丟同一個錯誤：${syncErr.message}`,
+    );
+  }
+  assert.equal(password.verifyPassword(OLD_PASSWORD, exec.raw.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash),
+    true, "被擋下時不得改動雜湊");
+});
+
+test("改密碼：sqlite 模式回退同步版，且不碰 PG 夾具", async () => {
+  const [db, exec] = resetWorld();
+  const password = await import("../src/password.js");
+  const hash = password.hashPassword(OLD_PASSWORD);
+  for (const h of [db, exec.raw]) h.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, UID);
+  const pgBefore = exec.raw.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash;
+
+  const result = await usersAsync.changeUserPasswordAsync(UID, OLD_PASSWORD, NEW_PASSWORD, { driver: "sqlite", exec });
+  assert.equal(result?.id, UID);
+  assert.equal(password.verifyPassword(NEW_PASSWORD, db.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash), true,
+    "sqlite 模式要寫本機那一份");
+  assert.equal(exec.raw.prepare("SELECT password_hash FROM users WHERE id = ?").get(UID).password_hash, pgBefore,
+    "sqlite 模式不得碰 PG 夾具");
+});

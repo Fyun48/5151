@@ -3893,6 +3893,35 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   狀態鍵都與同步版相同（第二次呼叫要從 PG 的游標接續）、**單列失敗要吞掉並計入 errors**。
 - 變異 **4 條全殺**（新增 `SAMEBACKFILL_MUTATIONS`）。
 
+## 二之負四十、2026-09-29 第七十批：改密碼搬上 PG
+
+### 70.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `POST /api/change-password` | `changeUserPasswordAsync()`（新，`usersAsync.js`） | MIXED → **PG** |
+
+尺規：缺口 **24 → 23**、PG **244 → 245**、MIXED **21 → 20**（SQLite 3、無直接DB 20 不變）。
+
+🚨 **這是活的正确性問題，不只是收尾債**：這一條原本只寫本機 SQLite，而**登入讀的是 PG**
+（`verifyLoginAsync`）⇒ 使用者在 PG 站改了密碼，新密碼根本沒生效（只能用舊密碼登入）。
+另外 `queueSystemMail()`（同步）會拉進本機的 `getMailTemplates`／`getStoredSmtp`，一併改成
+既有的 `queueSystemMailAsync()`。
+
+### 70.2 做法
+
+`usersAsync.changeUserPasswordAsync()`：PG 分支是
+「`USER_BY_ID_SQL` 讀 PG → `verifyPassword()` → `validatePassword()` → 不能與目前密碼相同 →
+`USER_SET_PASSWORD_SQL` 寫 PG → 回 `publicUser()`」，**三支驗證純函式與錯誤訊息／狀態碼逐字沿用**
+`members.js::changeUserPassword()`（不能有第二份密碼政策）；sqlite 分支延遲載入 `db.js` 的同步版。
+
+### 70.3 測試
+
+- `v3/test/users-async.test.js`（**16 項全綠**，新增 3 條）：
+  **PG 分支驗的是 PG 的雜湊**（本機刻意放不同的雜湊——PG 模式的實況——仍然成功，而且本機那一份
+  不得被改動）、四種錯誤情境的訊息與狀態碼都與同步版相同且雜湊不動、sqlite 模式回退且不碰 PG 夾具。
+- 變異 **13 條全殺**（`USERS_MUTATIONS` 新增 3 條：只寫本機／不比對目前密碼／不擋新舊相同）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3903,13 +3932,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十九批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **21** |
+| MIXED | — | **20** |
 | 無直接DB | — | **20** |
-| PG | 22 | **244** |
-| **缺口（SQLite＋MIXED）** | — | **24** |
+| PG | 22 | **245** |
+| **缺口（SQLite＋MIXED）** | — | **23** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

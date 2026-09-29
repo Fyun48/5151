@@ -3298,6 +3298,28 @@ const NWRITE_MUTATIONS = [
 // 使用者讀取（`getUserById`）PG 分支的變異集（v3/test/users-async.test.js）。
 const USERS_SRC = "v3/src/usersAsync.js";
 const USERS_MUTATIONS = [
+  {
+    // 第七十批：PG 模式下改密碼只寫本機 SQLite，而登入讀 PG ⇒ 新密碼根本沒生效。
+    name: "改密碼只寫本機（PG 站改了密碼仍只能用舊的登入）",
+    file: "v3/src/usersAsync.js",
+    from: "    await exec(USER_SET_PASSWORD_SQL, [hashPassword(next), id]);",
+    to: "    void USER_SET_PASSWORD_SQL; void hashPassword; void next;",
+    expect: "改密碼：PG 分支驗的是 PG 的雜湊",
+  },
+  {
+    name: "改密碼不比對目前密碼（任何人都能改）",
+    file: "v3/src/usersAsync.js",
+    from: "    if (!verifyPassword(currentPassword, user.password_hash)) {\n      throw Object.assign(new Error(\"目前密碼不對\"), { status: 400 });\n    }\n",
+    to: "",
+    expect: "改密碼：錯誤情境",
+  },
+  {
+    name: "改密碼不擋『新密碼與目前相同』",
+    file: "v3/src/usersAsync.js",
+    from: "    if (next === String(currentPassword || \"\")) {\n      throw Object.assign(new Error(\"新密碼不能跟目前密碼一樣\"), { status: 400 });\n    }\n",
+    to: "",
+    expect: "改密碼：錯誤情境",
+  },
   // ⚠️ 刻意**沒有**「查不到人回 undefined」這一條：`one()` 本身就保證回 `null`，
   // 所以在它後面加 `|| null` 是**等價的**（拿掉測試照樣過）。那個多餘的守衛已從原始碼移除。
   {
