@@ -3517,6 +3517,66 @@ const PUBLISHSELF_MUTATIONS = [
   },
 ];
 
+// 建立站內刊登（v3/test/self-listing-create-async.test.js，第八十四批）。
+const CREATESELF_MUTATIONS = [
+  {
+    name: "建立改回同步版（新刊登不在站上的清單裡）",
+    file: "v3/src/selfListingsAsync.js",
+    from: '  if (!isPg(options)) {\n    const { createSelfListing } = await import("./selfListings.js");',
+    to: '  if (true) {\n    const { createSelfListing } = await import("./selfListings.js");',
+    expect: "建立：PG 版與同步版的落地欄位相同",
+  },
+  {
+    name: "可刊登條件不算停權（PG 停權的人照樣建立）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  if (Number.isFinite(banned) && banned > at) {",
+    to: "  if (false) {",
+    expect: "可刊登條件讀 PG",
+  },
+  {
+    name: "可刊登條件不算同時上限",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  if (open >= SELF_MAX_OPEN) {",
+    to: "  if (false) {",
+    expect: "可刊登條件讀 PG",
+  },
+  {
+    name: "新刊登不寫進 PG",
+    file: "v3/src/selfListingsAsync.js",
+    from: "  await run(SELF_OPEN_INSERT_SQL, selfOpenInsertParams({",
+    to: "  void selfOpenInsertParams; if (false) await run(SELF_OPEN_INSERT_SQL, selfOpenInsertParams({",
+    expect: "建立：PG 版與同步版的落地欄位相同",
+  },
+  {
+    name: "冪等鍵不查（同鍵會建出兩則）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "      const hit = rowsOf(await run(SELF_CREATE_IDEMPOTENCY_HIT_SQL, [uid, key]))[0];",
+    to: "      const hit = null;",
+    expect: "冪等鍵",
+  },
+  {
+    name: "同鍵不同內容不擋（覆蓋成新內容）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "        if (String(hit.payload_hash) !== payloadHash) {\n          throw httpError(\"同一操作不能改成不同內容\", 409, \"IDEMPOTENCY_CONFLICT\");\n        }",
+    to: "        void payloadHash;",
+    expect: "冪等鍵",
+  },
+  {
+    name: "寫入失敗無條件回退本機（建立看起來成功、站上沒有）",
+    file: "v3/src/selfListingsAsync.js",
+    from: "    if (!sqliteFallbackAllowed(options, { write: true })) throw error;\n    const { createSelfListing } = await import(\"./selfListings.js\");",
+    to: "    const { createSelfListing } = await import(\"./selfListings.js\");",
+    expect: "寫入是 fail-closed",
+  },
+  {
+    name: "`POST /api/self-listings` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    const created = await createSelfListingAsync(session.userId, body, {",
+    to: "    const created = createSelfListing(session.userId, body); void (({",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4945,6 +5005,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /self-listing-matches-async/.test(testFile) ? SELFLISTING_MATCHES_MUTATIONS
   : /self-listing-copy-async/.test(testFile) ? COPYSELF_MUTATIONS
   : /self-listing-publish-async/.test(testFile) ? PUBLISHSELF_MUTATIONS
+  : /self-listing-create-async/.test(testFile) ? CREATESELF_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

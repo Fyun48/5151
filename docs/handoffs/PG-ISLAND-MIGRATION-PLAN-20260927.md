@@ -4511,6 +4511,44 @@ PG 模式下整條配對鏈讀的是**節點本機**：
   3. **驗證類測試要先跑**：`seedWorld()` 只重建本機，PG 夾具是測試開始時的快照 ⇒
      同一條測試裡先公開、再拿舊夾具驗驗證錯誤，會看到 409（「不是待刊登的草稿」）而不是 400。
 
+## 二之負五十四、2026-09-29 第八十四批：建立並公開站內刊登（`POST /api/self-listings`）
+
+### 84.1 範圍與投報率
+
+同步版整條讀寫節點本機：可刊登條件（`users` 的停權／註冊時間）、同時公開數、草稿列、
+夾具 registry、頭像／條件值與配對候選 ⇒ PG 模式下新刊登落在這台節點，而**站上的清單讀 PG
+⇒ 剛刊登的物件不在站上**（停權與註冊時間也用本機那一份判斷）。
+
+尺規：**MIXED（10 卡點）→ PG**；缺口總數 **4 → 3**（`PG` 264 → **265**、`MIXED` 4 → **3**）。
+
+### 84.2 做法
+
+- `v3/src/selfListings.js`：建立（公開）的兩句 SQL 抽成 `SELF_OPEN_INSERT_SQL`／
+  `SELF_OPEN_UPDATE_SQL` ＋ `selfOpenInsertParams()`／`selfOpenUpdateParams()`；比對更新與回讀
+  抽成 `MATCH_SET_SQL`／`LISTING_BY_POST_ID_SQL`；冪等鍵的兩句抽成
+  `SELF_CREATE_IDEMPOTENCY_HIT_SQL`／`_INSERT_SQL`；並匯出 `normalizePhotoUrl()`／
+  `selfSearchKey()`／`selfSourceKey()`。
+- `v3/src/stage1FixtureRegistry.js`：`REGISTRY_ACTIVE_USER_SQL`／`REGISTRY_INSERT_SQL` 匯出
+  （夾具 registry 的「有效使用者」定義只有一份）。
+- `v3/src/selfListingsAsync.js`：`isActiveRegistryFixtureUserAsync()`／
+  `fixtureNamespaceFromIsolationAsync()`／`isFixtureMaturityAuthorizedAsync()`／
+  `registerFixtureRowAsync()`／`insertOpenSelfListingAsync()`／`createSelfListingAsync()`
+  （含冪等鍵：同鍵同內容回同一則、不同內容 409 `IDEMPOTENCY_CONFLICT`）。
+- `v3/src/server.js`：路由改 async，素材所有權用 `assertOwnsMemberMediaUrlsAsync()`、
+  分享歸因改用既有的 `attributeShareAsync()`，配對候選以 `matchCandidatesAsync` 注入。
+
+### 84.3 測試
+
+- `v3/test/self-listing-create-async.test.js`（**6 項全綠**，新檔）：落地欄位逐欄位比對
+  （狀態 `open`、到期日在未來、一般建立不帶夾具命名空間）、七種參數驗證的錯誤形狀逐字相同、
+  **可刊登條件讀 PG**（PG 停權 403 而同步版照樣建立得出來／同時上限）、冪等鍵（同鍵同內容回同一則、
+  同鍵不同內容 409，兩個 driver 一致）、寫入 fail-closed、路由接線（含 import 斷言）。
+- `v3/test/self-listing-create-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上新刊登
+  落地（狀態／標題／租金／`contact_uid`／到期日）、**同步版不得在 PG 多出一列**、
+  PG 停權 403、冪等鍵。
+- **變異 8 條全殺**（`CREATESELF_MUTATIONS`）。
+- 踩點：`getSelfListing()` 回的是**裝飾過的視圖**（沒有 `self_status`）⇒ 斷言狀態要直接查那一列。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4521,13 +4559,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十三批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十四批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **4** |
+| MIXED | — | **3** |
 | 無直接DB | — | **20** |
-| PG | 22 | **264** |
-| **缺口（SQLite＋MIXED）** | — | **4** |
+| PG | 22 | **265** |
+| **缺口（SQLite＋MIXED）** | — | **3** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
