@@ -4635,6 +4635,64 @@ PG 模式下整條配對鏈讀的是**節點本機**：
   ——`import591.js`／`import5168.js` 的解析器自己就丟 `PARSE_FAILED`，抵達島嶼那一行之前
   就結束了（同步版也有同一行，屬對稱的防守性重複）⇒ 依規則移除並改釘 provider 欄位。
 
+## 二之負五十七、2026-09-29 第八十七批：建立許願房提案（最後一條，缺口歸零）
+
+### 87.1 範圍與投報率
+
+`POST /api/self-listings/:id/matches/:wishRef/offers` 原本走 `db.js:createWishOfferFor()` →
+`wishOffers.js:createWishOffer()`：刊登列（`getSelfRow`）、許願房、封鎖名單、每日上限、既有提案、
+冪等鍵與事件全部讀寫**節點本機** ⇒ PG 模式下「別的節點看得到的刊登／許願房」一律查不到
+（亂噴 409／429），而且提案寫進本機後站上（讀 PG）看不到。
+
+尺規：**MIXED（9 卡點）→ PG**；缺口總數 **1 → 0**（`PG` 267 → **268**、`MIXED` 1 → **0**）。
+
+### 87.2 做法
+
+- `v3/src/wishOffers.js`：抽出提案建立路徑的共用 SQL／純函式——`isUniqueViolation()`、
+  `WISH_BY_PUBLIC_REF_SQL`、`PENDING_OFFER_SQL`、`ACCEPTED_OFFER_SQL`、`LAST_TERMINAL_OFFER_SQL`、
+  `OWNER_OFFERS_SINCE_SQL`、`LISTING_OFFERS_SINCE_SQL`、`OFFER_INSERT_SQL` ＋ `offerInsertParams()`、
+  `OFFER_BY_ID_SQL`、`IDEMPOTENCY_BY_KEY_SQL`／`_INSERT_SQL` ＋ `idempotencyParams()`。
+- `v3/src/wishOffersAsync.js`：`assertCreateOfferGatesAsync()`／`insertPendingOfferAsync()`／
+  `createWishOfferAsync()`。順序與同步版逐條相同（啟用開關 → 端點節流 → 冪等鍵格式 → 過期清理 →
+  讀刊登／許願房 → 冪等回放 → 閘門 → INSERT pending → 冪等鍵 → `offer_created` 事件 →
+  `tenant_offer_received` 通知 → `publicOfferView` 投影）。
+  - 冪等鍵**先查再寫**，撞 PK 也回同一筆（PG 一撞唯一鍵整筆交易就 aborted，不能靠例外）。
+  - 併發由 PG 的兩個**部分唯一索引**（`idx_wish_offers_pending_unique`／`_active_unique`）擋住，
+    撞到就回既有那筆（＝同步版 catch UNIQUE 的語意）。
+  - 建立前先 `getRentalCatalogAsync()` ＋ `getWishConditionsAsync()`：等同
+    `db.js:hydrateRentalMarketplace()`，否則 `liveMatchEligible()` 會拿**本機過期**的目錄判斷配對。
+- `v3/src/wishOffersAsync.js` 不再自己複寫 `OFFER_BY_ID_SQL`／`LAST_TERMINAL_OFFER_SQL`，
+  改成 import＋轉出（同一句 SQL 只有一份）。
+- `v3/src/server.js`：路由改 async，提案走島嶼、分享歸因改 `attributeShareAsync()`，
+  移除同步 `createWishOfferFor` import。
+
+### 87.3 測試
+
+- `v3/test/wish-offer-create-async.test.js`（**11 項全綠**，新檔）：PG 落地與投影與同步版逐鍵相同
+  （`offer_ref` 是隨機 token，只投影掉它）、事件與冪等鍵落地、本機不被寫、冪等重放、換目標 409、
+  已有 pending 回同一筆、非擁有者 404、屋主停權 409、刊登已下架 409、
+  **建立前把 PG 的旗標／目錄收斂進行程內快取**、每日上限 429、寫入 fail-closed、路由接線。
+- `v3/test/wish-offer-create-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  `INSERT … RETURNING id`、提案／`offer_created` 事件／冪等鍵三張表都落地、冪等重放回同一筆、
+  本機不被寫；動到的 `settings`（旗標／目錄）先記原值、收尾還原。
+- **變異 14 條全殺**（`OFFERCREATE_MUTATIONS`）。
+- 既有來源文字測試同步更新：`v3/test/rental-match-ui.test.js` 的 `createWishOfferFor` 斷言改 async。
+- 踩點一：`saveRentalMarketplaceFlags()` **只換 self-listing 快取**，不會動提案快取
+  ⇒ 離線夾具要另外 `offers.setWishOfferHydrate()`，否則 `assertWishOfferEnabled()` 直接丟
+  「房源提案尚未開放」（同步版的 `hydrateRentalMarketplace()` 才是六個快取一起換）。
+- 踩點二：`export { X } from "./y.js"` **不會**建立本地綁定 ⇒ 只轉出會讓 `X is not defined`
+  （offline 第一版就是這樣紅的）。
+- 踩點三：許願房是「一人同時只能有一則公開的」，測試要造第二則許願房時必須換一個房客。
+
+### 87.4 缺口歸零
+
+```
+node v3/scripts/route-data-map.mjs
+```
+
+288 條入口：**PG 268／無直接DB 20／MIXED 0／SQLite 0**。也就是說，所有直接碰 DB 的路由
+都已經是 driver-aware 的 PG 島嶼；剩下的 20 條是沒有直接 DB 存取的入口（靜態檔、manifest 等）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4645,13 +4703,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十六批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十七批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **1** |
+| MIXED | — | **0** |
 | 無直接DB | — | **20** |
-| PG | 22 | **267** |
-| **缺口（SQLite＋MIXED）** | — | **1** |
+| PG | 22 | **268** |
+| **缺口（SQLite＋MIXED）** | — | **0** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

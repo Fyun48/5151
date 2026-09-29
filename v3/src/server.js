@@ -165,7 +165,6 @@ import {
   ownerListingMatches,
   rentalMatchAdminRules,
   rentalMatchOwnerMeta,
-  createWishOfferFor,
   getWishOfferFor,
   reportWishOfferFor,
   runWishOfferExpiryWorkerTick,
@@ -319,6 +318,7 @@ import {
 import {
   acceptWishOfferAsync,
   blockOwnerFromOfferAsync,
+  createWishOfferAsync,
   declineWishOfferAsync,
   listAdminOfferReportsAsync,
   listMyBlocksAsync,
@@ -3052,18 +3052,20 @@ function sendOfferError(res, error) {
   res.status(error.status || 400).json(body);
 }
 
-app.post("/api/self-listings/:id/matches/:wishRef/offers", (req, res) => {
+app.post("/api/self-listings/:id/matches/:wishRef/offers", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    const created = createWishOfferFor(session.userId, req.params.id, req.params.wishRef, {
+    // PG 島嶼（第八十七批）：刊登列、許願房、封鎖名單、每日上限與提案本體都要讀寫 PG，
+    // 否則 PG 站只查得到本機那幾筆（別的節點的刊登／許願房一律 409），提案也寫進本機。
+    const created = await createWishOfferAsync(session.userId, req.params.id, req.params.wishRef, {
       idempotencyKey: req.body?.idempotency_key || req.get("idempotency-key"),
       actorKey: `owner:${session.userId}`,
     });
-    attributeShare(req, session.userId, "offer");
+    await attributeShareAsync(req, session.userId, "offer");
     res.json(created);
   } catch (error) {
     sendOfferError(res, error);

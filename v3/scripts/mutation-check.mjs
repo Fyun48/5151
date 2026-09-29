@@ -3764,6 +3764,109 @@ const IMPORTSTART_MUTATIONS = [
   },
 ];
 
+// 建立許願房提案（`POST /api/self-listings/:id/matches/:wishRef/offers`，第八十七批；缺口歸零）。
+// 重點：提案／事件／冪等鍵都要落在 PG，閘門與每日上限要讀 PG，而且寫入不得 fail-open。
+const OFFERCREATE_MUTATIONS = [
+  {
+    name: "提案不寫 PG（PG 站上看不到剛送的提案）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "    const res = await run(`${OFFER_INSERT_SQL} RETURNING id`, offerInsertParams({",
+    to: "    const res = { rows: [] }; void OFFER_INSERT_SQL; if (false) await run(`${OFFER_INSERT_SQL} RETURNING id`, offerInsertParams({",
+    expect: "PG 建立：落地與投影",
+  },
+  {
+    name: "提案的 tenant 寫成屋主自己（房客收不到）",
+    file: "v3/src/wishOffers.js",
+    from: "    Number(wishRow.user_id),\n    idempotencyKey || null,",
+    to: "    Number(ownerUserId),\n    idempotencyKey || null,",
+    expect: "PG 建立：落地與投影",
+  },
+  {
+    name: "事件不落地（沒有 offer_created 痕跡）",
+    file: "v3/src/wishOffersAsync.js",
+    from: '    await writeOfferEventAsync(run, {\n      offerId: offer.id,\n      actorUserId: ownerUserId,\n      eventType: "offer_created",',
+    to: '    if (false) await writeOfferEventAsync(run, {\n      offerId: offer.id,\n      actorUserId: ownerUserId,\n      eventType: "offer_created",',
+    expect: "PG 建立：落地與投影",
+  },
+  {
+    name: "冪等鍵不落地（同鍵會建出第二筆）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "        await run(IDEMPOTENCY_INSERT_SQL, idempotencyParams({",
+    to: "        void idempotencyParams; if (false) await run(IDEMPOTENCY_INSERT_SQL, idempotencyParams({",
+    expect: "冪等鍵重放",
+  },
+  {
+    name: "冪等鍵不查（同鍵不同目標也放行）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "      const replay = one((await run(IDEMPOTENCY_BY_KEY_SQL, [Number(ownerUserId), key])).rows);\n      if (replay) {",
+    to: "      const replay = null; void IDEMPOTENCY_BY_KEY_SQL;\n      if (replay) {",
+    expect: "冪等鍵換目標",
+  },
+  {
+    name: "已有 pending 時不擋（會撞唯一索引或建出第二筆）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "  const existingPending = one((await run(PENDING_OFFER_SQL, [\n    Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),\n  ])).rows);\n  if (existingPending) return { live, existingPending };",
+    to: "  const existingPending = null;\n  if (existingPending) return { live, existingPending };",
+    expect: "已有 pending",
+  },
+  {
+    name: "擁有者停權不檢查（停權的人照樣提案）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "  if (await ownerBannedAsync(run, ownerUserId, now)) {",
+    to: "  if (false) {",
+    expect: "屋主被停權",
+  },
+  {
+    name: "每日上限不查（第 9 筆照樣建立）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "  if (await sinceCountAsync(run, OWNER_OFFERS_SINCE_SQL, ownerUserId, since) >= OFFER_OWNER_DAILY_CAP) {",
+    to: "  if (false) {",
+    expect: "每日上限讀 PG 的計數",
+  },
+  {
+    name: "刊登擁有者不驗（別人的刊登也能提案）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "  if (!listingRow || Number(listingRow.listed_by_user_id) !== Number(ownerUserId)) {",
+    to: "  if (!listingRow) {",
+    expect: "閘門：不是自己的刊登",
+  },
+  {
+    name: "配對資格不驗（已下架／條件不合也建立）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "  const live = liveMatchEligible(null, listingRow, wishRow, now);\n  if (!live.eligible) {",
+    to: "  const live = { eligible: true };\n  if (!live.eligible) {",
+    expect: "刊登已下架",
+  },
+  {
+    name: "旗標／目錄不從 PG 收斂（拿本機過期的目錄判斷配對）",
+    file: "v3/src/wishOffersAsync.js",
+    from: "    await getRentalCatalogAsync(options);\n    await getWishConditionsAsync(options);",
+    to: "    void getWishConditionsAsync;",
+    expect: "收斂進行程內快取",
+  },
+  {
+    name: "寫入改成 fail-open（PG 掛掉時偷偷寫本機）",
+    file: "v3/src/wishOffersAsync.js",
+    from: 'export async function createWishOfferAsync(ownerUserId, listingRef, wishRef, {\n  idempotencyKey,\n  now = new Date(),\n  actorKey = "",\n} = {}, options = {}) {\n  return withFallback(options, { write: true }, async (run) => {',
+    to: 'export async function createWishOfferAsync(ownerUserId, listingRef, wishRef, {\n  idempotencyKey,\n  now = new Date(),\n  actorKey = "",\n} = {}, options = {}) {\n  return withFallback(options, { write: false }, async (run) => {',
+    expect: "寫入 fail-closed",
+  },
+  {
+    name: "`POST …/offers` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    const created = await createWishOfferAsync(session.userId, req.params.id, req.params.wishRef, {",
+    to: "    const created = createWishOfferFor(session.userId, req.params.id, req.params.wishRef, {",
+    expect: "路由接線",
+  },
+  {
+    name: "只刪 import、body 還在呼叫（量尺會誤判成 PG）",
+    file: "v3/src/server.js",
+    from: "  createWishOfferAsync,\n",
+    to: "",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5195,6 +5298,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /self-listing-create-async/.test(testFile) ? CREATESELF_MUTATIONS
   : /oauth-callback-async/.test(testFile) ? OAUTHCB_MUTATIONS
   : /listing-import-start-async/.test(testFile) ? IMPORTSTART_MUTATIONS
+  : /wish-offer-create-async/.test(testFile) ? OFFERCREATE_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

@@ -245,15 +245,11 @@ function rollingWindowStart(now, ms) {
 }
 
 export function countOwnerOffersSince(db, ownerUserId, sinceIso) {
-  return Number(db.prepare(
-    "SELECT COUNT(*) AS n FROM wish_offers WHERE owner_user_id = ? AND created_at >= ?",
-  ).get(Number(ownerUserId) || 0, sinceIso)?.n) || 0;
+  return Number(db.prepare(OWNER_OFFERS_SINCE_SQL).get(Number(ownerUserId) || 0, sinceIso)?.n) || 0;
 }
 
 export function countListingOffersSince(db, listingId, sinceIso) {
-  return Number(db.prepare(
-    "SELECT COUNT(*) AS n FROM wish_offers WHERE listing_id = ? AND created_at >= ?",
-  ).get(Number(listingId) || 0, sinceIso)?.n) || 0;
+  return Number(db.prepare(LISTING_OFFERS_SINCE_SQL).get(Number(listingId) || 0, sinceIso)?.n) || 0;
 }
 
 function hitWindow(map, key, now, limit, windowMs) {
@@ -295,10 +291,76 @@ export function normalizeOfferIdempotencyKey(raw) {
   return key;
 }
 
+// ---- 提案建立路徑的共用 SQL／參數（第八十七批抽出）---------------------------
+//
+// 這一組是 `createWishOffer()` 的落地點。抽成常數與純函式的理由與其他批次相同：
+// PG 版（`wishOffersAsync.js`）要跑**逐字相同**的 SQL，參數順序也不能漂移。
+// ⚠️ PG 上的兩個部分唯一索引（`idx_wish_offers_pending_unique`／`_active_unique`）是
+// 「同時只允許一筆 pending／accepted」的實際守門員——衝突時 PG 丟 `23505`、
+// SQLite 丟訊息含 `UNIQUE`，所以 `isUniqueViolation()` 兩種都要認。
+export const isUniqueViolation = (error) =>
+  String(error?.code || "") === "23505"
+  || String(error?.code || "") === "SQLITE_CONSTRAINT_UNIQUE"
+  || /UNIQUE constraint failed|duplicate key/i.test(String(error?.message || ""));
+
+export const WISH_BY_PUBLIC_REF_SQL = "SELECT * FROM demand_posts WHERE public_token = ?";
+
+export const PENDING_OFFER_SQL = `SELECT * FROM wish_offers
+     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'pending'
+     LIMIT 1`;
+
+export const ACCEPTED_OFFER_SQL = `SELECT * FROM wish_offers
+     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'accepted'
+     LIMIT 1`;
+
+export const LAST_TERMINAL_OFFER_SQL = `SELECT * FROM wish_offers
+     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ?
+       AND status IN ('declined', 'withdrawn', 'expired', 'blocked')
+     ORDER BY created_at DESC, id DESC LIMIT 1`;
+
+export const OWNER_OFFERS_SINCE_SQL =
+  "SELECT COUNT(*) AS n FROM wish_offers WHERE owner_user_id = ? AND created_at >= ?";
+
+export const LISTING_OFFERS_SINCE_SQL =
+  "SELECT COUNT(*) AS n FROM wish_offers WHERE listing_id = ? AND created_at >= ?";
+
+export const OFFER_INSERT_SQL = `INSERT INTO wish_offers(
+         public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status,
+         idempotency_key, created_at, updated_at, expires_at, version
+       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`;
+
+/** 提案 INSERT 的參數（純函式）：欄位順序與 `OFFER_INSERT_SQL` 逐字對應。 */
+export function offerInsertParams({ token, wishRow, listingRow, ownerUserId, idempotencyKey = "", stamp, expires }) {
+  return [
+    token,
+    Number(wishRow.id),
+    Number(listingRow.post_id),
+    Number(ownerUserId),
+    Number(wishRow.user_id),
+    idempotencyKey || null,
+    stamp,
+    stamp,
+    expires,
+  ];
+}
+
+export const OFFER_BY_ID_SQL = "SELECT * FROM wish_offers WHERE id = ?";
+
+export const IDEMPOTENCY_BY_KEY_SQL =
+  "SELECT * FROM wish_offer_idempotency WHERE owner_user_id = ? AND idempotency_key = ?";
+
+export const IDEMPOTENCY_INSERT_SQL = `INSERT INTO wish_offer_idempotency(owner_user_id, idempotency_key, offer_id, listing_id, wish_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`;
+
+/** 冪等鍵落地的參數（純函式）。 */
+export function idempotencyParams({ ownerUserId, key, offerId, listingId, wishId, stamp }) {
+  return [Number(ownerUserId), key, Number(offerId), Number(listingId), Number(wishId), stamp];
+}
+
 export function loadWishByPublicRef(db, wishRef) {
   const raw = String(wishRef || "").trim();
   if (!raw || /^\d+$/.test(raw)) return null;
-  return db.prepare("SELECT * FROM demand_posts WHERE public_token = ?").get(raw) || null;
+  return db.prepare(WISH_BY_PUBLIC_REF_SQL).get(raw) || null;
 }
 
 export function loadOfferByPublicRef(db, offerRef) {
@@ -338,28 +400,15 @@ export function liveMatchEligible(db, listingRow, wishRow, now = new Date()) {
 }
 
 function lastTerminalOffer(db, ownerUserId, listingId, wishId) {
-  return db.prepare(
-    `SELECT * FROM wish_offers
-     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ?
-       AND status IN ('declined', 'withdrawn', 'expired', 'blocked')
-     ORDER BY created_at DESC, id DESC LIMIT 1`,
-  ).get(Number(ownerUserId), Number(listingId), Number(wishId));
+  return db.prepare(LAST_TERMINAL_OFFER_SQL).get(Number(ownerUserId), Number(listingId), Number(wishId));
 }
 
 function pendingOffer(db, ownerUserId, listingId, wishId) {
-  return db.prepare(
-    `SELECT * FROM wish_offers
-     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'pending'
-     LIMIT 1`,
-  ).get(Number(ownerUserId), Number(listingId), Number(wishId));
+  return db.prepare(PENDING_OFFER_SQL).get(Number(ownerUserId), Number(listingId), Number(wishId));
 }
 
 function acceptedOffer(db, ownerUserId, listingId, wishId) {
-  return db.prepare(
-    `SELECT * FROM wish_offers
-     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ? AND status = 'accepted'
-     LIMIT 1`,
-  ).get(Number(ownerUserId), Number(listingId), Number(wishId));
+  return db.prepare(ACCEPTED_OFFER_SQL).get(Number(ownerUserId), Number(listingId), Number(wishId));
 }
 
 export function assertCreateOfferGates(db, {
@@ -416,25 +465,12 @@ export function insertPendingOffer(db, {
   const expires = iso(new Date(atMs(now) + OFFER_TTL_MS));
   const token = newOfferToken();
   try {
-    const ins = db.prepare(
-      `INSERT INTO wish_offers(
-         public_token, wish_id, listing_id, owner_user_id, tenant_user_id, status,
-         idempotency_key, created_at, updated_at, expires_at, version
-       ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 1)`,
-    ).run(
-      token,
-      wishRow.id,
-      listingRow.post_id,
-      Number(ownerUserId),
-      Number(wishRow.user_id),
-      idempotencyKey || null,
-      stamp,
-      stamp,
-      expires,
-    );
-    return db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(Number(ins.lastInsertRowid));
+    const ins = db.prepare(OFFER_INSERT_SQL).run(...offerInsertParams({
+      token, wishRow, listingRow, ownerUserId, idempotencyKey, stamp, expires,
+    }));
+    return db.prepare(OFFER_BY_ID_SQL).get(Number(ins.lastInsertRowid));
   } catch (error) {
-    if (String(error.message || "").includes("UNIQUE") || String(error.code || "") === "SQLITE_CONSTRAINT_UNIQUE") {
+    if (isUniqueViolation(error)) {
       const existing = pendingOffer(db, ownerUserId, listingRow.post_id, wishRow.id);
       if (existing) return existing;
       if (acceptedOffer(db, ownerUserId, listingRow.post_id, wishRow.id)) {
@@ -458,9 +494,7 @@ export function createWishOffer(db, ownerUserId, listingRef, wishRef, {
     const listingRow = getSelfRow(db, listingRef);
     const wishRow = loadWishByPublicRef(db, wishRef);
     if (key) {
-      const replay = db.prepare(
-        "SELECT * FROM wish_offer_idempotency WHERE owner_user_id = ? AND idempotency_key = ?",
-      ).get(Number(ownerUserId), key);
+      const replay = db.prepare(IDEMPOTENCY_BY_KEY_SQL).get(Number(ownerUserId), key);
       if (replay) {
         const listingId = listingRow ? Number(listingRow.post_id) : NaN;
         const wishId = wishRow ? Number(wishRow.id) : NaN;
@@ -469,7 +503,7 @@ export function createWishOffer(db, ownerUserId, listingRef, wishRef, {
           && listingId === Number(replay.listing_id)
           && wishId === Number(replay.wish_id);
         if (sameTarget) {
-          const offer = db.prepare("SELECT * FROM wish_offers WHERE id = ?").get(replay.offer_id);
+          const offer = db.prepare(OFFER_BY_ID_SQL).get(replay.offer_id);
           if (offer) return offer;
         }
         throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
@@ -501,18 +535,15 @@ export function createWishOffer(db, ownerUserId, listingRef, wishRef, {
     if (!offer) throw offerHttpError("目前無法提供", 409, "match_no_longer_eligible");
     if (key) {
       try {
-        db.prepare(
-          `INSERT INTO wish_offer_idempotency(owner_user_id, idempotency_key, offer_id, listing_id, wish_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        ).run(Number(ownerUserId), key, offer.id, listingRow.post_id, wishRow.id, iso(now));
+        db.prepare(IDEMPOTENCY_INSERT_SQL).run(...idempotencyParams({
+          ownerUserId, key, offerId: offer.id, listingId: listingRow.post_id, wishId: wishRow.id, stamp: iso(now),
+        }));
       } catch (error) {
-        const replay = db.prepare(
-          "SELECT * FROM wish_offer_idempotency WHERE owner_user_id = ? AND idempotency_key = ?",
-        ).get(Number(ownerUserId), key);
+        const replay = db.prepare(IDEMPOTENCY_BY_KEY_SQL).get(Number(ownerUserId), key);
         if (replay && Number(replay.offer_id) !== Number(offer.id)) {
           throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
         }
-        if (!String(error.message || "").includes("UNIQUE")) throw error;
+        if (!isUniqueViolation(error)) throw error;
       }
     }
     writeOfferEvent(db, {
