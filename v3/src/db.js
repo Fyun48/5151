@@ -24,8 +24,9 @@ import {
   isCommuteRushEnabled,
   isGoogleDirectionsEnabled,
   mapsAdminWarning,
-  summarizeMapsUsage,
+  mapsBudgetWarning,
   pacificYmd,
+  summarizeMapsUsage,
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
@@ -1036,10 +1037,11 @@ export function getAdminMapsSettings() {
 
 function mapsDistanceWarning(base) {
   const cfg = getProviderConfig(db, "distance_matrix");
-  if (googleDirectionsEnabled() && Number(cfg?.daily_limit_minor || 0) <= 0) {
-    return `${base} 外掛日預算為 0，BudgetGuard 不准花付費額度，Google Directions 不會送出。請到「外掛與預算」填日預算（建議 NT$50）。`;
-  }
-  return base;
+  // 那句話由 `mapsBilling.mapsBudgetWarning()` 提供（PG 版要用同一份文字）。
+  return mapsBudgetWarning(base, {
+    googleEnabled: googleDirectionsEnabled(),
+    dailyLimitMinor: cfg?.daily_limit_minor,
+  });
 }
 
 // 2.4：外掛與預算改走 driver-aware store（PG 模式讀寫 PostgreSQL）。

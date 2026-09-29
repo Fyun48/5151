@@ -3421,6 +3421,50 @@ done
 > **教訓**：**驗證工具本身也要有守衛**。「變異全殺」是一種被信任的證據，而它可能只是
 > 「一套都沒跑」。這一條的價值不在抓到的那三套，而在它從此會替每一套看著。
 
+## 二之負三十一、2026-09-29 第六十一批：長尾單點四條 ＋ 量尺缺陷 (7)
+
+### 61.1 範圍與投報率
+
+| 路由 | 進入點 | 作法 |
+|---|---|---|
+| `PUT /api/admin/providers/site-budget` | （無程式改動） | **量尺缺陷 (7) 修正**：方法呼叫被當成函式呼叫 |
+| `POST /api/public/wish-room/:id/share-events` | `recordShareEventAsync` | 接線（島嶼在第五十三批就做好了） |
+| `GET /api/listings/:id/history` | `sourceHistoryAsync`（新） | 同一個 `source_key` 的歷史 ＋ 個人旗標都要讀 PG |
+| `GET /api/admin/maps` | `getAdminMapsSettingsAsync`（新） | 開關、`maps_usage_daily` 用量、provider 預算都讀 PG |
+
+尺規：缺口 **41 → 37**、PG **227 → 231**、MIXED **38 → 34**（SQLite 3 不變）。
+
+### 61.2 🚨 量尺缺陷 (7)：方法呼叫不是函式呼叫
+
+`callsIn()` 原本用 `\bname\s*\(`，所以 `budgetStore({…}).saveSiteBudget(partial)` 這種**方法呼叫**
+會被算成「呼叫了 `saveSiteBudget()`」，而 `fnOwner` 把它指到 `budgetGuard.js` 的同步實作
+⇒ `PUT /api/admin/providers/site-budget` 被判成 MIXED——**但那個 store 其實是 driver-aware 的**
+（PG 模式走 `saveSiteBudgetAsync`）。這是一條**假陽性**：一條早就移植好的路由永遠留在缺口裡，
+而且掩蓋真正的卡點。
+
+修法：名字前面是 `.`（或 `?.`）的不算（宣告 `name:` 不受影響）。
+**實測影響：全站 288 條只有 1 條判定改變**（就是這一條，MIXED → PG），沒有連帶變動 ⇒ 安全。
+守衛也搬進**合成來源樹**：合成樹裡放一個與 SQLite 函式同名的物件方法，
+斷言「修好的尺規看不到、套回缺陷 (7) 就看得到」。
+
+### 61.3 這一包的兩個坑
+
+1. 🚨 **「exec 形狀」第八次**（`personalFlagsAsync`）：它的 `pgExec()` 直接回傳 `options.exec`，
+   `sourceHistoryAsync` 傳 `{ rows, rowCount }` 時 `for (const row of rows)` 會炸成
+   `object is not iterable`。已修（`rowsOf()`），並在 `runInTransaction` 的注入路徑一併正規化。
+2. **那句話只能有一份**：`mapsDistanceWarning()` 裡的「外掛日預算為 0…」是給管理員的操作指示，
+   抽成 `mapsBilling.mapsBudgetWarning()` 讓同步版與 PG 版逐字相同（測試同時驗兩邊的出現/不出現）。
+
+### 61.4 測試
+
+- `v3/test/source-history-async.test.js`（**2 項全綠**）：只列同一 `source_key`、由新到舊、
+  **個人化欄位（關注／已看過／備註）要從 PG 的旗標來**（本機刻意沒有旗標，讀錯 store 就會露出來）、
+  兩種 exec 形狀、sqlite 模式。變異 **3 條全殺**。
+- `v3/test/admin-settings-async.test.js`（**23 項全綠**，新增 2 條）：`getAdminMapsSettingsAsync`
+  的開關／用量／provider／預算提示（兩個 store 放**不同**的值，讀錯 store 就會紅）、sqlite 模式。
+  變異 **16 條全殺**（新增 3 條）。
+- `v3/test/route-data-map.test.js`（**12 項全綠**）：合成來源樹守衛擴充到缺陷 (7)。變異 **8 條全殺**。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3431,13 +3475,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十九批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十一批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **38** |
+| MIXED | — | **34** |
 | 無直接DB | — | **20** |
-| PG | 22 | **227** |
-| **缺口（SQLite＋MIXED）** | — | **41** |
+| PG | 22 | **231** |
+| **缺口（SQLite＋MIXED）** | — | **37** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

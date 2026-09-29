@@ -28,6 +28,19 @@ import {
   sponsorCatalog,
 } from "./sponsorLinks.js";
 import { normalizeMailTemplates, normalizeSmtp, publicSmtp, smtpFromEnv } from "./siteMail.js";
+import {
+  googleDirectionsBlockState,
+  hasGoogleMapsKey,
+  isCommuteRushEnabled,
+  isGoogleDirectionsEnabled,
+  mapsAdminWarning,
+  mapsBudgetWarning,
+  summarizeMapsUsage,
+} from "./mapsBilling.js";
+import { budgetStore } from "./budgetStore.js";
+import { sqliteHandle } from "./db.js";
+import { sharedPgDriver as sharedDriverForMaps } from "./pgSharedDriver.js";
+import { toPostgresSql as toPgSqlForMaps } from "./sqlDialect.js";
 import { BRAND_SLOTS } from "./brandMascot.js";
 import { adminSiteAdsView, normalizeSiteAds } from "./siteAds.js";
 import { adminBroadcastsView, normalizeBroadcasts } from "./broadcasts.js";
@@ -36,6 +49,7 @@ import {
   getAdminAdsSettings as getAdminAdsSettingsSync,
   getAdminBroadcastsSettings as getAdminBroadcastsSettingsSync,
   getAdminMailSettings as getAdminMailSettingsSync,
+  getAdminMapsSettings as getAdminMapsSettingsSync,
   getAdminOauthSettings as getAdminOauthSettingsSync,
   getAdminSponsorSettings as getAdminSponsorSettingsSync,
   getBrandMascot as getBrandMascotSync,
@@ -51,6 +65,28 @@ import {
   applyAdminMailSettingsLocally,
   applyAdminOauthSettingsLocally,
 } from "./db.js";
+
+const GOOGLE_DIRECTIONS_KEY = "googleDirectionsEnabled";
+const COMMUTE_RUSH_KEY = "commuteRushEnabled";
+const MAPS_USAGE_SQL = "SELECT day, essentials, advanced FROM maps_usage_daily ORDER BY day";
+
+// `maps_usage_daily` 的讀取（PG 走共用 driver，SQLite 走本機）。
+// ⚠️ 注入式 `exec` 的形狀要正規化成**裸陣列**（這個模組的 runner 約定），
+// 而且只能呼叫它**一次**（第一版寫成呼叫兩次，第二次的值還會蓋掉第一次）。
+async function withMapsExec(options, fn) {
+  if (options.exec) {
+    const injected = options.exec;
+    return fn(async (sql, params = []) => {
+      const raw = await injected(sql, params);
+      return Array.isArray(raw) ? raw : (raw?.rows || []);
+    });
+  }
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    return fn(async (sql, params = []) => sqliteHandle().prepare(sql).all(...params));
+  }
+  const pgDriver = options.pgDriver || (await sharedDriverForMaps());
+  return fn(async (sql, params = []) => (await pgDriver.query(toPgSqlForMaps(sql), params)).rows);
+}
 
 const SMTP_KEY = "smtp";
 const MAIL_TEMPLATES_KEY = "mailTemplates";
@@ -94,6 +130,45 @@ export async function getStoredOauthAsync(options = {}) {
   if (!isPg(options)) return getStoredOauthSync();
   const stored = await getSiteSettingAsync(OAUTH_KEY, options);
   return normalizeOauthConfig(stored && typeof stored === "object" ? stored : {}, {}, process.env);
+}
+
+// ---- 地圖與預算（`GET /api/admin/maps`）--------------------------------------
+//
+// 同步版 `db.js getAdminMapsSettings()` 讀三個地方：兩個 settings 鍵
+// （`googleDirectionsEnabled`／`commuteRushEnabled`）、`maps_usage_daily` 的用量列，
+// 以及 BudgetGuard 的 provider 設定（`distance_matrix` 的日預算）。
+// PG 模式下這些都必須讀 PG，否則後台看到的會是**別的節點**的開關與用量。
+// 純函式（`mapsAdminWarning`／`summarizeMapsUsage`／`mapsBudgetWarning`／
+// `googleDirectionsBlockState`）全部沿用同一份，兩個 driver 的輸出才會逐字相同。
+export async function getAdminMapsSettingsAsync(options = {}) {
+  if (!isPg(options)) return getAdminMapsSettingsSync();
+  const [googleEnabledRaw, rushEnabledRaw] = await Promise.all([
+    getSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, options),
+    getSiteSettingAsync(COMMUTE_RUSH_KEY, options),
+  ]);
+  const googleEnabled = isGoogleDirectionsEnabled(googleEnabledRaw);
+  const enabled = isCommuteRushEnabled(rushEnabledRaw);
+  const hasKey = hasGoogleMapsKey();
+  const block = googleDirectionsBlockState();
+  const daily = await withMapsExec(options, (exec) => exec(MAPS_USAGE_SQL, []));
+  const usage = summarizeMapsUsage(daily);
+  // ⚠️ 同步版的 provider 判斷走 `googleDirectionsAllowed()`，而那一支用的是
+  // `directionsEnabledReader()`（在 db.js 被綁到**同步**讀取器）⇒ PG 版自己算：
+  // 熔斷中、沒有金鑰、或 PG 的開關是關的，就一律走免費的 OSRM。
+  const provider = (!block.blocked && hasKey && googleEnabled) ? "google" : "osrm";
+  const baseWarning = mapsAdminWarning({ googleEnabled, rushEnabled: enabled, hasKey, block });
+  const cfg = await budgetStore({ sqliteDb: sqliteHandle(), options }).config("distance_matrix");
+  return {
+    enabled,
+    googleEnabled,
+    hasKey,
+    googleBlocked: block.blocked,
+    googleBlockReason: block.reason,
+    googleBlockUntil: block.until,
+    provider,
+    warning: mapsBudgetWarning(baseWarning, { googleEnabled, dailyLimitMinor: cfg?.daily_limit_minor }),
+    usage,
+  };
 }
 
 // `db.js saveAdminMailSettings()` 的 PG 版（第五十五批）。

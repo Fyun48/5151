@@ -219,6 +219,16 @@ export function rushStale(updatedAt, now = Date.now(), ttlMs = RUSH_TTL_MS) {
   return Number(now) - t >= ttlMs;
 }
 
+/** 「外掛日預算為 0 ⇒ Google Directions 不會送出」那句提示。
+ *  抽成純函式的原因：同步版（`db.js mapsDistanceWarning()`，讀本機 store）與 PG 版
+ *  （`adminSettingsAsync`，讀 PG 的 store）必須給出**逐字相同**的提示——那句話是給管理員看的操作指示。 */
+export function mapsBudgetWarning(base, { googleEnabled = false, dailyLimitMinor = 0 } = {}) {
+  if (googleEnabled && Number(dailyLimitMinor || 0) <= 0) {
+    return `${base} 外掛日預算為 0，BudgetGuard 不准花付費額度，Google Directions 不會送出。請到「外掛與預算」填日預算（建議 NT$50）。`;
+  }
+  return base;
+}
+
 export function summarizeMapsUsage(dailyRows, { now = Date.now() } = {}) {
   const today = pacificYmd(now);
   const month = monthKey(today);

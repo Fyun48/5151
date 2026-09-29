@@ -2180,6 +2180,28 @@ const SESSION_MUTATIONS = [
 // 這一組的 port 都很短，所以每一條都要證明「拿掉就失敗」，不能靠「看起來一樣」。
 const ADMSET_MUTATIONS = [
   {
+    // 第六十一批：`GET /api/admin/maps` 的開關必須讀 PG（讀本機就會顯示別的節點的狀態）。
+    name: "後台地圖設定改讀本機的開關（PG 站顯示別的節點）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    getSiteSettingAsync(GOOGLE_DIRECTIONS_KEY, options),\n    getSiteSettingAsync(COMMUTE_RUSH_KEY, options),",
+    to: "    getSiteSettingAsync(\"__none__\", options),\n    getSiteSettingAsync(\"__none__\", options),",
+    expect: "getAdminMapsSettingsAsync：開關、用量與 provider",
+  },
+  {
+    name: "後台地圖設定不讀 PG 的用量（用量永遠 0）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "  const daily = await withMapsExec(options, (exec) => exec(MAPS_USAGE_SQL, []));",
+    to: "  const daily = [];",
+    expect: "getAdminMapsSettingsAsync：開關、用量與 provider",
+  },
+  {
+    name: "後台地圖設定忽略預算為 0 的提示",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    warning: mapsBudgetWarning(baseWarning, { googleEnabled, dailyLimitMinor: cfg?.daily_limit_minor }),",
+    to: "    warning: baseWarning,",
+    expect: "getAdminMapsSettingsAsync：開關、用量與 provider",
+  },
+  {
     name: "品牌上傳不驗位置（任何 slot 都會被接受）",
     file: ADMSET_SRC,
     from: '  if (!BRAND_SLOTS.includes(key)) {\n    const err = new Error("請選擇要套用的位置");\n    err.status = 400;\n    throw err;\n  }\n',
@@ -2325,7 +2347,17 @@ const MAP_MUTATIONS = [
     // ⚠️ 這條變異的殺手換過三次：舊斷言拿「當時還沒移植的 /api/admin/members」當真值，
     // 第五十四批把它搬上 PG 之後就失效了。現在由**合成來源樹**守衛負責（它自己造一個
     // 簽名含 destructured default 的 helper，套回缺陷 (1) 之後必須看不到）。
-    expect: "缺陷 (1)(2) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
+  },
+  {
+    // 缺陷 (7)：方法呼叫不是函式呼叫。舊版 `callsIn()` 用 `\bname\s*\(`，
+    // 會把 `store().saveSiteBudget()` 當成呼叫了 budgetGuard.js 的同名同步函式
+    // ⇒ `PUT /api/admin/providers/site-budget` 明明已經 driver-aware，卻永遠留在缺口裡。
+    name: "還原缺陷 (7)：方法呼叫也算成函式呼叫（同名方法造成假陽性）",
+    file: MAP_SRC,
+    from: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");",
+    to: "const callsIn = (body, name) => {\n  const escaped = name.replace(/\\$/g, \"\\\\$\");\n  if (true) return new RegExp(`\\\\b${escaped}\\\\s*\\\\(`).test(body);",
+    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
   },
   {
     name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
@@ -2336,7 +2368,7 @@ const MAP_MUTATIONS = [
     // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
     // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
     // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
-    expect: "缺陷 (1)(2) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2)(7) 的守衛（合成來源樹）",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -3557,6 +3589,31 @@ const SITECMD_MUTATIONS = [
   },
 ];
 
+// 來源歷史（第六十一批）的變異集。
+const SRCHIST_MUTATIONS = [
+  {
+    name: "來源歷史不疊加個人旗標（個人化欄位全空）",
+    file: "v3/src/sourceHistoryAsync.js",
+    from: "    const flagMap = await loadFlagMapAsync(userId, options);\n    return overlayRowsPersonal(rows, flagMap);",
+    to: "    return rows;",
+    expect: "個人化欄位相同",
+  },
+  {
+    name: "來源歷史排序反過來（舊的排前面）",
+    file: "v3/src/sourceHistoryAsync.js",
+    from: "   FROM listings WHERE source_key = ? ORDER BY last_seen_at DESC`;",
+    to: "   FROM listings WHERE source_key = ? ORDER BY last_seen_at ASC`;",
+    expect: "由新到舊",
+  },
+  {
+    name: "來源歷史不篩 source_key（會列出所有物件）",
+    file: "v3/src/sourceHistoryAsync.js",
+    from: "   FROM listings WHERE source_key = ? ORDER BY last_seen_at DESC`;",
+    to: "   FROM listings WHERE 1=1 ORDER BY last_seen_at DESC`;",
+    expect: "只列同一個 source_key",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3565,7 +3622,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
+const MUTATIONS = /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS
+  : /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
   : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS
   : /feedback-outbox-async/.test(testFile) ? OUTBOXASYNC_MUTATIONS
   : /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
