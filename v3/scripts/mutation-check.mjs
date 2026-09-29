@@ -2247,6 +2247,38 @@ const ADMSET_MUTATIONS = [
   // 所以把 wrapper 的 guard 拿掉，行為完全不變（`driver:"sqlite"` 時仍然讀磁碟）。
   // 回退**行為**本身有測試（第 10 項，兩邊刻意種不同的值），只是殺不掉這個冗餘的 guard。
   // 保留 guard 是為了與其他島嶼的形狀一致；留一條永遠 SURVIVED 的變異只會稀釋報告。
+  {
+    // 第五十五批：設定進 PG，但**本機落地不能省**（auth.env 是節點啟動時套用的檔案，
+    // 而本機的同步讀者 getStoredSmtp()/getMailTemplates() 還在）。
+    name: "郵件設定只寫 PG、不做本機落地（auth.env 與同步讀者看不到）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    applyAdminMailSettingsLocally({ smtp, templates });",
+    to: "    void applyAdminMailSettingsLocally;",
+    expect: "saveAdminMailSettingsAsync：PG 落地",
+  },
+  {
+    name: "郵件設定只寫 smtp、不寫 mailTemplates",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "  await setSiteSettingAsync(MAIL_TEMPLATES_KEY, templates, options);",
+    to: "  void templates;",
+    expect: "saveAdminMailSettingsAsync：PG 落地",
+  },
+  {
+    // 把「公開形狀」寫進 store：密碼／secret 會消失（後台看起來存好了，實際上寄不出去）。
+    name: "郵件設定把公開形狀寫進 PG（掉了密碼）",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "  await setSiteSettingAsync(SMTP_KEY, smtp, options);",
+    to: "  await setSiteSettingAsync(SMTP_KEY, publicSmtp(smtp), options);",
+    expect: "saveAdminMailSettingsAsync：PG 落地",
+  },
+  {
+    name: "OAuth 設定只寫 PG、不做本機落地",
+    file: "v3/src/adminSettingsAsync.js",
+    from: "    applyAdminOauthSettingsLocally(oauth);",
+    to: "    void applyAdminOauthSettingsLocally;",
+    expect: "saveAdminOauthSettingsAsync：PG 落地",
+  },
+
 ];
 
 const MAP_SRC = "v3/scripts/route-data-map.mjs";

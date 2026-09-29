@@ -1141,6 +1141,15 @@ export function getAdminMailSettings() {
   };
 }
 
+// 「本機落地」＝ 寫本機 settings ＋ 寫節點本機的 `auth.env`。抽出來的原因是
+// PG 島嶼（`adminSettingsAsync`）在寫完 PG 之後要**做同一件事**（第五十五批的 Owner 決定：
+// 設定進 PG，`auth.env` 仍留在節點本機）——兩邊各寫一份遲早會漂移。
+export function applyAdminMailSettingsLocally({ smtp, templates } = {}) {
+  writeSettingKey("smtp", smtp);
+  writeSettingKey("mailTemplates", templates);
+  persistSmtpToAuthEnv(smtp);
+}
+
 export function saveAdminMailSettings(partial = {}) {
   const current = getStoredSmtp();
   const smtp = normalizeSmtp(partial.smtp || {}, current);
@@ -1148,9 +1157,7 @@ export function saveAdminMailSettings(partial = {}) {
     ...getMailTemplates(),
     ...(partial.templates && typeof partial.templates === "object" ? partial.templates : {}),
   });
-  writeSettingKey("smtp", smtp);
-  writeSettingKey("mailTemplates", templates);
-  persistSmtpToAuthEnv(smtp);
+  applyAdminMailSettingsLocally({ smtp, templates });
   return getAdminMailSettings();
 }
 
@@ -1177,11 +1184,15 @@ export function getAdminOauthSettings() {
   return { oauth: publicOauthConfig(oauth) };
 }
 
+export function applyAdminOauthSettingsLocally(oauth) {
+  writeSettingKey("oauth", oauth);
+  persistOauthToAuthEnv(oauth);
+}
+
 export function saveAdminOauthSettings(partial = {}) {
   const current = getStoredOauth();
   const oauth = normalizeOauthConfig(partial.oauth || {}, current);
-  writeSettingKey("oauth", oauth);
-  persistOauthToAuthEnv(oauth);
+  applyAdminOauthSettingsLocally(oauth);
   return getAdminOauthSettings();
 }
 

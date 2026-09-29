@@ -3118,6 +3118,49 @@ done
 - 另外修掉兩個**過期的接線守衛**（`admin-members.test.js`／`system-mail.test.js`
   斷言 `queueSystemMail("account_deleted")` 等同步接線，條目改走 `queueSystemMailAsync` 後就會紅）。
 
+## 二之負二十五、2026-09-28 第五十五批：後台郵件／OAuth 設定寫入（Owner 決定：移植）
+
+### 55.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `PUT /api/admin/mail` | `saveAdminMailSettingsAsync` |
+| `PUT /api/admin/oauth` | `saveAdminOauthSettingsAsync` |
+
+尺規：缺口 **51 → 49**、PG **217 → 219**、MIXED **47 → 45**（SQLite 4 不變）。
+
+**這是 Owner 明確決定的一批**（前幾批一直列在「未決事項」）：設定**進 PG**，
+`auth.env` **仍留在節點本機**。作法是四步：
+
+1. 讀目前值（PG）
+2. 用同一組純函式正規化（`normalizeSmtp`／`normalizeMailTemplates`／`normalizeOauthConfig`）
+3. 寫 PG（`settings.smtp`／`settings.mailTemplates`／`settings.oauth`）
+4. **在回答你的那一台**做本機落地（本機 settings 鏡射 ＋ 寫 `auth.env`）
+
+第 4 步不是遺漏：`auth.env` 是節點啟動時套用的檔案（`applyStoredSmtp()`／`applyStoredOauth()`
+在 import 時就跑），而本機的同步讀者（`getStoredSmtp()`／`getMailTemplates()`／`getStoredOauth()`）
+也還在。順序刻意是「**先 PG、再本機**」：反過來的話 PG 寫失敗時本機已經變了
+（連 `auth.env` 也寫了），就會出現「這台看起來設定好了、其他節點還是舊的」。
+
+> ⚠️ **維運要記得**：SMTP 密碼與 OAuth client secret 現在會進 **PG 的 settings**
+> （先前是 SQLite 的 settings ＋ auth.env；本來就不是只放檔案）。PG 是多節點共用的 store。
+
+### 55.2 這一包的兩個坑
+
+1. **對照組會蓋掉缺陷（交接紀律第 7 條再次生效）。** 兩個測試原本先跑同步版 `saveAdmin…`
+   當對照組，再斷言本機鏡射——而**同步版自己就會寫本機** ⇒「async 版沒做本機落地」的變異
+   活了下來。把對照組移到**最後**（斷言先做）之後才殺掉。
+2. **`auth.env` 的鍵名不要自己發明**：OAuth 的變數名是 `GOOGLE_OAUTH_CLIENT_ID`
+   （由 `applyOauthEnv()` 決定），不是直覺的 `GOOGLE_CLIENT_ID`。測試直接斷言真實鍵名。
+
+### 55.3 測試
+
+- `v3/test/admin-settings-async.test.js`（**21 項全綠**，新增 4 條）：郵件設定的 PG 落地
+  （兩個鍵、含密碼的完整設定、與同步版落地位元組比對）＋公開形狀不含密碼＋本機鏡射＋`auth.env`；
+  PG 失敗時**不得**動本機；OAuth 設定同理；sqlite 模式走同步版。變異 **13 條全殺**（新增 4 條）。
+- `v3/test/admin-settings-live-pg.test.js`（**1 項全綠**，隔離庫連跑兩次）：真 PG 上寫入 →
+  讀回來 → 本機同步讀者也看到同一份；前後快照／還原三個設定鍵。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3128,13 +3171,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十四批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十五批）** |
 |---|---:|---:|
 | SQLite | 95 | **4** |
-| MIXED | — | **47** |
+| MIXED | — | **45** |
 | 無直接DB | — | **20** |
-| PG | 22 | **217** |
-| **缺口（SQLite＋MIXED）** | — | **51** |
+| PG | 22 | **219** |
+| **缺口（SQLite＋MIXED）** | — | **49** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
