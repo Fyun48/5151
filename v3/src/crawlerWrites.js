@@ -17,6 +17,9 @@ import {
   setListingDetail as setListingDetailSync,
   touchListingChecked as touchListingCheckedSync,
   confirmExpiredOfflineListings as confirmExpiredOfflineListingsSync,
+  listingLocationUpdate,
+  notifyReopenQuery,
+  updateListingsGeoByAddress as updateListingsGeoByAddressSync,
   persistHpListingFields as persistHpListingFieldsSync,
   listingFieldsBuildContext,
 } from "./db.js";
@@ -42,6 +45,7 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { normalizeOfflineConfirmDays } from "./offline.js";
+import { setCachedGeoAsync } from "./geoCacheAsync.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -189,6 +193,64 @@ export function markSourceKitRetryAsync(postId, { error = "", delayMs = 15 * 60 
     },
     () => markSourceKitRetrySync(postId, { error, delayMs }),
   );
+}
+
+// db.js updateListingsGeoByAddress(): geo 回填 worker 的落點——依「去掉空白的地址」找出同一地址的
+// listings 列，逐列把座標寫回去（`listingLocationUpdate()` 的「誰比較好」判斷是純函式，兩個 driver
+// 共用）。原本只寫本機 SQLite ⇒ PG 模式下回填算出來的座標不會出現在站上讀的那一份。
+export const LISTING_GEO_CANDIDATES_SQL = `SELECT post_id, address, lat, lng, geo_source, location_class, coord_version
+       FROM listings
+       WHERE replace(IFNULL(address, ''), ' ', '') = ?
+          OR replace(IFNULL(address_norm, ''), ' ', '') = ?`;
+export const LISTING_GEO_CANDIDATES_LEGACY_SQL = `SELECT post_id, address, lat, lng, geo_source
+       FROM listings
+       WHERE replace(IFNULL(address, ''), ' ', '') = ?`;
+
+const isMissingRelation = (error) =>
+  error?.code === "42703" || /no such column|has no column named|does not exist/i.test(String(error?.message || ""));
+
+async function selectGeoRows(exec, key) {
+  try {
+    return await exec(LISTING_GEO_CANDIDATES_SQL, [key, key]);
+  } catch (error) {
+    if (!isMissingRelation(error)) throw error;
+    return exec(LISTING_GEO_CANDIDATES_LEGACY_SQL, [key]);
+  }
+}
+
+export async function updateListingsGeoByAddressAsync(address, lat, lng, meta = {}, options = {}) {
+  const key = String(address || "").replace(/\s+/g, "");
+  // 與同步版同義：座標不是有限數、或位址去空白後是空的，就不落地（連快取都不寫）。
+  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return 0;
+  // 快取先寫（走第六十四批的 geo_cache 島嶼；PG 模式寫 PG）。
+  await setCachedGeoAsync(address, lat, lng, meta, options);
+  const next = {
+    lat,
+    lng,
+    geo_source: meta.geo_source || "geocode",
+    location_class: meta.location_class,
+    address_norm: meta.address_used || address,
+    provider: meta.provider || "",
+    geo_job_state: "done",
+  };
+  return write(options, async (exec) => {
+    const rows = await selectGeoRows(exec, key);
+    let updated = 0;
+    for (const row of rows) {
+      // 每一列的 coord_version 從**它自己**的現值往上加（與同步版逐列相同）。
+      const update = listingLocationUpdate(row, { ...next, coord_version: (Number(row.coord_version) || 0) + 1 }, row.post_id);
+      if (!update) continue;
+      await exec(update.sql, update.params);
+      const reopen = notifyReopenQuery(row.post_id, update.coordVersion);
+      try {
+        await exec(reopen.sql, reopen.params);
+      } catch {
+        /* 舊 fixture 沒有那張表（同步版也是 try/catch） */
+      }
+      updated += 1;
+    }
+    return updated;
+  }, () => updateListingsGeoByAddressSync(address, lat, lng, meta));
 }
 
 // db.js confirmExpiredOfflineListings(): 「已下線但還沒被確認」的房源在 N 天後自動確認為下線。

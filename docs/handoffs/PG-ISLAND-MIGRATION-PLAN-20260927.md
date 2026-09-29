@@ -3829,6 +3829,39 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   60 秒節流、sqlite 回退）＋ 1 條 live 子測試（在拋棄式 schema 內真的改到那一列並回報 1 列）。
 - `v3/test/route-data-map.test.js` **12 項全綠**：合成樹擴充到缺陷 (9)。變異 **10 條全殺**。
 
+## 二之負三十八、2026-09-29 第六十八批：geo 回填落點 ＋ 統計（第 (4) 步的第 2 塊）
+
+### 68.1 範圍與投報率
+
+`POST /api/settings` 的 23 個卡點全部來自 `queueGeoBackfill()`（geo／路線回填 worker 的喚醒）
+與 `safeStats()`。這一包做掉其中兩塊：
+
+1. **`updateListingsGeoByAddressAsync()`**（新）：geo 回填的落點——依「去掉空白的地址」找出同一地址的
+   `listings` 列，逐列把座標寫回去。原本只寫本機 SQLite ⇒ PG 模式下**回填算出來的座標不會出現在
+   站上讀的那一份**（清單上的距離永遠是舊的）。「誰比較好」的判斷逐字重用
+   `listingLocationUpdate()`（純函式），每一列的 `coord_version` 從它自己的現值往上加。
+   ⚠️ 一個地址可能對到**多列**（同地址不同物件）——這正是這支函式存在的理由，測試也釘住「三列都要改」。
+2. **`safeStats()` 改 async**：`POST /api/settings` 回傳的 `stats` 走既有的統計島嶼
+   `listingStatsAsync({ userId })`（PG 模式讀 PG），失敗時回同一個安全形狀。
+3. `watcher.js` 的 `backfillAddressGeo()` 一併改走 driver-aware 入口（`getCachedGeoAsync`／
+   `setCachedGeoAsync`／`updateListingsGeoByAddressAsync`）——第六十四批的 geo 快取島嶼在這裡接上。
+
+尺規：`POST /api/settings` 的卡點 **23 → 21**、`PUT /api/admin/maps` **26 → 24**（缺口總數不變，
+因為剩下的卡點還在同一個 worker 裡）。
+
+### 68.2 剩下的那一塊（下一包）
+
+`queueGeoBackfill()` 仍在的路線／通知鏈：`upsertRouteJob`／`getRouteJob`／`setCachedRoute`／
+`listingCommutePatch`／`commuteRushEnabled`（路線快取與設定讀取）、`flushPendingNotifications` 內的
+`sendWebPush`／`getMailTemplates`、以及 `settingsForGeoBackfill`／`getSettings` 的同步預設參數。
+還有 `holdStatsCache`（統計快取）那一條。
+
+### 68.3 測試
+
+- `v3/test/listing-state-writes.test.js`：新增 1 條離線（語句種類、**三列都要改**、與同步版落地值
+  逐欄相同、非法座標不落地也不寫快取）＋ 1 條 live 子測試（在拋棄式 schema 內改的是 PG 那一列、
+  **本機那一列不動**）。變異 **5 條全殺**（新增一個 `STATEWRITE_MUTATIONS` 套組）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

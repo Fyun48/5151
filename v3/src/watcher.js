@@ -29,9 +29,6 @@ import {
   collectCommuteSettings,
   copyUserFlags,
   touchListingChecked,
-  updateListingsGeoByAddress,
-  getCachedGeo,
-  setCachedGeo,
   isCrawlSourceEnabled,
   persistHpListingFields,
   invalidateListingLocation,
@@ -55,6 +52,7 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 // （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
 import { fetchHbCoveringListings } from "./hbhousing.js";
 import { fetchSinyiCoveringListings } from "./sinyi.js";
 import { fetchHpCoveringListings } from "./houseprice.js";
@@ -108,6 +106,7 @@ import {
   setListingDetailAsync,
   touchListingCheckedAsync,
   upsertListingPrepAsync,
+  updateListingsGeoByAddressAsync,
 } from "./crawlerWrites.js";
 // 樂屋抓取游標：PG 模式下不再讀寫本機 SQLite（見 crawlerProgressAsync.js 的說明）。
 import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawlerProgressAsync.js";
@@ -1172,15 +1171,16 @@ export async function backfillAddressGeo(settings = getSettings(), { limit = 12 
     attempted += 1;
     try {
       if (geoFailReason(row.address)) continue;
-      const hit = await geocodeAddress(row.address, getCachedGeo, { fast: true, budgetMs: 5000, maxExternal: 1, strict: false });
+      // 快取與 listings 的座標都要走 driver-aware 入口（PG 模式下寫本機 SQLite 等於沒回填）。
+      const hit = await geocodeAddress(row.address, (key) => getCachedGeoAsync(key), { fast: true, budgetMs: 5000, maxExternal: 1, strict: false });
       if (hit?.busy) continue;
       if (hit && Number.isFinite(Number(hit.lat)) && Number.isFinite(Number(hit.lng))) {
-        setCachedGeo(row.address, hit.lat, hit.lng, hit);
+        await setCachedGeoAsync(row.address, hit.lat, hit.lng, hit);
         if (hit.location_class === "street") {
           const streetKey = streetCacheKey(parseTaiwanAddressParts(row.address));
-          if (streetKey) setCachedGeo(streetKey, hit.lat, hit.lng, { ...hit, cache_kind: "street" });
+          if (streetKey) await setCachedGeoAsync(streetKey, hit.lat, hit.lng, { ...hit, cache_kind: "street" });
         }
-        updateListingsGeoByAddress(row.address, hit.lat, hit.lng, hit);
+        await updateListingsGeoByAddressAsync(row.address, hit.lat, hit.lng, hit);
         located += 1;
       }
     } catch {
