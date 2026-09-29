@@ -4265,6 +4265,67 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   4. 「第二輪挑選不看行政區」這個突變的殺手是**訪客示範**那條，不是純決策那條（案例設計會讓
      第二輪一定挑得到人）——寫在變異定義的註解裡。
 
+## 二之負四十九、2026-09-29 第七十九批：需求統計＋首頁需求曝險（順手修掉一個真的線上缺陷）
+
+### 79.1 範圍與投報率
+
+`GET /api/demand/aggregate` 與 `GET /api/demand/exposure`（各 8 個卡點，同一條鏈）：
+
+- 兩條都是純讀取，但同步版整條讀的是節點本機的 `demand_posts` ⇒ PG 模式下許願房早就寫在 PG
+  （第六十五批起），統計卻從本機撈：訪客看到的「需求熱區」是**這台節點**的樣本，樣本不足時還會
+  誤判成「需求樣本不足」（`suppressed`）。
+- **`SQLite` 判定歸零**（95 → **0**）：已經沒有「只走 SQLite」的路由了，剩下的 10 條全是 MIXED
+  （寫入／讀取各半）。
+
+尺規：兩條都 **SQLite → PG**；缺口總數 **12 → 10**（`PG` 256 → **258**、`MIXED` 10 不變、`SQLite` 0）。
+
+### 79.2 順手抓到的**真的線上缺陷**：PG 的行政區索引從來沒被維護
+
+`demand_match_districts` 是「**帶行政區篩選**的統計」唯一的來源（`aggregateSql()` 用
+`district IN (…)` 去撈 `wish_id`），但 PG 模式的寫入路徑只維護**本機**那一份
+（`writeRow()` 內含同步的 `syncDemandMatchDistricts()`）⇒ **PG 的索引表永遠是空的**，
+訪客用行政區篩選需求熱區會得到 **0 筆**（不帶篩選的統計卻正常，所以不會有人發現）。
+這是這一包的 live PG 測試抓到的（離線夾具是「把本機的索引列複製進 PG」才對得起來）。
+
+修法（與同步版同一組語意）：
+
+- `demand.js` 匯出共用語句與純函式：`MATCH_DISTRICTS_DELETE_SQL`／`MATCH_DISTRICTS_INSERT_SQL`
+  （`INSERT … WHERE NOT EXISTS`，兩個 driver 都吃，不依賴唯一鍵）／`matchDistrictKeysForRow()`。
+- `demandAsync.js` 新增 `syncDemandMatchDistrictsAsync()`／`rebuildDemandMatchDistrictsAsync()`／
+  `demandMatchDistrictIndexCountAsync()`，並在**四個寫入路徑**（建立／修改／刊登／重開）維護 PG 的索引。
+- `demandAggregateAsync.js` 在帶行政區篩選時，**索引為空就懶重建**（與同步版
+  `ensureRentalMatchIndexes()` 的規則相同）⇒ 舊資料（修好之前寫的）也救得回來。
+
+### 79.3 做法（島嶼）
+
+`rentalMatchQuery.js` 把彙總拆成純核心：`aggregateDemandRows(rows, {catalog})` 與
+`homepageExposureFromAggregate(agg)`，同步版改成呼叫它們；`aggregateSql()`／
+`activeMatchingConditionIds()`／`wishMatchesAggregateFilters()`／`assertAggregateConditions()`／
+`assertMatchingEnabled()` 一併匯出。
+`v3/src/demandAggregateAsync.js`（新檔）＝補水（`getWishConditionsAsync()` → 目錄／開關）→
+`expireOpenPostsAsync()` → 分塊掃描（`aggregateSql()` ＋ `AGGREGATE_SCAN_CHUNK`）→ 同一組純函式。
+業務錯誤（404／400）直接往上丟，其餘讀取失敗才 fail-open 回退同步版。
+
+### 79.4 測試
+
+- `v3/test/demand-aggregate-async.test.js`（**7 項全綠**，新檔）：兩個 driver 逐欄位相同
+  （含行政區／城市／租金／格局／類型五種篩選）、**把列只留在 PG 時同步版是「樣本不足」而 PG 版
+  照樣算得出來**、錯誤形狀（400 `aggregate_filter`／404 `owner_matching_disabled`）、
+  **只有 PG 關掉配對時 PG 版要 404（本機那份不算）**、首頁曝險（含配對關閉的回應）、
+  fail-open／sqlite 模式、新建與修改許願房要維護 PG 的行政區索引（含索引清空時的懶重建）、路由接線。
+- `v3/test/demand-aggregate-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上六筆許願房
+  算得出熱區（第一個行政區刻意種 3 筆過隱私門檻）、**帶行政區的篩選查得到**（這就是索引缺陷的
+  回歸測試）、首頁曝險、注入 exec 與純 `pgDriver` 兩條路徑一致。
+- **變異 10 條全殺**（`DEMANDAGG_MUTATIONS`）。
+- 踩點：
+  1. **隱私門檻是「總數」與「每一組」兩層**（`AGGREGATE_PRIVACY_THRESHOLD = 3`）：一個行政區只有
+     2 筆時整批會被抑制成 `total: 0`（斷言要用原始列 `aggregateWishRowsAsync()` 比，不要用 `total`）。
+  2. **同步的 `createDemandPost()` 限制「一個人同時只能有一則公開許願房」**⇒ 離線夾具要一則樣本
+     一個帳號（五筆樣本五個帳號）。
+  3. 夾具的表要一次備齊：`demand_match_districts`（`expireOpenPostsAsync()` 會清）、
+     `demand_replies`（回讀整則許願房時會拉）、`user_listing_flags`（活動分數）——少一張就會
+     「no such table」。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4275,13 +4336,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十八批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十九批）** |
 |---|---:|---:|
-| SQLite | 95 | **2** |
+| SQLite | 95 | **0** |
 | MIXED | — | **10** |
 | 無直接DB | — | **20** |
-| PG | 22 | **256** |
-| **缺口（SQLite＋MIXED）** | — | **12** |
+| PG | 22 | **258** |
+| **缺口（SQLite＋MIXED）** | — | **10** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

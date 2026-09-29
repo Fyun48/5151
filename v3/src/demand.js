@@ -256,6 +256,28 @@ export function ensureDemandMatchDistrictSchema(db) {
   `);
 }
 
+// 行政區索引的語句（同步與 PG 版共用）。`INSERT ... WHERE NOT EXISTS` 兩個 driver 都吃，
+// 不依賴唯一鍵（PG 那邊的複合主鍵是 `ensurePgSchema()` 鏡射來的，不該拿來當正確性前提）。
+export const MATCH_DISTRICTS_DELETE_SQL = "DELETE FROM demand_match_districts WHERE wish_id = ?";
+export const MATCH_DISTRICTS_INSERT_SQL = `INSERT INTO demand_match_districts(wish_id, district)
+     SELECT ?, ? WHERE NOT EXISTS (
+       SELECT 1 FROM demand_match_districts WHERE wish_id = ? AND district = ?
+     )`;
+export const OPEN_WISH_DISTRICT_ROWS_SQL = "SELECT id, districts, status FROM demand_posts WHERE status = 'open'";
+export const WISH_DISTRICT_ROW_SQL = "SELECT id, districts, status FROM demand_posts WHERE id = ?";
+
+/** 一則許願房要進索引的行政區鍵（純函式，兩個 driver 共用同一份正規化）。 */
+export function matchDistrictKeysForRow(row) {
+  if (!row || String(row.status || "") !== "open") return [];
+  let raw = [];
+  try {
+    raw = JSON.parse(row.districts || "[]");
+  } catch {
+    raw = [];
+  }
+  return normalizeWatchDistricts(raw);
+}
+
 export function syncDemandMatchDistricts(db, wishId) {
   ensureDemandMatchDistrictSchema(db);
   const id = Number(wishId) || 0;

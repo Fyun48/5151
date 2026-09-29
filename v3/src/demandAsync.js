@@ -92,6 +92,11 @@ import {
   EXPIRE_PAUSE_PARAMS,
   EXPIRE_LEGACY_PARAMS,
   PRUNE_MATCH_DISTRICTS_SQL,
+  MATCH_DISTRICTS_DELETE_SQL,
+  MATCH_DISTRICTS_INSERT_SQL,
+  OPEN_WISH_DISTRICT_ROWS_SQL,
+  WISH_DISTRICT_ROW_SQL,
+  matchDistrictKeysForRow,
   expireGraceCutoff,
   expireOpenPosts,
   isWishLifecycleExpiryEnabled,
@@ -337,6 +342,45 @@ export async function expireOpenPostsAsync(run, now = new Date()) {
   }
   await run(PRUNE_MATCH_DISTRICTS_SQL, []);
 }
+
+// `demand.js:syncDemandMatchDistricts()` 的 PG 版：把一則許願房的行政區索引重寫。
+//
+// ⚠️ **這是一個真的線上缺陷**（第七十九批的 live PG 測試抓到）：`demand_match_districts` 是
+// 「帶行政區篩選的統計」唯一的來源（`aggregateSql()` 用 `district IN (…)` 去撈 wish_id），
+// 而 PG 模式下的寫入路徑只維護**本機**那一份（`writeRow()` 內含同步的
+// `syncDemandMatchDistricts()`）⇒ PG 的索引表永遠是空的，**訪客用行政區篩選需求熱區會得到 0 筆**
+// （不帶篩選的統計卻正常，所以不會有人發現）。
+export async function syncDemandMatchDistrictsAsync(run, wishId) {
+  const id = Number(wishId) || 0;
+  if (!id) return 0;
+  await run(MATCH_DISTRICTS_DELETE_SQL, [id]);
+  const row = one((await run(WISH_DISTRICT_ROW_SQL, [id])).rows);
+  const keys = matchDistrictKeysForRow(row);
+  for (const key of keys) await run(MATCH_DISTRICTS_INSERT_SQL, [id, key, id, key]);
+  return keys.length;
+}
+
+// 全量重建（給「索引表是空的、但已經有 open 許願房」的舊資料用；同步版的
+// `ensureRentalMatchIndexes()` 也有同一條懶重建規則）。
+export async function rebuildDemandMatchDistrictsAsync(run) {
+  const rows = (await run(OPEN_WISH_DISTRICT_ROWS_SQL, [])).rows;
+  await run("DELETE FROM demand_match_districts", []);
+  let written = 0;
+  for (const row of rows) {
+    for (const key of matchDistrictKeysForRow(row)) {
+      await run(MATCH_DISTRICTS_INSERT_SQL, [Number(row.id) || 0, key, Number(row.id) || 0, key]);
+      written += 1;
+    }
+  }
+  return written;
+}
+
+// 索引表是不是空的（與同步版 `ensureRentalMatchIndexes()` 的判斷同一句）。
+export async function demandMatchDistrictIndexCountAsync(run) {
+  const row = one((await run("SELECT COUNT(DISTINCT wish_id) AS n FROM demand_match_districts", [])).rows);
+  return Number(row?.n) || 0;
+}
+
 
 // PG 版的 loader：五個操作與 `syncDecorateLoader()` 一一對應，語句逐字相同。
 // `hasColumn` 一律 true——PG 的 demand_posts 由 `ensurePgSchema` 鏡射建表，欄位一定在。
@@ -639,6 +683,8 @@ export async function updateWishRoomAsync(userId, postId, input = {}, options = 
     if (row.status === "open") assertPublishable(fields);
     const extra = { updated_at: iso(nowOf(options)) };
     await run(WRITE_ROW_SQL, writeRowParams(row.id, fields, extra));
+    // PG 的行政區索引也要維護（同步版的 `writeRow()` 只維護本機那一份）。
+    await syncDemandMatchDistrictsAsync(run, row.id);
     // 本機 handle 追上（`writeRow()` 內含 `syncDemandMatchDistricts()`，那一支吃 handle）。
     writeRow(sqliteHandle(), row.id, fields, extra);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
@@ -671,6 +717,7 @@ export async function publishWishRoomAsync(userId, postId, input = {}, options =
       rethrowActiveLimit(error);
     }
     applyPublishInPlace(sqliteHandle(), row, fields, now);
+    await syncDemandMatchDistrictsAsync(run, row.id);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => publishWishRoomSync(sqliteHandle(), userId, postId, input));
 }
@@ -707,6 +754,7 @@ export async function reopenWishRoomAsync(userId, postId, options = {}) {
       rethrowActiveLimit(error);
     }
     applyReopenInPlace(sqliteHandle(), row, fields, now);
+    await syncDemandMatchDistrictsAsync(run, row.id);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => reopenWishRoomSync(sqliteHandle(), userId, postId));
 }
@@ -889,6 +937,8 @@ export async function createDemandAsync(userId, input = {}, options = {}) {
       if (!isUniqueUserConstraintError(error)) throw error;
       created = await inDemandTransaction(options, (tx) => recoverCreateRaceAsync(tx, uid, now, options, fields, asDraft, error));
     }
+    // 非草稿（＝已公開）的許願房要進 PG 的行政區索引，否則帶行政區的統計查不到它。
+    if (created && created.status !== "draft") await syncDemandMatchDistrictsAsync(run, created.id);
     // 與 `db.js:1866-1874` 同義：非草稿且先前有「已找到房」的許願 ⇒ 記一次 wish_cloned。
     // 分析失敗不得讓刊登失敗（同步版也是 try/catch 吞掉）。
     try {

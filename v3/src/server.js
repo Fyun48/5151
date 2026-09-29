@@ -18,6 +18,8 @@ import { expireStaleVerifyTokensAsync, pauseIdleMembersAsync } from "./accountMa
 // 個人旗標（收藏／隱藏／已看過）：站上讀 PG 的 user_listing_flags，寫入也必須進 PG。
 import { setFlagsAsync } from "./personalFlagsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
+// 需求統計／首頁需求曝險的 PG 島嶼入口。
+import { aggregateDemandAsync, homepageDemandExposureAsync } from "./demandAggregateAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
 import { readFileSync } from "node:fs";
@@ -148,8 +150,6 @@ import {
   getSelfListing,
   ownerListingMatchSummary,
   ownerListingMatches,
-  aggregateDemand,
-  homepageDemandExposure,
   rentalMatchAdminRules,
   rentalMatchOwnerMeta,
   createWishOfferFor,
@@ -1103,7 +1103,7 @@ app.get("/api/wish-rooms", async (req, res) => {
   }
 });
 
-app.get("/api/demand/aggregate", (req, res) => {
+app.get("/api/demand/aggregate", async (req, res) => {
   try {
     const query = req.query || {};
     const districts = String(query.districts || query.district || "")
@@ -1114,7 +1114,9 @@ app.get("/api/demand/aggregate", (req, res) => {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean);
-    res.json(aggregateDemand({
+    // PG 模式下同步版讀的是節點本機的 demand_posts ⇒ 訪客看到的「需求熱區」是這台節點的樣本
+    // （別的節點收到的心願不算），樣本不足時還會誤判成「需求樣本不足」（第七十九批）。
+    res.json(await aggregateDemandAsync({
       districts,
       city: query.city,
       rent_min: query.rent_min,
@@ -1128,9 +1130,9 @@ app.get("/api/demand/aggregate", (req, res) => {
   }
 });
 
-app.get("/api/demand/exposure", (req, res) => {
+app.get("/api/demand/exposure", async (req, res) => {
   try {
-    res.json(homepageDemandExposure());
+    res.json(await homepageDemandExposureAsync());
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
