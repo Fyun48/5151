@@ -642,15 +642,16 @@ export function getSelfRow(db, postId) {
   ).get(Number(postId) || 0);
 }
 
+// 自己的站內刊登（同步與 PG 版共用同一句；PG 島嶼在 `rentalMatchAsync.js`）。
+export const SELF_LISTINGS_BY_OWNER_SQL = `SELECT * FROM listings
+     WHERE listed_by_user_id = ? AND COALESCE(source, '591') = 'self'
+     ORDER BY post_id DESC LIMIT 30`;
+
 export function listMineSelfListings(db, userId) {
   const uid = Number(userId) || 0;
   if (!uid) return [];
   expireOpenSelfListings(db);
-  return db.prepare(
-    `SELECT * FROM listings
-     WHERE listed_by_user_id = ? AND COALESCE(source, '591') = 'self'
-     ORDER BY post_id DESC LIMIT 30`,
-  ).all(uid).map((row) => decorateSelfListing(row, { viewerId: uid }));
+  return db.prepare(SELF_LISTINGS_BY_OWNER_SQL).all(uid).map((row) => decorateSelfListing(row, { viewerId: uid }));
 }
 
 export function getSelfListing(db, postId, { viewerId = 0 } = {}) {

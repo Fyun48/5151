@@ -235,7 +235,7 @@ const CANDIDATE_COLUMNS = `
   p.fixture_namespace
 `;
 
-function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK, db = null } = {}) {
+export function candidateSql(listing, { afterId = 0, limit = MATCH_CANDIDATE_CHUNK, db = null } = {}) {
   const districts = listing.districts || [];
   const rent = Number(listing.rent) || 0;
   const params = [];
@@ -331,6 +331,11 @@ export function preloadActivityByUser(db, rows, now, { chunkSize = ACTIVITY_PREL
       }
     } catch { /* flags table may be absent */ }
   }
+  return activityMapFrom(rows, logins, flags, now);
+}
+
+/** 活動資料的**純組裝**（同步與 PG 版共用）：`logins`／`flags` 已由各自的 driver 查好。 */
+export function activityMapFrom(rows, logins = new Map(), flags = new Map(), now = new Date()) {
   const map = new Map();
   for (const row of rows || []) {
     const uid = Number(row.user_id);
@@ -444,18 +449,25 @@ function snapshotFromScored(listing, scored, now) {
   };
 }
 
-export function computeListingMatches(db, listing, { now = new Date(), rows = null, activityByUser = null } = {}) {
-  expireOpenPosts(db, now);
-  const generation = wishGeneration(db);
+// 配對快照的**純核心**（快取讀寫 ＋ 評分 ＋ 快照）：候選列與活動資料由呼叫端備好，
+// 同步與 PG 版都走這一份，排序與分數不可能漂移。
+export function computeListingMatchesFrom({ listing, candidates = [], activityByUser = new Map(), now = new Date(), generation = 0 } = {}) {
   const key = cacheKey(listing, "matches", generation);
   const cached = readCache(key);
   if (cached) return cached;
-
   const catalog = currentMatchCatalog();
+  const scored = scoreCandidates(listing, candidates, activityByUser, catalog, now);
+  return writeCache(key, snapshotFromScored(listing, scored, now));
+}
+
+export function computeListingMatches(db, listing, { now = new Date(), rows = null, activityByUser = null } = {}) {
+  expireOpenPosts(db, now);
+  const generation = wishGeneration(db);
+  const cached = readCache(cacheKey(listing, "matches", generation));
+  if (cached) return cached;
   const candidates = rows || queryAllCandidateWishes(db, listing);
   const activity = activityByUser || preloadActivityByUser(db, candidates, now);
-  const scored = scoreCandidates(listing, candidates, activity, catalog, now);
-  return writeCache(key, snapshotFromScored(listing, scored, now));
+  return computeListingMatchesFrom({ listing, candidates, activityByUser: activity, now, generation });
 }
 
 function computeListingMatchesBatch(db, listings, now = new Date()) {
@@ -485,11 +497,10 @@ function computeListingMatchesBatch(db, listings, now = new Date()) {
   return listings.map((listing) => byId.get(listing.id));
 }
 
-export function ownerListingMatchSummary(db, postId, userId, now = new Date()) {
-  const { listing } = loadOwnedMatchListing(db, postId, userId, now);
-  const snapshot = computeListingMatches(db, listing, { now });
+/** 擁有者配對摘要的**純組裝**（同步與 PG 版共用）。 */
+export function ownerMatchSummaryFrom(listingId, snapshot = {}) {
   return {
-    listing_id: listing.id,
+    listing_id: listingId,
     enabled: true,
     count: snapshot.total,
     unavailable: false,
@@ -498,6 +509,12 @@ export function ownerListingMatchSummary(db, postId, userId, now = new Date()) {
       : "目前沒有符合的活躍需求",
     empty: snapshot.total === 0,
   };
+}
+
+export function ownerListingMatchSummary(db, postId, userId, now = new Date()) {
+  const { listing } = loadOwnedMatchListing(db, postId, userId, now);
+  const snapshot = computeListingMatches(db, listing, { now });
+  return ownerMatchSummaryFrom(listing.id, snapshot);
 }
 
 function ownerPublicMatchItem(row) {
@@ -574,7 +591,7 @@ export function pairStillHardEligible(db, postId, userId, wishRef, now = new Dat
   }
 }
 
-function unavailableSummary(listingId = null) {
+export function unavailableSummary(listingId = null) {
   return {
     listing_id: listingId,
     enabled: true,

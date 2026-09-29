@@ -3267,6 +3267,80 @@ const DEMANDAGG_MUTATIONS = [
   },
 ];
 
+// 站內刊登的屋主配對讀取（v3/test/self-listing-match-async.test.js，第八十批）。
+const SELFLISTING_MATCH_MUTATIONS = [
+  {
+    name: "自己的刊登改回同步版（別的節點的刊登看不到）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: '  if (!isPg(options)) {\n    const { listMineSelfListings } = await import("./db.js");',
+    to: '  if (true) {\n    const { listMineSelfListings } = await import("./db.js");',
+    expect: "自己的刊登：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "配對摘要改回同步版（候選只算本機的許願房）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "  if (!isPg(options)) return ownerListingMatchSummarySync(sqliteHandle(), postId, userId, now);",
+    to: "  if (true) return ownerListingMatchSummarySync(sqliteHandle(), postId, userId, now);",
+    expect: "工具資訊與 owner_matching",
+  },
+  {
+    name: "附摘要時改回同步版（清單的摘要只算本機）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "  if (!isPg(options)) return attachOwnerMatchSummariesSync(sqliteHandle(), listings, userId, now);",
+    to: "  if (true) return attachOwnerMatchSummariesSync(sqliteHandle(), listings, userId, now);",
+    expect: "自己的刊登：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "工具資訊改讀本機的會員（方案額度跟著本機跑）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "  const user = uid ? await getUserByIdAsync(uid, options) : null;",
+    to: '  const user = uid ? (await import("./db.js")).getUserById(uid) : null;',
+    expect: "工具資訊與 owner_matching",
+  },
+  {
+    name: "owner_matching 不回 PG 補水（別的節點關掉也照樣配對）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "export async function rentalMatchOwnerMetaAsync(options = {}) {\n  await getWishConditionsAsync(options);",
+    to: "export async function rentalMatchOwnerMetaAsync(options = {}) {\n  void options;",
+    expect: "工具資訊與 owner_matching",
+  },
+  {
+    name: "候選掃描不重建行政區索引（舊資料的配對永遠是 0）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "  if ((listing?.districts || []).length && (await demandMatchDistrictIndexCountAsync(run)) === 0) {\n    await rebuildDemandMatchDistrictsAsync(run);\n  }",
+    to: "  void listing;",
+    expect: "自己的刊登：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "自己的刊登不裝飾（回傳原始列）",
+    file: "v3/src/rentalMatchAsync.js",
+    from: "    const rows = rowsOf(await run(SELF_LISTINGS_BY_OWNER_SQL, [uid]))\n      .map((row) => decorateSelfListing(row, { viewerId: uid }));",
+    to: "    const rows = rowsOf(await run(SELF_LISTINGS_BY_OWNER_SQL, [uid]));",
+    expect: "自己的刊登：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "摘要文案不給（前端標籤空白）",
+    file: "v3/src/rentalMatchQuery.js",
+    from: '    label: snapshot.total\n      ? `目前可能符合 ${snapshot.total} 個活躍需求`\n      : "目前沒有符合的活躍需求",',
+    to: '    label: "",',
+    expect: "自己的刊登：PG 版與同步版逐欄位相同",
+  },
+  {
+    name: "`GET /api/self-listings` 改回同步版",
+    file: "v3/src/server.js",
+    from: "      listings: await listMineSelfListingsAsync(session.userId),",
+    to: "      listings: listMineSelfListings(session.userId),",
+    expect: "路由接線",
+  },
+  {
+    name: "`/matches/summary` 改回同步版",
+    file: "v3/src/server.js",
+    from: "    res.json(await ownerListingMatchSummaryAsync(req.params.id, session.userId));",
+    to: "    res.json(ownerListingMatchSummary(req.params.id, session.userId));",
+    expect: "路由接線",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4691,6 +4765,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /route-cache-async/.test(testFile) ? ROUTECACHE_MUTATIONS
   : /admin-maps-demo-async/.test(testFile) ? MAPSDEMO_MUTATIONS
   : /demand-aggregate-async/.test(testFile) ? DEMANDAGG_MUTATIONS
+  : /self-listing-match-async/.test(testFile) ? SELFLISTING_MATCH_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

@@ -20,6 +20,13 @@ import { setFlagsAsync } from "./personalFlagsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 // 需求統計／首頁需求曝險的 PG 島嶼入口。
 import { aggregateDemandAsync, homepageDemandExposureAsync } from "./demandAggregateAsync.js";
+// 站內刊登的屋主配對讀取島嶼（第八十批）。
+import {
+  listMineSelfListingsAsync,
+  listingToolsInfoAsync,
+  ownerListingMatchSummaryAsync,
+  rentalMatchOwnerMetaAsync,
+} from "./rentalMatchAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
 import { readFileSync } from "node:fs";
@@ -2988,36 +2995,36 @@ app.post("/api/feedback", async (req, res) => {
   }
 });
 
-app.get("/api/self-listings", (req, res) => {
+app.get("/api/self-listings", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入才能看自己的刊登" });
       return;
     }
+    // 自己的刊登、配對摘要、方案額度與 marketplace 開關全部走 PG 島嶼：同步版會讀到
+    // **這台節點**的刊登與會員（別的節點建立的完全看不到），配對候選也只算本機的許願房（第八十批）。
+    const flags = await getRentalMarketplaceFlagsAsync();
+    const catalog = isRentalCatalogV2Enabled(flags) ? await getRentalCatalogAsync() : null;
     res.json({
-      ...selfListingMeta(
-        isRentalCatalogV2Enabled(getRentalMarketplaceFlags())
-          ? { catalog: getRentalCatalog() }
-          : {},
-      ),
-      tools: listingToolsInfo(session.userId),
-      owner_matching: rentalMatchOwnerMeta(),
-      listings: listMineSelfListings(session.userId),
+      ...selfListingMeta(catalog ? { catalog } : {}),
+      tools: await listingToolsInfoAsync(session.userId),
+      owner_matching: await rentalMatchOwnerMetaAsync(),
+      listings: await listMineSelfListingsAsync(session.userId),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/self-listings/:id/matches/summary", (req, res) => {
+app.get("/api/self-listings/:id/matches/summary", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(ownerListingMatchSummary(req.params.id, session.userId));
+    res.json(await ownerListingMatchSummaryAsync(req.params.id, session.userId));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
   }
