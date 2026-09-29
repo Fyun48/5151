@@ -53,6 +53,47 @@ export function ensureGeoCacheSchema(db) {
   }
 }
 
+/** `ensureGeoCacheSchema()` 補的那九個欄位（PG 版用 `ADD COLUMN IF NOT EXISTS` 逐字補同一組）。 */
+export const GEO_CACHE_EXTRA_COLUMNS = Object.freeze([
+  "quality", "geo_source", "address_used", "address_version", "location_class",
+  "city", "district", "cache_kind", "provider",
+]);
+
+/**
+ * `geo_cache` 一列的落地值（**純函式**）：同步版（`db.js setCachedGeo()`）與 PG 版
+ * （`geoCacheAsync.setCachedGeoAsync()`）共用同一份推導——「quality／cache_kind 怎麼算」
+ * 不能有兩份實作，否則兩個 driver 會寫出不同形狀的快取。
+ * 回傳 `null` 代表這一筆不該落地（沒有可用的鍵，或座標不是有限數）。
+ */
+export function geoCacheRow(address, lat, lng, meta = {}, now = new Date()) {
+  const key = addressVersion(address);
+  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return null;
+  const quality = meta.quality || inferGeoQuality({ address: meta.address_used || address });
+  const source = String(meta.geo_source || meta.source || "");
+  const used = String(meta.address_used || address || "");
+  const stamp = new Date(now).toISOString();
+  const locationClass = String(meta.location_class || "");
+  const city = String(meta.city || "");
+  const district = String(meta.district || "");
+  const cacheKind = String(meta.cache_kind || (locationClass === "street" ? "street" : locationClass === "address" ? "house" : quality));
+  const provider = String(meta.provider || "");
+  return {
+    address: key,
+    lat: Number(lat),
+    lng: Number(lng),
+    updated_at: stamp,
+    quality,
+    geo_source: source,
+    address_used: used,
+    address_version: key,
+    location_class: locationClass,
+    city,
+    district,
+    cache_kind: cacheKind,
+    provider,
+  };
+}
+
 export function createGeoQueue({
   concurrency = 2,
   lookup,

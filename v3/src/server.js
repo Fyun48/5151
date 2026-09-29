@@ -29,7 +29,6 @@ import {
   defaultUserId,
   listUserIds,
   deleteProfile,
-  getCachedGeo,
   confirmExpiredOfflineFromSettings,
   getSettings,
   hideMany,
@@ -53,7 +52,6 @@ import {
   resetAllData,
   saveAsProfile,
   saveSettings,
-  setCachedGeo,
   sourceHistory,
   stats,
   holdStatsCache,
@@ -429,6 +427,8 @@ import {
   updateDescriptionTemplateAsync,
 } from "./listingToolsAsync.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
+// geo_cache（跨節點共用的地理編碼快取）的 PG 島嶼入口。
+import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
 import { publicListingView } from "./selfListings.js";
@@ -722,7 +722,8 @@ async function resolveGuestWorkPoint(workAddress, commuteKm) {
   if (!address || !(km > 0)) {
     return { workAddress: address, commuteKm: km, workLat: null, workLng: null, error: "" };
   }
-  const cached = getCachedGeo(address);
+  // 快取讀寫都走 PG 島嶼（`geo_cache` 跨節點共用；本機那份只有 crawler 在寫）。
+  const cached = await getCachedGeoAsync(address);
   if (cached && isTaiwanCoord(cached.lat, cached.lng)) {
     return {
       workAddress: address,
@@ -733,7 +734,7 @@ async function resolveGuestWorkPoint(workAddress, commuteKm) {
     };
   }
   try {
-    const geo = await geocodeAddress(address, getCachedGeo, {
+    const geo = await geocodeAddress(address, geoLookupAsync(), {
       strict: false,
       maxAttempts: 2,
       allowAdmin: false,
@@ -748,7 +749,7 @@ async function resolveGuestWorkPoint(workAddress, commuteKm) {
       };
     }
     if (geo && isTaiwanCoord(geo.lat, geo.lng)) {
-      setCachedGeo(address, geo.lat, geo.lng, geo);
+      await setCachedGeoAsync(address, geo.lat, geo.lng, geo);
       return {
         workAddress: address,
         commuteKm: km,
@@ -3759,9 +3760,9 @@ async function ensureWorkCoords() {
   const workAddress = String(current.workAddress || "").trim();
   if (!workAddress || (hasWorkPoint(current) && isTaiwanCoord(current.workLat, current.workLng))) return current;
   try {
-    const geo = await geocodeAddress(workAddress, getCachedGeo, { strict: false, maxAttempts: 2, allowAdmin: false });
+    const geo = await geocodeAddress(workAddress, geoLookupAsync(), { strict: false, maxAttempts: 2, allowAdmin: false });
     if (!geo) return current;
-    setCachedGeo(workAddress, geo.lat, geo.lng, geo);
+    await setCachedGeoAsync(workAddress, geo.lat, geo.lng, geo);
     return await saveSettingsAsync({ workLat: geo.lat, workLng: geo.lng, workLocationClass: geo.location_class || "" }, uid);
   } catch (error) {
     console.warn("補上班地址座標失敗：", error.message);
@@ -4529,13 +4530,13 @@ async function persistSettings(body = {}, userId) {
     });
     if (resolved.error) throw new Error(resolved.error);
     if (resolved.needsGeocode) {
-      const geo = await geocodeAddress(resolved.workAddress, getCachedGeo, { strict: true, maxAttempts: 2 });
+      const geo = await geocodeAddress(resolved.workAddress, geoLookupAsync(), { strict: true, maxAttempts: 2 });
       if (!geo) throw new Error("找不到這個上班地址，請再寫詳細一點");
       body.workAddress = resolved.workAddress;
       body.workLat = geo.lat;
       body.workLng = geo.lng;
       body.workLocationClass = geo.location_class || "";
-      setCachedGeo(resolved.workAddress, geo.lat, geo.lng, geo);
+      await setCachedGeoAsync(resolved.workAddress, geo.lat, geo.lng, geo);
     } else if (resolved.workAddress !== undefined) {
       body.workAddress = resolved.workAddress;
       body.workLat = resolved.workLat;
@@ -4614,9 +4615,10 @@ app.post("/api/exclude-region", async (req, res) => {
       res.status(400).json({ error: "請輸入範圍描述" });
       return;
     }
+    // `boxFromRoadDescription()` 會逐個路名查快取（PG 島嶼）並把新查到的座標寫回去。
     const box = await boxFromRoadDescription(text, {
-      lookup: getCachedGeo,
-      save: setCachedGeo,
+      lookup: geoLookupAsync(),
+      save: (road, lat, lng, meta) => setCachedGeoAsync(road, lat, lng, meta),
     });
     res.json({ box });
   } catch (error) {

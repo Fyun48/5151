@@ -557,6 +557,19 @@ async function nominatimSearch(params, { fetchFn = fetch, timeoutMs = 4000 } = {
   return res;
 }
 
+// `lookup()` 可能回 Promise（PG 島嶼的 `getCachedGeoAsync()`）：2026-09-29 第六十四批起
+// 快取入口是**非同步**的，所以這一串候選鍵要逐一 `await`。同步函式（crawler 用的本機版本）
+// 傳進來也完全相容——`await` 一個非 Promise 值只是原值。
+async function firstCachedGeo(lookup, keys) {
+  if (typeof lookup !== "function") return null;
+  for (const key of keys) {
+    if (!key) continue;
+    const hit = await lookup(key);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 async function geocodeAddressUnshared(address, lookup, options = {}) {
   const started = Date.now();
   const text = geoKey(address);
@@ -568,7 +581,8 @@ async function geocodeAddressUnshared(address, lookup, options = {}) {
   const parts = parseTaiwanAddressParts(address);
   const houseKey = houseCacheKey(parts);
   const streetKey = streetCacheKey(parts);
-  const cached = lookup?.(address) || lookup?.(text) || (houseKey && lookup?.(houseKey)) || (streetKey && lookup?.(streetKey));
+  // 逐字沿用原本的候選順序（address → 正規化文字 → 門牌鍵 → 路段鍵），只是現在會 await。
+  const cached = await firstCachedGeo(lookup, [address, text, houseKey, streetKey]);
   if (cached && Number.isFinite(Number(cached.lat)) && Number.isFinite(Number(cached.lng))) {
     const hit = acceptGeoHit({
       ...cached,
@@ -771,7 +785,8 @@ export async function boxFromRoadDescription(text, options = {}) {
   const uniqueRoads = [...new Set(parts.map((part) => part.road))];
   const coords = {};
   for (const road of uniqueRoads) {
-    const cached = options.lookup?.(road) || options.lookup?.(geoKey(road));
+    // 同 `firstCachedGeo()`：lookup／save 都可能是非同步的（PG 島嶼），所以一律 await。
+    const cached = (await options.lookup?.(road)) || (await options.lookup?.(geoKey(road)));
     let geo = cached;
     if (!geo) {
       geo = await geocodeAddress(road, options.lookup, { cityHint: "臺北市" });
@@ -783,7 +798,7 @@ export async function boxFromRoadDescription(text, options = {}) {
       throw new Error(`找不到路名「${road}」，請改成較完整的路名（例如加上路／街／段，或寫士林區承德路）再試`);
     }
     if (!cached) {
-      options.save?.(road, geo.lat, geo.lng);
+      await options.save?.(road, geo.lat, geo.lng);
     }
     coords[road] = geo;
   }

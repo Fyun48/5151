@@ -88,7 +88,7 @@ import {
   getActiveSearchProfile,
   notifySnapshotFromProfile,
 } from "./searchProfiles.js";
-import { addressVersion, ensureGeoCacheSchema, inferGeoQuality } from "./geoQueue.js";
+import { addressVersion, ensureGeoCacheSchema, geoCacheRow, inferGeoQuality } from "./geoQueue.js";
 import { ensureListingPrepSchema } from "./listingEnrichQueue.js";
 import { classifyAddress, hpDisplayReadySql, isHousepriceListing, listingIsDisplayable } from "./listingPrep.js";
 import {
@@ -8501,18 +8501,11 @@ export function getCachedGeo(address) {
   }
 }
 
+// 一列的落地值由 `geoQueue.geoCacheRow()` 這個**純函式**算（2026-09-29 第六十四批抽出來）：
+// PG 版（`geoCacheAsync.setCachedGeoAsync()`）逐欄重用同一份，兩個 driver 不可能寫出不同形狀。
 export function setCachedGeo(address, lat, lng, meta = {}) {
-  const key = addressVersion(address);
-  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
-  const quality = meta.quality || inferGeoQuality({ address: meta.address_used || address });
-  const source = String(meta.geo_source || meta.source || "");
-  const used = String(meta.address_used || address || "");
-  const stamp = new Date().toISOString();
-  const locationClass = String(meta.location_class || "");
-  const city = String(meta.city || "");
-  const district = String(meta.district || "");
-  const cacheKind = String(meta.cache_kind || (locationClass === "street" ? "street" : locationClass === "address" ? "house" : quality));
-  const provider = String(meta.provider || "");
+  const row = geoCacheRow(address, lat, lng, meta);
+  if (!row) return;
   try {
     db.prepare(
       `INSERT INTO geo_cache(address, lat, lng, updated_at, quality, geo_source, address_used, address_version, location_class, city, district, cache_kind, provider)
@@ -8530,11 +8523,12 @@ export function setCachedGeo(address, lat, lng, meta = {}) {
          district = excluded.district,
          cache_kind = excluded.cache_kind,
          provider = excluded.provider`,
-    ).run(key, Number(lat), Number(lng), stamp, quality, source, used, key, locationClass, city, district, cacheKind, provider);
+    ).run(row.address, row.lat, row.lng, row.updated_at, row.quality, row.geo_source, row.address_used,
+      row.address_version, row.location_class, row.city, row.district, row.cache_kind, row.provider);
   } catch {
     db.prepare(
       "INSERT INTO geo_cache(address, lat, lng, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(address) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, updated_at = excluded.updated_at",
-    ).run(key, Number(lat), Number(lng), stamp);
+    ).run(row.address, row.lat, row.lng, row.updated_at);
   }
 }
 

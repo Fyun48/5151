@@ -2514,6 +2514,100 @@ const MAP_MUTATIONS = [
   // 集合反而變小）——但沒有可重跑的失敗可以指名，所以不假裝它被測試守住。
 ];
 
+// geo_cache（地理編碼快取）PG 分支的變異集（v3/test/geo-cache-async.test.js，第六十四批）。
+const GEOCACHE_SRC = "v3/src/geoCacheAsync.js";
+const GEOCACHE_MUTATIONS = [
+  {
+    name: "快取讀取不查 PG（永遠當成沒命中，每次都要重新地理編碼）",
+    file: GEOCACHE_SRC,
+    from: "        const rows = rowsOf(await exec(sql, [key]));\n        return rows[0] || null;",
+    to: "        return null;",
+    expect: "讀取：正規化過的變體會命中同一列",
+  },
+  {
+    name: "讀取鍵不經 addressVersion（正規化過的地址查不到同一列）",
+    file: GEOCACHE_SRC,
+    from: "  const key = addressVersion(address);\n  if (!key) return null;",
+    to: '  const key = String(address || "");\n  if (!key) return null;',
+    expect: "讀取：正規化過的變體會命中同一列",
+  },
+  {
+    name: "落地值不經共用的純函式（meta 推導全部丟掉）",
+    file: GEOCACHE_SRC,
+    from: "  const row = geoCacheRow(address, lat, lng, meta, options.now || new Date());",
+    to: "  const row = geoCacheRow(address, lat, lng, {}, options.now || new Date());",
+    expect: "寫入：落地值與同步版逐欄相同",
+  },
+  {
+    name: "座標不是有限數時仍然落地（快取寫進 NaN）",
+    file: "v3/src/geoQueue.js",
+    from: "  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return null;",
+    to: "  if (!key) return null;",
+    expect: "沒有可用的鍵或座標不是有限數",
+  },
+  {
+    name: "PG 建表時不補那九個額外欄位（新庫少欄位）",
+    file: GEOCACHE_SRC,
+    from: "    for (const column of GEO_CACHE_EXTRA_COLUMNS) {",
+    to: "    for (const column of []) {",
+    expect: "ensureGeoCacheOnce",
+  },
+  {
+    // ⚠️ 原本寫成「`tables: []`」是**等價變異**：`ensurePgSchema()` 的 `tables: []` 代表
+    // 「鏡射全部表」，geo_cache 照樣被建出來（實測 SURVIVED）。要驗的是「乾脆不建表」。
+    name: "PG 不建 geo_cache（只補欄位，新庫直接 42P01）",
+    file: GEOCACHE_SRC,
+    from: '    await ensurePgSchema(pgDriver, sqlite, { tables: ["geo_cache"], indexes: false });\n',
+    to: "",
+    expect: "ensureGeoCacheOnce",
+  },
+  {
+    name: "讀取不往下一層 fallback（舊庫少欄位就整個讀不到）",
+    file: GEOCACHE_SRC,
+    from: "        if (!isMissingRelation(error)) throw error;\n      }\n    }\n    return null;",
+    to: "        throw error;\n      }\n    }\n    return null;",
+    expect: "舊形狀的表",
+  },
+  {
+    name: "寫入不往最小語句 fallback（舊庫少欄位就寫不進去）",
+    file: GEOCACHE_SRC,
+    from: "      if (!isMissingRelation(error)) throw error;\n      await exec(GEO_CACHE_UPSERT_MINIMAL_SQL, [row.address, row.lat, row.lng, row.updated_at]);",
+    to: "      throw error;\n      await exec(GEO_CACHE_UPSERT_MINIMAL_SQL, [row.address, row.lat, row.lng, row.updated_at]);",
+    expect: "舊形狀的表",
+  },
+  {
+    name: "geocodeAddress 的 lookup 回到同步呼叫（非同步快取永遠當成命中 Promise）",
+    file: "v3/src/geo.js",
+    from: "  const cached = await firstCachedGeo(lookup, [address, text, houseKey, streetKey]);",
+    to: "  const cached = lookup?.(address) || lookup?.(text) || (houseKey && lookup?.(houseKey)) || (streetKey && lookup?.(streetKey));",
+    expect: "非同步的 lookup 也要命中快取",
+  },
+  {
+    name: "候選鍵不 await（非同步 lookup 一律 miss）",
+    file: "v3/src/geo.js",
+    from: "    const hit = await lookup(key);",
+    to: "    const hit = lookup(key);",
+    // 殺手是「候選鍵的順序」那一條：`firstCachedGeo()` 是 async，回傳的 Promise 會被外層
+    // `await` 解掉，所以單一鍵的命中測試**不會**紅；但候選鍵 miss 時 `if (hit)`（Promise 恆真）
+    // 會提早結束整條鏈 ⇒ 路段鍵永遠問不到。
+    expect: "候選鍵的順序不變",
+  },
+  {
+    name: "boxFromRoadDescription 不 await lookup（非同步快取查不到路名）",
+    file: "v3/src/geo.js",
+    from: "    const cached = (await options.lookup?.(road)) || (await options.lookup?.(geoKey(road)));",
+    to: "    const cached = options.lookup?.(road) || options.lookup?.(geoKey(road));",
+    expect: "boxFromRoadDescription",
+  },
+  {
+    name: "boxFromRoadDescription 不 await save（新座標還沒落地就回傳）",
+    file: "v3/src/geo.js",
+    from: "      await options.save?.(road, geo.lat, geo.lng);",
+    to: "      options.save?.(road, geo.lat, geo.lng);",
+    expect: "boxFromRoadDescription",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -3794,6 +3888,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /site-command-async/.test(testFile) ? SITECOMMAND_MUTATIONS
   : /web-push-async/.test(testFile) ? PUSH_MUTATIONS
   : /rental-catalog-async/.test(testFile) ? RENTALCAT_MUTATIONS
+  : /geo-cache-async/.test(testFile) ? GEOCACHE_MUTATIONS
   : /comms-async/.test(testFile) ? COMMS_MUTATIONS
   : /content-documents-async/.test(testFile) ? CONTENTDOCS_MUTATIONS
   : /member-media-async/.test(testFile) ? MEMBERMEDIA_MUTATIONS
