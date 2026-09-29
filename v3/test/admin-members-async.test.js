@@ -10,7 +10,7 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -22,6 +22,7 @@ const dbMod = await import("../src/db.js");
 const adminAsync = await import("../src/adminMembersAsync.js");
 const { ADMIN_DELETE_REASONS } = await import("../src/members.js");
 
+const dir = path.dirname(new URL(import.meta.url).pathname);
 const PG = { driver: "postgres" };
 const handle = () => dbMod.sqliteHandle();
 const MEMBER = 900000006001;
@@ -205,4 +206,37 @@ test("投影形狀：刪除理由清單必須來自同一份常數（前端契�
   assert.ok(ADMIN_DELETE_REASONS.length >= 2);
   const custom = ADMIN_DELETE_REASONS.find((row) => row.id === "custom");
   assert.ok(custom, "必須有 custom 這個選項");
+});
+
+// ---------------------------------------------------------------------------
+// 第七十一批：`GET /api/me` 的個人欄位與「開著的自主刊登數」改讀 PG。
+// 這一條本來就是「別的節點看不到」的形狀：`readSession` 的身分來自 PG，欄位卻讀本機。
+// ---------------------------------------------------------------------------
+
+test("countOpenSelfListingsAsync：PG 分支數的是 PG 的列，而且會先清過期", async () => {
+  const exec = pgOnlyWorld();
+  // 本機**刻意沒有**這位會員的刊登（PG 模式的實況）⇒ 同步版會回 0。
+  dbMod.sqliteHandle().prepare("DELETE FROM listings WHERE listed_by_user_id = ?").run(MEMBER);
+  const pg = await adminAsync.countOpenSelfListingsAsync(MEMBER, { ...PG, exec, strict: true });
+  assert.equal(pg, 1, "PG 上只有一筆還開著（另一筆已過期 ⇒ 不算）");
+  assert.equal(dbMod.countOpenSelfListings(MEMBER), 0, "本機沒有這些列 ⇒ 讀本機的話會是 0（證明讀的是 PG）");
+  assert.equal(exec.raw.prepare("SELECT self_status FROM listings WHERE post_id = 910004").get().self_status, "expired",
+    "過期那一筆要被標成 expired（與同步版同義）");
+});
+
+test("GET /api/me 走 PG 島嶼（會員欄位、最後登入與自主刊登數）", () => {
+  const src = readFileSync(path.join(dir, "../src/server.js"), "utf8");
+  const start = src.indexOf('app.get("/api/me"');
+  assert.ok(start > 0, "找不到 /api/me 的 handler");
+  const end = src.indexOf("\n});", start);
+  const body = src.slice(start, end === -1 ? undefined : end + 4);
+  for (const needle of ["await getUserByIdAsync(", "await touchLastLoginAsync(", "await countOpenSelfListingsAsync("]) {
+    assert.ok(body.includes(needle), `/api/me 必須用 PG 島嶼：${needle}`);
+  }
+  // 同步版的三支不得出現在 handler 裡。⚠️ 要先把 `XxxAsync(` 整個拿掉再找 `Xxx(`——
+  // 第一版寫成 `replace(/Async\(/g, "(")`，等於**自己把 async 名字變成同步名字**，測試永遠紅。
+  for (const sync of ["getUserById", "touchLastLogin", "countOpenSelfListings"]) {
+    const withoutAsync = body.replace(new RegExp(`${sync}Async\\(`, "g"), "");
+    assert.ok(!new RegExp(`(?<![A-Za-z])${sync}\\(`).test(withoutAsync), `/api/me 不得再用同步的 ${sync}()`);
+  }
 });

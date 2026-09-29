@@ -3922,6 +3922,31 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   不得被改動）、四種錯誤情境的訊息與狀態碼都與同步版相同且雜湊不動、sqlite 模式回退且不碰 PG 夾具。
 - 變異 **13 條全殺**（`USERS_MUTATIONS` 新增 3 條：只寫本機／不比對目前密碼／不擋新舊相同）。
 
+## 二之負四十一、2026-09-29 第七十一批：`GET /api/me`（個人頁）搬上 PG
+
+### 71.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `GET /api/me` | `getUserByIdAsync()`／`touchLastLoginAsync()`／`countOpenSelfListingsAsync()`（都既有） | MIXED → **PG** |
+
+尺規：缺口 **23 → 22**、PG **245 → 246**、MIXED **20 → 19**（SQLite 3、無直接DB 20 不變）。
+
+形狀與其他「別的節點看不到」的例子一樣：`readSession` 的**身分**來自 PG，但這一頁的會員欄位
+（頭像／聯絡方式／地址）與「開著的自主刊登數」讀本機 ⇒ PG 站會顯示別台節點看不到的舊資料
+（換節點後頭像與聯絡方式「不見了」）。三支需要的 async 版本**都已經存在**（前幾批做的），
+所以這一包是純接線 ＋ 補上 `countOpenSelfListingsAsync()` 的 PG 分支 parity 測試。
+
+### 71.2 測試
+
+- `v3/test/admin-members-async.test.js`（**8 項全綠**，新增 2 條）：
+  `countOpenSelfListingsAsync()` 的 PG 分支**數的是 PG 的列**（夾具只把資料放在 PG、本機刻意留空，
+  同步版因此回 0）而且會先把過期那一筆標成 `expired`；`GET /api/me` 的接線（三支 async 都要在
+  handler 裡、同步三支都不得再出現）。
+  ⚠️ 接線斷言第一版寫成 `replace(/Async\(/g, "(")`——那等於**自己把 async 名字變成同步名字**，
+  測試永遠紅；要先把 `XxxAsync(` 整個拿掉再找 `Xxx(`。
+- 變異 **11 條全殺**（`ADMINMEMBERS_MUTATIONS` 新增 3 條：自主刊登數改讀本機、`/api/me` 兩支改回同步版）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3932,13 +3957,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十一批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **20** |
+| MIXED | — | **19** |
 | 無直接DB | — | **20** |
-| PG | 22 | **245** |
-| **缺口（SQLite＋MIXED）** | — | **23** |
+| PG | 22 | **246** |
+| **缺口（SQLite＋MIXED）** | — | **22** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
