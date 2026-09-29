@@ -118,8 +118,6 @@ import {
   saveRentalMarketplaceFlags,
   applyWishLifecycleFor,
   runWishLifecycleWorkerTick,
-  getLegalCopy,
-  saveLegalCopy,
   getSpirit,
   saveSpirit,
   getHousingData,
@@ -255,6 +253,9 @@ import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requir
 import { listingToolsMeta } from "./listingTools.js";
 import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPushAsync.js";
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
+// 法律文案（免責聲明／個資說明）的 PG 島嶼入口：一份文案、兩個 store
+// （settings 與 content_documents），同步版在 PG 站是「寫本機、訪客讀不到」的靜默失效。
+import { getLegalCopyAsync, saveLegalCopyAsync } from "./legalCopyAsync.js";
 import {
   cancelListingImportAsync,
   confirmListingImportAsync,
@@ -466,6 +467,7 @@ import {
   getAdminMailSettingsAsync,
   getStoredSmtpAsync,
   getAdminOauthSettingsAsync,
+  getStoredOauthAsync,
   getAdminSponsorSettingsAsync,
   getBrandMascotAsync,
   publicSponsorSettingsAsync,
@@ -858,6 +860,8 @@ app.get("/api/me", async (req, res) => {
   if (session?.userId) touchLastLogin(session.userId, { minIntervalMs: 12 * 60 * 60 * 1000 });
   const user = session?.userId ? getUserById(session.userId) : null;
   const nickname = String(user?.nickname || "").trim();
+  // 法律文案走 PG 島嶼：這一頁顯示的是「使用者同意的那一份」，讀本機在 PG 站會顯示舊版。
+  const legal = await getLegalCopyAsync();
   res.json({
     ok: Boolean(session),
     email: session?.email || "",
@@ -877,10 +881,10 @@ app.get("/api/me", async (req, res) => {
     residence: String(user?.residence || "").trim(),
     privacy_accepted: Boolean(String(user?.profile_privacy_at || user?.accepted_disclaimer_at || "").trim()),
     needs_profile: needsProfileOnboard(user),
-    privacy_text: getLegalCopy().privacy,
-    disclaimer_text: getLegalCopy().disclaimer,
-    privacy_check: getLegalCopy().privacyCheck,
-    disclaimer_check: getLegalCopy().disclaimerCheck,
+    privacy_text: legal.privacy,
+    disclaimer_text: legal.disclaimer,
+    privacy_check: legal.privacyCheck,
+    disclaimer_check: legal.disclaimerCheck,
     pending_documents: session?.userId ? pendingMemberDocuments(session.userId) : [],
     consents: session?.userId ? listMyConsents(session.userId) : [],
     open_self_listings: session?.userId ? countOpenSelfListings(session.userId) : 0,
@@ -907,8 +911,12 @@ app.patch("/api/profile", (req, res) => {
   }
 });
 
-app.get("/api/disclaimer", (_req, res) => {
-  res.json(getLegalCopy());
+app.get("/api/disclaimer", async (_req, res) => {
+  try {
+    res.json(await getLegalCopyAsync());
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
 app.get("/api/public/documents", async (_req, res) => {
@@ -1345,7 +1353,7 @@ app.get("/api/oauth", async (_req, res) => {
   res.json(await getAdminOauthSettingsAsync());
 });
 
-app.get("/auth/:provider", (req, res) => {
+app.get("/auth/:provider", async (req, res) => {
   try {
     const provider = String(req.params.provider || "");
     if (!OAUTH_PROVIDERS.includes(provider)) {
@@ -1353,14 +1361,15 @@ app.get("/auth/:provider", (req, res) => {
       err.status = 404;
       throw err;
     }
-    const cfg = getStoredOauth()[provider];
+    // 設定與同意文件都走 PG 島嶼：同步版會讀節點本機，非來源節點會「管理員明明開了卻說沒開通」。
+    const cfg = (await getStoredOauthAsync())[provider];
     if (!cfg?.enabled || !cfg.clientId || !cfg.clientSecret) {
       const err = new Error("管理員尚未開通這個社群登入");
       err.status = 503;
       throw err;
     }
     const accept = String(req.query.accept || "") === "1";
-    const consents = accept ? getRequiredRegistrationDocuments() : [];
+    const consents = accept ? await getRequiredRegistrationDocumentsAsync() : [];
     const state = createOauthState({ provider, accept, consents });
     const base = publicBaseUrl(req);
     const redirectUri = `${base}/auth/${provider}/callback`;
@@ -1386,7 +1395,8 @@ app.get("/auth/:provider/callback", async (req, res) => {
       err.status = 400;
       throw err;
     }
-    const cfg = getStoredOauth()[provider];
+    // 與 /auth/:provider 同一個 store：設定寫在 PG（settings.oauth）時，讀本機就會「查無設定」。
+    const cfg = (await getStoredOauthAsync())[provider];
     const base = publicBaseUrl(req);
     const redirectUri = `${base}/auth/${provider}/callback`;
     const profile = await exchangeOauthCode(provider, {
@@ -2418,13 +2428,17 @@ app.put("/api/admin/spirit", requireAdminApi, async (req, res) => {
   }
 });
 
-app.get("/api/admin/legal-copy", requireAdminApi, (_req, res) => {
-  res.json(getLegalCopy());
+app.get("/api/admin/legal-copy", requireAdminApi, async (_req, res) => {
+  try {
+    res.json(await getLegalCopyAsync());
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message });
+  }
 });
 
-app.put("/api/admin/legal-copy", requireAdminApi, (req, res) => {
+app.put("/api/admin/legal-copy", requireAdminApi, async (req, res) => {
   try {
-    res.json(saveLegalCopy(req.body || {}));
+    res.json(await saveLegalCopyAsync(req.body || {}));
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }

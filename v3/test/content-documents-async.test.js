@@ -120,6 +120,25 @@ test("建立草稿：形狀、版本號、落地列與稽核事件都與同步�
   assert.equal(dump(exec.raw, "content_document_events")[0].action, "draft_create");
 });
 
+test("注入式 exec 的兩種形狀都要吃得下（裸陣列與 { rows, rowCount }）", async () => {
+  // 🚨 第六次踩到「exec 形狀」：`withFallbackTx()` 直接把 `options.exec` 轉送給 runner，
+  // 而這個模組的 runner 一律吃**裸陣列**。照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }` 時，
+  // `nextVersionAsync()` 會把整個物件當成「沒有資料列」⇒ 版本算成 1 ⇒ 撞
+  // `idx_content_documents_type_version`（live PG 測試抓到）。
+  const exec = resetBoth();
+  // 第一版先用裸陣列，第二版改用 `{ rows, rowCount }`：版本必須接到 2，而且落地列要一樣。
+  const first = await asyncMod.createDraftAsync(DRAFT, { now: NOW, ...PG, exec });
+  assert.equal(first.version, 1);
+  const wrapped = async (sql, params = []) => {
+    const rows = await exec(sql, params);
+    return { rows, rowCount: Number(rows.rowCount) || 0 };
+  };
+  const second = await asyncMod.createDraftAsync(DRAFT, { now: NOW, ...PG, exec: wrapped });
+  assert.equal(second.version, 2, "第二版的版本號必須是 2（`{rows}` 形狀被當成 0 列時會算成 1 而撞唯一鍵）");
+  assert.equal(dump(exec.raw, "content_documents").length, 2, "兩版都要落地");
+  assert.notEqual(second.content_hash, first.content_hash, "版本不同 ⇒ 指紋要跟著變");
+});
+
 test("建立草稿：版本號往上遞增，指紋要跟著版本變（否則兩版會同 hash）", async () => {
   const exec = resetBoth();
   const a1 = await asyncMod.createDraftAsync(DRAFT, { now: NOW, ...PG, exec });

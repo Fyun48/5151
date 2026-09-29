@@ -2823,6 +2823,87 @@ node v3/scripts/route-data-map.mjs --json
 > `/home/cline/.secrets/postgres/5151-live-repro.env` 的 `PG_LIVE_REPRO_URL`，
 > 並登記在 `INDEX.md` 第 10 列。`5151-agent-pg.env` 的 `PG_TEST_URL` 是**正式站**，不要拿來跑測試。
 
+## 二之負二十、2026-09-28 第五十批：法律文案（legal copy）＋ OAuth 設定讀取
+
+### 50.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `GET  /api/disclaimer` | `getLegalCopyAsync` |
+| `GET  /api/admin/legal-copy` | `getLegalCopyAsync` |
+| `PUT  /api/admin/legal-copy` | `saveLegalCopyAsync` |
+| `GET  /api/me` | 同一支（顯示「使用者同意的那一份」；這條還有其它卡點，尚未整條變 PG） |
+| `GET  /auth/:provider` | `getStoredOauthAsync` ＋ `getRequiredRegistrationDocumentsAsync` |
+| `GET  /auth/:provider/callback` | 同一支的 OAuth 設定讀取（其餘卡點仍在） |
+
+尺規：缺口 **66 → 62**、PG **202 → 206**、SQLite **10 → 7**、MIXED **56 → 55**。
+**一次四條路由變 PG**（三條法律文案 ＋ OAuth 起始），是近期單包最大的一格。
+
+### 50.2 這一包的五個坑
+
+1. 🚨 **`settings.legalCopy` 不是來源，是「種子」。**
+   `legalCopyFromDocuments()`（contentDocuments.js:441）**永遠不會回 null**：文件不在時它回
+   `defaultLegalCopy()` 的欄位。而 `getLegalCopy()` 的條件是
+   `if (fromDocs?.disclaimer && fromDocs?.privacy)` —— 兩個欄位恆為 truthy ⇒
+   **`?? settingKey("legalCopy")` 那一路只有「文件讀取丟例外」時才到得了**。
+   我第一版測試照「settings 是回退」寫，**5 條紅**；改成照真實語意寫（文件優先／沒有文件回預設值／
+   只有例外時才走 settings）才對。**先讀懂語意再寫期望值，不要照字面猜。**
+2. 🚨 **`withFallbackTx()` 沒有把注入式 `exec` 正規化（「exec 形狀」第六次）。**
+   `contentDocumentsAsync.withFallbackTx()` 直接 `runPostgres(options.exec)`，但那個模組的 PG runner
+   一律吃**裸陣列**；照 `crmOutboxAsync` 慣例傳 `{ rows, rowCount }` 時，
+   `nextVersionAsync()` 會把整個物件當成「沒有資料列」⇒ 版本算成 1 ⇒ 撞
+   `idx_content_documents_type_version`（**由 live PG 測試抓到**，不是單元測試）。
+   已修成 `runPostgres(await pgExec(options))`，並補測試（兩種形狀都要吃得下）＋變異。
+   **同一個形狀問題還在其它 7 個模組**（`budgetGuardAsync`、`commsAsync`、`crmAsync`、
+   `listingEnrichQueueAsync`、`listingSimilarityAsync`、`listingToolsAsync` 的 `withFallbackTx`／
+   `withTransaction` 路徑）——它們的 **live/parity 測試目前都傳裸陣列**，所以還沒爆；
+   要修就是同一行（`options.exec` → 該模組的 `pgExec(options)`）。**列為下一批的橫向修正。**
+3. **`saveLegalCopy()` 只會為「真的改到的」那份文件建立新版本**（未變動的 `continue`）。
+   live 測試第一版斷言「兩份都會被建立」也是錯的（只有 `registration_terms` 會多一版）。
+4. **`/api/me` 的四行 `getLegalCopy()`** 只是同一支的順手移植（該路由還有 5 個卡點），
+   但它是**必要**的：會員頁顯示的是「他同意的那一份」，讀本機在 PG 站會顯示舊版。
+5. **本機鏡射**：`db.js` 的 `updateUserProfile()` → `withLegalProfile()`（`PATCH /api/profile`）
+   還是同步讀本機，所以 `saveLegalCopyAsync()` 在 PG 寫完後會**順手把本機那份也寫成同一個值**
+   （`saveLegalCopySync(next)`，盡力而為）。其它節點仍要等 `PATCH /api/profile` 移植才會一致。
+
+### 50.3 測試
+
+- `v3/test/legal-copy-async.test.js`（**8 項全綠**）：文件優先（settings 放誘餌值）、
+  沒有文件回預設值、**文件讀取丟例外時才走 settings**、儲存時與同步版比對**落地的位元組**
+  （settings JSON ＋ 文件 body）、SQLite 模式走同步、fail-open 讀／fail-closed 寫（有 strict 與
+  沒 strict 兩種）、OAuth 與同意文件同源、wiring。變異 **6 條全殺**；
+  另有一條**刻意移除的等價變異**（`withFallback()` 的 `!isPg` 檢查：這一支的 PG 分支全由
+  既有島嶼函式組成，它們自己會依 driver 分派 ⇒ 拿掉之後 8 條測試一條都不紅）。
+- `v3/test/legal-copy-live-pg.test.js`（**1 項全綠**，隔離庫實跑兩次）：寫進去 → 讀回來、
+  settings 存原文、只有改到的那份文件多一版且 `published`、**不可變性 trigger 仍在**
+  （直接 UPDATE 已發布文件必須被擋）。前後都還原（刪新列 ＋ 寫回 settings）。
+- `v3/test/content-documents-async.test.js`（**16 項全綠**）：新增「注入式 exec 兩種形狀都要吃得下」；
+  `CONTENTDOCS_MUTATIONS` **16 條全殺**。
+- `v3/test/route-data-map.test.js`（**12 項全綠**）：原第 17 條「`/api/admin/legal-copy` 必須看得到
+  SQLite 讀取」**第八次過期**（這條路由一移植就失效），改成**不動數字的版本**：
+  解析交接文件的「現況」表 ＋ 尺規的 `--json` 統計，兩邊自動比對
+  ⇒ 之後只會因為「改了程式沒改文件」而紅，不會再因為進度而過期。
+
+```bash
+node --test v3/test/legal-copy-async.test.js v3/test/content-documents-async.test.js v3/test/route-data-map.test.js
+node v3/scripts/mutation-check.mjs v3/test/legal-copy-async.test.js
+node v3/scripts/mutation-check.mjs v3/test/content-documents-async.test.js
+set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a
+node --test v3/test/legal-copy-live-pg.test.js
+```
+
+### 50.4 這一包之後，剩下的缺口長什麼樣（62 條）
+
+- **`ensureUser`（22 條）＋ `getUserById`（24 條）＋ `countWatched`（12 條）＋
+  `expireOpenSelfListings`（10 條）**：會員／管理後台那一叢，**沒有任何 Async 版本**
+  （`deleteUser`、`restoreUser`、`listUsers`、`listAdminMembers`、`adminPatchMember`、`setUserPlan`…），
+  是下一塊真正的大石頭（一次可能清掉 5～8 條）。
+- **`getMailTemplates`（10）／`getStoredSmtp`（6）**：寄信那一叢（`/api/change-password`、
+  `/auth/:provider/callback`…），多數已有 Async 版本，屬「接線型」工作。
+- **`tableColumns`（10）＋ 自主刊登配對那一叢**：`self-listings` 的 4 條。
+- **Owner 未決**：`PUT /api/admin/mail`、`PUT /api/admin/oauth`（會寫節點本機 `auth.env`）、
+  feedback／Ops 遞送那一叢（A：宣告尺規例外／B：worker 重做）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -2833,13 +2914,16 @@ node v3/scripts/route-data-map.mjs --json
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第四十九批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十批）** |
 |---|---:|---:|
-| SQLite | 95 | **10** |
-| MIXED | — | **56** |
+| SQLite | 95 | **7** |
+| MIXED | — | **55** |
 | 無直接DB | — | **20** |
-| PG | 22 | **202** |
-| **缺口（SQLite＋MIXED）** | — | **66** |
+| PG | 22 | **206** |
+| **缺口（SQLite＋MIXED）** | — | **62** |
+
+> 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
+> `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
 
 > 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
 > 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`

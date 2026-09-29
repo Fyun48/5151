@@ -1728,6 +1728,15 @@ const CD_SRC = "v3/src/contentDocumentsAsync.js";
 const CD_SYNC_SRC = "v3/src/contentDocuments.js";
 const CONTENTDOCS_MUTATIONS = [
   {
+    // 注入式 exec 不經 `pgExec()` 正規化 ⇒ `{ rows, rowCount }` 形狀會被當成「沒有資料列」，
+    // 版本算成 1 而撞唯一鍵（live PG 測試抓到；「exec 形狀」第六次）。
+    name: "注入式 exec 不經正規化（{rows} 形狀會把版本算成 1）",
+    file: CD_SRC,
+    from: "    if (options.exec) return await runPostgres(await pgExec(options));",
+    to: "    if (options.exec) return await runPostgres(options.exec);",
+    expect: "注入式 exec 的兩種形狀都要吃得下",
+  },
+  {
     name: "PG trigger 寫回 SQLite 語法 IS NOT OLD.body（PG 直接語法錯誤）",
     file: CD_SRC,
     from: "       NEW.body IS DISTINCT FROM OLD.body",
@@ -2904,6 +2913,66 @@ const PFLAGS_MUTATIONS = [
   },
 ];
 
+// 法律文案 PG 分支的變異集（v3/test/legal-copy-async.test.js）。
+const LEGALCOPY_SRC = "v3/src/legalCopyAsync.js";
+const LEGALCOPY_MUTATIONS = [
+  {
+    // 文件優先：`settings` 只是 bootstrap 的種子。改成 settings 優先 ⇒ 後台改文案後前端看不到。
+    name: "法律文案改成 settings 優先（文件被忽略）",
+    file: LEGALCOPY_SRC,
+    from: "      const fromDocs = await legalCopyFromDocumentsAsync(options);\n      if (fromDocs?.disclaimer && fromDocs?.privacy) return publicLegalCopy(fromDocs);",
+    to: "      const seeded = await getSiteSettingAsync(LEGAL_COPY_KEY, options);\n      if (seeded?.disclaimer && seeded?.privacy) return publicLegalCopy(seeded);",
+    expect: "文件優先：settings 存了別的值",
+  },
+  {
+    // 沒有文件時應該回**預設值**（`legalCopyFromDocuments()` 永遠不會回 null）。
+    name: "文件讀取例外時回預設值而不是 settings",
+    file: LEGALCOPY_SRC,
+    from: "    return publicLegalCopy(stored ?? defaultLegalCopy());",
+    to: "    return publicLegalCopy(defaultLegalCopy());",
+    // ⚠️ 殺手是「例外那條路」的測試，不是「文件不存在」那條：
+    // 文件不存在時 `legalCopyFromDocumentsAsync()` 會回預設欄位 ⇒ 根本走不到這一行（等價變異）。
+    // 這一條的鑑別力來自**文件讀取丟例外**（模擬文件表還沒補建）時，settings 才是唯一來源。
+    expect: "文件讀取丟例外時才走 settings",
+  },
+  {
+    // 寫入只寫一個 store：settings 有、文件沒有 ⇒ 真正生效的那份沒被改到。
+    name: "儲存只寫 settings，不同步內容文件",
+    file: LEGALCOPY_SRC,
+    from: "        await publishDocumentAsync(draft.id, { actorId: 0, now, ...options });",
+    to: "        void draft;",
+    expect: "saveLegalCopyAsync：合併、兩邊都寫",
+  },
+  {
+    // 本機鏡射拿掉：還沒移植的同步讀者（updateUserProfile → withLegalProfile）會看到舊文案。
+    name: "不鏡射本機（同步讀者看到舊文案）",
+    file: LEGALCOPY_SRC,
+    from: "    try { saveLegalCopySync(next); } catch { /* 本機鏡射失敗不擋 */ }",
+    to: "    try { void next; } catch { /* 不鏡射 */ }",
+    expect: "saveLegalCopyAsync：合併、兩邊都寫",
+  },
+  {
+    name: "reset 不生效（沿用目前值）",
+    file: LEGALCOPY_SRC,
+    from: "    const next = src.reset === true ? defaultLegalCopy() : normalizeLegalCopy({ ...current, ...src });",
+    to: "    const next = normalizeLegalCopy({ ...current, ...src });",
+    expect: "saveLegalCopyAsync：合併、兩邊都寫",
+  },
+  {
+    name: "寫入失敗也回退本機（表面成功、實際寫在本機）",
+    file: LEGALCOPY_SRC,
+    from: "    if (!sqliteFallbackAllowed(options, write ? { write: true } : {})) throw error;",
+    to: "    if (!sqliteFallbackAllowed(options, {})) throw error;",
+    expect: "讀取失敗時回退本機",
+  },
+  // ⚠️ **刻意沒有**「非 postgres 模式也走 PG 分支」這條變異：它是**等價變異**。
+  // 這一支的 PG 分支完全由既有的島嶼函式組成（`legalCopyFromDocumentsAsync`／
+  // `getSiteSettingAsync`／`createDraftAsync`…），而那些函式自己就會依 driver 分派；
+  // 把 `withFallback()` 的 `if (!isPg(options)) return runSqlite();` 拿掉之後，
+  // SQLite 模式仍然一路走到同一批同步函式（實測：整個測試檔 8 條全綠，一條都不紅）。
+  // 依紀律「等價變異要移除並寫下理由，不要硬追」。
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -2912,7 +2981,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS
+const MUTATIONS = /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS
+  : /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS
   : /member-consents-async/.test(testFile) ? CONSENTS_MUTATIONS
   : /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS
   : /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
