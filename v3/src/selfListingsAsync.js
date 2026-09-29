@@ -25,6 +25,26 @@ import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolati
 import {
   ABANDON_DRAFT_LISTING_SQL,
   BAN_SELF_PUBLISHER_SQL,
+  OPEN_SELF_COUNT_SQL,
+  PERSIST_LISTING_VALUES_SQL,
+  PUBLISHER_AVATAR_SQL,
+  SELF_BAN_UNTIL_SQL,
+  SELF_MAX_OPEN,
+  SELF_NEW_ACCOUNT_WAIT_MS,
+  SELF_PUBLISH_UPDATE_SQL,
+  SELF_TTL_DAYS,
+  SET_PUBLISHER_FACE_SQL,
+  USER_CREATED_AT_SQL,
+  composeSelfAddress,
+  floorText,
+  kindId,
+  kindLabel,
+  layoutText,
+  requireListingTitle,
+  resolveListingTraits,
+  roleId,
+  roleLabel,
+  selfPublishUpdateParams,
   NEXT_SELF_POST_ID_SQL,
   SELF_CONTACT_MAX,
   SELF_DRAFT_INSERT_SQL,
@@ -47,6 +67,7 @@ import {
   getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
   SELF_BODY_MAX,
+  SELF_BODY_MIN,
   SELF_TITLE_MAX,
   getSelfListing as getSelfListingSync,
   getSelfRow as getSelfRowSync,
@@ -55,10 +76,16 @@ import {
   normalizePhotoList,
   selfBanStamp,
 } from "./selfListings.js";
-import { sanitizeListingBodyHtml } from "./listingBody.js";
+import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
 import { isMemberMediaUrl } from "./memberMedia.js";
+import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
+import { matchCandidatesAsync } from "./crawlerReads.js";
+import { bestMatch } from "./match.js";
+import { isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
+import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { isSelfPhotoPublicUrl } from "./selfPhotos.js";
 import { normalizeDeposit, normalizeSelfTraits } from "./selfTraits.js";
+import { depositLabel, selfTraitLabels } from "./selfTraits.js";
 import { ownsMediaUrlAsync } from "./memberMediaAsync.js";
 import { copyResult } from "./listingTools.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
@@ -433,4 +460,176 @@ async function copyOwnListingPg(uid, sourceId, input, options) {
     }
   }
   return copyResult(null, uid, source, draft);
+}
+
+// ---- 公開站內刊登草稿（`POST /api/self-listings/:id/publish` 與匯入的
+//      `POST /api/listing-imports/:id/publish`，第八十三批）--------------------------------
+//
+// 同步版整條讀寫節點本機：草稿列、停權／註冊時間（`users`）、同時公開數、頭像、
+// 條件值（`listing_condition_values`）與配對候選。PG 模式下「別的節點建立的草稿」根本公開不了
+// （404），而**站上的刊登清單讀的是 PG** ⇒ 公開動作看起來成功、刊登卻不在站上。
+//
+// 驗證規則（可刊登條件、成熟度、同時上限、欄位正規化）**全部沿用 `selfListings.js` 的純函式**，
+// 這裡只把「跑語句的人」換成 PG。
+
+/** `selfListings.js:assertCanPublish()` 的 PG 版。 */
+export async function assertCanPublishAsync(run, userId, now = new Date(), { maturity, options = {} } = {}) {
+  const uid = Number(userId) || 0;
+  const banned = Date.parse(String(rowsOf(await run(SELF_BAN_UNTIL_SQL, [uid]))[0]?.self_ban_until || ""));
+  const at = now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+  if (Number.isFinite(banned) && banned > at) {
+    const when = new Date(banned).toISOString().slice(0, 10);
+    throw httpError(`因不實刊登暫停上傳，直到 ${when}`, 403);
+  }
+  const created = Date.parse(String(rowsOf(await run(USER_CREATED_AT_SQL, [uid]))[0]?.created_at || ""));
+  const skipWait = isFixtureMaturityAuthorized(sqliteHandle(), uid, now, maturity);
+  if (!skipWait && Number.isFinite(created) && at - created < SELF_NEW_ACCOUNT_WAIT_MS) {
+    throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
+  }
+  await expireOpenSelfListingsAsync(run, now);
+  const open = Number(rowsOf(await run(OPEN_SELF_COUNT_SQL, [uid]))[0]?.n) || 0;
+  if (open >= SELF_MAX_OPEN) {
+    throw httpError(`同時最多 ${SELF_MAX_OPEN} 則未過期的站內刊登，請先關閉一則`, 403);
+  }
+  void options;
+}
+
+/** `selfListings.js:setPublisherFace()` 的 PG 版（頭像與 `contact_uid`）。 */
+export async function setPublisherFaceAsync(run, postId, uid) {
+  const avatar = String(rowsOf(await run(PUBLISHER_AVATAR_SQL, [Number(uid) || 0]))[0]?.avatar_url || "").trim();
+  await run(SET_PUBLISHER_FACE_SQL, [avatar, String(uid), Number(postId) || 0]);
+}
+
+/** `selfListings.js:persistListingValues()` 的 PG 版（租賃目錄 v2 的條件值）。 */
+export async function persistListingValuesAsync(run, postId, listingValues) {
+  await run(PERSIST_LISTING_VALUES_SQL, [JSON.stringify(listingValues || {}), Number(postId) || 0]);
+}
+
+/** `db.js:assertOwnsMemberMediaUrls()` 的 PG 版（只能用自己的素材照片）。 */
+export async function assertOwnsMemberMediaUrlsAsync(userId, urls, options = {}) {
+  for (const url of Array.isArray(urls) ? urls : []) {
+    if (!isMemberMediaUrl(url)) continue;
+    if (!(await ownsMediaUrlAsync(userId, url, options))) {
+      throw httpError("只能使用自己素材庫的照片", 403);
+    }
+  }
+  return true;
+}
+
+/** `selfListings.js:publishImportedDraftListing()` 的 PG 版（草稿 → 公開）。 */
+export async function publishImportedDraftListingAsync(userId, postId, input = {}, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) throw httpError("請先登入才能刊登", 401);
+  const now = options.now ? new Date(options.now) : new Date();
+  if (!isPg(options)) {
+    const { publishImportedDraftListing } = await import("./selfListings.js");
+    return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {
+      matchCandidates: options.matchCandidates,
+    });
+  }
+  try {
+    await getWishConditionsAsync(options);
+    const run = await runnerFor(options);
+    const row = await getSelfRowAsync(postId, { ...options, exec: run, driver: "postgres", strict: true });
+    if (!row) throw httpError("找不到這則匯入草稿", 404);
+    if (Number(row.listed_by_user_id) !== uid) throw httpError("只能刊登自己的匯入草稿", 403);
+    if (String(row.self_status || "") !== "draft") throw httpError("這則不是待刊登的匯入草稿", 409);
+    await assertCanPublishAsync(run, uid, now, { maturity: options.maturity || options.isolation, options });
+
+    const districts = normalizeWatchDistricts(input.district ? [input.district] : input.districts).slice(0, 1);
+    if (!districts.length) throw httpError("請選一個行政區");
+    const district = lookupDistrict(districts[0]);
+    if (!district) throw httpError("請選一個有效行政區");
+    const rent = Math.round(Number(input.rent || input.price_num) || 0);
+    if (!(rent >= 1000 && rent <= 200000)) throw httpError("請填每月租金（1,000～200,000）");
+    const ping = Number(String(input.ping || input.area || "").replace(/坪/g, ""));
+    if (!(ping > 0 && ping <= 500)) throw httpError("請填坪數");
+    if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
+    const address = composeSelfAddress(district, input.street || input.address);
+    const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
+    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+    const kind = kindId(input.kind || input.housing_type);
+    const role = roleId(input.role);
+    const layout = layoutText(input);
+    const floorName = floorText(input);
+    if (!floorName) throw httpError("請填出租樓層");
+    let contactName = String(input.contact_name || "").trim().slice(0, SELF_CONTACT_MAX);
+    if (!contactName) {
+      try {
+        contactName = String(rowsOf(await run("SELECT nickname FROM users WHERE id = ?", [uid]))[0]?.nickname || "").trim();
+      } catch {
+        contactName = "";
+      }
+    }
+    const phone = digitsPhone(input.phone || input.mobile);
+    const lineUrl = normalizeLineUrl(input.line_url);
+    if (phone && phone.replace(/\D/g, "").length < 8) throw httpError("電話號碼太短");
+    const extra = catalogTraitExtras({ includeInactive: true });
+    const resolved = resolveListingTraits(input, row);
+    const traitIds = resolved.traitIds;
+    const deposit = normalizeDeposit(input.deposit);
+    const photos = normalizePhotoList(input.photos != null ? input.photos : listingPhotoUrls(row));
+    const kindName = kindLabel(kind);
+    const roleName = roleLabel(role);
+    const areaName = `${String(Math.round(ping * 10) / 10).replace(/\.0$/, "")}坪`;
+    const title = requireListingTitle(input.title != null ? input.title : row.title);
+    const created = (now instanceof Date ? now : new Date(now)).toISOString();
+    const expires = new Date((now instanceof Date ? now.getTime() : Number(now) || Date.now()) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    await run(SELF_PUBLISH_UPDATE_SQL, selfPublishUpdateParams({
+      postId: Number(row.post_id) || 0,
+      region: district.region,
+      section: district.id,
+      title,
+      rent,
+      address,
+      areaName,
+      layout,
+      floorName,
+      kindName,
+      roleName,
+      cover: photos[0] || "",
+      tags: ["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean),
+      expires,
+      body,
+      photos,
+      traitIds,
+      deposit,
+      created,
+      contactName,
+      phone,
+      lineUrl,
+    }));
+    await setPublisherFaceAsync(run, row.post_id, uid);
+    // 配對候選：PG 版走 `crawlerReads.matchCandidatesAsync()`（同一組 builder）。
+    const listing = rowsOf(await run("SELECT * FROM listings WHERE post_id = ?", [Number(row.post_id) || 0]))[0];
+    // ⚠️ `matchCandidatesAsync` 的注入式 exec 吃**純陣列**，而本島的 runner 回 `{rows}`
+    // ⇒ 兩個形狀要在這裡對齊（否則 `loadAnyoneFlagMap()` 會 iterate 一個物件而爆掉）。
+    const candidateExec = async (sql, params = []) => rowsOf(await run(sql, params));
+    const candidates = typeof options.matchCandidates === "function"
+      ? await options.matchCandidates(listing)
+      : await matchCandidatesAsync(listing.post_id, listing, { ...options, driver: "postgres", exec: candidateExec });
+    const hit = bestMatch(listing, candidates);
+    if (hit?.listing) {
+      await run(
+        "UPDATE listings SET match_post_id=?, match_level=?, match_detail=?, match_rejected=0 WHERE post_id=?",
+        [hit.listing.post_id, hit.level, hit.detail, Number(row.post_id) || 0],
+      );
+    }
+    await persistListingValuesAsync(run, row.post_id, resolved.listingValues);
+    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經公開的刊登回錯。
+    try {
+      const { publishImportedDraftListing } = await import("./selfListings.js");
+      publishImportedDraftListing(sqliteHandle(), uid, row.post_id, input, now, {
+        matchCandidates: () => [],
+      });
+    } catch { /* 本機鏡射盡力而為 */ }
+    return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
+  } catch (error) {
+    if (error?.status) throw error;
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
+    const { publishImportedDraftListing } = await import("./selfListings.js");
+    return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {
+      matchCandidates: options.matchCandidates,
+    });
+  }
 }

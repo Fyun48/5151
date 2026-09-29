@@ -4465,6 +4465,52 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 路由接線測試**同時**斷言「本文用 `await copyOwnListingAsync(`」與「`copyOwnListingAsync`
 真的有被 import」。**之後每一批的路由接線測試都應該照這個形狀寫。**
 
+## 二之負五十三、2026-09-29 第八十三批：公開站內刊登草稿（兩條 publish 路由）
+
+### 83.1 範圍與投報率
+
+- `POST /api/self-listings/:id/publish`（7 卡點）；
+- `POST /api/listing-imports/:id/publish`（8 卡點，走同一個 `publishImportedDraftListing`）。
+
+同步版整條讀寫節點本機：草稿列、停權／註冊時間（`users`）、同時公開數、頭像、
+條件值（`listing_condition_values`）與配對候選 ⇒ PG 模式下**別的節點建立的草稿根本公開不了**
+（404），而站上的刊登清單讀的是 PG ⇒ 公開動作看起來成功、**刊登卻不在站上**。
+
+尺規：兩條 **MIXED → PG**；缺口總數 **6 → 4**（`PG` 262 → **264**、`MIXED` 6 → **4**）。
+
+### 83.2 做法
+
+- `v3/src/selfListings.js`：公開的 UPDATE 抽成 `SELF_PUBLISH_UPDATE_SQL` ＋
+  `selfPublishUpdateParams()`（同步版改呼叫它們）；`assertCanPublish()` 的四句查詢
+  （停權／註冊時間／同時上限）與 `setPublisherFace()`／`persistListingValues()` 的語句也抽成常數；
+  另外匯出 `floorText`／`kindId`／`kindLabel`／`layoutText`／`requireListingTitle`／
+  `resolveListingTraits`／`roleId`／`roleLabel`／`catalogTraitExtras`。
+- `v3/src/selfListingsAsync.js`：`assertCanPublishAsync()`／`setPublisherFaceAsync()`／
+  `persistListingValuesAsync()`／`assertOwnsMemberMediaUrlsAsync()`／
+  `publishImportedDraftListingAsync()`。配對候選走 `matchCandidatesAsync()`（PG），
+  本機鏡射盡力而為。
+- `v3/src/listingImportAsync.js`：`publishConfirmedImportAsync()`（沿用 `readImportRow()`／
+  `assertImportOwner()`，再交給 `publishImportedDraftListingAsync()`）。
+- `v3/src/server.js`：兩條路由改 async，配對候選以 `matchCandidatesAsync` 注入。
+
+### 83.3 測試
+
+- `v3/test/self-listing-publish-async.test.js`（**8 項全綠**，新檔）：六種參數驗證的錯誤形狀逐字相同、
+  公開後落地欄位相同且狀態是 `open`、**草稿只放在 PG 時同步版 404 而 PG 版照樣公開得出來**、
+  **可刊登條件讀 PG**（停權／註冊未滿 24 小時／同時上限各一格）、素材所有權、匯入的確認後刊登
+  （未確認 409 ＋ 成功路徑）、寫入 fail-closed、兩條路由接線（含 import 斷言）。
+- `v3/test/self-listing-publish-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  「PG 的草稿 → 公開成功（狀態 open、標題與租金落地）」、匯入的確認後刊登整條鏈。
+- **變異 9 條全殺**（`PUBLISHSELF_MUTATIONS`）。
+- 踩點：
+  1. **注入式 exec 的形狀在島嶼之間不一致**：`matchCandidatesAsync()` 吃**純陣列**，
+     而本島的 runner 回 `{rows}` ⇒ 傳進去會讓 `loadAnyoneFlagMap()` iterate 一個物件而爆掉。
+     修法是在島嶼裡包一層 `rowsOf()`（這一類坑在這個專案已出現四次，值得之後統一）。
+  2. **夾具要同時滿足兩種 exec 慣例**：回「自己是自己的 `rows`」的陣列（`rows.rows = rows`），
+     兩種消費者都吃得下。
+  3. **驗證類測試要先跑**：`seedWorld()` 只重建本機，PG 夾具是測試開始時的快照 ⇒
+     同一條測試裡先公開、再拿舊夾具驗驗證錯誤，會看到 409（「不是待刊登的草稿」）而不是 400。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4475,13 +4521,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十二批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十三批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **6** |
+| MIXED | — | **4** |
 | 無直接DB | — | **20** |
-| PG | 22 | **262** |
-| **缺口（SQLite＋MIXED）** | — | **6** |
+| PG | 22 | **264** |
+| **缺口（SQLite＋MIXED）** | — | **4** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

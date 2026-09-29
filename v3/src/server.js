@@ -29,7 +29,15 @@ import {
   rentalMatchOwnerMetaAsync,
 } from "./rentalMatchAsync.js";
 // 站內複製島嶼
-import { copyOwnListingAsync } from "./selfListingsAsync.js";
+import {
+  assertOwnsMemberMediaUrlsAsync,
+  copyOwnListingAsync,
+  publishImportedDraftListingAsync,
+} from "./selfListingsAsync.js";
+// 匯入的「確認後刊登」PG 島嶼入口（第八十三批）。
+import { publishConfirmedImportAsync } from "./listingImportAsync.js";
+// 配對候選的 PG 讀取（`publishImportedDraftListingAsync` 會用它挑同類物件）。
+import { matchCandidatesAsync } from "./crawlerReads.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
 import express from "express";
 import { readFileSync } from "node:fs";
@@ -170,7 +178,6 @@ import {
   runRentalNotifyWorkerTick,
   createSelfListing,
   listingToolsInfo,
-  publishOwnedDraftFor,
   listDescriptionTemplatesFor,
   createDescriptionTemplateFor,
   getOwnedDescriptionTemplateFor,
@@ -183,7 +190,6 @@ import {
   deleteContactProfileFor,
   listingImportMeta,
   startListingImportFor,
-  publishConfirmedImportFor,
   saveMemberMediaFor,
   listMemberMediaFor,
   deleteMemberMediaFor,
@@ -3533,13 +3539,16 @@ app.post("/api/listing-imports/:id/confirm", async (req, res) => {
     res.json(await confirmListingImportAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.post("/api/listing-imports/:id/publish", (req, res) => {
+app.post("/api/listing-imports/:id/publish", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入才能刊登" }); return; }
     const body = req.body || {};
-    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
-    res.json(publishConfirmedImportFor(session.userId, req.params.id, body));
+    const media = [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean);
+    await assertOwnsMemberMediaUrlsAsync(session.userId, media);
+    res.json(await publishConfirmedImportAsync(session.userId, req.params.id, body, {
+      matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
+    }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.get("/api/admin/listing-imports", requireAdminApi, async (req, res) => {
@@ -3557,13 +3566,18 @@ app.post("/api/self-listings/:id/copy", async (req, res) => {
     res.json(await copyOwnListingAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.post("/api/self-listings/:id/publish", (req, res) => {
+app.post("/api/self-listings/:id/publish", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入才能刊登" }); return; }
     const body = req.body || {};
-    assertOwnsMemberMediaUrls(session.userId, [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean));
-    res.json(publishOwnedDraftFor(session.userId, req.params.id, body));
+    const media = [...(Array.isArray(body.photos) ? body.photos : []), body.cover].filter(Boolean);
+    // 草稿、可刊登條件（停權／註冊滿 24 小時／同時上限）、素材所有權與配對候選全部走 PG 島嶼：
+    // 同步版只寫本機 ⇒ 公開動作看起來成功、刊登卻不在站上的清單裡（第八十三批）。
+    await assertOwnsMemberMediaUrlsAsync(session.userId, media);
+    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, body, {
+      matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
+    }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
 });
 app.get("/api/listing-description-templates", async (req, res) => {

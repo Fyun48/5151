@@ -96,7 +96,7 @@ function parseListingValues(row) {
   }
 }
 
-function resolveListingTraits(input = {}, previous = {}) {
+export function resolveListingTraits(input = {}, previous = {}) {
   if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) {
     return {
       traitIds: normalizeSelfTraitsInput(input.traits, catalogTraitExtras().ids),
@@ -138,10 +138,12 @@ function resolveListingTraits(input = {}, previous = {}) {
   return { traitIds: traitIds.slice(0, 40), listingValues };
 }
 
+export const PERSIST_LISTING_VALUES_SQL = "UPDATE listings SET listing_condition_values = ? WHERE post_id = ?";
+
 function persistListingValues(db, postId, listingValues) {
   if (!listingCatalog || !isRentalCatalogV2Enabled(listingFlags)) return;
   try {
-    db.prepare("UPDATE listings SET listing_condition_values = ? WHERE post_id = ?")
+    db.prepare(PERSIST_LISTING_VALUES_SQL)
       .run(JSON.stringify(listingValues || {}), postId);
   } catch {
     // column missing in isolated tests before ensureSelfListingSchema
@@ -326,27 +328,29 @@ function iso(now) {
   return new Date(nowMs(now)).toISOString();
 }
 
-function kindLabel(id) {
+export function kindLabel(id) {
   return SELF_KINDS.find((row) => row.id === id)?.label || SELF_KINDS[0].label;
 }
 
-function kindId(value) {
+export function kindId(value) {
   const id = String(value || "whole").trim();
   return SELF_KINDS.some((row) => row.id === id) ? id : "whole";
 }
 
-function roleLabel(id) {
+export function roleLabel(id) {
   return SELF_ROLES.find((row) => row.id === id)?.label || "屋主";
 }
 
-function roleId(value) {
+export function roleId(value) {
   const id = String(value || "owner").trim();
   return SELF_ROLES.some((row) => row.id === id) ? id : "owner";
 }
 
+export const USER_CREATED_AT_SQL = "SELECT created_at FROM users WHERE id = ?";
+
 function userCreatedAt(db, userId) {
   try {
-    return String(db.prepare("SELECT created_at FROM users WHERE id = ?").get(userId)?.created_at || "");
+    return String(db.prepare(USER_CREATED_AT_SQL).get(userId)?.created_at || "");
   } catch {
     return "";
   }
@@ -369,9 +373,16 @@ export function expireOpenSelfListings(db, now = new Date()) {
   }
 }
 
+export const OPEN_SELF_COUNT_SQL = `SELECT COUNT(*) AS n FROM listings
+     WHERE listed_by_user_id = ?
+       AND COALESCE(source, '591') = 'self'
+       AND COALESCE(self_status, 'open') = 'open'`;
+
+export const SELF_BAN_UNTIL_SQL = "SELECT self_ban_until FROM users WHERE id = ?";
+
 function selfBanUntil(db, userId) {
   try {
-    return String(db.prepare("SELECT self_ban_until FROM users WHERE id = ?").get(userId)?.self_ban_until || "");
+    return String(db.prepare(SELF_BAN_UNTIL_SQL).get(userId)?.self_ban_until || "");
   } catch {
     return "";
   }
@@ -401,12 +412,7 @@ function assertCanPublish(db, userId, now = new Date(), { maturity } = {}) {
     throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
   }
   expireOpenSelfListings(db, now);
-  const open = db.prepare(
-    `SELECT COUNT(*) AS n FROM listings
-     WHERE listed_by_user_id = ?
-       AND COALESCE(source, '591') = 'self'
-       AND COALESCE(self_status, 'open') = 'open'`,
-  ).get(userId);
+  const open = db.prepare(OPEN_SELF_COUNT_SQL).get(userId);
   if (Number(open?.n) >= SELF_MAX_OPEN) {
     throw httpError(`同時最多 ${SELF_MAX_OPEN} 則未過期的站內刊登，請先關閉一則`, 403);
   }
@@ -422,16 +428,19 @@ export function nextSelfPostId(db) {
 
 function publisherAvatar(db, uid) {
   try {
-    return String(db.prepare("SELECT avatar_url FROM users WHERE id=?").get(uid)?.avatar_url || "").trim();
+    return String(db.prepare(PUBLISHER_AVATAR_SQL).get(uid)?.avatar_url || "").trim();
   } catch {
     return "";
   }
 }
 
+export const PUBLISHER_AVATAR_SQL = "SELECT avatar_url FROM users WHERE id=?";
+export const SET_PUBLISHER_FACE_SQL = "UPDATE listings SET avatar = ?, contact_uid = ? WHERE post_id = ?";
+
 function setPublisherFace(db, postId, uid) {
   const avatar = publisherAvatar(db, uid);
   try {
-    db.prepare("UPDATE listings SET avatar = ?, contact_uid = ? WHERE post_id = ?").run(avatar, String(uid), postId);
+    db.prepare(SET_PUBLISHER_FACE_SQL).run(avatar, String(uid), postId);
   } catch {
     try {
       db.prepare("UPDATE listings SET avatar = ? WHERE post_id = ?").run(avatar, postId);
@@ -439,7 +448,7 @@ function setPublisherFace(db, postId, uid) {
   }
 }
 
-function requireListingTitle(raw, fallback = "") {
+export function requireListingTitle(raw, fallback = "") {
   const title = String(raw || fallback || "").trim().slice(0, SELF_TITLE_MAX);
   if (title.length < SELF_TITLE_MIN) throw httpError(`標題至少 ${SELF_TITLE_MIN} 個字`);
   return title;
@@ -511,7 +520,7 @@ export function normalizeLineUrl(value) {
   throw httpError("LINE 請貼 https://line.me 或 https://lin.ee 連結");
 }
 
-function layoutText(input) {
+export function layoutText(input) {
   const rooms = Math.max(0, Math.min(12, Math.round(Number(input.rooms) || 0)));
   const living = Math.max(0, Math.min(8, Math.round(Number(input.living) || 0)));
   const bath = Math.max(0, Math.min(8, Math.round(Number(input.bath) || 0)));
@@ -522,7 +531,7 @@ function layoutText(input) {
   return raw || "格局未填";
 }
 
-function floorText(input) {
+export function floorText(input) {
   const floor = Math.max(0, Math.min(80, Math.round(Number(input.floor) || 0)));
   const total = Math.max(0, Math.min(80, Math.round(Number(input.total_floors) || 0)));
   if (floor && total) return `${floor}F/${total}F`;
@@ -1109,6 +1118,52 @@ export function abandonImportedDraftListing(db, userId, postId, now = new Date()
 }
 
 /** 會員確認匯入後，以一般刊登欄位把同一則草稿轉成公開。工作者不得呼叫。 */
+// 公開（草稿 → open）的 UPDATE 與參數組裝（同步與 PG 版共用；`selfListingsAsync.js` 會跑同一份）。
+export const SELF_PUBLISH_UPDATE_SQL = `UPDATE listings SET
+      source_key=?, search_key=?, title=?, url=?, price=?, price_num=?,
+      address=?, area_name=?, layout=?, floor_name=?, kind_name=?, role_name=?,
+      cover=?, tags=?,
+      self_status='open', self_expires_at=?, self_body=?, self_photos=?,
+      self_traits=?, self_deposit=?, self_pledge_at=?,
+      contact_name=?, contact_role=?, mobile=?, phone=?, line_url=?, contact_fetched=1,
+      last_event='new', last_seen_at=?
+    WHERE post_id=?`;
+
+export function selfPublishUpdateParams({
+  postId, region, section, title, rent, address, areaName, layout, floorName, kindName, roleName,
+  cover, tags, expires, body, photos, traitIds, deposit, created, contactName, phone, lineUrl,
+}) {
+  return [
+    selfSourceKey({ regionId: region, sectionId: section, address, floorName, areaName, layout }),
+    selfSearchKey(region, section),
+    title,
+    `/go/${postId}`,
+    String(rent),
+    rent,
+    address,
+    areaName,
+    layout,
+    floorName,
+    kindName,
+    roleName,
+    cover,
+    JSON.stringify(tags || []),
+    expires,
+    body,
+    JSON.stringify((photos || []).slice(0, SELF_PHOTO_MAX_COUNT)),
+    JSON.stringify(traitIds || []),
+    deposit,
+    created,
+    contactName || roleName,
+    roleName,
+    phone,
+    phone,
+    lineUrl,
+    created,
+    postId,
+  ];
+}
+
 export function publishImportedDraftListing(db, userId, postId, input = {}, now = new Date(), { matchCandidates } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能刊登", 401);
@@ -1168,22 +1223,11 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     areaName,
     layout,
   });
-  db.prepare(`
-    UPDATE listings SET
-      source_key=?, search_key=?, title=?, url=?, price=?, price_num=?,
-      address=?, area_name=?, layout=?, floor_name=?, kind_name=?, role_name=?,
-      cover=?, tags=?,
-      self_status='open', self_expires_at=?, self_body=?, self_photos=?,
-      self_traits=?, self_deposit=?, self_pledge_at=?,
-      contact_name=?, contact_role=?, mobile=?, phone=?, line_url=?, contact_fetched=1,
-      last_event='new', last_seen_at=?
-    WHERE post_id=?
-  `).run(
-    sourceKey,
-    selfSearchKey(district.region, district.id),
+  db.prepare(SELF_PUBLISH_UPDATE_SQL).run(...selfPublishUpdateParams({
+    postId: row.post_id,
+    region: district.region,
+    section: district.id,
     title,
-    `/go/${postId}`,
-    String(rent),
     rent,
     address,
     areaName,
@@ -1191,22 +1235,18 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     floorName,
     kindName,
     roleName,
-    photos[0] || "",
-    JSON.stringify(["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean)),
+    cover: photos[0] || "",
+    tags: ["吉比本站", ...selfTraitLabels(traitIds, extra.labels), depositLabel(deposit)].filter(Boolean),
     expires,
     body,
-    JSON.stringify(photos.slice(0, SELF_PHOTO_MAX_COUNT)),
-    JSON.stringify(traitIds),
+    photos,
+    traitIds,
     deposit,
     created,
-    contactName || roleName,
-    roleName,
-    phone,
+    contactName,
     phone,
     lineUrl,
-    created,
-    row.post_id,
-  );
+  }));
   setPublisherFace(db, row.post_id, uid);
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(row.post_id);
   const candidates = typeof matchCandidates === "function" ? matchCandidates(listing) : [];
