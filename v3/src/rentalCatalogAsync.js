@@ -10,6 +10,8 @@
 //   POST   /api/admin/rental-catalog/templates/:id/apply
 //   POST   /api/admin/rental-catalog/draft/publish
 //   GET    /api/admin/rental-match-rules
+//   GET    /api/admin/rental-marketplace-flags      （開關讀取）
+//   PUT    /api/admin/rental-marketplace-flags      （開關寫入 ＋ 啟用時的許願遷移，第六十三批）
 //
 // **這個模組幾乎沒有 SQL**：目錄本身是存在 `settings` 表裡的一個 JSON blob，所以儲存層直接用
 // 已移植的 `settingsKvAsync`（`getSiteSettingAsync`／`setSiteSettingAsync`）。真正的邏輯
@@ -27,7 +29,7 @@
 import { resolveDbDriver } from "./dbDriver.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
-import { setRentalCatalogCache, setRentalMarketplaceFlags } from "./demand.js";
+import { setRentalCatalogCache, setRentalMarketplaceFlags, migrateOpenWishesOnActivation } from "./demand.js";
 import { setSelfListingCatalog } from "./selfListings.js";
 import { setRentalMatchHydrate, matchRulesForAdmin } from "./rentalMatchQuery.js";
 import { setWishOfferHydrate } from "./wishOffers.js";
@@ -57,6 +59,9 @@ import {
   upsertCategory,
   upsertCondition,
 } from "./rentalCatalog.js";
+// 許願啟用時的遷移判斷是**純函式**（`isLegacyWishForActivation` ＋ TTL 計算），
+// PG 版逐列重用同一份，不重寫第二份「什麼叫做遠期到期」。
+import { migrateOpenWishOnActivation } from "./wishLifecycle.js";
 
 export { publicRentalMarketplaceFlags };
 
@@ -87,6 +92,23 @@ async function withFallback(options, { read = false }, runPostgres, runSqlite) {
 
 const readPg = (key, options) => getSiteSettingAsync(key, { ...options, driver: "postgres" });
 const writePg = (key, value, options) => setSiteSettingAsync(key, value, { ...options, driver: "postgres" });
+
+// 注入式 `exec` 的形狀正規化：這個模組的 PG runner 一律吃**裸陣列**，但呼叫端可能照
+// `crmOutboxAsync` 的慣例傳 `{ rows, rowCount }`（`settingsAsync.js` 第 52 批踩過同一個坑）。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+const asArrayExec = (exec) => async (sql, params = []) => rowsOf(await exec(sql, params));
+
+// 與 db.js 的 `BEGIN`／`COMMIT` 對應。注入式 exec（離線測試的夾具）沒有交易，
+// 就照同一條連線的順序跑——與 `settingsAsync.js` 的 `runInTransaction()` 同一個處置。
+async function runInTransaction(options, fn) {
+  if (options.exec) return fn(asArrayExec(options.exec));
+  const pgDriver = options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver());
+  const { toPostgresSql } = await import("./sqlDialect.js");
+  return pgDriver.withTransaction(async (client) => {
+    const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);
+    return fn(tx);
+  });
+}
 
 async function readFlagsPg(options) {
   return normalizeRentalMarketplaceFlags((await readPg(KEYS.flags, options)) || {});
@@ -186,7 +208,7 @@ async function readStatePgOrSync(options) {
 }
 
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) return asArrayExec(options.exec);
   const pgDriver = options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver());
   const { toPostgresSql } = await import("./sqlDialect.js");
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
@@ -343,3 +365,111 @@ export async function saveWishConditionsAsync(partial = {}, options = {}) {
     return getWishConditionsAsync(options);
   }, async () => (await syncDb()).saveWishConditions(partial));
 }
+
+// ---- 開關寫入（`PUT /api/admin/rental-marketplace-flags`）----
+//
+// 對應 `db.js:1443 saveRentalMarketplaceFlags()`（第六十三批的長尾單點）。它的兩個卡點就是
+// 那個函式自己，以及啟用生命週期時要跑的 `demand.js:823 migrateOpenWishesOnActivation()`。
+//
+// 三個**必須逐條對齊**的語意：
+//   1. 合併是**逐段**的：`wish`／`rental_catalog_v2` 各自 shallow merge。只帶
+//      `{ wish: { offer_enabled: true } }` 不能把其他已經開著的許願旗標一起關掉。
+//   2. `lifecycle_enabled === true` 時，「遷移既有的遠期許願」與「寫開關」必須在**同一個交易**
+//      內（同步版是 `BEGIN` ＋ 遷移 ＋ `persist()` ＋ `COMMIT`）。
+//   3. 寫完要把行程內快取收斂到新值（同步版 `persist()` 會呼叫 `setRentalMarketplaceFlags()`
+//      與 `getRentalCatalog()` 的兩個 setter），否則同一台節點的同步路徑還是舊開關。
+export const MIGRATE_OPEN_WISHES_SELECT_SQL = "SELECT * FROM demand_posts WHERE status = 'open'";
+// 逐字沿用 `demand.js:832-836` 的兩句 UPDATE（只保留 `?` 佔位；PG 端由 `toPostgresSql` 轉 `$n`）。
+export const MIGRATE_OPEN_WISHES_UPDATE_SQL = `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
+         continuous_active_from = ?, lifecycle = 'active', lifecycle_migrated_at = ?, updated_at = ? WHERE id = ?`;
+export const MIGRATE_OPEN_WISHES_UPDATE_NO_MARKER_SQL = `UPDATE demand_posts SET expires_at = ?, last_confirmed_at = ?, last_active_at = ?,
+         continuous_active_from = ?, lifecycle = 'active', updated_at = ? WHERE id = ?`;
+
+const MISSING_RELATION = /(no such column|no such table|does not exist)/i;
+const isMissingRelation = (error) =>
+  error?.code === "42703" || error?.code === "42P01" || MISSING_RELATION.test(String(error?.message || ""));
+
+// PG 沒有 `PRAGMA table_info()`（同步版靠它判斷欄位在不在）。用「只取那個欄位、不取任何列」的
+// 探測查詢代替：兩種 driver 都適用，而且**只有**「欄位／表不存在」才算沒有——連線錯誤要往上丟，
+// 否則 strict 模式會把真正的失敗吞成「這張表沒有那個欄位」。
+async function hasColumnAsync(exec, column) {
+  try {
+    await exec(`SELECT ${column} FROM demand_posts WHERE 1 = 0`, []);
+    return true;
+  } catch (error) {
+    if (isMissingRelation(error)) return false;
+    throw error;
+  }
+}
+
+/** `demand.js:823 migrateOpenWishesOnActivation()` 的 PG 版：逐列重用同一個純判斷。 */
+export async function migrateOpenWishesOnActivationAsync(exec, now = new Date(), { hasMarker = true } = {}) {
+  const rows = rowsOf(await exec(MIGRATE_OPEN_WISHES_SELECT_SQL, []));
+  let n = 0;
+  for (const row of rows) {
+    const patch = migrateOpenWishOnActivation(row, now);
+    if (!patch) continue;
+    if (hasMarker) {
+      await exec(MIGRATE_OPEN_WISHES_UPDATE_SQL, [
+        patch.expires_at, patch.last_confirmed_at, patch.last_active_at,
+        patch.continuous_active_from, patch.lifecycle_migrated_at, patch.updated_at, row.id,
+      ]);
+    } else {
+      await exec(MIGRATE_OPEN_WISHES_UPDATE_NO_MARKER_SQL, [
+        patch.expires_at, patch.last_confirmed_at, patch.last_active_at,
+        patch.continuous_active_from, patch.updated_at, row.id,
+      ]);
+    }
+    n += 1;
+  }
+  return n;
+}
+
+/** `db.js:1443 saveRentalMarketplaceFlags()` 的 PG 版（回傳公開形狀，與同步版相同）。 */
+export async function saveRentalMarketplaceFlagsAsync(partial = {}, options = {}) {
+  if (!isPg(options)) return (await syncDb()).saveRentalMarketplaceFlags(partial);
+  const src = partial && typeof partial === "object" ? partial : {};
+  const prev = await readFlagsPg(options);
+  const next = normalizeRentalMarketplaceFlags({
+    ...prev,
+    ...src,
+    rental_catalog_v2: { ...prev.rental_catalog_v2, ...(src.rental_catalog_v2 || {}) },
+    wish: { ...prev.wish, ...(src.wish || {}) },
+  });
+  return withFallback(options, {}, async () => {
+    const exec = await pgExec(options);
+    // ⚠️ 欄位探測必須在交易**外**：PG 的交易內任何一個錯誤都會讓整個交易進入 aborted 狀態，
+    // 之後每一句都會以 `current transaction is aborted` 失敗。
+    const hasLifecycle = await hasColumnAsync(exec, "lifecycle");
+    const hasMarker = hasLifecycle && (await hasColumnAsync(exec, "lifecycle_migrated_at"));
+    const persist = async (target) => {
+      const txOptions = { ...options, exec: target };
+      await writePg(KEYS.flags, next, txOptions);
+      // 讀一次「開關 ＋ 目錄」正好把六個行程內快取收斂到剛落地的內容（同步版 persist() 同義）。
+      await readStatePg(txOptions);
+    };
+    if (next.wish.lifecycle_enabled === true) {
+      // 與同步版同一個契約：**只要啟用**就開交易（欄位不存在時遷移會回 0，但交易照開）。
+      // 兩個 driver 用**同一個 `now`**（同步版也只有一個）：否則 PG 與本機的時間戳會差幾毫秒，
+      // 「兩個 store 逐列相同」就永遠不成立。
+      const now = new Date();
+      await runInTransaction(options, async (tx) => {
+        if (hasLifecycle) await migrateOpenWishesOnActivationAsync(tx, now, { hasMarker });
+        await persist(tx);
+      });
+      // 本機 handle 也要跑一次遷移（與 `demandAsync.js expireOpenPostsAsync()` 同一個處置）：
+      // 還沒搬完的讀取（`/api/demand/aggregate`、`/api/self-listings` …）看的是節點 SQLite，
+      // 不追上的話那些頁面會繼續顯示「遠期到期」的舊資料。
+      // 欄位判斷交給同步版自己（`demand.js:824` 開頭就有 `hasWishColumn(db, "lifecycle")`，
+      // 沒有那個欄位時回 0）——不要在這裡用 PG 的探測結果去決定本機要不要跑。
+      // ⚠️ 順序刻意擺在 PG 交易**之後**：PG 才是來源，先讓「遷移 ＋ 開關」原子落地；
+      // 反過來的話 PG 失敗時本機會留下一批被改短 TTL 的許願，而開關其實沒開。
+      // 這一句失敗會往上丟（不吞）：重試一次即可，PG 端已是冪等。
+      migrateOpenWishesOnActivation((await syncDb()).sqliteHandle(), now);
+    } else {
+      await persist(exec);
+    }
+    return publicRentalMarketplaceFlags(next);
+  }, async () => (await syncDb()).saveRentalMarketplaceFlags(partial));
+}
+

@@ -28,6 +28,7 @@ const syncDb = await import("../src/db.js");
 const lib = await import("../src/rentalCatalog.js");
 const { defaultCatalog } = lib;
 const asyncMod = await import("../src/rentalCatalogAsync.js");
+const flagsLib = await import("../src/rentalMarketplaceFlags.js");
 const demand = await import("../src/demand.js");
 
 const PG = { driver: "postgres" };
@@ -44,7 +45,9 @@ const PG_ILLEGAL = [
 function pgFixture() {
   const mem = new DatabaseSync(":memory:");
   const disk = new DatabaseSync(diskPath(), { readOnly: true });
-  for (const table of ["settings", "listings", "demand_posts"]) {
+  // `users` 也要：`demand_posts` 有 `FOREIGN KEY (user_id) REFERENCES users(id)`，
+  // 少了那張表連 `DELETE FROM demand_posts` 都會以 `no such table: main.users` 失敗。
+  for (const table of ["settings", "listings", "demand_posts", "users"]) {
     const ddl = disk.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(table);
     assert.ok(ddl?.sql, `必須抓到 ${table} 的 DDL`);
     mem.exec(ddl.sql);
@@ -463,4 +466,196 @@ test("許願條件：儲存時落地成 { items: [...] }，reset 要寫正規化
   assert.deepEqual(reset, syncDb.saveWishConditions({ reset: true }));
   const after = JSON.parse(exec.raw.prepare("SELECT value FROM settings WHERE key='wishConditions'").get().value);
   assert.ok(after.items.length > 1, "reset 要寫入完整的預設清單（不是空陣列）");
+});
+
+// ---- 開關寫入（`PUT /api/admin/rental-marketplace-flags`）----
+//
+// 第六十三批的長尾單點。兩個卡點是 `saveRentalMarketplaceFlags` 與啟用生命週期時的
+// `migrateOpenWishesOnActivation`，所以這一組測試有三個重點：
+//   1. **逐段合併**：只帶 `{ wish: { offer_enabled: true } }` 不能把其他已開的旗標關掉。
+//   2. **遷移的對象只有「遠期到期的 open」**：已遷移過的、非 open 的、真的快到期的都不能動。
+//   3. **PG 交易內完成遷移 ＋ 開關**，而且本機 handle 也要追上（島嶼還沒搬完的讀取看的是它）。
+const WISH_COLS = `id, user_id, status, lifecycle, expires_at, last_confirmed_at, last_active_at, updated_at,
+  continuous_active_from, lifecycle_migrated_at`;
+
+const wishRows = (handle) =>
+  handle.prepare(`SELECT ${WISH_COLS} FROM demand_posts ORDER BY id`).all();
+
+// ⚠️「遠期到期」的判準是 `expires_at >= WISH_FAR_EXPIRE`（`9999-12-31`），不是「比今天晚」——
+// 第一版用 `2099-01-01`，`isLegacyWishForActivation()` 直接回 false（遷移 0 列，測試卻看起來有跑）。
+const FAR_EXPIRE = "9999-12-31T00:00:00.000Z";
+
+// 種一列許願。`user_id` 必須每列不同——`idx_demand_one_open` 是「同一人只能有一則 open」的
+// 部分唯一索引（夾具只鏡射表 DDL，但同步版那一邊是真的資料庫，撞到會直接紅）。
+// 本機那一份有開 `PRAGMA foreign_keys`，所以要先種一個對應的 user（夾具沒有開，但兩邊都種
+// 才不會出現「只有一邊種得進去」的假象）。
+function seedWish(handle, { id, userId, status = "open", expiresAt = FAR_EXPIRE, lifecycle = null, migratedAt = null }) {
+  handle.prepare(`INSERT INTO users(id, email, created_at) VALUES (?, ?, '2026-01-01T00:00:00.000Z')
+    ON CONFLICT(id) DO NOTHING`).run(userId, `wish-${userId}@example.com`);
+  handle.prepare(`INSERT INTO demand_posts(id, user_id, status, lifecycle, created_at, expires_at, lifecycle_migrated_at)
+    VALUES (?, ?, ?, ?, '2026-01-01T00:00:00.000Z', ?, ?)`)
+    .run(id, userId, status, lifecycle, expiresAt, migratedAt);
+}
+
+const clearWishes = (exec) => {
+  for (const h of [db, exec.raw]) {
+    h.prepare("DELETE FROM demand_posts").run();
+    h.prepare("DELETE FROM users WHERE email LIKE 'wish-%@example.com'").run();
+  }
+};
+
+test("開關寫入：部分更新不得關掉其他旗標，落地列與行程內快取都與同步版相同", async () => {
+  const exec = resetBoth();
+  // 起點：兩個區塊都已經有開著的旗標（兩個 store 各一份相同的值）。
+  const prior = { rental_catalog_v2: { enabled: true }, wish: { notifications_enabled: true, lifecycle_enabled: false } };
+  for (const h of [db, exec.raw]) {
+    h.prepare("INSERT INTO settings(key, value) VALUES('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify(prior));
+  }
+  const patch = { wish: { offer_enabled: true } };
+  const pg = await asyncMod.saveRentalMarketplaceFlagsAsync(patch, { ...PG, exec });
+  // 🚨 先在**只走過 PG** 的狀態下讀快取：同步版本本身也會 hydrate，先跑同步版會掩蓋缺陷。
+  const cachedAfterPg = CACHE().flags;
+  const lite = syncDb.saveRentalMarketplaceFlags(patch);
+
+  assert.deepEqual(pg, lite, "回傳的公開開關必須與同步版逐欄相同");
+  assert.equal(pg.rental_catalog_v2.enabled, true, "沒帶到的區塊要保留（頂層合併）");
+  assert.equal(pg.wish.lifecycle_enabled, false, "這次沒開生命週期");
+  // ⚠️ `publicRentalMarketplaceFlags()` 只公開 `lifecycle_enabled`（其餘旗標在公開形狀裡一律
+  // 是 false，分階段上線的設計），所以「不得關掉其他旗標」要看**落地的 blob** 與行程內快取。
+  const landed = JSON.parse(settingsRows(exec.raw).find((row) => row.key === "rentalMarketplaceFlags").value);
+  assert.equal(landed.wish.offer_enabled, true, "這次開的旗標必須落地");
+  assert.equal(landed.wish.notifications_enabled, true, "沒帶到的旗標不得被關掉（wish 逐段合併）");
+  assert.equal(landed.rental_catalog_v2.enabled, true, "另一個區塊也要保留");
+  assert.equal(lite.wish.notifications_enabled, false, "前置條件：同步版的公開形狀也不公開它");
+  assertSameSettings(exec, "寫開關");
+  assert.deepEqual(cachedAfterPg, flagsLib.normalizeRentalMarketplaceFlags(landed),
+    "PG 寫入後行程內快取必須換成新開關（否則同步路徑還是舊的）");
+  assert.equal(cachedAfterPg.wish.offer_enabled, true, "快取裡必須看得到這次開的旗標");
+  assert.deepEqual(CACHE().flags, cachedAfterPg);
+});
+
+test("開關寫入：啟用生命週期時，既有許願要在 PG 交易內遷移，且本機 handle 也要追上", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  for (const h of [db, exec.raw]) {
+    seedWish(h, { id: 9101, userId: 8101 });                                        // 遠期到期 ⇒ 要遷移
+    seedWish(h, { id: 9102, userId: 8102, expiresAt: "2027-01-01T00:00:00.000Z" });  // 真的快到期 ⇒ 不動
+    seedWish(h, { id: 9103, userId: 8103, status: "closed" });                       // 非 open ⇒ 不動
+    seedWish(h, { id: 9104, userId: 8104, lifecycle: "active", migratedAt: "2026-02-01T00:00:00.000Z" }); // 已遷移 ⇒ 不動
+  }
+  const untouchedBefore = wishRows(exec.raw).filter((row) => row.id !== 9101);
+
+  const pg = await asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { lifecycle_enabled: true } }, { ...PG, exec });
+  // 🚨 本機 handle 必須**在 PG 分支就**追上，不是靠下面那句同步版。
+  assert.equal(wishRows(db).find((row) => row.id === 9101).lifecycle, "active",
+    "PG 分支也要遷移本機 handle（島嶼還沒搬完的讀取看的是它）");
+
+  const lite = syncDb.saveRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  assert.deepEqual(pg, lite, "回傳的公開開關必須與同步版相同");
+  assert.equal(pg.wish.lifecycle_enabled, true);
+  assertSameSettings(exec, "啟用生命週期");
+  assert.deepEqual(wishRows(exec.raw), wishRows(db), "PG 與本機的 demand_posts 必須逐列相同");
+
+  const migrated = wishRows(exec.raw).find((row) => row.id === 9101);
+  assert.equal(migrated.lifecycle, "active", "遠期到期的 open 要改成 active");
+  assert.ok(migrated.expires_at < "2099-01-01", `遠期到期必須被改成 TTL，實際 ${migrated.expires_at}`);
+  assert.ok(migrated.expires_at > migrated.last_confirmed_at, "TTL 到期時間必須晚於最後確認時間");
+  assert.equal(migrated.last_confirmed_at, migrated.last_active_at, "最後確認與最後活動是同一個時間戳");
+  assert.equal(migrated.last_confirmed_at, migrated.continuous_active_from, "連續活躍起點從這次遷移算起");
+  assert.equal(migrated.last_confirmed_at, migrated.updated_at, "遷移也要更新 updated_at");
+  assert.ok(migrated.lifecycle_migrated_at, "遷移標記必須寫入（否則每次啟用都會再遷一次）");
+  // 另外三列（真的快到期／非 open／已遷移）必須原封不動。
+  assert.deepEqual(wishRows(exec.raw).filter((row) => row.id !== 9101), untouchedBefore,
+    "只有遠期到期的 open 能被改動");
+});
+
+test("開關寫入：沒有啟用生命週期時，不得動到任何 demand_posts", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  for (const h of [db, exec.raw]) seedWish(h, { id: 9201, userId: 8201 });
+  const before = wishRows(exec.raw);
+  const pg = await asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { owner_matching_enabled: true } }, { ...PG, exec });
+  const lite = syncDb.saveRentalMarketplaceFlags({ wish: { owner_matching_enabled: true } });
+  assert.deepEqual(pg, lite);
+  assert.deepEqual(wishRows(exec.raw), before, "只開配對時不得遷移任何許願");
+  assert.deepEqual(wishRows(db), before, "本機也不得被動到");
+});
+
+test("遷移：逐列重用純判斷——只有遠期到期的 open 會被改", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  seedWish(exec.raw, { id: 9301, userId: 8301 });
+  seedWish(exec.raw, { id: 9302, userId: 8302, status: "draft" });
+  seedWish(exec.raw, { id: 9303, userId: 8303, migratedAt: "2026-03-01T00:00:00.000Z" });
+  const n = await asyncMod.migrateOpenWishesOnActivationAsync(exec, new Date());
+  assert.equal(n, 1, "只有一列符合「遠期到期的 open」");
+  assert.deepEqual(wishRows(exec.raw).map((row) => [row.id, row.lifecycle]),
+    [[9301, "active"], [9302, null], [9303, null]], "其餘兩列的 lifecycle 不得被寫入");
+});
+
+test("遷移：沒有 lifecycle_migrated_at 欄位時仍要遷移（改走不含標記的 UPDATE）", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  seedWish(exec.raw, { id: 9401, userId: 8401, migratedAt: null });
+  // 夾具的 demand_posts 少了標記欄位（舊庫升級上來的形狀）。
+  exec.raw.exec("ALTER TABLE demand_posts DROP COLUMN lifecycle_migrated_at");
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('demand_posts') WHERE name = 'lifecycle_migrated_at'").get().n, 0,
+    "前置條件：夾具真的沒有那個欄位");
+  const hasMarker = await asyncMod.migrateOpenWishesOnActivationAsync(exec, new Date(), { hasMarker: false });
+  assert.equal(hasMarker, 1, "沒有標記欄位時仍要遷移那兩列");
+  const row = exec.raw.prepare("SELECT id, lifecycle, expires_at FROM demand_posts WHERE id = 9401").get();
+  assert.equal(row.lifecycle, "active");
+  assert.ok(row.expires_at < "2099-01-01", `遠期到期必須被改成 TTL，實際 ${row.expires_at}`);
+});
+
+test("開關寫入：探測到沒有 lifecycle 欄位時，一切照舊（不得用不存在的欄位寫入）", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  seedWish(exec.raw, { id: 9501, userId: 8501, lifecycle: null });
+  // DROP COLUMN 之後就選不到 lifecycle 了，所以基準值只取還會存在的三個欄位。
+  const before = exec.raw.prepare("SELECT id, status, expires_at FROM demand_posts WHERE id = 9501").get();
+  // 只有 PG 這一邊沒有 lifecycle 欄位（模擬舊庫；同步版那一邊照舊）。
+  exec.raw.exec("ALTER TABLE demand_posts DROP COLUMN lifecycle");
+  const pg = await asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { lifecycle_enabled: true } }, { ...PG, exec });
+  const lite = syncDb.saveRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  assert.deepEqual(pg, lite, "回傳的公開開關必須與同步版相同");
+  assert.equal(pg.wish.lifecycle_enabled, true, "開關本身仍要落地（同步版也是先寫開關）");
+  assertSameSettings(exec, "沒有 lifecycle 欄位");
+  assert.deepEqual(exec.raw.prepare("SELECT id, status, expires_at FROM demand_posts WHERE id = 9501").get(),
+    before, "沒有 lifecycle 欄位時不得改動任何列");
+});
+
+test("開關寫入：只有標記欄位缺席時，PG 仍要完成遷移（走不含標記的 UPDATE）", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  seedWish(exec.raw, { id: 9451, userId: 8451, migratedAt: null });
+  // 這一條刻意**只**拿掉標記欄位：`lifecycle` 還在，所以遷移一定要跑，只是不能寫標記。
+  //（上一條是「連 lifecycle 都沒有 ⇒ 完全不遷移」，兩條合起來才釘住兩個探測結果。）
+  exec.raw.exec("ALTER TABLE demand_posts DROP COLUMN lifecycle_migrated_at");
+  const pg = await asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { lifecycle_enabled: true } }, { ...PG, exec });
+  const row = exec.raw.prepare("SELECT id, lifecycle, expires_at FROM demand_posts WHERE id = 9451").get();
+  assert.equal(row.lifecycle, "active", "標記欄位缺席不得讓遷移整批跳過");
+  assert.ok(row.expires_at < "2099-01-01", `遠期到期必須被改成 TTL，實際 ${row.expires_at}`);
+  const lite = syncDb.saveRentalMarketplaceFlags({ wish: { lifecycle_enabled: true } });
+  assert.deepEqual(pg, lite, "回傳的公開開關必須與同步版相同");
+  assert.equal(pg.wish.lifecycle_enabled, true);
+  assertSameSettings(exec, "沒有標記欄位");
+});
+
+test("strict：PG 失敗時必須往上丟，且不得先遷移本機、也不得寫進 SQLite", async () => {
+  const exec = resetBoth();
+  clearWishes(exec);
+  seedWish(db, { id: 9601, userId: 8601 });
+  const broken = async () => { throw new Error("connection terminated unexpectedly"); };
+  await assert.rejects(
+    () => asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { lifecycle_enabled: true } }, { ...PG, exec: broken }),
+    /connection terminated/,
+  );
+  await assert.rejects(
+    () => asyncMod.saveRentalMarketplaceFlagsAsync({ wish: { lifecycle_enabled: true } }, { ...PG, exec: broken, strict: true }),
+    /connection terminated/,
+  );
+  assert.equal(wishRows(db)[0].lifecycle, null, "PG 失敗時不得先遷移本機（否則等於開了沒開的開關）");
+  assert.equal(settingsRows(db).length, 0, "寫入失敗不得回退寫 SQLite");
 });
