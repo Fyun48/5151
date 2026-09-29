@@ -65,9 +65,13 @@ test("upsertListing bumps the data revision change-log (add then update)", () =>
 
 test("api/events/revision returns the durable change-log", () => {
   const server = readFileSync(path.join(dir, "../src/server.js"), "utf8");
-  assert.match(server, /app\.get\("\/api\/events\/revision"/);
-  assert.match(server, /revision: currentRevision\(db\)/);
-  assert.match(server, /changes: changesSince\(db, since, \{ limit: 500 \}\)/);
+  assert.match(server, /app\.get\("\/api\/events\/revision", async \(req, res\) => \{/);
+  // 第四十九批之前這裡是 node-local 的同步讀取（`currentRevision(db)`），
+  // 而寫入端早就是 driver-aware 的 ⇒ PG 站「寫在 PG、讀在本機」，revision 永遠 0。
+  assert.match(server, /revision: await currentRevisionAsync\(\)/);
+  assert.match(server, /changes: await changesSinceAsync\(since, \{ limit: 500 \}\)/);
+  assert.doesNotMatch(server, /revision: currentRevision\(db\)/,
+    "不得再走 node-local 的同步讀取（PG 站的 revision 會永遠是 0）");
 });
 
 test("frontend reconnects by re-reading the revision delta", () => {

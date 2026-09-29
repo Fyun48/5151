@@ -38,6 +38,12 @@ test("live PG：用 writePath 寫入、用 PG 版讀回來（寫讀同源）", {
   const who = (await query("SELECT current_database() AS db"))[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
 
+  // 🚨 建表要**排在第一次 cleanup 之前**：CI 的拋棄式資料庫沒有 `data_revision`
+  // （`pg-integration-setup.mjs` 的鏡射清單不含它，正式路徑是第一次用到時才由
+  // `db.js` 的 `ensurePgSchema(pgDriver, db, { tables: ["data_revision"] })` 補建），
+  // 所以先 DELETE 會直接 42P01。這裡照正式路徑補建（idempotent）。
+  await dataRevAsync.ensureDataRevisionStoreOnce(pgDriver);
+
   const cleanup = async () => {
     await query("DELETE FROM data_revision WHERE entity_type LIKE $1", [`${TOKEN}%`]);
   };

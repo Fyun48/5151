@@ -121,6 +121,18 @@ export function schemaStatements(db, { schema = "", tables = [] } = {}) {
 }
 
 export async function ensurePgSchema(pgDriver, sqliteDb, { schema = "", tables = [], indexes = true } = {}) {
+  // 🚨 來源（SQLite）沒有那張表時，`createTableStatement()` 會產生一個**零欄的
+  // `CREATE TABLE IF NOT EXISTS x ()`**，而 PostgreSQL 照收 —— 症狀不是 42P01（找不到表），
+  // 而是之後每一句都 42703（`column "..." does not exist`），極難回推。
+  // 2026-09-28 實測中過一次：`data_revision` 是**延遲建立**的表（第一次讀／寫才建），
+  // 全新節點的 SQLite 還沒有它，於是 PG 被建出零欄表。這裡直接擋掉，呼叫端要自己先確保
+  // 來源表存在（例：`ensureDataRevisionTable(db)`）。
+  const missing = tables.filter((table) => tableInfo(sqliteDb, table).length === 0);
+  if (missing.length) {
+    throw new Error(
+      `ensurePgSchema：SQLite 來源缺少資料表 ${missing.join(", ")}（直接鏡射會建出零欄表，之後只會看到 42703）`,
+    );
+  }
   // SQLite index SQL can use SQLite-only syntax (COLLATE NOCASE, expression
   // indexes), so callers that only need the tables can skip the index DDL.
   const statements = schemaStatements(sqliteDb, { schema, tables })

@@ -160,3 +160,32 @@ test("非 postgres 模式必須走同步路徑（不碰傳入的 exec）", async
   assert.equal(rev, syncMod.currentRevision(disk));
   assert.deepEqual(plain(rows), plain(syncMod.changesSince(disk, 0, { limit: 500 })));
 });
+
+// ⚠️ 這一條要放在最後：它會把本機的 `data_revision` 暫時砍掉再還原。
+test("ensureDataRevisionStoreOnce：本機還沒有那張表時，仍要建出**完整欄位**（不是零欄表）", async () => {
+  // 🚨 這正是 CI 拋棄式資料庫 ＋ 全新 DATA_DIR 的狀態：`data_revision` 是**延遲建立**的表，
+  // 而 `ensurePgSchema()` 從「沒有那張表」的來源鏡射，會產生**零欄的
+  // `CREATE TABLE IF NOT EXISTS data_revision ()`**，PostgreSQL 照收 ⇒
+  // 之後每一句都變成 42703（`column "entity_type" does not exist`）而不是 42P01，
+  // 極難回推。2026-09-28 在 CI 上實際中過（PR #547 第一次跑）。
+  const h = handle();
+  h.exec("DROP TABLE IF EXISTS data_revision");
+  try {
+    const ddl = [];
+    const fakePg = {
+      exec: async (sql) => { ddl.push(String(sql)); },
+      query: async () => ({ rows: [], rowCount: 0 }),
+    };
+    await asyncMod.ensureDataRevisionStoreOnce(fakePg);
+    const create = ddl.find((sql) => /^CREATE TABLE/i.test(sql)) || "";
+    assert.ok(create, `必須送出一句 CREATE TABLE（實際：${JSON.stringify(ddl)}）`);
+    for (const col of ["id", "entity_type", "entity_id", "event_type", "created_at"]) {
+      assert.match(create, new RegExp(`\\b${col}\\b`), `建表語句必須包含 ${col}：${create}`);
+    }
+    assert.doesNotMatch(create, /\(\s*\)/, "不得是零欄表");
+    // 來源（本機）那張表本身也要被補回來：同步版每個入口都會先做這件事。
+    assert.equal(syncMod.currentRevision(h), 0, "補回來之後是空表，revision 應為 0");
+  } finally {
+    syncMod.ensureDataRevisionTable(h);
+  }
+});

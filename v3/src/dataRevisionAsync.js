@@ -21,6 +21,7 @@ import {
   CHANGES_SINCE_MAX,
   changesSince as changesSinceSync,
   currentRevision as currentRevisionSync,
+  ensureDataRevisionTable,
 } from "./dataRevision.js";
 
 export const DATA_REVISION_TABLES = ["data_revision"];
@@ -42,7 +43,13 @@ const schemaReady = new WeakMap();
 export async function ensureDataRevisionStoreOnce(pgDriver) {
   if (!pgDriver) return;
   if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);
-  const ready = ensurePgSchema(pgDriver, sqliteHandle(), { tables: DATA_REVISION_TABLES });
+  const sqlite = sqliteHandle();
+  // 🚨 鏡射的**來源必須真的有那張表**：`data_revision` 是延遲建立的（同步版每個入口都會先
+  // `ensureDataRevisionTable(db)`），全新節點的本機 SQLite 還沒有它 ⇒ 直接鏡射會讓 PG 被建出
+  // **零欄表**（症狀是之後每一句都 42703，不是 42P01）。2026-09-28 在 CI 的拋棄式資料庫上實測中過。
+  // `pgSchema.ensurePgSchema()` 現在也會擋這種情況，這裡先照同步版把來源表準備好。
+  ensureDataRevisionTable(sqlite);
+  const ready = ensurePgSchema(pgDriver, sqlite, { tables: DATA_REVISION_TABLES });
   schemaReady.set(pgDriver, ready);
   try {
     await ready;

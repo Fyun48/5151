@@ -1200,6 +1200,15 @@ const DATAREV_MUTATIONS = [
     to: "",
     expect: "非 postgres 模式必須走同步路徑",
   },
+  {
+    // 少了這一句，全新節點（本機 SQLite 還沒有 `data_revision`）會被鏡射出**零欄表**，
+    // 之後每一句都 42703。CI 的拋棄式資料庫上實際中過。
+    name: "ensure 不先補來源表（會建出零欄表，症狀是 42703）",
+    file: DATAREV_SRC,
+    from: "  ensureDataRevisionTable(sqlite);\n",
+    to: "",
+    expect: "ensureDataRevisionStoreOnce：本機還沒有那張表時",
+  },
 ];
 
 // 會員同意紀錄 ＋ 匯入確認 PG 分支的變異集（v3/test/member-consents-async.test.js）。
