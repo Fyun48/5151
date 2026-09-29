@@ -1,0 +1,201 @@
+// 回饋傳輸佇列（`feedback_outbox`）的 driver-aware 入口（PG 島嶼，2026-09-28，第五十七批）。
+//
+// 為什麼需要（這一叢最嚴重的靜默失效）：worker（`opsDelivery.js` 的 `startDeliveryLoop`）
+// 讀寫的是**節點本機**的 `feedback_outbox`。PG 模式下 `POST /api/feedback` 會把事件寫進 PG，
+// 而 worker 送的是本機那一份 ⇒ **PG 的佇列永遠沒有人送**（事件靜靜躺在 pending，沒有錯誤）。
+//
+// 🚨 併發語意**不是逐字照抄**：SQLite 版是「SELECT 候選 → 一句帶 status 條件的 UPDATE 搶」。
+// PG 要用 `FOR UPDATE SKIP LOCKED`，否則多節點會重複認領同一個事件（Ops 端有 delivery_id 去重，
+// 但重複送出仍然浪費、而且 attempts 會亂跳）。離線夾具（SQLite）不支援 `SKIP LOCKED`，
+// 所以「語句長什麼樣」用假 handle 驗，**併發的正確性只有 live PG 測得出來**。
+import { resolveDbDriver } from "./dbDriver.js";
+import { sqliteHandle } from "./db.js";
+import { sharedPgDriver } from "./pgSharedDriver.js";
+import { toPostgresSql } from "./sqlDialect.js";
+import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { ensurePgSchema } from "./pgSchema.js";
+import {
+  OUTBOX_BACKLOG_WARN,
+  OUTBOX_COMPACT_AFTER_MS,
+  OUTBOX_DEAD_WARN,
+  OUTBOX_DEFAULT_MAX_ATTEMPTS,
+  backoffMs,
+  claimOutboxBatch as claimOutboxBatchSync,
+  compactSentOutboxPayloads as compactSentOutboxPayloadsSync,
+  markOutboxFailure as markOutboxFailureSync,
+  markOutboxSent as markOutboxSentSync,
+  outboxCapacityAlert as outboxCapacityAlertSync,
+  outboxStats as outboxStatsSync,
+  payloadHashHex,
+} from "./feedbackOutbox.js";
+
+export const FEEDBACK_OUTBOX_TABLES = ["feedback_outbox"];
+
+// 🚨 `delivery_id`／`idempotency_key` 的 UNIQUE 是**表約束**（隱式索引），`ensurePgSchema()`
+// 鏡射不到（已中六次以上）：少了它，重送會產生重複列，而去重是靠這兩個鍵。
+export const FEEDBACK_OUTBOX_UNIQUE_INDEXES = [
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_outbox_delivery_id ON feedback_outbox(delivery_id)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_outbox_idempotency_key ON feedback_outbox(idempotency_key)",
+  "CREATE INDEX IF NOT EXISTS idx_feedback_outbox_status_pg ON feedback_outbox(status, next_attempt_at)",
+  "CREATE INDEX IF NOT EXISTS idx_feedback_outbox_feedback_pg ON feedback_outbox(feedback_id)",
+];
+
+// 🚨 **認領必須是「一句」**（`UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING *`）。
+//
+// 我第一版寫成兩段式（先 SELECT 候選、再 UPDATE 認領），**live PG 的併發測試當場抓到重複認領**：
+// `pgDriver.query()` 每句都是自己的隱含交易，`FOR UPDATE` 的鎖在 SELECT 結束就放掉了，
+// 另一個 worker 因此在 UPDATE 之前看到的還是 `pending` ⇒ 同一列被兩邊各認領一次
+// （30 筆被認領 31 次）。單句寫法沒有這個窗口，而且 `SKIP LOCKED` 讓兩邊拿到互斥的子集。
+// 條件與同步版逐條對應（pending／failed 且到期，或 stale 的 sending）。
+export const CLAIM_OUTBOX_SQL = `UPDATE feedback_outbox
+   SET status = 'sending', claimed_at = $1
+   WHERE id IN (
+     SELECT id FROM feedback_outbox
+      WHERE (status IN ('pending','failed') AND next_attempt_at <= $1)
+         OR (status = 'sending' AND (claimed_at IS NULL OR claimed_at <= $2))
+      ORDER BY id ASC
+      LIMIT $3
+      FOR UPDATE SKIP LOCKED
+   )
+   RETURNING *`;
+export const OUTBOX_STATS_SQL = "SELECT status, COUNT(*) AS n FROM feedback_outbox GROUP BY status";
+export const OUTBOX_SENT_SQL = "UPDATE feedback_outbox SET status='sent', sent_at=$1, last_error=NULL WHERE id=$2";
+export const OUTBOX_DEAD_SQL = "UPDATE feedback_outbox SET status='dead', attempts=$1, last_error=$2 WHERE id=$3";
+export const OUTBOX_FAILED_SQL =
+  "UPDATE feedback_outbox SET status='failed', attempts=$1, next_attempt_at=$2, last_error=$3 WHERE id=$4";
+export const OUTBOX_COMPACT_CANDIDATES_SQL = `SELECT id, payload, feedback_id FROM feedback_outbox
+   WHERE status IN ('sent','dead')
+     AND created_at <= $1
+     AND payload NOT LIKE '{"compacted":true%'
+   ORDER BY id ASC
+   LIMIT $2`;
+export const OUTBOX_COMPACT_UPDATE_SQL = "UPDATE feedback_outbox SET payload=$1 WHERE id=$2";
+
+export const OUTBOX_CLAIM_STALE_MS = 5 * 60 * 1000;
+
+const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
+const one = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
+
+function normalizeResult(raw) {
+  if (Array.isArray(raw)) return { rows: raw, rowCount: Number(raw.rowCount ?? raw.length) || 0 };
+  const rows = (raw && raw.rows) || [];
+  const changes = Number(raw && raw.changes);
+  return { rows, rowCount: Number((raw && raw.rowCount) ?? (Number.isFinite(changes) ? changes : rows.length)) || 0 };
+}
+
+const iso = (now) => (now instanceof Date ? now : new Date(now || Date.now())).toISOString();
+
+const schemaReady = new WeakMap();
+export async function ensureFeedbackOutboxStoreOnce(pgDriver) {
+  if (!pgDriver) return;
+  if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);
+  const sqlite = sqliteHandle();
+  const ready = (async () => {
+    await ensurePgSchema(pgDriver, sqlite, { tables: FEEDBACK_OUTBOX_TABLES, indexes: false });
+    for (const sql of FEEDBACK_OUTBOX_UNIQUE_INDEXES) await pgDriver.exec(sql);
+  })();
+  schemaReady.set(pgDriver, ready);
+  try {
+    await ready;
+  } catch (error) {
+    schemaReady.delete(pgDriver);
+    throw error;
+  }
+}
+
+async function withFallback(options, runPostgres, runSqlite, { write = false } = {}) {
+  if (!isPg(options)) return runSqlite();
+  try {
+    if (options.exec) {
+      const injected = options.exec;
+      return await runPostgres(async (sql, params = []) => normalizeResult(await injected(sql, params)));
+    }
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
+    await ensureFeedbackOutboxStoreOnce(pgDriver);
+    return await runPostgres(async (sql, params = []) => normalizeResult(await pgDriver.query(toPostgresSql(sql), params)));
+  } catch (error) {
+    if (!sqliteFallbackAllowed(options, write ? { write: true } : {})) throw error;
+    return runSqlite();
+  }
+}
+
+// `feedbackOutbox.claimOutboxBatch()` 的 PG 版（**單句原子認領**，見上面 `CLAIM_OUTBOX_SQL` 的說明）。
+// 回傳的列就是「這一句真的搶到的」；stale 的 sending 走同一條（crash 後可復原）。
+export async function claimOutboxBatchAsync({ limit = 20, now = new Date(), staleMs = OUTBOX_CLAIM_STALE_MS } = {}, options = {}) {
+  const nowIso = iso(now);
+  const staleBefore = iso(new Date((now instanceof Date ? now.getTime() : now) - staleMs));
+  const cap = Math.max(1, Math.min(Number(limit) || 20, 200));
+  return withFallback(options, async (exec) => {
+    const rows = (await exec(CLAIM_OUTBOX_SQL, [nowIso, staleBefore, cap])).rows;
+    return rows.map((row) => ({ ...row, attempts: Number(row.attempts) || 0 }));
+  }, () => claimOutboxBatchSync(sqliteHandle(), { limit, now, staleMs }), { write: true });
+}
+
+export async function markOutboxSentAsync(id, { now = new Date() } = {}, options = {}) {
+  return withFallback(options, async (exec) => { await exec(OUTBOX_SENT_SQL, [iso(now), Number(id) || 0]); },
+    () => markOutboxSentSync(sqliteHandle(), id, { now }), { write: true });
+}
+
+// 失敗：attempts+1；達上限 → dead，否則 failed ＋ 退避（`backoffMs` 是純函式，兩邊共用同一份）。
+export async function markOutboxFailureAsync(row, errText, { now = new Date(), random = Math.random } = {}, options = {}) {
+  const attempts = Number(row?.attempts) + 1;
+  const max = Number(row?.max_attempts) || OUTBOX_DEFAULT_MAX_ATTEMPTS;
+  const err = String(errText || "").slice(0, 500);
+  const id = Number(row?.id) || 0;
+  if (attempts >= max) {
+    return withFallback(options, async (exec) => {
+      await exec(OUTBOX_DEAD_SQL, [attempts, err, id]);
+      return { status: "dead", attempts };
+    }, () => markOutboxFailureSync(sqliteHandle(), row, errText, { now, random }), { write: true });
+  }
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const next = iso(new Date(nowMs + backoffMs(attempts, { random })));
+  return withFallback(options, async (exec) => {
+    await exec(OUTBOX_FAILED_SQL, [attempts, next, err, id]);
+    return { status: "failed", attempts, next_attempt_at: next };
+  }, () => markOutboxFailureSync(sqliteHandle(), row, errText, { now, random }), { write: true });
+}
+
+export async function outboxStatsAsync(options = {}) {
+  return withFallback(options, async (exec) => {
+    const out = { pending: 0, sending: 0, sent: 0, failed: 0, dead: 0, total: 0 };
+    for (const row of (await exec(OUTBOX_STATS_SQL, [])).rows) {
+      out[row.status] = Number(row.n) || 0;
+      out.total += Number(row.n) || 0;
+    }
+    return out;
+  }, () => outboxStatsSync(sqliteHandle()));
+}
+
+// ⚠️ 只有在**真的送出**時才算「已傳送」；這裡只是把 stats 轉成警示（與同步版同一組門檻）。
+export async function outboxCapacityAlertAsync({ backlogWarn = OUTBOX_BACKLOG_WARN, deadWarn = OUTBOX_DEAD_WARN } = {}, options = {}) {
+  const stats = await outboxStatsAsync(options);
+  const backlog = (stats.pending || 0) + (stats.failed || 0) + (stats.sending || 0);
+  const warn = backlog >= backlogWarn || (stats.dead || 0) >= deadWarn;
+  return {
+    ...stats,
+    backlog,
+    warn,
+    backlog_warn: backlogWarn,
+    dead_warn: deadWarn,
+    message: warn
+      ? `傳輸佇列堆積 ${backlog} 筆、dead ${stats.dead || 0} 筆。回饋主本仍在本機；可精簡已送出的傳輸複本。`
+      : "",
+  };
+}
+
+// 精簡已送出／dead 的 payload（保留 sha256）。語意與同步版逐條相同。
+export async function compactSentOutboxPayloadsAsync({ olderThanMs = OUTBOX_COMPACT_AFTER_MS, now = new Date(), limit = 500 } = {}, options = {}) {
+  const cutoff = iso(new Date((now instanceof Date ? now.getTime() : now) - olderThanMs));
+  const cap = Math.max(1, Math.min(Number(limit) || 500, 2000));
+  return withFallback(options, async (exec) => {
+    const rows = (await exec(OUTBOX_COMPACT_CANDIDATES_SQL, [cutoff, cap])).rows;
+    let compacted = 0;
+    for (const row of rows) {
+      const slim = JSON.stringify({ compacted: true, feedback_id: row.feedback_id, payload_sha256: payloadHashHex(row.payload) });
+      await exec(OUTBOX_COMPACT_UPDATE_SQL, [slim, Number(row.id)]);
+      compacted += 1;
+    }
+    return { compacted, scanned: rows.length };
+  }, () => compactSentOutboxPayloadsSync(sqliteHandle(), { olderThanMs, now, limit }), { write: true });
+}

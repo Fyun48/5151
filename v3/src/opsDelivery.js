@@ -79,7 +79,7 @@ async function withTimeout(fetchImpl, url, options, timeoutMs) {
   }
 }
 
-async function deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now = () => new Date(), random = Math.random }) {
+async function deliverOne(store, row, { url, secret, timeoutMs, fetchImpl, now = () => new Date(), random = Math.random }) {
   const raw = row.payload; // 送出的 body 必須與簽章時的 bytes 完全一致
   let deliveryId = row.delivery_id;
   try {
@@ -92,14 +92,14 @@ async function deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now = ()
     const { headers } = signIngestRequest({ method: "POST", path: INGEST_PATH, deliveryId, rawBody: raw, secret });
     const res = await withTimeout(fetchImpl, url, { method: "POST", headers, body: raw }, timeoutMs);
     if (res.status >= 200 && res.status < 300) {
-      markOutboxSent(db, row.id, { now: now() });
+      await store.markSent(row.id, { now: now() });
       return { id: row.id, result: "sent" };
     }
-    const info = markOutboxFailure(db, row, `HTTP ${res.status}`, { now: now(), random });
+    const info = await store.markFailure(row, `HTTP ${res.status}`, { now: now(), random });
     return { id: row.id, result: info.status, http: res.status };
   } catch (err) {
     const cls = err?.name === "AbortError" ? "timeout" : (err?.name || "error");
-    const info = markOutboxFailure(db, row, cls, { now: now(), random });
+    const info = await store.markFailure(row, cls, { now: now(), random });
     return { id: row.id, result: info.status, error: cls };
   }
 }
@@ -118,8 +118,21 @@ async function runPool(items, concurrency, worker) {
   return results;
 }
 
-// 跑一輪遞送。回傳摘要（只含計數與 id/status，不含 payload）。
-export async function deliverOutboxOnce(db, {
+// `db`（同步 SQLite handle）→ 統一的 store 介面。
+// 這一層是為了讓「遞送政策」只有一份實作：同步版與 PG 版差別只在誰去跑 SQL。
+export function feedbackOutboxStoreFromDb(db) {
+  return {
+    isStopped: () => isLocalDeliveryStopped(db),
+    claim: (opts) => claimOutboxBatch(db, opts),
+    markSent: (id, opts) => markOutboxSent(db, id, opts),
+    markFailure: (row, errText, opts) => markOutboxFailure(db, row, errText, opts),
+  };
+}
+
+// 跑一輪遞送（共用核心）。`store` 的方法可以是同步或 async——這裡一律 `await`，
+// 所以 SQLite 版的行為完全不變（await 一個非 Promise 值是 no-op）。
+// 回傳摘要（只含計數與 id/status，不含 payload）。
+export async function deliverWithStore(store, {
   url,
   secret,
   now = () => new Date(),
@@ -131,11 +144,11 @@ export async function deliverOutboxOnce(db, {
 } = {}) {
   if (!url || !secret) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "not_configured" };
   if (typeof fetchImpl !== "function") return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "no_fetch" };
-  if (isLocalDeliveryStopped(db)) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
-  const claimed = claimOutboxBatch(db, { limit: batchSize, now: now() });
+  if (await store.isStopped()) return { claimed: 0, sent: 0, failed: 0, dead: 0, skipped: "local_stopped" };
+  const claimed = await store.claim({ limit: batchSize, now: now() });
   if (!claimed.length) return { claimed: 0, sent: 0, failed: 0, dead: 0 };
   const results = await runPool(claimed, concurrency, (row) =>
-    deliverOne(db, row, { url, secret, timeoutMs, fetchImpl, now, random }));
+    deliverOne(store, row, { url, secret, timeoutMs, fetchImpl, now, random }));
   const summary = { claimed: claimed.length, sent: 0, failed: 0, dead: 0 };
   for (const r of results) {
     if (r.result === "sent") summary.sent += 1;
@@ -145,16 +158,22 @@ export async function deliverOutboxOnce(db, {
   return summary;
 }
 
+// `db` 版的薄包裝（SQLite 站／既有呼叫端不受影響）。
+export async function deliverOutboxOnce(db, config = {}) {
+  return deliverWithStore(feedbackOutboxStoreFromDb(db), config);
+}
+
 // 由 server 呼叫：啟動週期性遞送（回傳 stop 函式）。crash/重啟後 pending 會自然被再次認領。
-export function startDeliveryLoop(db, config, { fetchImpl = globalThis.fetch, log = () => {} } = {}) {
+// 「同一個 tick 不重入」與「每個 tick 先問一次 stop」的規則兩種 driver 共用。
+export function startDeliveryLoopWithStore(store, config, { fetchImpl = globalThis.fetch, log = () => {} } = {}) {
   if (!config?.enabled) return () => {};
   let running = false;
   const tick = async () => {
     if (running) return; // 不重入
     running = true;
     try {
-      if (isLocalDeliveryStopped(db)) return;
-      const summary = await deliverOutboxOnce(db, {
+      if (await store.isStopped()) return;
+      const summary = await deliverWithStore(store, {
         url: config.url,
         secret: config.secret,
         timeoutMs: config.timeoutMs,
@@ -172,4 +191,9 @@ export function startDeliveryLoop(db, config, { fetchImpl = globalThis.fetch, lo
   const timer = setInterval(tick, config.intervalMs);
   if (typeof timer.unref === "function") timer.unref();
   return () => clearInterval(timer);
+}
+
+// `db` 版的薄包裝（SQLite 站行為完全不變）。
+export function startDeliveryLoop(db, config, deps) {
+  return startDeliveryLoopWithStore(feedbackOutboxStoreFromDb(db), config, deps);
 }
