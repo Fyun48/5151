@@ -39,7 +39,10 @@ import {
 import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
 // 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
 // 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
-import { saveSettingsAsync } from "./settingsAsync.js";
+import { getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+// 通知決策要讀站上那一份的會員與信件範本（PG 模式下讀本機等於用別台節點的資料做決定）。
+import { getUserByIdAsync } from "./usersAsync.js";
+import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
@@ -401,9 +404,13 @@ async function resolveListingRoute(listing, settings) {
   return listingForWatchAsync(listing.post_id);
 }
 
-export async function flushPendingNotifications(settings = getSettings(), { silent = false } = {}) {
+export async function flushPendingNotifications(settings = null, { silent = false, ...options } = {}) {
+  // ⚠️ 逐會員的設定與信箱要讀**站上讀的那一份**（PG）：同步版讀本機 ⇒ PG 模式下
+  // 「暫停通知的會員照樣被通知」、信件寄到舊的（或空的）信箱，而且不會報錯。
+  // `options` 一路轉發給島嶼，測試才能注入 driver（正式路徑不傳，行為不變）。
+  settings = settings || await getSettingsAsync(0, options);
   bindNotifyJobSnapshots();
-  const pending = await pendingNotifyEventsAsync({ limit: 400 });
+  const pending = await pendingNotifyEventsAsync({ limit: 400 }, options);
   const dockByUser = new Map();
   const hookByUser = new Map();
   const mailByUser = new Map();
@@ -411,17 +418,17 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
   const neededByEvent = new Map();
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
-    const userSettings = userId ? getSettings(userId) : settings;
-    const listing = await listingForWatchAsync(event.post_id, userId || undefined);
-    const mailTo = String(getUserById(userId)?.email || "").trim();
-    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { configured: false, smtp: null, templates: getMailTemplates() };
+    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;
+    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);
+    const mailTo = String((await getUserByIdAsync(userId, options))?.email || "").trim();
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { configured: false, smtp: null, templates: await getMailTemplatesAsync(options) };
     const mailReady = Boolean(mailBundle.configured);
     if (!listing) {
-      await updateEventNotifyAsync(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 });
+      await updateEventNotifyAsync(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 }, options);
       continue;
     }
     if (userSettings.notificationsPaused === true) {
-      await updateEventNotifyAsync(event.id, { notify_reason: "paused" });
+      await updateEventNotifyAsync(event.id, { notify_reason: "paused" }, options);
       continue;
     }
     const forDock = shouldDockNotify(userSettings, listing, event);
@@ -434,7 +441,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
       notify_reason: decision.reason,
       notify_coord_version: Number(listing.coord_version) || 0,
       notify_ready_at: decision.verdict === "send" ? Date.now() : event.notify_ready_at,
-    });
+    }, options);
     if (decision.verdict === "pending") {
       if (isStalePendingNotify(event)) {
         await updateEventNotifyAsync(event.id, {
@@ -442,12 +449,12 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
           notify_reason: "backoff",
           notify_next_at: Date.now() + NOTIFY_BACKOFF_MS,
           notify_retry_count: (Number(event.notify_retry_count) || 0) + 1,
-        });
+        }, options);
       }
       continue;
     }
     if (decision.verdict !== "send") {
-      await updateEventNotifyAsync(event.id, { notified: 1, notify_decide: decision.decide || "skip_distance", notify_reason: decision.reason });
+      await updateEventNotifyAsync(event.id, { notified: 1, notify_decide: decision.decide || "skip_distance", notify_reason: decision.reason }, options);
       continue;
     }
     if (!forDock && !forHook && !forMail && !forPush) {
@@ -458,7 +465,7 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
         push_job_state: "skipped",
         notified: 1,
         notify_reason: "channels_off",
-      });
+      }, options);
       continue;
     }
     const created = Date.parse(event.created_at || "");
@@ -505,13 +512,13 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     ));
     const mail = mailByUser.get(userId) || [];
     const push = pushByUser.get(userId) || [];
-    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { smtp: null, templates: getMailTemplates() };
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { smtp: null, templates: await getMailTemplatesAsync(options) };
     let result = { webhook: { job_state: "skipped" }, mail: { job_state: "skipped", shown_ids: [] } };
     if (!silent && (dock.length || hook.length || mail.length)) {
-      result = await notify(getSettings(userId), dock, {
+      result = await notify(await getSettingsAsync(userId, options), dock, {
         webhookEvents: hook,
         mailEvents: mail,
-        mailTo: String(getUserById(userId)?.email || "").trim(),
+        mailTo: String((await getUserByIdAsync(userId, options))?.email || "").trim(),
         mailTemplates: mailBundle.templates,
         smtp: mailBundle.smtp || null,
       }) || result;
@@ -529,23 +536,23 @@ export async function flushPendingNotifications(settings = getSettings(), { sile
     const mailState = result.mail?.job_state || "retry";
     const mailShown = new Set(result.mail?.shown_ids || mail.slice(0, 8).map((event) => event.event_id || event.id));
     for (const payload of dock) {
-      await updateEventNotifyAsync(payload.event_id, { dock_job_state: silent ? "accepted" : "accepted" });
+      await updateEventNotifyAsync(payload.event_id, { dock_job_state: silent ? "accepted" : "accepted" }, options);
     }
     for (const payload of hook) {
       await updateEventNotifyAsync(payload.event_id, {
         line_job_state: hookState || "retry",
         notify_last_error: result.webhook?.fail_reason || "",
-      });
+      }, options);
     }
     for (const payload of mail) {
       const id = payload.event_id || payload.id;
       await updateEventNotifyAsync(id, {
         email_job_state: mailShown.has(id) ? mailState : "retry",
         notify_last_error: mailShown.has(id) ? (result.mail?.fail_reason || "") : "batch_overflow",
-      });
+      }, options);
     }
     for (const payload of push) {
-      await updateEventNotifyAsync(payload.event_id, { push_job_state: pushState });
+      await updateEventNotifyAsync(payload.event_id, { push_job_state: pushState }, options);
     }
     const touched = new Set([
       ...dock.map((event) => event.event_id),

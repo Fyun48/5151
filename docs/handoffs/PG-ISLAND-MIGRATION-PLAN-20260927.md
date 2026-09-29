@@ -4002,6 +4002,34 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   **live PG** 在拋棄式 schema 內真的清空（`PG_TEST_URL` gate，本機指向影子站所以只碰自己的 schema）。
 - 變異 **4 條全殺**（`SITERESET_MUTATIONS`）。
 
+## 二之負四十四、2026-09-29 第七十四批：通知 flush 迴圈的逐會員讀取搬上 PG
+
+### 74.1 範圍與投報率
+
+`flushPendingNotifications()`（`queueGeoBackfill` 路線／通知鏈的一半）裡的兩個**逐會員同步讀取**：
+
+- `getSettings(userId)` → `getSettingsAsync(userId, options)`：PG 模式下讀本機 ⇒
+  **暫停通知的會員照樣被通知**（用別台節點的舊設定做決定），而且不會報錯。
+- `getUserById(userId)?.email` → `getUserByIdAsync`：信件寄到舊的（或空的）信箱。
+- 另外 `getMailTemplates()`（沒有會員的那條分支）與 `notify(getSettings(userId), …)` 一併換掉。
+- `options` 一路轉發（`pendingNotifyEventsAsync`／`listingForWatchAsync`／`updateEventNotifyAsync` ×10）
+  ——**這是可測性的前提**：不轉發的話，注入的 exec 只會寫到一半（隊列讀本機、狀態寫夾具）。
+
+尺規：`POST /api/settings` 的卡點 **21 → 20**（缺口總數不變：路線快取那一半還沒搬）。
+
+### 74.2 測試
+
+- `v3/test/notify-flush-settings.test.js`（**4 項全綠**，新檔）：用一個「只回答幾種語句」的假 exec
+  ＋假 driver 直接驅動整個 flush，斷言「迴圈與逐會員的設定／信箱都讀注入的 PG runner」、
+  **PG 說暫停的事件被記成 `paused`**、PG 沒說暫停時不得被本機旗標影響、sqlite 模式不碰注入的 exec，
+  以及原始碼接線（flush 內不得再出現同步的三支）。
+  ⚠️ 三個踩點：(1) 有島嶼走 `pgDriver.query()` 而不是 exec，只給 exec 會去連真的 127.0.0.1:5432；
+  (2) `user_settings` 是**一個鍵一列**，回一個大 blob 會讓 `settingsFromRows()` 組出預設值
+  （暫停旗標等於沒生效）；(3) 參數攤平找理由字串時不要把空字串算進候選（`notify_decide` 在
+  paused 那筆是空的），否則永遠找不到 `paused`。
+- 變異 **4 條全殺**（`NOTIFYFLUSH_MUTATIONS`）。其中兩條的殺手是**原始碼接線**那條——
+  信箱與站台設定在 silent 模式的行為面看不到差異，這一點寫在變異定義的註解裡。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
