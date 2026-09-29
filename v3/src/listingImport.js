@@ -131,6 +131,10 @@ export const IMPORT_BY_ID_SQL = "SELECT * FROM listing_import WHERE id=?";
 // 兩個寫入語句（PG 也接受、逐字共用）。
 export const IMPORT_TITLE_TEXT_UPDATE_SQL = "UPDATE listing_import SET imported_title=?, imported_text=? WHERE id=?";
 export const IMPORT_STATUS_UPDATE_SQL = "UPDATE listing_import SET status=? WHERE id=?";
+// 確認匯入聲明時的 UPDATE（PG 逐字共用）。
+export const IMPORT_CONFIRM_UPDATE_SQL = `UPDATE listing_import SET
+      status=?, terms_document_id=?, declaration_version=?, declaration_content_hash=?, confirmed_at=?
+    WHERE id=?`;
 
 export function getListingImport(db, id) {
   return rowToImport(db.prepare(IMPORT_BY_ID_SQL).get(Number(id) || 0));
@@ -483,11 +487,8 @@ export function confirmListingImport(db, userId, id, input = {}, { now = new Dat
     content_hash: current.content_hash,
     source: "import",
   }, { now });
-  db.prepare(`
-    UPDATE listing_import SET
-      status=?, terms_document_id=?, declaration_version=?, declaration_content_hash=?, confirmed_at=?
-    WHERE id=?
-  `).run(IMPORT_STATUSES.CONFIRMED, current.id, current.version, current.content_hash, iso(now), row.id);
+  db.prepare(IMPORT_CONFIRM_UPDATE_SQL)
+    .run(IMPORT_STATUSES.CONFIRMED, current.id, current.version, current.content_hash, iso(now), row.id);
   return publicImport(db, getListingImport(db, row.id));
 }
 

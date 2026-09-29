@@ -189,7 +189,6 @@ import {
   deleteContactProfileFor,
   listingImportMeta,
   startListingImportFor,
-  confirmListingImportFor,
   publishConfirmedImportFor,
   saveMemberMediaFor,
   listMemberMediaFor,
@@ -217,10 +216,6 @@ import {
   publishContentDocument,
   newContentVersion,
   listContentEvents,
-  listMyConsents,
-  pendingMemberDocuments,
-  acceptPendingDocuments,
-  getOwnConsentDocument,
   DOC_TYPES,
   publicDocumentView,
   getCommsConfig,
@@ -260,6 +255,7 @@ import { deletePushSubscriptionAsync, savePushSubscriptionAsync } from "./webPus
 import { applyBrandUploadAsync, getAdminAdsSettingsAsync, getAdminBroadcastsSettingsAsync } from "./adminSettingsAsync.js";
 import {
   cancelListingImportAsync,
+  confirmListingImportAsync,
   getOwnedListingImportViewAsync,
   importMetaAsync,
   listAdminListingImportsAsync,
@@ -306,6 +302,13 @@ import {
   rentalOpsDrilldownAsync,
   rentalOpsSummaryAsync,
 } from "./rentalOpsAnalyticsAsync.js";
+// 會員同意紀錄（consents）的 PG 島嶼入口：列表、批次同意、歷史文件。
+import {
+  acceptPendingDocumentsAsync,
+  getOwnConsentDocumentAsync,
+  listMyConsentsAsync,
+  pendingRequiredDocumentsAsync,
+} from "./memberConsentsAsync.js";
 // 租屋通知偏好／配對訂閱／取消訂閱的 PG 島嶼入口。
 import {
   applyUnsubscribeTokenAsync,
@@ -935,7 +938,7 @@ app.get("/terms.html", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/terms.html"));
 });
 
-app.post("/api/consents", (req, res) => {
+app.post("/api/consents", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
@@ -944,30 +947,30 @@ app.post("/api/consents", (req, res) => {
     }
     res.json({
       ok: true,
-      consents: acceptPendingDocuments(session.userId, req.body?.consents, { source: "reaccept" }),
-      pending_documents: pendingMemberDocuments(session.userId),
+      consents: await acceptPendingDocumentsAsync(session.userId, req.body?.consents, { source: "reaccept" }),
+      pending_documents: await pendingRequiredDocumentsAsync(session.userId),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
   }
 });
 
-app.get("/api/consents", (req, res) => {
+app.get("/api/consents", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入" });
     return;
   }
-  res.json({ items: listMyConsents(session.userId), pending_documents: pendingMemberDocuments(session.userId) });
+  res.json({ items: await listMyConsentsAsync(session.userId), pending_documents: await pendingRequiredDocumentsAsync(session.userId) });
 });
 
-app.get("/api/consents/:id/document", (req, res) => {
+app.get("/api/consents/:id/document", async (req, res) => {
   const session = readSession(req);
   if (!session?.userId) {
     res.status(401).json({ error: "請先登入" });
     return;
   }
-  const doc = getOwnConsentDocument(session.userId, req.params.id);
+  const doc = await getOwnConsentDocumentAsync(session.userId, req.params.id);
   if (!doc) {
     res.status(404).json({ error: "找不到這筆同意對應的文件" });
     return;
@@ -3340,11 +3343,11 @@ app.post("/api/listing-imports/:id/cancel", async (req, res) => {
     res.json(await cancelListingImportAsync(session.userId, req.params.id));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
-app.post("/api/listing-imports/:id/confirm", (req, res) => {
+app.post("/api/listing-imports/:id/confirm", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
-    res.json(confirmListingImportFor(session.userId, req.params.id, req.body || {}));
+    res.json(await confirmListingImportAsync(session.userId, req.params.id, req.body || {}));
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.code || "" }); }
 });
 app.post("/api/listing-imports/:id/publish", (req, res) => {

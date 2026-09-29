@@ -8,7 +8,8 @@ import {
   REGISTRATION_DOC_TYPES,
 } from "./contentDocuments.js";
 
-function httpError(message, status = 400) {
+// 匯出給 PG 版（`memberConsentsAsync.js`）：錯誤的狀態碼與訊息必須完全相同。
+export function httpError(message, status = 400) {
   const err = new Error(message);
   err.status = status;
   return err;

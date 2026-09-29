@@ -1154,6 +1154,83 @@ const IMPLIFE_MUTATIONS = [
   },
 ];
 
+// 會員同意紀錄 ＋ 匯入確認 PG 分支的變異集（v3/test/member-consents-async.test.js）。
+const CONSENTS_SRC = "v3/src/memberConsentsAsync.js";
+const CONSENTS_SYNC_SRC = "v3/src/memberConsents.js";
+const CONFIRM_SRC = "v3/src/listingImportAsync.js";
+const CONSENTS_MUTATIONS = [
+  {
+    name: "同意紀錄不比對既有列（同一份文件會一直寫新列）",
+    file: CONSENTS_SRC,
+    from: "    const existing = one((await run(CONSENT_EXISTS_SQL, [uid, documentId, hash])).rows);\n",
+    to: "    const existing = null;\n",
+    expect: "同意紀錄：列表、idempotent",
+  },
+  {
+    name: "同意紀錄不鏡射本機（同步的註冊流程看不到）",
+    file: CONSENTS_SRC,
+    from: "    if (!local.prepare(CONSENT_EXISTS_SQL).get(uid, documentId, hash)) {\n      local.prepare(CONSENT_INSERT_SQL).run(uid, type, documentId, version, hash, source, isoOf(now));\n    }\n",
+    to: "",
+    expect: "同意紀錄：列表、idempotent",
+  },
+  {
+    name: "待同意文件只比 document_id（換版本也當成已同意）",
+    file: CONSENTS_SRC,
+    from: "  const row = one((await run(CONSENT_EXISTS_SQL, [Number(userId), Number(doc.id), doc.content_hash])).rows);\n  return Boolean(row);",
+    to: "  const row = (await run(CONSENTS_BY_USER_SQL, [Number(userId)])).rows.find((r) => Number(r.document_id) === Number(doc.id));\n  return Boolean(row);",
+    expect: "待同意文件",
+  },
+  {
+    name: "requires_reacceptance 被忽略（legacy 同意永遠算數）",
+    file: CONSENTS_SRC,
+    from: "    if (doc.requires_reacceptance) return false;\n",
+    to: "",
+    expect: "待同意文件",
+  },
+  {
+    name: "批次同意不檢查缺件（少送也照樣放行）",
+    file: CONSENTS_SRC,
+    from: '      if (!hit) throw httpError("請先閱讀並同意更新後的條款", 400);\n',
+    to: "",
+    expect: "批次同意",
+  },
+  {
+    name: "歷史文件不檢查狀態（草稿也回得出去）",
+    file: CONSENTS_SRC,
+    from: '    if (!doc || doc.status !== "published") return null;',
+    to: "    if (!doc) return null;",
+    expect: "歷史文件",
+  },
+  {
+    name: "匯入確認不比對 content_hash（舊版聲明也能確認）",
+    file: CONFIRM_SRC,
+    from: "      || submitted.content_hash !== current.content_hash\n",
+    to: "",
+    expect: "匯入確認：寫入同意",
+  },
+  {
+    name: "匯入確認不寫同意紀錄（沒有留痕）",
+    file: CONFIRM_SRC,
+    from: "    await recordConsentAsync(userId, {\n      document_type: IMPORT_DECLARATION_TYPE,\n      document_id: current.id,\n      version: current.version,\n      content_hash: current.content_hash,\n      source: \"import\",\n    }, { now, ...IMPORT_ROW_OPTIONS(rest, run) });\n",
+    to: "",
+    expect: "匯入確認：寫入同意",
+  },
+  {
+    name: "同步版的同意紀錄不比對既有列（同一份文件會一直寫新列）",
+    file: CONSENTS_SYNC_SRC,
+    from: "  const existing = db.prepare(\n    \"SELECT id FROM member_consents WHERE user_id=? AND document_id=? AND content_hash=? LIMIT 1\",\n  ).get(uid, documentId, hash);\n",
+    to: "  const existing = null;\n",
+    expect: "同意紀錄：列表、idempotent",
+  },
+  {
+    name: "非 postgres 模式也走 PG 分支（SQLite 站會壞）",
+    file: CONSENTS_SRC,
+    from: "  if (!isPg(options)) return runSqlite();\n",
+    to: "",
+    expect: "非 postgres 模式必須走同步路徑",
+  },
+];
+
 // CRM 開關 PG 分支的變異集（v3/test/crm-module-async.test.js）。
 const CRMMOD_SRC = "v3/src/crmAsync.js";
 const CRMMOD_MUTATIONS = [
@@ -2778,7 +2855,8 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS
+const MUTATIONS = /member-consents-async/.test(testFile) ? CONSENTS_MUTATIONS
+  : /listing-import-lifecycle-async/.test(testFile) ? IMPLIFE_MUTATIONS
   : /self-listing-report-async/.test(testFile) ? SELFREPORT_MUTATIONS
   : /close-self-listing-async/.test(testFile) ? CLOSESELF_MUTATIONS
   : /listing-imports-async/.test(testFile) ? IMPORTS_MUTATIONS
