@@ -3862,6 +3862,37 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
   逐欄相同、非法座標不落地也不寫快取）＋ 1 條 live 子測試（在拋棄式 schema 內改的是 PG 那一列、
   **本機那一列不動**）。變異 **5 條全殺**（新增一個 `STATEWRITE_MUTATIONS` 套組）。
 
+## 二之負三十九、2026-09-29 第六十九批：管理員「同房源重掃」搬上 PG
+
+### 69.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `POST /api/admin/same-house/reconcile` | `runSameHouseBackfillAsync()`（新，`sameHouseAsync.js`） | MIXED → **PG** |
+
+尺規：缺口 **25 → 24**、PG **243 → 244**、MIXED **22 → 21**（SQLite 3、無直接DB 20 不變）。
+
+**為什麼是真的缺陷**：這個端點是管理員的「同房源重掃」，原本只寫本機 SQLite
+（`reconcileListingById()` 的 `listing_groups`／`match_post_id`／稽核列都在本機）⇒ PG 模式下
+後台按了、站上（讀 PG）看不到任何變化，而且**游標也只前進本機那一份**（重開機或換節點就重掃同一批）。
+
+### 69.2 這一包的做法
+
+1. `sameHouseReconcile.nextBackfillBatch()` 的 SQL 抽成 `NEXT_BACKFILL_BATCH_SQL`（PG 版逐字共用；
+   `IFNULL` 由 `toPostgresSql()` 轉 `COALESCE`）。
+2. `sameHouseAsync.runSameHouseBackfillAsync()`：游標 ＋ 批次 ＋ 摘要的形狀逐條照抄同步版，
+   逐列的重掃直接呼叫既有的島嶼 `listingMatchAsync.reconcileListingByIdAsync()`
+   （所以「重掃到底寫了什麼」與其他管理員動作同一條路徑），狀態與游標用 `getSiteSettingAsync()`／
+   `setSiteSettingAsync()`——**落地格式與 `writeSettingKey()` 逐字相同**（兩者都 JSON.stringify 一次）。
+3. `server.js` 的端點改 async 並接上島嶼（`runSameHouseBackfill` 同步版不再被 server.js 引用）。
+
+### 69.3 測試
+
+- `v3/test/admin-same-house-async.test.js`（**5 項全綠**，新增 3 條）：sqlite 模式與同步版逐欄相同
+  （⚠️ 兩邊都要**從同一個游標**開始，第一版沒重置游標就紅在 `cursor: 0 vs 2`）、PG 分支的摘要／游標／
+  狀態鍵都與同步版相同（第二次呼叫要從 PG 的游標接續）、**單列失敗要吞掉並計入 errors**。
+- 變異 **4 條全殺**（新增 `SAMEBACKFILL_MUTATIONS`）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3872,13 +3903,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十七批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十九批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **22** |
+| MIXED | — | **21** |
 | 無直接DB | — | **20** |
-| PG | 22 | **243** |
-| **缺口（SQLite＋MIXED）** | — | **25** |
+| PG | 22 | **244** |
+| **缺口（SQLite＋MIXED）** | — | **24** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
