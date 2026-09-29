@@ -2287,7 +2287,10 @@ const MAP_MUTATIONS = [
   const open = text.indexOf("{", i);`,
     to: `  let i = start;
   const open = text.indexOf("{", i);`,
-    expect: "函式本文被截斷的守衛",
+    // ⚠️ 這條變異的殺手換過三次：舊斷言拿「當時還沒移植的 /api/admin/members」當真值，
+    // 第五十四批把它搬上 PG 之後就失效了。現在由**合成來源樹**守衛負責（它自己造一個
+    // 簽名含 destructured default 的 helper，套回缺陷 (1) 之後必須看不到）。
+    expect: "缺陷 (1)(2) 的守衛（合成來源樹）",
   },
   {
     name: "還原缺陷 (2)：sqlite 歸屬只看 db.js（吃 handle 參數的 helper 隱形）",
@@ -2298,7 +2301,7 @@ const MAP_MUTATIONS = [
     // 接收 handle 參數，所以限制成「只認 db.js」時它一定會消失。
     // ⚠️ 曾經想改指 `/api/media` 的 `listMemberMedia`，實測**殺不死**——`/api/media` 是
     // 經 db.js 的 `listMemberMediaFor()` 進去的，仍然算得到，所以那個標的沒有鑑別力。
-    expect: "缺陷 (2) 的守衛（合成來源樹）",
+    expect: "缺陷 (1)(2) 的守衛（合成來源樹）",
   },
   {
     name: "剝註解改回 regexp 版（不辨識正規表達式 ⇒ 本文被截斷、純函式被誤判成 SQLite）",
@@ -3221,6 +3224,99 @@ const SHARE_EVENT_MUTATIONS = [
   },
 ];
 
+// 後台會員管理（第五十四批）的變異集。
+const ADMINMEMBERS_SRC = "v3/src/adminMembersAsync.js";
+const ADMINMEMBERS_MUTATIONS = [
+  {
+    name: "後台列表不讀 PG 的會員設定（通知間隔永遠是預設值）",
+    file: ADMINMEMBERS_SRC,
+    from: "    getSettingsAsync(user.id, options),",
+    to: "    Promise.resolve({}),",
+    expect: "列表：PG 才有的會員",
+  },
+  {
+    name: "後台列表不數關注（watchCount 永遠 0）",
+    file: ADMINMEMBERS_SRC,
+    from: "    countWatchedAsync(user.id, options),",
+    to: "    Promise.resolve(0),",
+    expect: "列表：PG 才有的會員",
+  },
+  {
+    name: "後台列表不數自主刊登（listingCount 永遠 0）",
+    file: ADMINMEMBERS_SRC,
+    from: "    countOpenSelfListingsAsync(user.id, options),",
+    to: "    Promise.resolve(0),",
+    expect: "列表：PG 才有的會員",
+  },
+  {
+    name: "停權不寫 PG（只回投影，看起來成功）",
+    file: "v3/src/usersAsync.js",
+    from: "    await exec(USER_DELETE_SQL, [now, who, String(reason || \"\").slice(0, 2000), String(reasonCode || \"\").slice(0, 40), id]);",
+    to: "    void now;",
+    expect: "刪除／復原：守衛訊息相同",
+  },
+  {
+    name: "復原不寫 PG",
+    file: "v3/src/usersAsync.js",
+    from: "  await run(options, async (exec) => { await exec(USER_RESTORE_SQL, [id]); }, () => restoreUserSync(sqliteHandle(), id));",
+    to: "  await run(options, async () => {}, () => restoreUserSync(sqliteHandle(), id));",
+    expect: "刪除／復原：守衛訊息相同",
+  },
+  {
+    name: "刪除不擋管理員帳號",
+    file: "v3/src/members.js",
+    from: "  if (user.role === \"admin\") {\n    const err = new Error(\"不能刪除管理員帳號\");",
+    to: "  if (false) {\n    const err = new Error(\"不能刪除管理員帳號\");",
+    expect: "刪除／復原：守衛訊息相同",
+  },
+  {
+    name: "改方案不寫 PG",
+    file: "v3/src/usersAsync.js",
+    from: "  await run(options, async (exec) => { await exec(USER_SET_PLAN_SQL, [next, id]); },",
+    to: "  await run(options, async () => {},",
+    expect: "改方案：方案落地",
+  },
+  // ⚠️ 刻意**沒有**「不重設 intervalMinutes」那條：把值改成 `undefined` 是**等價變異**——
+  // 讀取端（`settingsAsync`）在 `intervalAdminSet === false` 時就用方案預設值算，
+  // 所以有沒有寫入那個數字，投影出來都一樣（實測：單獨跑也殺不死）。
+  // 真正有鑑別力的是下面這條「不把 intervalAdminSet 設回 false」。
+  {
+    name: "改方案不把 intervalAdminSet 設回 false（手動間隔蓋掉方案預設）",
+    file: ADMINMEMBERS_SRC,
+    from: "    settingsPatch.intervalMinutes = planIntervalMinutes(fresh.plan);\n    settingsPatch.intervalAdminSet = false;",
+    to: "    settingsPatch.intervalMinutes = planIntervalMinutes(fresh.plan);\n    settingsPatch.intervalAdminSet = true;",
+    expect: "改方案：方案落地",
+  },
+];
+
+const WATCHLIMITS_MUTATIONS = [
+  {
+    // 這一條真的抓到過：模組的 runner 約定是**裸陣列**，但 callback 一度寫成 `(...).rows`
+    // ⇒ 永遠回 0（額度算成 0 筆，會員可以無限加入關注）。
+    name: "countWatchedAsync 把裸陣列當 {rows}（永遠回 0）",
+    file: "v3/src/watchLimitsAsync.js",
+    from: "  return run(options, async (exec) => Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0,",
+    to: "  return run(options, async (exec) => Number(one((await exec(WATCHED_COUNT_SQL, [uid])).rows)?.n) || 0,",
+    expect: "PG 與同步版相同：已確認離線的不佔額度",
+  },
+  {
+    // 額度的定義：已確認離線的物件不佔額度。拿掉 EXISTS 之後兩邊會一起變鬆，
+    // 所以殺手是「絕對值」那句（`sync === 2` 的前提），不是 parity。
+    name: "額度不排除已確認離線的物件（額度算太鬆）",
+    file: "v3/src/watchLimits.js",
+    from: "           AND EXISTS (\n             SELECT 1 FROM listings l\n             WHERE l.post_id = f.post_id\n               AND IFNULL(l.offline_confirmed, 0) = 0\n           )`;",
+    to: "           AND 1 = 1`;",
+    expect: "PG 與同步版相同：已確認離線的不佔額度",
+  },
+  {
+    name: "uid 0 不早退（送出一句 user_id = 0 的查詢）",
+    file: "v3/src/watchLimitsAsync.js",
+    from: "  if (!uid) return 0;",
+    to: "  if (false) return 0;",
+    expect: "PG 與同步版相同：已確認離線的不佔額度",
+  },
+];
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -3229,7 +3325,9 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
+const MUTATIONS = /admin-members-async/.test(testFile) ? ADMINMEMBERS_MUTATIONS
+  : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
+  : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS
   : /share-events-async/.test(testFile) ? SHARE_EVENT_MUTATIONS
   : /idle-verify/.test(testFile) ? IDLEPAUSE_MUTATIONS

@@ -199,8 +199,9 @@ export function resolveDeleteReason(code, customText = "") {
   return { code: preset.id, label: preset.label, text: custom || preset.text };
 }
 
-export function deleteUser(conn, userId, { by = "self", reason = "", reasonCode = "" } = {}) {
-  const user = getUserById(conn, userId);
+// 刪除／還原的守衛抽成純函式：同步版與 PG 版（`usersAsync`）必須丟出**同一組訊息**，
+// 否則同一個操作在兩個 driver 上會給使用者不同的說法。
+export function assertMemberDeletable(user) {
   if (!user) {
     const err = new Error("找不到這位會員");
     err.status = 404;
@@ -216,6 +217,24 @@ export function deleteUser(conn, userId, { by = "self", reason = "", reasonCode 
     err.status = 400;
     throw err;
   }
+}
+
+export function assertMemberRestorable(user) {
+  if (!user) {
+    const err = new Error("找不到這位會員");
+    err.status = 404;
+    throw err;
+  }
+  if (!isUserDeleted(user)) {
+    const err = new Error("這位會員尚未刪除");
+    err.status = 400;
+    throw err;
+  }
+}
+
+export function deleteUser(conn, userId, { by = "self", reason = "", reasonCode = "" } = {}) {
+  const user = getUserById(conn, userId);
+  assertMemberDeletable(user);
   const now = new Date().toISOString();
   const who = by === "admin" ? "admin" : "self";
   conn.prepare(
@@ -228,16 +247,7 @@ export function deleteUser(conn, userId, { by = "self", reason = "", reasonCode 
 
 export function restoreUser(conn, userId) {
   const user = getUserById(conn, userId);
-  if (!user) {
-    const err = new Error("找不到這位會員");
-    err.status = 404;
-    throw err;
-  }
-  if (!isUserDeleted(user)) {
-    const err = new Error("這位會員尚未刪除");
-    err.status = 400;
-    throw err;
-  }
+  assertMemberRestorable(user);
   conn.prepare(
     "UPDATE users SET deleted_at = NULL, deleted_by = '', deleted_reason = '', deleted_reason_code = '' WHERE id = ?",
   ).run(user.id);

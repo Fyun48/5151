@@ -3058,6 +3058,66 @@ done
 - `v3/test/member-auth-live-pg.test.js`（**2 項全綠**）：新增「註冊確認 token 流程（成功 → 第二次 409）
   ＋ 忘記密碼在沒有 SMTP 的隔離庫必須 503 且不得改雜湊」。
 
+## 二之負二十四、2026-09-28 第五十四批：後台會員管理（列表／停權／復原／改方案／自我刪除）
+
+### 54.1 範圍與投報率
+
+| 路由 | 進入點 |
+|---|---|
+| `GET   /api/admin/members` | `listAdminMembersAsync` |
+| `POST  /api/admin/members/:id/delete` | `adminDeleteMemberAsync` ＋ `queueSystemMailAsync` |
+| `POST  /api/admin/members/:id/restore` | `adminRestoreMemberAsync` |
+| `PATCH /api/admin/members/:id` | `adminPatchMemberAsync` ＋ `queueSystemMailAsync` |
+| `POST  /api/account/delete` | `deleteOwnAccountAsync` |
+
+尺規：缺口 **56 → 51**、PG **212 → 217**、MIXED **52 → 47**（SQLite 4 不變）。
+
+**這一包修的是後台的「假 0」**：算出一列會員要三份資料——`users`、該會員的 `settings`
+（通知間隔）、`user_listing_flags` ＋ `listings`（關注數／刊登數）。同步版三份都讀節點本機
+⇒ PG 模式下後台對別的節點會員顯示「關注 0 筆、刊登 0 筆、間隔是預設值」，而且不會報錯。
+
+### 54.2 新增的共用單元
+
+- `v3/src/adminMemberView.js`：**純**投影（前端契約）。原本藏在 `db.js` 的私有函式裡，
+  抽出來之後同步版與 PG 版共用同一份欄位定義（`db.js` 只負責把三個值準備好）。
+- `v3/src/watchLimitsAsync.js`：`countWatchedAsync`（**12 條路由**的共用卡點）。
+  額度的定義只有一句 SQL（`WATCHED_COUNT_SQL`），PG 路徑靠 `toPostgresSql()` 把
+  `IFNULL` 翻成 `COALESCE`——**不要自己再抄一份**（列表頁的 `watchedTotal` 用的就是同一句）。
+- `v3/src/usersAsync.js`：`listUsersAsync`／`setUserPlanAsync`／`deleteUserAsync`／`restoreUserAsync`。
+- `v3/src/members.js`：把刪除／還原的守衛抽成 `assertMemberDeletable()`／`assertMemberRestorable()`
+  （**訊息是使用者看得到的，只能有一份**）。
+- `v3/src/adminMembersAsync.js`：`listAdminMembersAsync`／`adminDeleteMemberAsync`／
+  `adminRestoreMemberAsync`／`deleteOwnAccountAsync`／`adminPatchMemberAsync`／
+  `countOpenSelfListingsAsync`／`adminMemberViewAsync`。
+
+### 54.3 這一包的三個坑
+
+1. 🚨 **「exec 形狀」第三次咬人——這次是模組自己的約定不一致。**
+   `watchLimitsAsync` 的 runner 回**裸陣列**，但 callback 一度寫成 `(...).rows`
+   ⇒ 永遠回 0 ⇒ **額度算成 0 筆，會員可以無限加入關注**（不報錯）。
+   是靠「同一支函式在 admin-members 的列表測試裡被比對」才看出來的。
+   **規則**：新模組的 runner 約定要在檔頭寫清楚，callback 立刻用同一種形狀。
+2. **等價變異**：「改方案時不重設 `intervalMinutes`」（寫 `undefined`）殺不死——讀取端在
+   `intervalAdminSet === false` 時就用方案預設值算，寫不寫那個數字投影都一樣。
+   已移除並改寫理由；換成「把 `intervalAdminSet` 設成 `true`」（手動間隔會蓋掉方案預設）。
+3. **`listings` 是寬表**：測試夾具要用 `PRAGMA table_info` 自動補齊 NOT NULL 欄位
+   （`url`／`first_seen_at`／`last_seen_at`…），不要一個個猜欄位名。
+
+### 54.4 測試
+
+- `v3/test/admin-members-async.test.js`（**6 項全綠**）：列表（PG 才有的會員要算得出
+  關注數／刊登數／間隔；已離線的不佔額度；過期的不算刊登）、刪除／復原（管理員不可刪、
+  已刪除不能再刪、未刪除不能復原、不存在 404、PG 的列真的被改）、自我刪除（`deleted_by=self`）、
+  改方案（方案落地、間隔依方案重設、手動指定要標 `adminSet`）、sqlite 模式走同步版、
+  投影形狀。變異 **8 條全殺**。
+- `v3/test/watch-limits-async.test.js`（**3 項全綠**）：PG 與同步版相同（已確認離線的不佔額度、
+  沒關注的不算、uid 0 早退）、**注入式 exec 兩種形狀都要吃得下**、sqlite 模式不碰 exec。
+  變異 **3 條全殺**。
+- `v3/test/member-auth-live-pg.test.js`（**3 項全綠**，隔離庫連跑兩次）：新增「後台列表要算得出
+  PG 的關注數／刊登數／通知間隔，停權與改方案也落地」。
+- 另外修掉兩個**過期的接線守衛**（`admin-members.test.js`／`system-mail.test.js`
+  斷言 `queueSystemMail("account_deleted")` 等同步接線，條目改走 `queueSystemMailAsync` 後就會紅）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3068,13 +3128,13 @@ done
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-28 第五十三批）** |
+| 判定 | 起點 | **現在（2026-09-28 第五十四批）** |
 |---|---:|---:|
 | SQLite | 95 | **4** |
-| MIXED | — | **52** |
+| MIXED | — | **47** |
 | 無直接DB | — | **20** |
-| PG | 22 | **212** |
-| **缺口（SQLite＋MIXED）** | — | **56** |
+| PG | 22 | **217** |
+| **缺口（SQLite＋MIXED）** | — | **51** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。

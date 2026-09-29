@@ -94,8 +94,10 @@ test("server register, change-password, and sponsor patch queue system mail", ()
   assert.match(src, /await queueSystemMailAsync\("verified_welcome"/);
   assert.match(src, /queueSystemMail\("verify_expired"/);
   assert.match(src, /queueSystemMail\("password_changed"/);
-  assert.match(src, /queueSystemMail\("sponsor_thanks"/);
-  assert.match(src, /queueSystemMail\("account_deleted"/);
+  // 贊助感謝信也在第五十四批跟著 `PATCH /api/admin/members/:id` 改走 PG 島嶼。
+  assert.match(src, /await queueSystemMailAsync\("sponsor_thanks"/);
+  // 停權通知也在第五十四批改走 PG 島嶼。
+  assert.match(src, /await queueSystemMailAsync\("account_deleted"/);
   assert.match(src, /app\.post\("\/api\/change-password"/);
   const queue = src.slice(src.indexOf("function queueSystemMail"), src.indexOf('app.post("/api/register"'));
   assert.match(queue, /smtp:\s*getStoredSmtp\(\)/);
