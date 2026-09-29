@@ -19,12 +19,16 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { idPlaceholders } from "./repository/listings.js";
 import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
 import {
   MATCH_CANDIDATE_CHUNK,
+  applyMatchCursor,
+  clampLimit,
+  expireMatchPageCursor,
   isListingMatchable,
+  isWishMatchable,
   listingMatchSnapshot,
+  readOpaqueMatchCursor,
 } from "./rentalMatch.js";
 import {
   activityMapFrom,
@@ -35,6 +39,7 @@ import {
   currentMatchCatalog,
   currentMatchFlags,
   loadOwnedMatchListing as loadOwnedMatchListingSync,
+  ownerPublicMatchItem,
   ownerListingMatchSummary as ownerListingMatchSummarySync,
   ownerMatchSummaryFrom,
   ownerMatchingMeta,
@@ -50,6 +55,7 @@ import { SELF_LISTINGS_BY_OWNER_SQL, decorateSelfListing } from "./selfListings.
 import { getUserByIdAsync } from "./usersAsync.js";
 import { listingToolsMeta } from "./listingTools.js";
 import { DEMAND_MATCH_GENERATION_SQL } from "./demand.js";
+import { attachOfferCtasAsync } from "./wishOffersAsync.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 const nowOf = (options) => (options.now ? new Date(options.now) : new Date());
@@ -66,6 +72,8 @@ async function pgRunner(options = {}) {
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
 }
+
+const placeholders = (list) => list.map(() => "?").join(",");
 
 const chunkIds = (ids, size = 400) => {
   const out = [];
@@ -110,7 +118,10 @@ export async function preloadActivityByUserAsync(run, rows, now, { chunkSize = 4
   const logins = new Map();
   const flags = new Map();
   for (const chunk of chunkIds(ids, chunkSize)) {
-    const marks = idPlaceholders(chunk, "postgres");
+    // ⚠️ 佔位符寫 `?`：島嶼的 runner 在真 PG 路徑會過 `toPostgresSql()` 轉成 `$n`，
+    // 但**注入式 exec（測試夾具）不會被翻譯** ⇒ 寫死 `$n` 會讓那些查詢整個失敗
+    // （`try/catch` 吞掉之後變成「活動資料永遠是空的」，第八十一批實測中過）。
+    const marks = placeholders(chunk);
     try {
       const users = rowsOf(await run(`SELECT id, last_login_at FROM users WHERE id IN (${marks})`, chunk));
       for (const user of users) if (user.last_login_at) logins.set(Number(user.id), user.last_login_at);
@@ -275,4 +286,119 @@ export async function listingToolsInfoAsync(userId, options = {}) {
 export async function rentalMatchOwnerMetaAsync(options = {}) {
   await getWishConditionsAsync(options);
   return ownerMatchingMeta();
+}
+
+// ---- `GET /api/self-listings/:id/matches`（配對清單）------------------------------------
+
+/** `rentalMatchQuery.js:loadWishLifecycleByTokens()` 的 PG 版（游標頁的生命週期守衛用）。 */
+export async function loadWishLifecycleByTokensAsync(run, tokens, { chunkSize = 400 } = {}) {
+  const map = new Map();
+  const list = [...new Set((tokens || []).map((token) => String(token || "")).filter(Boolean))];
+  for (const chunk of chunkIds(list, chunkSize)) {
+    const marks = placeholders(chunk);
+    try {
+      const rows = rowsOf(await run(
+        `SELECT public_token, status, lifecycle FROM demand_posts WHERE public_token IN (${marks})`,
+        chunk,
+      ));
+      for (const row of rows) map.set(String(row.public_token), row);
+    } catch { /* 隔離測試可能沒有 public_token 欄 */ }
+  }
+  return map;
+}
+
+/** `rentalMatchQuery.js:assertUpcomingCursorWishesMatchable()` 的 PG 版。 */
+export async function assertUpcomingCursorWishesMatchableAsync(run, stored, cursor, limit) {
+  const size = clampLimit(limit);
+  const start = Math.max(0, Number(stored.afterIndex) || 0);
+  const upcoming = (stored.items || []).slice(start, start + size);
+  const tokens = upcoming.map((row) => row.wish_ref || row.public_token).filter(Boolean);
+  if (!tokens.length) return 0;
+  const live = await loadWishLifecycleByTokensAsync(run, tokens);
+  for (const token of tokens) {
+    const row = live.get(token);
+    if (!row || !isWishMatchable(row)) {
+      expireMatchPageCursor(cursor);
+      throw Object.assign(new Error("分頁已過期，請重新查詢"), { status: 400, code: "cursor_expired" });
+    }
+  }
+  return tokens.length;
+}
+
+/** `rentalMatchQuery.js:ownerListingMatches()` 的 PG 版（配對清單，含游標分頁）。 */
+export async function ownerListingMatchesAsync(postId, userId, options = {}) {
+  const { limit, cursor } = options;
+  const now = nowOf(options);
+  if (!isPg(options)) {
+    const { ownerListingMatches } = await import("./db.js");
+    return ownerListingMatches(postId, userId, { limit, cursor });
+  }
+  try {
+    await getWishConditionsAsync(options);
+    const run = await pgRunner(options);
+    const { listing } = await loadOwnedMatchListingAsync(run, postId, userId, now);
+    await expireOpenPostsAsync(run, now);
+    const at = now.getTime();
+    const epoch = await wishGenerationAsync(run);
+    const flags = currentMatchFlags();
+    if (cursor) {
+      const stored = readOpaqueMatchCursor(cursor, at);
+      if (!stored) throw Object.assign(new Error("分頁已過期，請重新查詢"), { status: 400, code: "cursor_expired" });
+      if (listing.id && stored.listingId && String(stored.listingId) !== String(listing.id)) {
+        throw Object.assign(new Error("分頁游標不正確"), { status: 400, code: "bad_cursor" });
+      }
+      if (stored.epoch && String(stored.epoch) !== String(epoch)) {
+        expireMatchPageCursor(cursor);
+        throw Object.assign(new Error("分頁已過期，請重新查詢"), { status: 400, code: "cursor_expired" });
+      }
+      await assertUpcomingCursorWishesMatchableAsync(run, stored, cursor, limit);
+      const page = applyMatchCursor(null, cursor, limit, { listingId: listing.id, now: at, epoch });
+      const items = page.items.map(ownerPublicMatchItem);
+      return {
+        listing_id: listing.id,
+        total: page.total,
+        limit: clampLimit(limit),
+        cursor: String(cursor),
+        next_cursor: page.next_cursor,
+        items: await attachOfferCtasAsync(items, {
+          listingId: listing.id,
+          ownerUserId: userId,
+          now,
+          flags,
+          ...options,
+        }),
+      };
+    }
+    const snapshot = await computeListingMatchesAsync(run, listing, { ...options, now });
+    let page;
+    try {
+      page = applyMatchCursor(snapshot.items, "", limit, { listingId: listing.id, now: at, epoch });
+    } catch (error) {
+      if (error.code === "match_snapshot_too_large") {
+        error.total = snapshot.total;
+        throw error;
+      }
+      throw error;
+    }
+    const items = page.items.map(ownerPublicMatchItem);
+    return {
+      listing_id: listing.id,
+      total: snapshot.total,
+      limit: clampLimit(limit),
+      cursor: "",
+      next_cursor: page.next_cursor,
+      items: await attachOfferCtasAsync(items, {
+        listingId: listing.id,
+        ownerUserId: userId,
+        now,
+        flags,
+        ...options,
+      }),
+    };
+  } catch (error) {
+    if (error?.status) throw error;
+    if (!sqliteFallbackAllowed(options, {})) throw error;
+    const { ownerListingMatches } = await import("./db.js");
+    return ownerListingMatches(postId, userId, { limit, cursor });
+  }
 }

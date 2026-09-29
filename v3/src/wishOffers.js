@@ -927,6 +927,42 @@ export function projectOfferContact(db, offer, userId, now = new Date()) {
   return projection;
 }
 
+// 單一項目的 CTA 決策（**純函式**）：同步版與 PG 版共用，兩個 driver 的文案與狀態不可能漂移。
+// `wish`／`active`／`lastTerminal`／`banned` 都由呼叫端先查好（各自的 driver 各查各的）。
+export function offerCtaForItem(item, { wish = null, active = null, lastTerminal = null, banned = false, now = new Date() } = {}) {
+  if (!wish) {
+    return { ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" };
+  }
+  if (banned) {
+    return { ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" };
+  }
+  if (active?.status === "accepted") {
+    return {
+      ...item,
+      offer_available: false,
+      offer_cta: "目前無法提供",
+      offer_status: "accepted",
+      offer_ref: active.public_token,
+    };
+  }
+  if (active?.status === "pending") {
+    return {
+      ...item,
+      offer_available: false,
+      offer_cta: "已提供，等待對方回覆",
+      offer_status: "pending",
+      offer_ref: active.public_token,
+    };
+  }
+  if (lastTerminal) {
+    const created = Date.parse(lastTerminal.created_at);
+    if (Number.isFinite(created) && atMs(now) - created < OFFER_SAME_WISH_COOLDOWN_MS) {
+      return { ...item, offer_available: false, offer_cta: "稍後才能再提供", offer_status: "cooldown" };
+    }
+  }
+  return { ...item, offer_available: true, offer_cta: "提供我的房源", offer_status: "ready" };
+}
+
 export function attachOfferCtas(db, items, { listingId, ownerUserId, now = new Date() } = {}) {
   const list = Array.isArray(items) ? items : [];
   if (!isWishOfferEnabled(flagsCache)) {
@@ -954,41 +990,20 @@ export function attachOfferCtas(db, items, { listingId, ownerUserId, now = new D
       if (!prev || row.status === "accepted") active.set(Number(row.wish_id), row);
     }
   }
+  const banned = ownerBanned(db, ownerUserId, now);
   return list.map((item) => {
     const wish = wishes.get(item.wish_ref);
-    if (!wish) {
+    if (!wish) return offerCtaForItem(item, { now });
+    if (tenantBlocksOwner(db, wish.user_id, ownerUserId)) {
       return { ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" };
     }
-    if (tenantBlocksOwner(db, wish.user_id, ownerUserId) || ownerBanned(db, ownerUserId, now)) {
-      return { ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" };
-    }
-    const open = active.get(Number(wish.id));
-    if (open?.status === "accepted") {
-      return {
-        ...item,
-        offer_available: false,
-        offer_cta: "目前無法提供",
-        offer_status: "accepted",
-        offer_ref: open.public_token,
-      };
-    }
-    if (open?.status === "pending") {
-      return {
-        ...item,
-        offer_available: false,
-        offer_cta: "已提供，等待對方回覆",
-        offer_status: "pending",
-        offer_ref: open.public_token,
-      };
-    }
-    const last = lastTerminalOffer(db, ownerUserId, listingId, wish.id);
-    if (last) {
-      const created = Date.parse(last.created_at);
-      if (Number.isFinite(created) && atMs(now) - created < OFFER_SAME_WISH_COOLDOWN_MS) {
-        return { ...item, offer_available: false, offer_cta: "稍後才能再提供", offer_status: "cooldown" };
-      }
-    }
-    return { ...item, offer_available: true, offer_cta: "提供我的房源", offer_status: "ready" };
+    return offerCtaForItem(item, {
+      wish,
+      active: active.get(Number(wish.id)) || null,
+      lastTerminal: lastTerminalOffer(db, ownerUserId, listingId, wish.id),
+      banned,
+      now,
+    });
   });
 }
 

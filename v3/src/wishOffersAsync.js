@@ -27,6 +27,7 @@ import {
   assertContactReadable,
   assertOfferBurst,
   assertWishOfferEnabled,
+  attachOfferCtas,
   contactFieldsFor,
   contactProjection,
   liveMatchEligible,
@@ -36,11 +37,14 @@ import {
   loadFreshOffer as loadFreshOfferSync,
   loadVisibleOffer as loadVisibleOfferSync,
   newOfferToken,
+  offerCtaForItem,
   offerHttpError,
   publicAdminReportView,
   publicBlockView,
   publicOfferViewWith,
 } from "./wishOffers.js";
+import { currentRentalMarketplaceFlags } from "./demand.js";
+import { isWishOfferEnabled } from "./rentalMarketplaceFlags.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
 import { listWishOffersWith } from "./wishOfferQueries.js";
 
@@ -112,6 +116,72 @@ export async function tenantBlocksOwnerAsync(run, tenantUserId, ownerUserId) {
   const b = Number(ownerUserId) || 0;
   if (!a || !b) return false;
   return Boolean(one((await run(BLOCK_EXISTS_SQL, [a, b])).rows));
+}
+
+// `wishOffers.js:attachOfferCtas()` 的 PG 版（配對頁每一張卡的「提供我的房源」按鈕）。
+//
+// 同步版在 PG 模式下讀的是**節點本機**的 `demand_posts`／`wish_offers`／`user_blocks`／`users`
+// ⇒ 按鈕狀態（可提供／等待回覆／冷卻／已接受）會與站上其他地方不一致。
+// 決策本身是純函式（`offerCtaForItem`），這裡只負責把三個查詢換成 PG。
+export const WISHES_BY_TOKENS_SQL = (count) =>
+  `SELECT id, user_id, public_token FROM demand_posts WHERE public_token IN (${Array.from({ length: count }, () => "?").join(",")})`;
+export const ACTIVE_OFFERS_SQL = `SELECT public_token, wish_id, status FROM wish_offers
+       WHERE owner_user_id = ? AND listing_id = ? AND status IN ('pending', 'accepted')`;
+export const LAST_TERMINAL_OFFER_SQL = `SELECT * FROM wish_offers
+     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ?
+       AND status IN ('declined', 'withdrawn', 'expired', 'blocked')
+     ORDER BY created_at DESC, id DESC LIMIT 1`;
+export const OWNER_BAN_SQL = "SELECT self_ban_until FROM users WHERE id = ?";
+
+async function ownerBannedAsync(run, ownerUserId, now = new Date()) {
+  try {
+    const until = String(one((await run(OWNER_BAN_SQL, [Number(ownerUserId) || 0])).rows)?.self_ban_until || "");
+    if (!until) return false;
+    const ts = Date.parse(until);
+    return Number.isFinite(ts) && ts > (now instanceof Date ? now.getTime() : Number(now) || Date.now());
+  } catch {
+    return false;
+  }
+}
+
+export async function attachOfferCtasAsync(items, { listingId, ownerUserId, now = new Date(), flags = null, ...options } = {}) {
+  const list = Array.isArray(items) ? items : [];
+  const enabled = flags ? flags.wish?.offer_enabled === true : isWishOfferEnabled(currentRentalMarketplaceFlags());
+  if (!enabled) {
+    return list.map((item) => ({ ...item, offer_available: false, offer_cta: "提供房源（即將推出）" }));
+  }
+  return withFallback(options, {}, async (run) => {
+    const tokens = list.map((item) => item.wish_ref).filter(Boolean);
+    const wishes = new Map();
+    if (tokens.length) {
+      for (const row of (await run(WISHES_BY_TOKENS_SQL(tokens.length), tokens)).rows) {
+        wishes.set(String(row.public_token), row);
+      }
+    }
+    const active = new Map();
+    if (tokens.length) {
+      for (const row of (await run(ACTIVE_OFFERS_SQL, [Number(ownerUserId) || 0, Number(listingId) || 0])).rows) {
+        const prev = active.get(Number(row.wish_id));
+        if (!prev || row.status === "accepted") active.set(Number(row.wish_id), row);
+      }
+    }
+    const banned = await ownerBannedAsync(run, ownerUserId, now);
+    const out = [];
+    for (const item of list) {
+      const wish = wishes.get(item.wish_ref);
+      if (!wish) {
+        out.push({ ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" });
+        continue;
+      }
+      if (await tenantBlocksOwnerAsync(run, wish.user_id, ownerUserId)) {
+        out.push({ ...item, offer_available: false, offer_cta: "目前無法提供", offer_status: "unavailable" });
+        continue;
+      }
+      const last = one((await run(LAST_TERMINAL_OFFER_SQL, [Number(ownerUserId) || 0, Number(listingId) || 0, Number(wish.id) || 0])).rows);
+      out.push(offerCtaForItem(item, { wish, active: active.get(Number(wish.id)) || null, lastTerminal: last || null, banned, now }));
+    }
+    return out;
+  }, () => attachOfferCtas(sqliteHandle(), list, { listingId, ownerUserId, now }));
 }
 
 // `loadVisibleOffer()` 的 PG 版（找不到、或看的人不是 owner／tenant ⇒ null）。

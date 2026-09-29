@@ -25,6 +25,7 @@ import {
   listMineSelfListingsAsync,
   listingToolsInfoAsync,
   ownerListingMatchSummaryAsync,
+  ownerListingMatchesAsync,
   rentalMatchOwnerMetaAsync,
 } from "./rentalMatchAsync.js";
 import { markListingAliveAsync, markListingOfflineAsync } from "./crawlerWrites.js";
@@ -3030,14 +3031,16 @@ app.get("/api/self-listings/:id/matches/summary", async (req, res) => {
   }
 });
 
-app.get("/api/self-listings/:id/matches", (req, res) => {
+app.get("/api/self-listings/:id/matches", async (req, res) => {
   try {
     const session = readSession(req);
     if (!session?.userId) {
       res.status(401).json({ error: "請先登入" });
       return;
     }
-    res.json(ownerListingMatches(req.params.id, session.userId, {
+    // 配對清單、游標分頁與「提供我的房源」按鈕狀態全部走 PG 島嶼（同步版讀本機的
+    // 許願房／提案／封鎖名單 ⇒ PG 模式下按鈕狀態與站上其他地方不一致）（第八十一批）。
+    res.json(await ownerListingMatchesAsync(req.params.id, session.userId, {
       limit: req.query?.limit,
       cursor: req.query?.cursor,
     }));

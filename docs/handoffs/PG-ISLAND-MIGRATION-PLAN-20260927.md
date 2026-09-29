@@ -4380,6 +4380,48 @@ PG 模式下整條配對鏈讀的是**節點本機**：
      聲明勾選／說明字數），測資要照著填；`listingToolsMeta()` 的輸出**沒有 `plan` 欄位**
      （差別在 `description_template_limit`）。
 
+## 二之負五十一、2026-09-29 第八十一批：配對清單（`GET /api/self-listings/:id/matches`）
+
+### 81.1 範圍與投報率
+
+配對功能的最後一塊讀取：清單本身、**游標分頁**，以及每一張卡片的「提供我的房源」按鈕狀態
+（`attachOfferCtas()`）。同步版整條讀的是節點本機的 `demand_posts`／`wish_offers`／`user_blocks`／
+`users` ⇒ PG 模式下**按鈕狀態與站上其他地方不一致**（提案早就寫在 PG 了），而且別的節點收到的
+心願完全不在清單裡。
+
+尺規：**MIXED（13 卡點）→ PG**；缺口總數 **8 → 7**（`PG` 260 → **261**、`MIXED` 8 → **7**）。
+
+### 81.2 做法
+
+- `v3/src/wishOffers.js`：把 CTA 的決策抽成純函式 `offerCtaForItem(item, {wish, active, lastTerminal,
+  banned, now})`，同步版改呼叫它（兩個 driver 的文案與狀態不可能漂移）。
+- `v3/src/wishOffersAsync.js`：`attachOfferCtasAsync()`（三個查詢換成 PG：心願 by tokens、
+  作用中的提案、最後一次終端提案 ＋ 屋主停權），提案開關吃呼叫端傳進來的 `flags`（PG 補水後的那一份）。
+- `v3/src/rentalMatchAsync.js`：`loadWishLifecycleByTokensAsync()`／
+  `assertUpcomingCursorWishesMatchableAsync()`／`ownerListingMatchesAsync()`（游標分頁與
+  `applyMatchCursor()` 的純邏輯沿用）。
+- `rentalMatchQuery.js` 匯出 `ownerPublicMatchItem()`（剝掉內部評分欄位的那一支）。
+
+### 81.3 測試
+
+- `v3/test/self-listing-matches-async.test.js`（**6 項全綠**，新檔）：清單逐欄位比對（含 CTA 的
+  accepted／pending／cooldown 三種狀態）、**列只留在 PG 時同步版 404 而 PG 版照樣算得出來**、
+  游標分頁兩頁內容一致 ＋ 游標只能用一次（重用與壞游標都是 400 `cursor_expired`）、
+  **翻頁前重驗心願生命週期**（把心願關掉後下一次翻頁必須過期）、404／409 錯誤形狀、
+  提案關閉時兩個 driver 都回「即將推出」、fail-open／sqlite 模式、路由接線。
+- `v3/test/self-listing-matches-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上
+  配對清單讀得到（同步版在本機 404）、**PG 的 `pending` 提案反映在 CTA**、游標翻第二頁。
+- **變異 7 條全殺**（`SELFLISTING_MATCHES_MUTATIONS`）。
+- 踩點：
+  1. **島嶼的 SQL 佔位符要寫 `?`**：真 PG 路徑會過 `toPostgresSql()` 轉成 `$n`，但**注入式 exec
+     不會被翻譯** ⇒ 寫死 `$n` 會讓那些查詢整個失敗（`try/catch` 吞掉後變成「活動資料永遠是空的」；
+     第八十批的 `preloadActivityByUserAsync()` 也中同一個坑，這一包一起修掉）。
+  2. **游標／快照的到期時間用 `now` 計算**，而清單路徑的 `pruneMatchStores()` 會被另一邊以
+     **真實時鐘**呼叫 ⇒ 測試不要對分頁路徑注入過去的 `now`（第一版就是這樣紅的：
+     PG 版第二頁 `cursor_expired`）。游標也是一次性的，兩個 driver 要各用各的。
+  3. **CTA 的開關與資料要分開看**：開關讀的是行程內 flags 快取（PG 補水後兩邊相同），
+     能鑑別 store 的是**心願／提案／封鎖名單**那三個查詢 —— 變異的 `expect` 要指向那一條。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4390,13 +4432,13 @@ PG 模式下整條配對鏈讀的是**節點本機**：
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十批）** |
+| 判定 | 起點 | **現在（2026-09-29 第八十一批）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
-| MIXED | — | **8** |
+| MIXED | — | **7** |
 | 無直接DB | — | **20** |
-| PG | 22 | **260** |
-| **缺口（SQLite＋MIXED）** | — | **8** |
+| PG | 22 | **261** |
+| **缺口（SQLite＋MIXED）** | — | **7** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
