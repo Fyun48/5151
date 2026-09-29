@@ -29,7 +29,6 @@ import {
   defaultUserId,
   listUserIds,
   deleteProfile,
-  confirmExpiredOfflineFromSettings,
   getSettings,
   hideMany,
   listListings,
@@ -429,6 +428,8 @@ import {
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
 // geo_cache（跨節點共用的地理編碼快取）的 PG 島嶼入口。
 import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
+// 「已下線但還沒確認」的自動確認掃描（原本只寫本機 SQLite）。
+import { confirmExpiredOfflineAsync } from "./crawlerWrites.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
 import { publicListingView } from "./selfListings.js";
@@ -4010,6 +4011,17 @@ function schedule() {
   }, 60 * 1000);
 }
 
+// `db.js confirmExpiredOfflineFromSettings()` 的 async 版：設定讀 PG（`getSettingsAsync`），
+// 掃描走 `crawlerWrites.confirmExpiredOfflineAsync()`（PG 模式寫 PostgreSQL）。節流在那支裡面。
+async function confirmExpiredOfflineFromSettingsAsync() {
+  try {
+    const settings = await getSettingsAsync(0);
+    await confirmExpiredOfflineAsync({ days: settings?.offlineConfirmDays });
+  } catch (error) {
+    console.warn("確認逾期下線失敗：", error.message);
+  }
+}
+
 function safeStats(userId) {
   try {
     return stats(undefined, userId);
@@ -4107,7 +4119,7 @@ app.get("/api/state", async (req, res) => {
   let listings = [];
   let events = [];
   try {
-    confirmExpiredOfflineFromSettings();
+    await confirmExpiredOfflineFromSettingsAsync();
     const page = await loadListingPage({
       filter: "all", sort: "newest", limit: 500, offset: 0,
       userId: uid, matchVoteUserId: uid,
@@ -4169,7 +4181,7 @@ app.get("/api/listings", async (req, res) => {
     .map((name) => name.trim())
     .filter(Boolean);
   const started = Date.now();
-  confirmExpiredOfflineFromSettings();
+  await confirmExpiredOfflineFromSettingsAsync();
   let cursor = null;
   if (req.query.cursor) {
     try { cursor = JSON.parse(String(req.query.cursor)); } catch { cursor = null; }

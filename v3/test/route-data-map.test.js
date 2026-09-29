@@ -160,7 +160,7 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）：跨模組 helper、destructured default、方法呼叫與 driver-aware 委派", () => {
+test("缺陷 (1)(2)(7)(8)(9) 的守衛（合成來源樹）：跨模組 helper、destructured default、方法呼叫、driver-aware 委派與字串內的名字", () => {
   // 📌 這一條**已經換過七次標的**，換的原因值得記下來（前六次都是「拿『目前還沒移植』
   // 當 ground truth」）：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
@@ -277,6 +277,13 @@ test("缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）：跨模組 helper、de
       "  res.json(markThingAsync({}));",
       "});",
       "",
+      // 缺陷 (9) 的標的：SQLite 函式的名字只出現在**字串**裡（真實案例：
+      // `res.setHeader("Server-Timing", `… stats;dur=…`)` 讓 `stats()` 整條鏈被算進來）。
+      'app.get("/api/stringmention", (req, res) => {',
+      '  res.setHeader("Server-Timing", `loadThing;dur=1`);',
+      "  res.json({ ok: true });",
+      "});",
+      "",
     ].join("\n"));
 
     const runRuler = () => {
@@ -363,6 +370,22 @@ test("缺陷 (1)(2)(7)(8) 的守衛（合成來源樹）：跨模組 helper、de
     assert.ok(delegateBroken.sqlite.includes("markThingDone"), "缺陷 (8) 下那個 fallback 會被算進去");
     // 對照：不經 driver-aware 委派的路由在缺陷 (8) 下不受影響。
     assert.ok(defective8.get("GET /api/thing").sqlite.includes("loadThing"));
+
+    // ---- 缺陷 (9)：字串裡的名字不是引用 ----
+    const stringFixed = fixed.get("GET /api/stringmention");
+    assert.equal(stringFixed.verdict, "無直接DB",
+      `字串裡的函式名不得被當成引用。實際：${JSON.stringify(stringFixed)}`);
+    assert.deepEqual(stringFixed.sqlite, [], "字串內容不得帶進任何 SQLite 卡點");
+    const stripAnchor = "  .replace(/`(?:[^`\\\\]|\\\\.)*`/g, \"``\");";
+    assert.ok(original.includes(stripAnchor), "缺陷 (9) 的錨點必須還在（尺規改寫時要同步更新這一條）");
+    writeFileSync(rulerPath, original.replace(stripAnchor, "  .replace(/__never__/g, \"`\");"));
+    const defective9 = runRuler();
+    const stringBroken = defective9.get("GET /api/stringmention");
+    assert.equal(stringBroken.verdict, "SQLite",
+      `缺陷 (9) 下字串內容會被誤算。實際：${JSON.stringify(stringBroken)}`);
+    assert.ok(stringBroken.sqlite.includes("loadThing"), "缺陷 (9) 下字串裡的名字會被算進去");
+    // 對照：真正呼叫那個函式的路由在缺陷 (9) 下不受影響。
+    assert.ok(defective9.get("GET /api/thing").sqlite.includes("loadThing"));
 
     // ---- 缺陷 (1)：函式本文起點算錯（「簽名後第一個 {」＝ 參數的 }） ----
     const defect1From = `  let i = text.indexOf("(", start);

@@ -481,6 +481,20 @@ function tablesFor(names) {
 // 保守度：只在**路由本文**這一層放寬（函式本文仍用 `callsIn`），而且排除
 // `const/let/var/function <name>` 這種「同名區域變數宣告」——否則 `const stats = …`
 // 會被誤認成引用到 db.js 的 `stats()`。
+// 🚨 2026-09-29 修正缺陷 (9)：**字串裡的名字不是引用**。
+//
+// `GET /api/listings` 有一行
+//     res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
+// 那個 `stats` 是**字串內容**，卻讓 `mentionsIn()` 把 db.js 的 `stats()` 整條鏈
+// （countWatched／loadFlagMap／ensureUser／getUserById／listUserIds／sqlExcludeFixtureRows）
+// 全部算進這條路由（7 個假卡點）。
+// 修法：裸提及的檢查先**去掉字串與樣板字面值**。⚠️ 只在這一層做——`callsIn()` 仍然用原始
+// 本文，所以真的寫在 `${…}` 裡的呼叫不會被吃掉（`callsIn` 也優先於這條）。
+const stripStrings = (text) => String(text)
+  .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+  .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+  .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+
 const mentionsIn = (body, name) => {
   const n = name.replace(/\$/g, "\\$");
   // 有「呼叫」就一定算引用——這一條優先於下面的同名守衛。
@@ -492,7 +506,7 @@ const mentionsIn = (body, name) => {
   // `res.json({ stats: await listingStatsAsync(…) })` 因為鍵叫 `stats`，把 db.js 的
   // `stats()` 整條鏈（countWatched／loadFlagMap／sqlExcludeFixtureRows…）拉了進來，
   // 7 個 SQLite 函式全部誤報。`{ stats }` 這種 shorthand 沒有冒號，仍然算值。
-  if (!new RegExp(`(?<![\\w$.])${n}(?![\\w$])(?!\\s*:)`).test(body)) return false;
+  if (!new RegExp(`(?<![\\w$.])${n}(?![\\w$])(?!\\s*:)`).test(stripStrings(body))) return false;
   // 只有「裸提及」才需要排除同名區域變數宣告（否則 `const stats = …` 會被誤認成 db.js 的 stats()）。
   return !new RegExp(`\\b(?:const|let|var|function|class)\\s+${n}\\b`).test(body);
 };

@@ -3783,6 +3783,52 @@ SQLite；**整條邊**都要跳過（含遞移展開——只跳過直接計入�
   「擁有權問 PG（本機刻意沒有那一列）」與「prep 列真的落在 PG，且與 SQLite 逐欄相同」。
   ⚠️ 只碰自己那兩個鍵（`listing_enrich_jobs.id`／`listing_prep.post_id`）。
 
+## 二之負三十七、2026-09-29 第六十七批：逾期下線掃描 ＋ 尺規缺陷 (9)
+
+### 67.1 範圍與投報率
+
+| 路由 | 進入點 | 結果 |
+|---|---|---|
+| `GET /api/listings` | `confirmExpiredOfflineFromSettingsAsync()`（新） | MIXED → **PG** |
+| （`GET /api/state` 也用同一支掃描） | 同上 | 卡點少了 1 個（其餘仍在） |
+
+這一包是第 (4) 步的**前哨**：`GET /api/listings` 的 8 個卡點裡有 7 個是**尺規假陽性**（見 67.3），
+剩下的 1 個是真的——`confirmExpiredOfflineFromSettings()`（「已下線但還沒確認」的 N 天自動確認掃描）
+在 PG 模式下只寫本機 SQLite，站上讀的那一份永遠不會翻。
+
+尺規：缺口 **26 → 25**、PG **242 → 243**、MIXED **23 → 22**（SQLite 3、無直接DB 20 不變）。
+
+### 67.2 這一包的做法
+
+1. `crawlerWrites.confirmExpiredOfflineAsync({ days, now }, options)`：**同一句 UPDATE**（逐字沿用
+   `db.js:5098-5105`，含 SQLite 的 `IFNULL`——真 PG 端由 `postgresExec()` 的 `toPostgresSql()`
+   轉 `COALESCE`），尾端接 `RETURNING 1` 以取得列數（PG 對沒有 RETURNING 的 UPDATE 只回空陣列，
+   直接數會永遠是 0）。節流與同步版同義（每節點 60 秒），`now` 是測試的時間縫，
+   另有 `resetExpiredOfflineSweepForTests()`。
+2. `server.js` 的 `confirmExpiredOfflineFromSettingsAsync()`：設定讀 PG（`getSettingsAsync(0)`）
+   → 掃描走上面那一支；兩個呼叫點（`/api/listings`、`/api/state`）改 `await` 它。
+   失敗只記警告（與同步版同一個契約：掃描不該擋住清單）。
+
+### 67.3 尺規缺陷 (9)：字串裡的名字不是引用
+
+`GET /api/listings` 有一行
+```js
+res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
+```
+那個 `stats` 是**字串內容**，卻讓 `mentionsIn()`（裸提及也算引用那條規則）把 db.js 的 `stats()`
+整條鏈（`countWatched`／`loadFlagMap`／`ensureUser`／`getUserById`／`listUserIds`／
+`sqlExcludeFixtureRows`）全算進這條路由——**7 個假卡點**，也是這條路由一直留在缺口裡的主因。
+
+修法：裸提及的檢查先去掉字串與樣板字面值（`stripStrings()`）。⚠️ 只在這一層做——`callsIn()`
+仍用原始本文，所以真的寫在 `${…}` 裡的呼叫不會被吃掉（`callsIn` 也優先於這條）。
+守衛搬進合成來源樹（`/api/stringmention` 只在字串裡提到 SQLite 函式名），並加一條變異把規則套回去。
+
+### 67.4 測試
+
+- `v3/test/listing-state-writes.test.js`：新增 2 條離線（PG 分支的**列數與落地狀態**都與同步版相同、
+  60 秒節流、sqlite 回退）＋ 1 條 live 子測試（在拋棄式 schema 內真的改到那一列並回報 1 列）。
+- `v3/test/route-data-map.test.js` **12 項全綠**：合成樹擴充到缺陷 (9)。變異 **10 條全殺**。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -3793,13 +3839,13 @@ SQLite；**整條邊**都要跳過（含遞移展開——只跳過直接計入�
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第六十六批）** |
+| 判定 | 起點 | **現在（2026-09-29 第六十七批）** |
 |---|---:|---:|
 | SQLite | 95 | **3** |
-| MIXED | — | **23** |
+| MIXED | — | **22** |
 | 無直接DB | — | **20** |
-| PG | 22 | **242** |
-| **缺口（SQLite＋MIXED）** | — | **26** |
+| PG | 22 | **243** |
+| **缺口（SQLite＋MIXED）** | — | **25** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
