@@ -17,8 +17,26 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
-import { getSelfRowAsync } from "./selfListingsAsync.js";
+import { expireOpenSelfListingsAsync, getSelfRowAsync } from "./selfListingsAsync.js";
 import {
+  ACCEPTED_OFFER_SQL,
+  OFFER_LISTING_DAILY_CAP,
+  OFFER_OWNER_DAILY_CAP,
+  OFFER_SAME_WISH_COOLDOWN_MS,
+  OFFER_TTL_MS,
+  IDEMPOTENCY_BY_KEY_SQL,
+  IDEMPOTENCY_INSERT_SQL,
+  LISTING_OFFERS_SINCE_SQL,
+  OFFER_BY_ID_SQL,
+  OFFER_INSERT_SQL,
+  OWNER_OFFERS_SINCE_SQL,
+  PENDING_OFFER_SQL,
+  WISH_BY_PUBLIC_REF_SQL,
+  LAST_TERMINAL_OFFER_SQL,
+  idempotencyParams,
+  isUniqueViolation,
+  normalizeOfferIdempotencyKey,
+  offerInsertParams,
   OFFER_REPORT_DAILY_CAP,
   OFFER_REPORT_DETAIL_MAX,
   ADMIN_REPORTS_SQL,
@@ -45,6 +63,8 @@ import {
 } from "./wishOffers.js";
 import { currentRentalMarketplaceFlags } from "./demand.js";
 import { isWishOfferEnabled } from "./rentalMarketplaceFlags.js";
+import { getRentalCatalogAsync, getWishConditionsAsync } from "./rentalCatalogAsync.js";
+import { emitRentalNotifyEventAsync } from "./rentalNotifyWriteAsync.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
 import { listWishOffersWith } from "./wishOfferQueries.js";
 
@@ -94,7 +114,9 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
 
 // 逐字對應 wishOffers.js 的語句。
 export const OFFER_BY_TOKEN_SQL = "SELECT * FROM wish_offers WHERE public_token = ?";
-export const OFFER_BY_ID_SQL = "SELECT * FROM wish_offers WHERE id = ?";
+// ⚠️ `OFFER_BY_ID_SQL`／`LAST_TERMINAL_OFFER_SQL` 這一批之後**只有一份**（定義在 `wishOffers.js`），
+// 這裡改成 import 後轉出：同一句 SQL 在兩個模組各寫一次，就是漂移的開始。
+export { OFFER_BY_ID_SQL, LAST_TERMINAL_OFFER_SQL } from "./wishOffers.js";
 export const WISH_BY_ID_SQL = "SELECT * FROM demand_posts WHERE id = ?";
 export const BLOCK_EXISTS_SQL =
   "SELECT id FROM user_blocks WHERE blocker_user_id = ? AND blocked_user_id = ?";
@@ -127,10 +149,6 @@ export const WISHES_BY_TOKENS_SQL = (count) =>
   `SELECT id, user_id, public_token FROM demand_posts WHERE public_token IN (${Array.from({ length: count }, () => "?").join(",")})`;
 export const ACTIVE_OFFERS_SQL = `SELECT public_token, wish_id, status FROM wish_offers
        WHERE owner_user_id = ? AND listing_id = ? AND status IN ('pending', 'accepted')`;
-export const LAST_TERMINAL_OFFER_SQL = `SELECT * FROM wish_offers
-     WHERE owner_user_id = ? AND listing_id = ? AND wish_id = ?
-       AND status IN ('declined', 'withdrawn', 'expired', 'blocked')
-     ORDER BY created_at DESC, id DESC LIMIT 1`;
 export const OWNER_BAN_SQL = "SELECT self_ban_until FROM users WHERE id = ?";
 
 async function ownerBannedAsync(run, ownerUserId, now = new Date()) {
@@ -768,4 +786,207 @@ export async function blockOwnerFromOfferAsync(userId, offerRef, { now = new Dat
     const mod = await import("./wishOfferTransitions.js");
     return mod.blockOwnerFromOffer(sqliteHandle(), userId, offerRef, { now, actorKey });
   });
+}
+
+// ---- 建立提案（第八十七批）---------------------------------------------------
+//
+// `POST /api/self-listings/:id/matches/:wishRef/offers` 原本走
+// `db.js:createWishOfferFor()`（同步）：刊登列（`getSelfRow`）、許願房、封鎖名單、每日上限、
+// 既有提案、冪等鍵與事件全部讀寫**這台節點**。PG 模式下「別的節點看到的刊登／許願房」
+// 一律查不到 ⇒ 429／409 亂噴，而且提案本身寫進本機後站上（讀 PG）看不到。
+//
+// 順序與同步版逐條相同（`wishOffers.js:createWishOffer()`）：
+//   啟用開關 → 端點節流 → 冪等鍵格式 → 過期清理 → 讀刊登／許願房 → 冪等回放 →
+//   建立閘門（擁有者停權／封鎖／即時配對／每日上限／pending 回傳／accepted 衝突／冷卻）→
+//   INSERT pending（撞唯一鍵就回既有那筆）→ 冪等鍵落地 → `offer_created` 事件 →
+//   `tenant_offer_received` 通知（失敗不影響建立）→ `publicOfferView` 投影。
+//
+// ⚠️ 交易：同步版是 `BEGIN IMMEDIATE`；PG 這一邊靠**兩個部分唯一索引**
+// （`idx_wish_offers_pending_unique`／`_active_unique`）擋併發，撞到就回既有那筆
+// ——與同步版 catch UNIQUE 的語意相同（PG 丟 23505、SQLite 夾具丟訊息，`isUniqueViolation()` 都認）。
+
+const atMsOf = (now) => (now instanceof Date ? now.getTime() : Number(now) || Date.now());
+
+async function loadWishByPublicRefAsync(run, wishRef) {
+  const raw = String(wishRef || "").trim();
+  if (!raw || /^\d+$/.test(raw)) return null;
+  return one((await run(WISH_BY_PUBLIC_REF_SQL, [raw])).rows) || null;
+}
+
+const sinceCountAsync = async (run, sql, id, sinceIso) =>
+  Number(one((await run(sql, [Number(id) || 0, sinceIso])).rows)?.n) || 0;
+
+/** `assertCreateOfferGates()` 的 PG 版：判斷本身全部沿用同步版的純函式與政策常數。 */
+export async function assertCreateOfferGatesAsync(run, { ownerUserId, listingRow, wishRow, now = new Date() } = {}) {
+  if (!listingRow || Number(listingRow.listed_by_user_id) !== Number(ownerUserId)) {
+    throw offerHttpError("找不到這則站內刊登", 404, "listing_not_found");
+  }
+  if (await ownerBannedAsync(run, ownerUserId, now)) {
+    throw offerHttpError("目前無法提供", 409, "offer_unavailable");
+  }
+  if (await tenantBlocksOwnerAsync(run, wishRow?.user_id, ownerUserId)) {
+    throw offerHttpError("目前無法提供", 409, "offer_unavailable");
+  }
+  const live = liveMatchEligible(null, listingRow, wishRow, now);
+  if (!live.eligible) {
+    throw offerHttpError("目前無法提供", 409, "match_no_longer_eligible");
+  }
+  const since = rollingWindowStart(now, 24 * 60 * 60 * 1000);
+  if (await sinceCountAsync(run, OWNER_OFFERS_SINCE_SQL, ownerUserId, since) >= OFFER_OWNER_DAILY_CAP) {
+    throw offerHttpError("今日提案次數已達上限", 429, "RATE_LIMITED", { retry_after: 3600 });
+  }
+  if (await sinceCountAsync(run, LISTING_OFFERS_SINCE_SQL, listingRow.post_id, since) >= OFFER_LISTING_DAILY_CAP) {
+    throw offerHttpError("此房源今日提案次數已達上限", 429, "RATE_LIMITED", { retry_after: 3600 });
+  }
+  const existingPending = one((await run(PENDING_OFFER_SQL, [
+    Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),
+  ])).rows);
+  if (existingPending) return { live, existingPending };
+  if (one((await run(ACCEPTED_OFFER_SQL, [
+    Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),
+  ])).rows)) {
+    throw offerHttpError("目前無法提供", 409, "offer_already_active");
+  }
+  const last = one((await run(LAST_TERMINAL_OFFER_SQL, [
+    Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),
+  ])).rows);
+  if (last) {
+    const created = Date.parse(last.created_at);
+    if (Number.isFinite(created) && atMsOf(now) - created < OFFER_SAME_WISH_COOLDOWN_MS) {
+      throw offerHttpError("稍後才能再提供", 429, "OFFER_COOLDOWN", {
+        retry_after: Math.max(1, Math.ceil((OFFER_SAME_WISH_COOLDOWN_MS - (atMsOf(now) - created)) / 1000)),
+      });
+    }
+  }
+  return { live, existingPending: null };
+}
+
+/** `insertPendingOffer()` 的 PG 版：撞部分唯一索引時回既有那筆（同步版 catch UNIQUE 同義）。 */
+export async function insertPendingOfferAsync(run, {
+  ownerUserId,
+  listingRow,
+  wishRow,
+  idempotencyKey = "",
+  now = new Date(),
+} = {}) {
+  const stamp = isoOf(now);
+  const expires = isoOf(new Date(atMsOf(now) + OFFER_TTL_MS));
+  const token = newOfferToken();
+  try {
+    // ⚠️ PG 沒有 `lastInsertRowid`：島嶼要自己接 `RETURNING id`（同步版仍用 `.run()` 的回傳值，
+    // 所以共用的 `OFFER_INSERT_SQL` 本體不含 RETURNING）。
+    const res = await run(`${OFFER_INSERT_SQL} RETURNING id`, offerInsertParams({
+      token, wishRow, listingRow, ownerUserId, idempotencyKey, stamp, expires,
+    }));
+    const id = Number(one(res?.rows)?.id ?? res?.lastInsertRowid) || 0;
+    if (id) return one((await run(OFFER_BY_ID_SQL, [id])).rows) || null;
+    return null;
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      const existing = one((await run(PENDING_OFFER_SQL, [
+        Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),
+      ])).rows);
+      if (existing) return existing;
+      if (one((await run(ACCEPTED_OFFER_SQL, [
+        Number(ownerUserId), Number(listingRow.post_id), Number(wishRow.id),
+      ])).rows)) {
+        throw offerHttpError("目前無法提供", 409, "offer_already_active");
+      }
+    }
+    throw error;
+  }
+}
+
+/** `db.js:createWishOfferFor()` 的 PG 版（＝ `createWishOffer()` ＋ 通知 ＋ `offerJson()`）。 */
+export async function createWishOfferAsync(ownerUserId, listingRef, wishRef, {
+  idempotencyKey,
+  now = new Date(),
+  actorKey = "",
+} = {}, options = {}) {
+  return withFallback(options, { write: true }, async (run) => {
+    assertWishOfferEnabled();
+    if (actorKey) assertOfferBurst(actorKey, now);
+    const key = normalizeOfferIdempotencyKey(idempotencyKey);
+    // 等同 `db.js:hydrateRentalMarketplace()`：PG 的旗標／目錄／許願條件要先收斂到行程內快取，
+    // 否則 `liveMatchEligible()` 會拿本機（過期）的目錄判斷，配對結果與站上不一致。
+    await getRentalCatalogAsync(options);
+    await getWishConditionsAsync(options);
+    const runOpts = { ...options, driver: "postgres", exec: run };
+    await expireOpenSelfListingsAsync(run, now);
+    const listingRow = await getSelfRowAsync(listingRef, runOpts);
+    const wishRow = await loadWishByPublicRefAsync(run, wishRef);
+    if (key) {
+      const replay = one((await run(IDEMPOTENCY_BY_KEY_SQL, [Number(ownerUserId), key])).rows);
+      if (replay) {
+        const listingId = listingRow ? Number(listingRow.post_id) : NaN;
+        const wishId = wishRow ? Number(wishRow.id) : NaN;
+        const sameTarget = Number.isFinite(listingId)
+          && Number.isFinite(wishId)
+          && listingId === Number(replay.listing_id)
+          && wishId === Number(replay.wish_id);
+        if (sameTarget) {
+          const offer = one((await run(OFFER_BY_ID_SQL, [Number(replay.offer_id)])).rows);
+          if (offer) return publicOfferViewAsync(offer, ownerUserId, {}, runOpts);
+        }
+        throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
+      }
+    }
+    if (!listingRow || !wishRow) {
+      recordOfferFail(actorKey || `owner:${ownerUserId}`, now);
+      throw offerHttpError("目前無法提供", 409, "match_no_longer_eligible");
+    }
+    let gates;
+    try {
+      gates = await assertCreateOfferGatesAsync(run, { ownerUserId, listingRow, wishRow, now });
+    } catch (error) {
+      recordOfferFail(actorKey || `owner:${ownerUserId}`, now);
+      throw error;
+    }
+    if (key && gates.existingPending) {
+      const same = Number(gates.existingPending.listing_id) === Number(listingRow.post_id)
+        && Number(gates.existingPending.wish_id) === Number(wishRow.id);
+      if (!same) throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
+    }
+    const offer = gates.existingPending || await insertPendingOfferAsync(run, {
+      ownerUserId,
+      listingRow,
+      wishRow,
+      idempotencyKey: key,
+      now,
+    });
+    if (!offer) throw offerHttpError("目前無法提供", 409, "match_no_longer_eligible");
+    if (key) {
+      try {
+        await run(IDEMPOTENCY_INSERT_SQL, idempotencyParams({
+          ownerUserId, key, offerId: offer.id, listingId: listingRow.post_id, wishId: wishRow.id, stamp: isoOf(now),
+        }));
+      } catch (error) {
+        const replay = one((await run(IDEMPOTENCY_BY_KEY_SQL, [Number(ownerUserId), key])).rows);
+        if (replay && Number(replay.offer_id) !== Number(offer.id)) {
+          throw offerHttpError("此操作已用於另一筆提案", 409, "IDEMPOTENCY_CONFLICT");
+        }
+        if (!isUniqueViolation(error)) throw error;
+      }
+    }
+    await writeOfferEventAsync(run, {
+      offerId: offer.id,
+      actorUserId: ownerUserId,
+      eventType: "offer_created",
+      meta: { listing_id: listingRow.post_id },
+      now,
+    });
+    // `db.js:createWishOfferFor()` 的收尾：通知事件（失敗不影響建立）＋ 公開投影。
+    try {
+      await emitRentalNotifyEventAsync({
+        eventType: "tenant_offer_received",
+        userId: offer.tenant_user_id,
+        eventKey: `tenant_offer_received:${offer.id}`,
+        subjectType: "offer",
+        subjectRef: offer.public_token,
+        listingId: offer.listing_id,
+        now,
+      }, runOpts);
+    } catch { /* notify must not fail create */ }
+    return publicOfferViewAsync(offer, ownerUserId, {}, runOpts);
+  }, async () => (await import("./db.js")).createWishOfferFor(ownerUserId, listingRef, wishRef, { idempotencyKey, now, actorKey }));
 }

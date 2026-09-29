@@ -37,7 +37,9 @@ test("APIs are wired with ownership and flag gates", () => {
   assert.match(server, /\/api\/self-listings\/:id\/matches\/:wishRef\/offers/);
   assert.match(server, /\/api\/wish-offers\/inbox/);
   assert.match(server, /\/api\/wish-offers\/:offerRef\/accept/);
-  assert.match(server, /createWishOfferFor/);
+  // 第八十七批：提案建立改走 PG 島嶼（同步版把提案、事件與冪等鍵都寫進節點本機）。
+  assert.match(server, /await createWishOfferAsync\(session\.userId/);
+  assert.doesNotMatch(server, /createWishOfferFor\(session\.userId/);
 });
 
 test("admin rules page is read-only default rules", () => {
