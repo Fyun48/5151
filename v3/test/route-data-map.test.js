@@ -160,7 +160,7 @@ test("已完全移植的路由必須是 PG：reject-match 不得再有 SQLite �
   }
 });
 
-test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destructured default 都要看得見", () => {
+test("缺陷 (1)(2)(7) 的守衛（合成來源樹）：跨模組 helper、destructured default 與方法呼叫", () => {
   // 📌 這一條**已經換過七次標的**，換的原因值得記下來（前六次都是「拿『目前還沒移植』
   // 當 ground truth」）：
   //   1. `/api/support/public`（`publicSupportConfig(db)`）→ 第十一批移植 ⇒ 失效。
@@ -202,9 +202,29 @@ test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destru
       "}",
       "",
     ].join("\n"));
+    // 缺陷 (7) 的標的：一個**物件方法**剛好與 external.js 的 SQLite 函式同名。
+    // 舊版 `callsIn()` 用 `\bname\s*\(`，會把 `store().saveThing()` 也當成呼叫那個函式。
+    // `saveThing`：住在 db.js 以外、吃 handle 的 SQLite 節點（同時也是缺陷 (7) 的名字來源）。
+    writeFileSync(path.join(tmp, "v3/src/saveThing.js"), [
+      "export function saveThing(db) {",
+      '  return db.prepare("SELECT 1 AS n").get();',
+      "}",
+      "",
+    ].join("\\n"));
+    writeFileSync(path.join(tmp, "v3/src/store.js"), [
+      "export function makeStore() {",
+      "  return { saveThing: () => 1 };",
+      "}",
+      "",
+    ].join("\n"));
     writeFileSync(path.join(tmp, "v3/src/server.js"), [
       'import { db, readThing } from "./db.js";',
+      // ⚠️ `saveThing` 一定要在 import 清單裡：缺陷 (7) 的假陽性正是「方法名剛好與
+      // **已匯入的**同名函式撞名」（真實案例：`db.js` 匯入 `saveSiteBudget`，而 store 上
+      // 也有一個同名方法）。
       'import { loadPaged, loadThing } from "./external.js";',
+      'import { saveThing } from "./saveThing.js";',
+      'import { makeStore } from "./store.js";',
       "",
       "const app = { get() {} };",
       "",
@@ -218,6 +238,10 @@ test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destru
       "",
       'app.get("/api/paged", (req, res) => {',
       "  res.json(loadPaged(db));",
+      "});",
+      "",
+      'app.get("/api/methodcall", (req, res) => {',
+      "  res.json(makeStore().saveThing());",
       "});",
       "",
     ].join("\n"));
@@ -240,6 +264,13 @@ test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destru
     assert.ok(paged.sqlite.includes("loadPaged"),
       `destructured default 的 helper 不得被截斷。實際 sqlite=${JSON.stringify(paged.sqlite)}`);
 
+    // 缺陷 (7)：**方法呼叫不是函式呼叫**。`saveThing` 這個名字在 external.js 是 SQLite 節點，
+    // 但 `/api/methodcall` 用的是 store.js 物件上的同名方法 ⇒ 不得被算成 SQLite 卡點。
+    const methodRoute = fixed.get("GET /api/methodcall");
+    assert.equal(methodRoute.verdict, "無直接DB",
+      `物件方法不得被當成同名函式。實際：${JSON.stringify(methodRoute)}`);
+    assert.deepEqual(methodRoute.sqlite, [], "方法呼叫不得帶進 external.js 的 saveThing");
+
     // 套回缺陷 (2)：sqlite 歸屬只看 db.js ⇒ `loadThing` 必須消失（沒消失代表守衛沒有牙齒）。
     const rulerPath = path.join(tmp, "v3/scripts/route-data-map.mjs");
     const original = readFileSync(rulerPath, "utf8");
@@ -254,6 +285,31 @@ test("缺陷 (1)(2) 的守衛（合成來源樹）：跨模組 helper 與 destru
     // 對照：另一條路由（helper 住在 db.js）在缺陷下不受影響——確保上面驗的是「跨模組」而不是全部消失。
     assert.ok(defective.get("GET /api/other").sqlite.includes("readThing"),
       "db.js 內的 helper 在缺陷 (2) 下仍然要被看見（這才是缺陷的定義）");
+
+    // ---- 缺陷 (7)：把 `callsIn()` 還原成舊的 `\bname\s*\(`（方法呼叫也算） ----
+    // ⚠️ 這裡用「切出區塊再換掉」而不是比對整段字串：那段程式碼裡有反引號與多層跳脫，
+    // 用字串比對很容易因為一個反斜線就變成 no-op（第一版就是這樣，守衛看起來有跑其實沒換）。
+    const callsInStart = original.indexOf("const callsIn = (body, name) => {");
+    assert.ok(callsInStart > 0, "缺陷 (7) 的錨點必須還在（尺規改寫時要同步更新這一條）");
+    const callsInEnd = original.indexOf("\n};", callsInStart) + 3;
+    assert.ok(callsInEnd > callsInStart, "缺陷 (7) 的區塊結尾必須找得到");
+    const oldCallsIn = [
+      "const callsIn = (body, name) => {",
+      "  const escaped = name.replace(/\\$/g, \"\\\\$\");",
+      "  return new RegExp(`(^|[^.\\\\w$])${escaped}\\\\s*\\\\(`).test(body);",
+      "};",
+    ].join("\n") + "\n";
+    assert.ok(original.slice(callsInStart, callsInEnd).includes("^|[^."), "切出來的必須是修好的那一版");
+    writeFileSync(rulerPath, original.slice(0, callsInStart)
+      + "const callsIn = (body, name) => new RegExp(`\\\\b${name.replace(/\\$/g, \"\\\\$\")}\\\\s*\\\\(`).test(body);\n"
+      + original.slice(callsInEnd));
+    const defective7 = runRuler();
+    const brokenMethod = defective7.get("GET /api/methodcall");
+    assert.equal(brokenMethod.verdict, "SQLite",
+      `缺陷 (7) 下方法呼叫會被誤算。實際：${JSON.stringify(brokenMethod)}`);
+    assert.ok(brokenMethod.sqlite.includes("saveThing"), "缺陷 (7) 下會把同名方法算成 SQLite 節點");
+    // 對照：真正呼叫那個函式的路由在缺陷 (7) 下仍然正確（缺陷只影響「方法呼叫」那一類）。
+    assert.ok(defective7.get("GET /api/thing").sqlite.includes("loadThing"));
 
     // ---- 缺陷 (1)：函式本文起點算錯（「簽名後第一個 {」＝ 參數的 }） ----
     const defect1From = `  let i = text.indexOf("(", start);

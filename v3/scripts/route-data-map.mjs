@@ -215,7 +215,20 @@ for (const rel of files) {
 // sqliteDb 7；其餘 re／dest／target／source／*Re 全是 regex。
 const DIRECT = /\b(?:db|conn|sqliteDb)\.(prepare|exec|pragma|function)\s*\(|\bsqliteHandle\b/;
 const DRIVER_AWARE = /resolveDbDriver|pgSharedDriver|writePath|sqliteFallback|postgresDriver|toPostgresSql/;
-const callsIn = (body, name) => new RegExp(`\\b${name.replace(/\$/g, "\\$")}\\s*\\(`).test(body);
+// 🚨 2026-09-29 修正缺陷 (7)：**方法呼叫不是函式呼叫**。
+//
+// `budgetStore({…}).saveSiteBudget(partial)` 這種寫法，會被舊版算成「呼叫了 `saveSiteBudget()`」，
+// 而 `fnOwner` 把它指到 `budgetGuard.js` 的同步實作 ⇒ `PUT /api/admin/providers/site-budget`
+// 被判成 MIXED，**但那個 store 其實是 driver-aware 的**（PG 模式走 `saveSiteBudgetAsync`）。
+// 這是**假陽性**：它讓一條已經移植好的路由永遠留在缺口裡，而且掩蓋了真正的卡點。
+//
+// 修法：名字前面是 `.`（或 `?.`）的不算 —— 那是物件上的同名方法，不是這個模組的函式。
+// ⚠️ 宣告（`saveSiteBudget: …`）不受影響：那些是 `name:` 而不是 `name(`。
+const callsIn = (body, name) => {
+  const escaped = name.replace(/\$/g, "\\$");
+  const re = new RegExp(`(^|[^.\\w$])${escaped}\\s*\\(`, "m");
+  return re.test(body);
+};
 
 // 🚨 2026-09-27 修正缺陷 (2)：`touches` 原本**只從 db.js 計算**，於是「把 SQLite handle
 // 當參數傳」的 helper（`publicSupportConfig(db)`、`listCampaignsAdmin(db)`、

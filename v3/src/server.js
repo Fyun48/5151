@@ -256,6 +256,7 @@ import {
   applyBrandUploadAsync,
   getAdminAdsSettingsAsync,
   getAdminBroadcastsSettingsAsync,
+  getAdminMapsSettingsAsync,
   saveAdminMailSettingsAsync,
   saveAdminOauthSettingsAsync,
 } from "./adminSettingsAsync.js";
@@ -485,6 +486,8 @@ import {
   startDeliveryLoopAsync,
 } from "./opsDeliveryAsync.js";
 import { compactSentOutboxPayloadsAsync, outboxCapacityAlertAsync } from "./feedbackOutboxAsync.js";
+// 物件來源歷史（同一 source_key 的其他刊登 ＋ 個人旗標）的 PG 島嶼入口。
+import { sourceHistoryAsync } from "./sourceHistoryAsync.js";
 // Ops 反向指令（套用 Ops 的處理結果）的 PG 島嶼。
 import { handleApplyRequestAsync } from "./siteCommandApplyAsync.js";
 // 回饋（feedback）的 PG 島嶼：送出時「feedback ＋ 初始 outbox 事件」必須在同一個交易裡，
@@ -1226,7 +1229,7 @@ app.post("/api/public/wish-room/:id/share-events", async (req, res) => {
     }
     const session = readSession(req);
     setShareCookie(res, token);
-    res.json(recordShareEventFor({
+    res.json(await recordShareEventAsync({
       shareToken: token,
       eventType,
       userId: session?.userId || null,
@@ -2695,8 +2698,13 @@ app.post("/api/admin/similarity/:id/review", requireAdminApi, async (req, res) =
   }
 });
 
-app.get("/api/admin/maps", requireAdminApi, (_req, res) => {
-  res.json(getAdminMapsSettings());
+app.get("/api/admin/maps", requireAdminApi, async (_req, res) => {
+  try {
+    // 開關、用量與 provider 預算都要讀 PG（同步版會顯示別的節點的開關與用量）。
+    res.json(await getAdminMapsSettingsAsync());
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
 });
 
 app.put("/api/admin/maps", requireAdminApi, (req, res) => {
@@ -4233,7 +4241,7 @@ app.get("/api/listings/:id/history", async (req, res) => {
     res.status(404).json({ error: "找不到這筆物件" });
     return;
   }
-  res.json({ listing, history: sourceHistory(listing.source_key, uid) });
+  res.json({ listing, history: await sourceHistoryAsync(listing.source_key, uid) });
 });
 
 app.post("/api/listings/:id/flags", async (req, res) => {

@@ -43,14 +43,25 @@ const SET_WATCH_GROUP_SQL = "UPDATE user_listing_flags SET watch_group_id = ? WH
 const USER_BY_EMAIL_SQL = "SELECT id, role, plan FROM users WHERE email = ? LIMIT 1";
 const USER_BY_ID_SQL = "SELECT id, role, plan FROM users WHERE id = ? LIMIT 1";
 
+// 🚨 注入式 `exec` 的形狀要正規化成**裸陣列**（這個模組的 runner 約定），
+// 否則呼叫端傳 `{ rows, rowCount }` 時 `for (const row of rows)` 會炸成
+// `object is not iterable`——第八次踩到「exec 形狀」，這次是 `sourceHistoryAsync` 的夾具抓到的。
+const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
+
 async function pgExec(options = {}) {
-  if (options.exec) return options.exec;
+  if (options.exec) {
+    const injected = options.exec;
+    return async (sql, params = []) => rowsOf(await injected(sql, params));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
 }
 
 async function runInTransaction(options, fn) {
-  if (options.exec) return fn(options.exec);
+  if (options.exec) {
+    const injected = options.exec;
+    return fn(async (sql, params = []) => rowsOf(await injected(sql, params)));
+  }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return pgDriver.withTransaction(async (client) => {
     const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);

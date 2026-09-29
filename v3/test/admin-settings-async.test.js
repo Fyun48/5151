@@ -31,6 +31,7 @@ const sync = {
   saveAdminMailSettings: db.saveAdminMailSettings,
   saveAdminOauthSettings: db.saveAdminOauthSettings,
   getStoredOauth: db.getStoredOauth,
+  getAdminMapsSettings: db.getAdminMapsSettings,
   getAdminOauthSettings: db.getAdminOauthSettings,
   getSponsorConfig: db.getSponsorConfig,
   getAdminSponsorSettings: db.getAdminSponsorSettings,
@@ -61,7 +62,7 @@ function pgFixture() {
   const mem = new DatabaseSync(":memory:");
   const disk = new DatabaseSync(diskPath(), { readOnly: true });
   const rows = disk.prepare(
-    "SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('settings')",
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('settings','maps_usage_daily','system_provider_configs')",
   ).all();
   disk.close();
   for (const row of rows) if (row.sql) mem.exec(row.sql);
@@ -430,4 +431,58 @@ test("非 postgres：兩個寫入都走同步路徑（不碰傳入的 exec）", 
   const oauth = await asyncMod.saveAdminOauthSettingsAsync({ oauth: { line: { enabled: true, clientId: "lid", clientSecret: "lsecret" } } }, sqlite);
   assert.equal(oauth.oauth.line.clientId, "lid");
   assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
+});
+
+// ---- 第六十一批：`GET /api/admin/maps` 的三個來源 -----------------------------
+//
+// 同步版 `getAdminMapsSettings()` 讀兩個 settings 鍵、`maps_usage_daily` 的用量列，
+// 以及 BudgetGuard 的 provider 預算。PG 模式下這些都要讀 PG，否則後台看到的是
+// **別的節點**的開關與用量（而且不會報錯）。這一條刻意讓兩個 store 的值不同。
+
+test("getAdminMapsSettingsAsync：開關、用量與 provider 判斷都與同步版相同", async () => {
+  const [disk, exec] = resetBoth();
+  // 本機與 PG 各自放不同的值：PG 開著 Google、本機關著（若讀錯 store 就會露出來）。
+  seed(disk, "googleDirectionsEnabled", false);
+  seed(disk, "commuteRushEnabled", false);
+  seed(exec.raw, "googleDirectionsEnabled", true);
+  seed(exec.raw, "commuteRushEnabled", true);
+  const usage = (h, day, essentials, advanced) => h.prepare(
+    "INSERT OR REPLACE INTO maps_usage_daily(day, essentials, advanced) VALUES (?,?,?)",
+  ).run(day, essentials, advanced);
+  usage(disk, "2026-09-01", 1, 0);
+  usage(exec.raw, "2026-09-01", 7, 3);
+  usage(exec.raw, "2026-09-28", 2, 1);
+
+  const viaPg = await asyncMod.getAdminMapsSettingsAsync({ ...PG, exec, strict: true });
+  assert.equal(viaPg.googleEnabled, true, "要讀 PG 的開關（本機是 false）");
+  assert.equal(viaPg.enabled, true, "通勤尖峰也要讀 PG");
+  assert.equal(typeof viaPg.hasKey, "boolean", "hasKey 由環境變數決定（兩邊相同）");
+  assert.equal(typeof viaPg.usage.todayEssentials, "number", "用量要有今天的 essentials");
+  assert.equal(viaPg.usage.monthEssentials, 9, `9 月要含 PG 的 7+2 筆（實際 ${viaPg.usage.monthEssentials}）`);
+  assert.equal(viaPg.usage.monthAdvanced, 4, "advanced 也要算 PG 的 3+1");
+  // 形狀：與同步版同一組鍵（少了鍵前端會壞）
+  assert.deepEqual(
+    Object.keys(viaPg).sort(),
+    Object.keys(sync.getAdminMapsSettings()).sort(),
+    "回傳的鍵必須與同步版相同",
+  );
+  // 同步版讀本機（false、用量少）⇒ 兩邊**本來就該不同**，這正是這條測試的鑑別力。
+  assert.equal(sync.getAdminMapsSettings().googleEnabled, false);
+  assert.notEqual(viaPg.usage.monthEssentials, sync.getAdminMapsSettings().usage.monthEssentials,
+    "同步版讀本機（只有 1 筆）⇒ 兩邊本來就該不同，這正是鑑別力");
+  // provider：沒有金鑰時兩邊都是 osrm（這個環境沒有 GOOGLE_MAPS_API_KEY）
+  assert.equal(viaPg.provider, "osrm");
+  // 預算提示：PG 這邊開著 Google 又沒有日預算（夾具沒有 provider 設定列）⇒ 一定要出現那句操作指示；
+  // 本機是關的 ⇒ 不該出現（這兩句一起抓「有沒有把預算讀進來」）。
+  assert.match(viaPg.warning, /外掛日預算為 0/, `要出現預算提示（實際 ${viaPg.warning}）`);
+  assert.doesNotMatch(sync.getAdminMapsSettings().warning, /外掛日預算為 0/, "本機關著 ⇒ 不該有那句");
+});
+
+test("getAdminMapsSettingsAsync：非 postgres 走同步版（不碰 exec）", async () => {
+  resetBoth();
+  let calls = 0;
+  const boom = async () => { calls += 1; throw new Error("exec 不該被呼叫（sqlite 模式）"); };
+  const viaSqlite = await asyncMod.getAdminMapsSettingsAsync({ driver: "sqlite", exec: boom });
+  assert.deepEqual(viaSqlite, sync.getAdminMapsSettings());
+  assert.equal(calls, 0);
 });
