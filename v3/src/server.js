@@ -4022,9 +4022,11 @@ async function confirmExpiredOfflineFromSettingsAsync() {
   }
 }
 
-function safeStats(userId) {
+// `stats()`（db.js）的 driver-aware 版：PG 模式讀 PG 的統計島嶼（`listingStatsAsync`），
+// 失敗時回同一個安全形狀（與同步版同一個契約：統計壞掉不該讓整個回應 500）。
+async function safeStats(userId) {
   try {
-    return stats(undefined, userId);
+    return await listingStatsAsync({ userId });
   } catch (error) {
     console.warn("讀取統計失敗：", error.message);
     return { total: 0, error: error.message };
@@ -4573,7 +4575,7 @@ app.post("/api/settings", async (req, res) => {
     if (!session) return;
     const uid = session.userId;
     const settings = await persistSettings(req.body || {}, uid);
-    res.json({ settings, stats: safeStats(uid) });
+    res.json({ settings, stats: await safeStats(uid) });
     queueGeoBackfill(settings);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });

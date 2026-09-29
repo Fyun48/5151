@@ -323,6 +323,26 @@ test("live PostgreSQL: the state writes land where the site reads", { skip }, as
     });
   });
 
+  await t.test("geo 回填落點改的是 PG 那一列（本機不動）", async () => {
+    await withMirroredSchema(app, async (pgDriver) => {
+      const db = app.sqliteHandle();
+      const address = "台北市士林區測試路";
+      const localBefore = db.prepare("SELECT lat, lng, coord_version FROM listings WHERE post_id = ?").get(PG_ID);
+      await pgDriver.query("UPDATE listings SET lat = NULL, lng = NULL, location_class = '', coord_version = 0 WHERE post_id = $1", [PG_ID]);
+      const n = await writes.updateListingsGeoByAddressAsync(address, 25.4321, 121.8765, {
+        geo_source: "geocode", location_class: "address", address_used: address, provider: "photon",
+      }, pgOptions(pgDriver));
+      assert.equal(n >= 1, true, "同一地址至少一列要被更新（PG 回報列數）");
+      const row = (await pgDriver.query("SELECT lat, lng, geo_source, location_class, coord_version FROM listings WHERE post_id = $1", [PG_ID])).rows[0];
+      assert.equal(Number(row.lat), 25.4321, "座標要落在 PG 那一列");
+      assert.equal(Number(row.lng), 121.8765);
+      assert.equal(row.geo_source, "geocode");
+      assert.equal(Number(row.coord_version), 1);
+      const localAfter = db.prepare("SELECT lat, lng, coord_version FROM listings WHERE post_id = ?").get(PG_ID);
+      assert.deepEqual(localAfter, localBefore, "PG 模式不得動到本機那一列（站上讀的是 PG）");
+    });
+  });
+
   await t.test("逾期下線掃描在 PG 上真的改到那一列（並回報列數）", async () => {
     await withMirroredSchema(app, async (pgDriver) => {
       const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
@@ -351,4 +371,62 @@ test("live PostgreSQL: the state writes land where the site reads", { skip }, as
 });
 
 
+
+
+// ---------------------------------------------------------------------------
+// 第六十八批：`updateListingsGeoByAddress()`（geo 回填 worker 的落點）的 driver-aware 版本。
+// 原本只寫本機 SQLite ⇒ PG 模式下回填算出來的座標不會出現在站上讀的那一份。
+// ---------------------------------------------------------------------------
+
+test("geo 回填落點：PG 分支的語句、列數與落地值都與同步版相同", async () => {
+  const writes = await import("../src/crawlerWrites.js");
+  const { app } = await loadFixture();
+  const db = app.sqliteHandle();
+  const address = "台北市士林區測試路";
+  // ⚠️ 三筆 fixture 房源共用同一個地址 ⇒ 兩條 driver 都應該改到**三列**（第一版寫 1，
+  // 是把「一個地址一列」當成前提；那正是這支函式要處理的情境）。
+  const cols = "post_id, lat, lng, geo_source, location_class, coord_version";
+  const readAll = () => db.prepare(`SELECT ${cols} FROM listings WHERE post_id > 0 ORDER BY post_id`).all()
+    .map((row) => ({ ...row, lat: row.lat == null ? null : Number(row.lat), lng: row.lng == null ? null : Number(row.lng) }));
+  const clearCoords = () => db.prepare(
+    "UPDATE listings SET lat = NULL, lng = NULL, location_class = '', coord_version = 0 WHERE post_id > 0",
+  ).run();
+  const seen = [];
+  // 注入式 exec：PG 的語句跑在同一顆 SQLite 上（$n → ?），並記錄語句種類。
+  const shim = async (sql, params = []) => {
+    seen.push(String(sql).trim().split(/\s+/)[0].toUpperCase());
+    const text = String(sql).replace(/\$(\d+)/g, "?");
+    const stmt = db.prepare(text);
+    return /^\s*(select|with)/i.test(text) ? stmt.all(...params) : (stmt.run(...params), []);
+  };
+  const meta = { geo_source: "geocode", location_class: "address", address_used: address, provider: "photon" };
+
+  clearCoords();
+  const viaPg = await writes.updateListingsGeoByAddressAsync(address, 25.1234, 121.5678, meta, { driver: "postgres", exec: shim, strict: true });
+  const afterPg = readAll();
+  assert.equal(viaPg, 3, "同一個地址的三列都要被更新（PG 分支回報列數）");
+  // 語句種類：INSERT＝geo_cache 的 upsert、SELECT＝候選列、UPDATE＝座標與「重新排隊通知」
+  //（每一列兩句）。不得出現其他種類。
+  assert.deepEqual([...new Set(seen)].sort(), ["INSERT", "SELECT", "UPDATE"], `語句種類不對：${JSON.stringify(seen)}`);
+  assert.equal(seen.filter((k) => k === "UPDATE").length, viaPg * 2, "每一列要有座標與通知兩句 UPDATE");
+  for (const row of afterPg) {
+    assert.equal(row.lat, 25.1234);
+    assert.equal(row.lng, 121.5678);
+    assert.equal(row.geo_source, "geocode");
+    assert.equal(row.location_class, "address");
+    assert.equal(row.coord_version, 1, "coord_version 從各列自己的現值往上加");
+  }
+
+  // 同步版基準：同一組輸入、同一顆 DB，落地值必須逐欄相同。
+  clearCoords();
+  const viaSync = app.updateListingsGeoByAddress(address, 25.1234, 121.5678, meta);
+  assert.equal(viaSync, viaPg, "同步版改的列數必須相同");
+  assert.deepEqual(readAll(), afterPg, "兩條 driver 的落地值必須逐欄相同");
+
+  // 非法輸入：座標不是有限數時兩邊都不落地（也不寫快取）。
+  const geoBefore = db.prepare("SELECT COUNT(*) AS n FROM geo_cache").get().n;
+  assert.equal(await writes.updateListingsGeoByAddressAsync(address, Number.NaN, 121.5, meta, { driver: "postgres", exec: shim, strict: true }), 0);
+  assert.equal(app.updateListingsGeoByAddress(address, Number.NaN, 121.5, meta), 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM geo_cache").get().n, geoBefore, "非法座標不得寫入快取");
+});
 

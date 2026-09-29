@@ -2625,6 +2625,46 @@ const GEOCACHE_MUTATIONS = [
   },
 ];
 
+// 爬蟲的 listings 狀態寫入（v3/test/listing-state-writes.test.js，第六十七／六十八批）。
+const CRAWLER_WRITES_SRC = "v3/src/crawlerWrites.js";
+const STATEWRITE_MUTATIONS = [
+  {
+    name: "逾期下線掃描不看 RETURNING 的列數（永遠回報 0）",
+    file: CRAWLER_WRITES_SRC,
+    from: "    async (exec) => (await exec(`${EXPIRED_OFFLINE_SQL} RETURNING 1`, [stamp, cutoff])).length,",
+    to: "    async (exec) => { await exec(`${EXPIRED_OFFLINE_SQL} RETURNING 1`, [stamp, cutoff]); return 0; },",
+    expect: "逾期下線掃描：PG 分支改的列數",
+  },
+  {
+    name: "逾期下線掃描不節流（每個請求都掃一次）",
+    file: CRAWLER_WRITES_SRC,
+    from: "  if (at - lastExpiredOfflineSweepAt < EXPIRED_OFFLINE_SWEEP_MS) return 0;\n",
+    to: "",
+    expect: "60 秒內第二次不重掃",
+  },
+  {
+    name: "geo 落點只寫快取、不改 listings（回填的座標站上看不到）",
+    file: CRAWLER_WRITES_SRC,
+    from: "    const rows = await selectGeoRows(exec, key);\n    let updated = 0;",
+    to: "    const rows = [];\n    let updated = 0;",
+    expect: "geo 回填落點",
+  },
+  {
+    name: "geo 落點不寫快取（每次回填都要重新地理編碼）",
+    file: CRAWLER_WRITES_SRC,
+    from: "  await setCachedGeoAsync(address, lat, lng, meta, options);\n",
+    to: "",
+    expect: "geo 回填落點",
+  },
+  {
+    name: "geo 落點不驗座標（NaN 也照寫）",
+    file: CRAWLER_WRITES_SRC,
+    from: "  if (!key || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return 0;\n  // 快取先寫（走第六十四批的 geo_cache 島嶼；PG 模式寫 PG）。",
+    to: "  if (!key) return 0;\n  // 快取先寫（走第六十四批的 geo_cache 島嶼；PG 模式寫 PG）。",
+    expect: "geo 回填落點",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -4006,6 +4046,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /auth-member-async/.test(testFile) ? AUTHMEMBER_MUTATIONS
   : /budget-parity/.test(testFile) ? BUDGET_MUTATIONS
   : /listing-enrich-parity/.test(testFile) ? ENRICHQ_MUTATIONS
+  : /listing-state-writes/.test(testFile) ? STATEWRITE_MUTATIONS
   : /listing-similarity-admin-parity/.test(testFile) ? SIMILARITY_MUTATIONS
   : /legal-copy-async/.test(testFile) ? LEGALCOPY_MUTATIONS
   : /data-revision-async/.test(testFile) ? DATAREV_MUTATIONS
