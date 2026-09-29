@@ -134,9 +134,12 @@ export function pendingRequiredDocuments(db, userId, { now = new Date() } = {}) 
     .map(publicDocumentView);
 }
 
-export function assertRegistrationConsents(db, submitted, { now = new Date() } = {}) {
-  assertRequiredRegistrationReady(db, { now });
-  const required = getRequiredRegistrationDocuments(db, { now });
+/**
+ * 送出前的同意清單比對（**純函式**）：同步版與 PG 版（`memberConsentsAsync`）逐字共用，
+ * 同一份 submitted 在兩個 driver 上必須得到同一組文件與同一組錯誤訊息。
+ * `required` 是「目前有效且必要的文件」；`submitted` 是前端送來的同意清單。
+ */
+export function matchRegistrationConsents(required, submitted) {
   const items = Array.isArray(submitted) ? submitted : [];
   const accepted = [];
   for (const doc of required) {
@@ -154,6 +157,11 @@ export function assertRegistrationConsents(db, submitted, { now = new Date() } =
     accepted.push(doc);
   }
   return accepted;
+}
+
+export function assertRegistrationConsents(db, submitted, { now = new Date() } = {}) {
+  assertRequiredRegistrationReady(db, { now });
+  return matchRegistrationConsents(getRequiredRegistrationDocuments(db, { now }), submitted);
 }
 
 export function recordRegistrationConsents(db, userId, docs, { source = "registration", now = new Date() } = {}) {

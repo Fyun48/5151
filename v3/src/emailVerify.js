@@ -11,9 +11,13 @@ export function isEmailVerified(user) {
   return Number(user.email_verified) !== 0;
 }
 
+// 產生一組新的開通 token（同步島嶼與 `emailVerifyAsync.js` 共用，避免兩份 TTL／亂數邏輯漂移）。
+export function newVerifyToken({ now = Date.now() } = {}) {
+  return { token: randomBytes(24).toString("hex"), expiresAt: new Date(now + VERIFY_TTL_MS).toISOString() };
+}
+
 export function issueVerifyToken(conn, userId, { now = Date.now() } = {}) {
-  const token = randomBytes(24).toString("hex");
-  const expiresAt = new Date(now + VERIFY_TTL_MS).toISOString();
+  const { token, expiresAt } = newVerifyToken({ now });
   conn.prepare(
     `UPDATE users
      SET email_verified = 0, verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0, verify_used_at = NULL

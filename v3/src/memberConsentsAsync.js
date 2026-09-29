@@ -24,9 +24,10 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
-import { httpError, publicConsentRow } from "./memberConsents.js";
+import { httpError, matchRegistrationConsents, publicConsentRow } from "./memberConsents.js";
 // `REGISTRATION_DOC_TYPES` 的來源是 contentDocuments.js（memberConsents.js 只是再匯入）。
 import { REGISTRATION_DOC_TYPES, publicDocumentView } from "./contentDocuments.js";
+import { getRequiredRegistrationDocumentsAsync } from "./contentDocumentsAsync.js";
 import {
   getDocumentByIdAsync,
   getEffectiveDocumentAsync,
@@ -166,6 +167,33 @@ async function hasLegacyRegistrationAsync(run, userId) {
 }
 
 // `hasAcceptedRequiredDocument()` 的 PG 版：**比 id ＋ content_hash**，不是「曾經同意過」。
+// `memberConsents.js:assertRegistrationConsents()` 的 PG 版（`POST /api/register` 的前置）。
+// 判斷本身是純函式（`matchRegistrationConsents()`），這裡只把「目前有效且必要的文件」從 PG 讀進來。
+export async function assertRegistrationConsentsAsync(submitted, { now = new Date(), ...options } = {}) {
+  const required = await getRequiredRegistrationDocumentsAsync({ now, ...options });
+  // 與同步版 `assertRequiredRegistrationReady()` 同義：缺任何一型就 503（不是讓使用者看到空清單）。
+  if (required.length !== REGISTRATION_DOC_TYPES.length) {
+    throw httpError("目前無法取得有效的註冊條款，請稍後再試", 503);
+  }
+  return matchRegistrationConsents(required, submitted);
+}
+
+// `memberConsents.js:recordRegistrationConsents()` 的 PG 版：逐份文件呼叫既有的
+// `recordConsentAsync()`（PG ＋ 本機鏡射一起做，重複同意會回既有那一列）。
+export async function recordRegistrationConsentsAsync(userId, docs = [], { source = "registration", now = new Date(), ...options } = {}) {
+  const out = [];
+  for (const doc of Array.isArray(docs) ? docs : []) {
+    out.push(await recordConsentAsync(userId, {
+      document_type: doc.document_type,
+      document_id: doc.id,
+      version: doc.version,
+      content_hash: doc.content_hash,
+      source,
+    }, { now, ...options }));
+  }
+  return out;
+}
+
 export async function hasAcceptedRequiredDocumentAsync(userId, documentType, { now = new Date(), ...options } = {}) {
   return withFallback(options, {}, async (run) => {
     const doc = await getEffectiveDocumentAsync(documentType, { now, ...nested(options, run) });

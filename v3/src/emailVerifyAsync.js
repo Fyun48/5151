@@ -16,10 +16,19 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { confirmVerifyToken as confirmVerifyTokenSync } from "./emailVerify.js";
+import {
+  confirmVerifyToken as confirmVerifyTokenSync,
+  issueVerifyToken as issueVerifyTokenSync,
+  newVerifyToken,
+} from "./emailVerify.js";
 import { findUserByEmailAsync } from "./usersAsync.js";
 
 export const USER_BY_VERIFY_TOKEN_SQL = "SELECT * FROM users WHERE verify_token = ?";
+// `issueVerifyTokenAsync()` 用的 UPDATE：與 `emailVerify.js:issueVerifyToken` 逐字對應
+// （`email_verified = 0` 一併歸零，重寄開通信等於把已驗證狀態退回未驗證）。
+export const USER_ISSUE_VERIFY_SQL =
+  "UPDATE users SET email_verified = 0, verify_token = ?, verify_expires_at = ?, verify_expire_notified = 0, verify_used_at = NULL WHERE id = ?";
+
 export const USER_CONFIRM_VERIFY_SQL =
   "UPDATE users SET email_verified = 1, verify_used_at = ?, verify_expires_at = NULL, verify_expire_notified = 0 WHERE id = ?";
 
@@ -80,4 +89,17 @@ export async function confirmVerifyTokenAsync(token, { now = Date.now() } = {}, 
     confirmVerifyTokenSync(sqliteHandle(), token, { now });
   });
   return (await findUserByEmailAsync(row.email, options)) || row;
+}
+
+// `emailVerify.issueVerifyToken(db, userId, {now})` 的 PG 版（第七十五批，`POST /api/register` 用）。
+// 同步版在 PG 模式下把 token 寫進**節點本機**的 `users`：會員收到的連結在真正讀取（PG）的
+// 那一邊查不到，等於**註冊完就卡死**。這裡改成寫 PG，並且與同步版共用 `newVerifyToken()`。
+export async function issueVerifyTokenAsync(userId, { now = Date.now() } = {}, options = {}) {
+  const id = Number(userId) || 0;
+  if (!isPg(options)) return issueVerifyTokenSync(sqliteHandle(), id, { now });
+  const issued = newVerifyToken({ now });
+  return run(options, async (exec) => {
+    await exec(USER_ISSUE_VERIFY_SQL, [issued.token, issued.expiresAt, id]);
+    return issued;
+  }, () => issueVerifyTokenSync(sqliteHandle(), id, { now }));
 }

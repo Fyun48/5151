@@ -4030,6 +4030,68 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 - 變異 **4 條全殺**（`NOTIFYFLUSH_MUTATIONS`）。其中兩條的殺手是**原始碼接線**那條——
   信箱與站台設定在 silent 模式的行為面看不到差異，這一點寫在變異定義的註解裡。
 
+## 二之負四十五、2026-09-29 第七十五批：註冊（帳號 ＋ 同意 ＋ 開通信）搬上 PG
+
+### 75.1 範圍與投報率
+
+`POST /api/register` 的**整條寫入鏈**，8 個卡點一次清掉：
+
+- `registerUserWithConsents()` → `registerUserWithConsentsAsync()`（含 `registerUser`／
+  `assertRegistrationConsents`／`recordRegistrationConsents`／`findUserByEmail`）；
+- `issueVerifyToken()` → `issueVerifyTokenAsync()`（開通 token 的 UPDATE）；
+- `getStoredSmtp()`／`queueSystemMail()` → `getStoredSmtpAsync()`／`queueSystemMailAsync()`
+  （SMTP 設定與範本都讀 PG）。
+
+**兩個「線上就會中」的缺陷**（都是同一類：寫本機、讀 PG）：
+
+1. 新帳號寫進節點本機 SQLite，而 `verifyLoginAsync()` 讀 PG ⇒
+   **PG 模式下註冊完登不進去**（與第七十批的改密碼同一個病）。
+2. 開通 token 寫在本機，而 `confirmVerifyTokenAsync()` 讀 PG ⇒
+   **會員點信裡的連結永遠是「找不到這個開通連結」**（＝註冊完就卡死）。
+
+尺規：`POST /api/register` **SQLite（8 個卡點）→ PG**；缺口總數 **19 → 18**
+（`SQLite` 3 → **2**、`PG` 249 → **250**、`MIXED` 16 不變）。
+
+### 75.2 做法
+
+- `v3/src/usersAsync.js`：`USER_REGISTER_INSERT_SQL`（`RETURNING id`）、
+  `USER_REFRESH_UNVERIFIED_SQL`、`USER_REVIVE_DELETED_SQL`、`USER_PRIVACY_STAMP_SQL`
+  與 `registerUserAsync(exec, input, {now})`／`registerUserWithConsentsAsync(input, options)`。
+  ⚠️ 既有的 `USER_INSERT_SQL`（`ensureUser` 用）**名稱撞車**，新的那條改名
+  `USER_REGISTER_INSERT_SQL`。
+- **交易**：`runInTransaction(options, fn)` —— 有注入 exec 時沒有交易，就照同一條連線的順序跑
+  （與 `settingsAsync.js` 同一個處置）；真 PG 走 `pgDriver.withTransaction(client => …)`
+  並在 client 上做 `toPostgresSql()`。**帳號與同意紀錄必須同進同出**。
+- `v3/src/emailVerify.js`：把 token 產生抽成純函式 `newVerifyToken({now})`，
+  同步與 async 兩版共用同一份 TTL／亂數邏輯（避免兩份漂移）。
+- `v3/src/memberConsentsAsync.js`：`assertRegistrationConsentsAsync()`（缺文件 503、版本過期 409、
+  缺同意 400 全部沿用 `matchRegistrationConsents()` 這支純函式）與 `recordRegistrationConsentsAsync()`。
+  同步版的 `assertRegistrationConsents()` 也改成委派同一支純函式。
+- `v3/src/server.js`：路由換成 async 島嶼（`mailConfigured(await getStoredSmtpAsync())`、
+  `await registerUserWithConsentsAsync(...)`、`await issueVerifyTokenAsync(...)`、
+  `await queueSystemMailAsync("welcome", ...)`）。
+
+### 75.3 測試
+
+- `v3/test/register-async.test.js`（**7 項全綠**，新檔）：新帳號的落地欄位逐鍵比對同步版、
+  未驗證可重送（同一列、雜湊更新、舊密碼失效）、已刪除復活（`signup_count +1`／`deleted_at` 清空／
+  `plan` 回 free）、刪除兩次 409、四種 400 的訊息逐字相同、同意列寫 PG（含「本機已經有那個帳號時
+  才鏡射」的兩段）、開通 token 的欄位與同步版相同且 PG 讀得到、路由接線。
+- `v3/test/register-live-pg.test.js`（新檔，`PG_LIVE_REPRO_URL` gate）：真 PG 上「註冊 → 開通信 →
+  點連結開通」走完，同意列與帳號都落在 PG、本機沒有那個帳號、已開通後再註冊是 409。
+- **變異 18 條全殺**（`REGISTER_MUTATIONS`）。
+- 踩點（都真的紅過）：
+  1. `users` 有**沒有預設值的 NOT NULL 欄**（`email`／`created_at`／`disclaimer_version`）⇒
+     離線夾具種列時不能「每個欄位都塞 NULL 再靠 DDL 預設」。
+  2. `hashPassword()` **每次都加鹽** ⇒ 兩個 store 的雜湊永遠不會相等，比對要先驗密碼再比欄位。
+  3. 同意列的本機鏡射**只在該帳號本來就在本機時**發生（`member_consents` 的 FK；別的節點建的帳號
+     硬寫會 500）⇒ PG 模式的註冊「帳號與同意都只在 PG」，測試要照這個語意断言。
+  4. live 測試的 `t.after` 順序：**先 query、再關池**（順序顛倒會出現
+     `Cannot use a pool after calling end on the pool`）；而且同意列 append-only ⇒
+     收尾只能「改 Email ＋ 標記刪除」，不能刪帳號。
+  5. 「同一個交易」那一條**只有原始碼斷言殺得掉**（注入式 exec 沒有交易邊界），
+     寫在變異定義的註解裡。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -4040,13 +4102,13 @@ res.setHeader("Server-Timing", `list;dur=${…}, stats;dur=${…}`);
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第七十三批）** |
+| 判定 | 起點 | **現在（2026-09-29 第七十五批）** |
 |---|---:|---:|
-| SQLite | 95 | **3** |
+| SQLite | 95 | **2** |
 | MIXED | — | **16** |
 | 無直接DB | — | **20** |
-| PG | 22 | **249** |
-| **缺口（SQLite＋MIXED）** | — | **19** |
+| PG | 22 | **250** |
+| **缺口（SQLite＋MIXED）** | — | **18** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
 > `--json` 統計來比對）⇒ 之後只要跑了尺規，就要同步改這裡，否則 CI 會紅。
