@@ -66,6 +66,7 @@ test("live PG：worker 寫的路線要讓卡片路徑算得出通勤欄位（同
     if (uid) {
       try { await query("DELETE FROM user_settings WHERE user_id = $1", [uid]); } catch { /* 盡力而為 */ }
       try { await query("DELETE FROM push_subscriptions WHERE user_id = $1", [uid]); } catch { /* 盡力而為 */ }
+      try { await query("DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://push.example.test/live77-%'"); } catch { /* 盡力而為 */ }
       try { await query("DELETE FROM users WHERE id = $1", [uid]); } catch { /* 盡力而為 */ }
     }
     try { await query("DELETE FROM settings WHERE key = 'commuteRushEnabled'"); } catch { /* 盡力而為 */ }
@@ -135,10 +136,15 @@ test("live PG：worker 寫的路線要讓卡片路徑算得出通勤欄位（同
   assert.equal(Number(picked.commuteKm), 15, "呼叫端給的設定本身就滿足條件時要直接回它");
 
   // 5) 推播：PG 有訂閱就不能回 no-sub（同步版只看本機）
+  // ⚠️ 不要用 `ON CONFLICT (endpoint)`：`push_subscriptions` 的 `endpoint UNIQUE` 在 SQLite 是
+  // **欄位約束**（隱式索引），`pgSchema` 鏡射不到 ⇒ 拋棄式 CI 庫沒有那個唯一鍵，會直接
+  // `42P10`（`webPushAsync.js` 的檔頭就在講這個坑）。這裡用 DELETE + INSERT。
+  const ENDPOINT = `https://push.example.test/live77-${uid}`;
+  await query("DELETE FROM push_subscriptions WHERE endpoint = $1", [ENDPOINT]);
   await query(
     `INSERT INTO push_subscriptions(user_id, endpoint, p256dh, auth, created_at, last_seen_at)
-     VALUES ($1,$2,'p256','auth',$3,$3) ON CONFLICT (endpoint) DO NOTHING`,
-    [uid, `https://push.example.test/live77-${uid}`, "2026-09-29T00:00:00.000Z"],
+     VALUES ($1,$2,'p256','auth',$3,$3)`,
+    [uid, ENDPOINT, "2026-09-29T00:00:00.000Z"],
   );
   const push = await pushAsync.sendUserWebPushAsync(uid, { title: "t", body: "b" }, opts);
   assert.notEqual(push.skipped, "no-sub", "PG 有訂閱時不得回 no-sub");
