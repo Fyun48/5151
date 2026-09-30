@@ -4920,10 +4920,65 @@ grep -E '^DB_DRIVER=' /home/cline/.secrets/apps/5151-prod-casaos.env
    async 島嶼（`rentalCatalogAsync.getRentalMarketplaceFlagsAsync`／`saveRentalMarketplaceFlagsAsync`），
    狀態機改成 async（測試呼叫點要一起加 `await`）。在那之前，PG 模式要改 flag 請用產品端
    `PUT /api/admin/rental-marketplace-flags`（已是 PG-aware）。
-   > ✅ **2026-09-30 更新：已完成**，見 §二之負六十（第八十九批）。
+   > ✅ 排在**第九十批**（第八十九批先處理正式站回報的 `Unexpected token '<'`）。
 2. **UAT fixture 的 PG 版**（`production-uat-stages-wiring.mjs` 目前 fail-closed）。
 3. `cutover-backfill.mjs`／`cutover-conflicts.mjs` 的「快照新鮮度」檢查（它們不連 DB，只產 SQL）。
 4. `sqlite-consistency-snapshot.mjs` 在 PG 模式下會對過期 SQLite 做快照並寫進正式資料卷。
+
+## 二之負六十、2026-09-30 第八十九批：`/api/*` 一律回 JSON（修正式站回報的 `Unexpected token '<'`）
+
+### 89.1 症狀與根因
+
+正式站（PG 模式）頁面上出現：
+
+```
+Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+```
+
+根因有**兩層**，缺一不可：
+
+1. **伺服器**：`server.js` 原本**沒有任何錯誤中介層、也沒有 API 專屬的 404**，所以
+   (a) 打到不存在的 `/api/...`、(b) 路由把錯誤丟出 try/catch 之外，兩者都會回 Express 預設的
+   **HTML** 頁面。`GET /api/me` 正是「沒有 try/catch」的那一條，而它是前端 `loadState()` 的
+   **第一支請求**（`server.js:935`）⇒ 它一失敗，整個啟動流程就停在 `#status` 的錯誤訊息上，
+   列表永遠是「尚未載入列表」（與截圖一致）。
+2. **前端**：多處用 `res.json()` 直接讀（`index.html` 29 處），遇到 HTML 就爆出上面那句天書。
+   專案裡其實**早就有** `readApi()`（它會把非 JSON 換成「伺服器沒有正確回應，請重新整理後再試」），
+   但啟動路徑沒有用它。
+
+### 89.2 做法
+
+- 新增 `v3/src/apiFallbacks.js`：
+  - `apiNotFoundHandler()`：未知的 `/api/*` → `{error:"找不到這個 API 路徑", code:"api_not_found"}` 404。
+  - `apiErrorHandler({logger})`：`/api/*` 的錯誤 → JSON；**5xx 不外洩內部訊息**（通用句 + log）；
+    4xx 沿用路由原本給使用者看的訊息；`entity.parse.failed`（body 不是合法 JSON）→
+    「請求內容格式不正確」；`res.headersSent` 或**非** `/api` 路徑 → 交還 Express 預設（HTML 導覽不變）。
+  - `apiErrorBody()`／`statusOfApiError()`：狀態碼收斂（0／undefined／999 → 500）與內容組裝，純函式可測。
+- `v3/src/server.js`：
+  - `app.use("/api", apiNotFoundHandler())` 放在 `express.static` **之前**；
+    `app.use(apiErrorHandler())` 放在**最後**（Express 只認最後註冊的錯誤中介層）。
+  - `GET /api/me` 包 try/catch → 失敗回 JSON（`{error:"個人資料暫時無法載入，請稍後再試"}`）。
+- `v3/public/index.html`：啟動路徑改用既有的 `readApi()`
+  （`/api/me`、會員列表 `/api/listings`、設定檔載入／刪除、併入同房源、同意文件、自主刊登詳情）。
+  其餘 22 處 raw `res.json()` 多半已自帶 `.catch(() => …)` 或整段 try/catch，暫不動以免擴大誤觸面。
+
+### 89.3 測試
+
+- `v3/test/api-fallbacks.test.js`（**9 項全綠**，新檔）：4xx 沿用訊息／5xx 通用句不外洩、
+  奇怪 status 收斂 500、body-parser 友善訊息、未知 API 路徑 JSON 404、
+  `/api` 與非 `/api` 的分流、`headersSent` 不 double-send、logger 丟錯不影響回應、
+  server.js 註冊順序（404 在 static 前、錯誤中介層在最後）、`/api/me` 的 try/catch、
+  前端啟動路徑用 `readApi()`。
+- **變異 9 條全殺**（`APIFALLBACK_MUTATIONS`）。
+- 本機實跑（`PORT=5199 DATA_DIR=$(mktemp -d) node v3/src/server.js`）：
+  `POST /api/login` 帶壞掉的 JSON → `{"error":"請求內容格式不正確"}`（`application/json`，原本是 HTML 400）；
+  超過 body 上限也回 JSON；`/api/nope`（未登入）維持 JSON 401（`requireAuth` 先攔），
+  `/nope.html` 維持 302 導向登入頁（HTML 行為不變）。
+
+### 89.4 正式站狀態
+
+這一包**尚未部署**；正式站在部署前仍會出現同一個症狀（若 `/api/me` 因故失敗）。
+部署後：`/api/*` 的失敗一律是 JSON，前端啟動路徑也會顯示「伺服器沒有正確回應，請重新整理後再試」。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
