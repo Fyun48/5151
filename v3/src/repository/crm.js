@@ -60,6 +60,15 @@ export function contactByPhoneQuery(phone) {
 }
 
 // 某筆回饋是否已經有案件（重複按「建立案件」時要沿用，不要建第二筆）。
+// 第九十批：`enqueueCrmFromFeedback()` 的 PG 版要「這則回饋開過哪些聯絡人」，
+// 同步版是 `SELECT DISTINCT contact_id FROM crm_cases WHERE feedback_id=?`。
+export function contactIdsByFeedbackQuery(feedbackId) {
+  return {
+    sql: "SELECT DISTINCT contact_id FROM crm_cases WHERE feedback_id = ?",
+    params: [Number(feedbackId) || 0],
+  };
+}
+
 export function caseByFeedbackQuery(feedbackId) {
   return { sql: "SELECT * FROM crm_cases WHERE feedback_id = ?", params: [Number(feedbackId) || 0] };
 }

@@ -4009,10 +4009,10 @@ const APIFALLBACK_MUTATIONS = [
     expect: "headersSent",
   },
   {
-    name: "JSON 404 被移到靜態檔之後（/api/* 會被當檔案找）",
+    name: "JSON 404 與錯誤中介層順序顛倒（錯誤中介層先註冊就失效）",
     file: "v3/src/server.js",
-    from: 'app.use("/api", apiNotFoundHandler());\napp.use(express.static(path.join(__dirname, "../public")));',
-    to: 'app.use(express.static(path.join(__dirname, "../public")));\napp.use("/api", apiNotFoundHandler());',
+    from: 'app.use("/api", apiNotFoundHandler());\napp.use(apiErrorHandler());',
+    to: 'app.use(apiErrorHandler());\napp.use("/api", apiNotFoundHandler());',
     expect: "server.js 接線",
   },
   {
@@ -4028,6 +4028,70 @@ const APIFALLBACK_MUTATIONS = [
     from: "          me = await readApi(res);",
     to: "          me = await res.json();",
     expect: "前端啟動路徑",
+  },
+];
+
+// server.js 的接線守衛（第九十批）：正式站兩次「CI 全綠但站上壞掉」的根因。
+const WIRING_MUTATIONS = [
+  {
+    name: "把 `/api/me` 要用的 import 拿掉（ReferenceError → HTML 500）",
+    file: "v3/src/server.js",
+    from: "  listMyConsentsAsync,\n  pendingRequiredDocumentsAsync,\n",
+    to: "",
+    expect: "server.js 呼叫的模組 export",
+  },
+  {
+    name: "把 `/api/register` 要用的 import 拿掉（註冊直接 500）",
+    file: "v3/src/server.js",
+    from: "  registerUserWithConsentsAsync,\n  defaultUserIdAsync,",
+    to: "  defaultUserIdAsync,",
+    expect: "server.js 呼叫的模組 export",
+  },
+  {
+    name: "島嶼解析 sharedPgDriver() 少一個 await（Promise.query is not a function）",
+    file: "v3/src/adminMembersAsync.js",
+    from: "  const pgDriver = options.pgDriver || (await (await import(\"./pgSharedDriver.js\")).sharedPgDriver());",
+    to: "  const pgDriver = options.pgDriver || (await import(\"./pgSharedDriver.js\")).sharedPgDriver();",
+    expect: "sharedPgDriver() 時一定要 await",
+  },
+  {
+    name: "回饋狀態更新的 CRM 連結改回同步版（PG 模式下靜默失效）",
+    file: "v3/src/server.js",
+    from: "    try { await enqueueCrmFromFeedbackAsync(Number(req.params.id) || 0); } catch { /* 可選 */ }",
+    to: "    try { enqueueCrmFromFeedback(Number(req.params.id) || 0); } catch { /* 可選 */ }",
+    expect: "回饋狀態更新走 PG 的 CRM 島嶼",
+  },
+  {
+    name: "守衛的解析器不再容忍 import 區塊內的註解（會誤報成缺 import）",
+    file: "v3/test/server-module-wiring.test.js",
+    from: '    const block = text.slice(braceAt + 1, closeAt).replace(/\\/\\/[^\\n]*/g, "");',
+    to: '    const block = text.slice(braceAt + 1, closeAt);',
+    expect: "collectBindings 的解析力",
+  },
+];
+
+// 第九十批：`PATCH /api/admin/feedback/:id` 的 CRM 連結改走 PG 島嶼。
+const CRMENQ_MUTATIONS = [
+  {
+    name: "島嶼不理遞送閘門（遞送關閉時照樣排隊）",
+    file: "v3/src/crmAsync.js",
+    from: "    if (control?.effective) {",
+    to: "    if (true) {",
+    expect: "enqueueCrmFromFeedback 在兩個 driver",
+  },
+  {
+    name: "回傳值改成「實際排隊數」（同步版回的是案件數）",
+    file: "v3/src/crmAsync.js",
+    from: "    return rows.length;",
+    to: "    return control?.effective ? rows.length : 0;",
+    expect: "enqueueCrmFromFeedback 在兩個 driver",
+  },
+  {
+    name: "快照不進 payload（只排空物件）",
+    file: "v3/src/crmAsync.js",
+    from: "        const data = await snapshotContact(exec, contactId);\n        await enqueueCrmOutboxAsync({ contactId, data, now }, options);",
+    to: "        await enqueueCrmOutboxAsync({ contactId, data: {}, now }, options);",
+    expect: "enqueueCrmFromFeedback 在兩個 driver",
   },
 ];
 
@@ -5467,6 +5531,8 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /wish-offer-create-async/.test(testFile) ? OFFERCREATE_MUTATIONS
   : /domain-tool-guards/.test(testFile) ? DOMAINGUARD_MUTATIONS
   : /api-fallbacks/.test(testFile) ? APIFALLBACK_MUTATIONS
+  : /server-module-wiring/.test(testFile) ? WIRING_MUTATIONS
+  : /crm-parity/.test(testFile) ? CRMENQ_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

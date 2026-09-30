@@ -15,6 +15,7 @@ import {
   createCaseFromFeedback as createCaseFromFeedbackSync,
   createContact as createContactSync,
   crmModule as crmModuleSync,
+  enqueueCrmFromFeedback as enqueueCrmFromFeedbackSync,
   crmOverview as crmOverviewSync,
   getContact as getContactSync,
   guessContactFromFeedback,
@@ -28,6 +29,7 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import * as repo from "./repository/crm.js";
+import { crmDeliveryControlAsync, enqueueCrmOutboxAsync } from "./crmOutboxAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 
 // crm.js 的私有 httpError()（async 層要拋一樣的形狀：message + status）。
@@ -432,6 +434,39 @@ export function createCaseFromFeedbackAsync(feedbackId, options = {}) {
     },
     () => createCaseFromFeedbackSync(sqliteFor(options), feedbackId),
   );
+}
+
+// crm.js `enqueueCrmFromFeedback()` 的 PG 版（第九十批）。
+//
+// 為什麼需要：`PATCH /api/admin/feedback/:id` 在狀態更新後會「順手」把該回饋的 CRM 案件重新排進
+// 遞送佇列。同步版讀本機 `crm_cases`、寫本機 `crm_outbox` ⇒ PG 模式下（a）別的節點開的案件看不到、
+// （b）寫進本機佇列而站上（PG）永遠不會送出——而且它被包在 try/catch 裡，失敗是**靜默**的。
+//
+// ⚠️ 這一支也是「尺規盲點」的受害者：`enqueueCrmFromFeedback` 由 db.js **轉出**
+// （`export { … } from "./crm.js"`），尺規不會追進原始模組，所以這條路由一直被判成 PG。
+// 第九十批補回 import 之後尺規立刻看見它（MIXED），這一支就是把它補成 PG 的解法。
+export async function enqueueCrmFromFeedbackAsync(feedbackId, { now = new Date(), ...options } = {}) {
+  const id = Number(feedbackId) || 0;
+  if (!id) return 0;
+  return withFallback({ ...options, write: true }, async (exec) => {
+    // 與同步版 `enqueueSnapshot()` 的 `crmDeliveryControl(db).effective` 同義：
+    // 遞送沒開就不排隊（回 0，呼叫端不需要分辨）。
+    const q = repo.contactIdsByFeedbackQuery(id);
+    const rows = (await exec(q.sql, q.params)) || [];
+    // ⚠️ 回傳值是「這則回饋開過幾個案件」，**不是**「排了幾筆」——同步版就是這樣
+    // （`enqueueSnapshot()` 在遞送沒生效時自己 return，外層照樣回 `cases.length`）。
+    // 第一版回「實際排隊數」，parity 測試立刻抓到不一致。
+    const control = await crmDeliveryControlAsync(process.env, options);
+    if (control?.effective) {
+      for (const row of rows) {
+        const contactId = Number(row.contact_id) || 0;
+        if (!contactId) continue;
+        const data = await snapshotContact(exec, contactId);
+        await enqueueCrmOutboxAsync({ contactId, data, now }, options);
+      }
+    }
+    return rows.length;
+  }, () => enqueueCrmFromFeedbackSync(sqliteFor(options), id));
 }
 
 // crm.js updateCase()

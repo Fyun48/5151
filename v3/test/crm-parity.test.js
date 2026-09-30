@@ -129,6 +129,75 @@ test("postgres 路徑：找不到聯絡人時的行為與 sqlite 相同", async 
   assert.equal(pgError.status, 404);
 });
 
+// 2026-09-30（第九十批）：`PATCH /api/admin/feedback/:id` 的「順手 CRM 連結」也要 PG 化。
+//
+// 這一支之所以重要：同步版讀本機 `crm_cases`、寫本機 `crm_outbox`，而且呼叫端包在 try/catch 裡
+// ⇒ PG 模式下是**靜默失效**（別的節點開的案件看不到、站上也永遠不會送出）。
+// 離線這一段用同一個 SQLite fixture 當 PG 替身，所以 SQL 文字與 payload 組裝都會被跑到。
+test("第九十批：enqueueCrmFromFeedback 在兩個 driver 上排出同一份 payload", async (t) => {
+  const saved = {
+    OPS_CRM_DELIVERY: process.env.OPS_CRM_DELIVERY,
+    OPS_INGEST_URL: process.env.OPS_INGEST_URL,
+    OPS_INGEST_SECRET: process.env.OPS_INGEST_SECRET,
+  };
+  // 遞送要「生效」才會排隊（`effective = env_allowed && configured && !local_stopped`）。
+  process.env.OPS_CRM_DELIVERY = "1";
+  process.env.OPS_INGEST_URL = "http://127.0.0.1:9/ops/api/ingest/crm";
+  process.env.OPS_INGEST_SECRET = "test-secret";
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
+  const db = app.sqliteHandle();
+  const { ensureFeedbackSchema } = await import("../src/feedback.js");
+  ensureFeedbackSchema(db);
+  db.prepare("DELETE FROM feedback").run();
+  const fbId = Number(db.prepare(
+    "INSERT INTO feedback(user_id, kind, body, contact, context, status, admin_note, created_at, updated_at) VALUES (0,'bug','壞掉了','a@example.test','{}','new','',?,?)",
+  ).run(STAMP, STAMP).lastInsertRowid);
+  // 把這則回饋接到 FIRST_ID 的案件上（同步與 PG 兩邊讀的是同一份 fixture）。
+  db.prepare("DELETE FROM crm_cases WHERE feedback_id = ?").run(fbId);
+  db.prepare(
+    "INSERT INTO crm_cases(contact_id, feedback_id, title, handling_state, assigned_to, created_at, updated_at) VALUES (?,?,'回饋案件','new','',?,?)",
+  ).run(FIRST_ID, fbId, STAMP, STAMP);
+
+  const readOutbox = () => db.prepare("SELECT contact_id, payload FROM crm_outbox ORDER BY id").all();
+  const normalize = (payload) => {
+    const out = JSON.parse(payload);
+    delete out.delivery_id;         // 每次排隊都是新的 UUID
+    delete out.idempotency_key;
+    return out;
+  };
+
+  db.prepare("DELETE FROM crm_outbox").run();
+  const syncQueued = crm.enqueueCrmFromFeedback(db, fbId, { now: WHEN });
+  const syncRows = readOutbox();
+
+  db.prepare("DELETE FROM crm_outbox").run();
+  const pgQueued = await crmAsync.enqueueCrmFromFeedbackAsync(fbId, { ...pgOptions, exec: pgShimOn(db), now: WHEN });
+  const pgRows = readOutbox();
+
+  assert.ok(syncQueued >= 1, "前提：同步版真的排了至少一筆（否則這條測試沒有鑑別力）");
+  assert.equal(pgQueued, syncQueued, "兩邊排的筆數要相同");
+  assert.deepEqual(pgRows.map((r) => Number(r.contact_id)), syncRows.map((r) => Number(r.contact_id)));
+  assert.deepEqual(pgRows.map((r) => normalize(r.payload)), syncRows.map((r) => normalize(r.payload)),
+    "payload（聯絡人快照）逐鍵相同");
+
+  // 遞送沒生效時：**不排隊**，但回傳值仍是「案件數」（同步版語意：外層回 `cases.length`，
+  // 閘門在 `enqueueSnapshot()` 裡）。兩邊都必須回同一個數字、而且 outbox 留空。
+  delete process.env.OPS_CRM_DELIVERY;
+  db.prepare("DELETE FROM crm_outbox").run();
+  const syncOff = crm.enqueueCrmFromFeedback(db, fbId, { now: WHEN });
+  const syncOffRows = readOutbox().length;
+  const pgOff = await crmAsync.enqueueCrmFromFeedbackAsync(fbId, { ...pgOptions, exec: pgShimOn(db), now: WHEN });
+  const pgOffRows = readOutbox().length;
+  assert.equal(syncOffRows, 0, "前提：同步版在遞送關閉時不排隊");
+  assert.equal(pgOffRows, 0, "PG 版在遞送關閉時也不排隊");
+  assert.equal(pgOff, syncOff, "回傳值（案件數）兩邊要相同");
+});
+
 test("live shadow PostgreSQL：同一組 CRM 讀取斷言", async (t) => {
   const url = process.env.PG_TEST_URL;
   if (!url) {
