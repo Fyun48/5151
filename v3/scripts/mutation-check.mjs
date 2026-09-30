@@ -4095,6 +4095,38 @@ const CRMENQ_MUTATIONS = [
   },
 ];
 
+// 第九十一批：抓取輪次的「跑得完」保證（預算可調、逐批記錄完成、busy 不誤報）。
+const CRAWLROUND_MUTATIONS = [
+  {
+    name: "預算不再吃環境變數（正式站又回到固定 15 分鐘）",
+    file: "v3/src/crawlWatchdog.js",
+    from: "  if (Number.isFinite(raw) && raw > 0) return Math.round(raw * 60 * 1000);",
+    to: "  if (false) return Math.round(raw * 60 * 1000);",
+    expect: "抓取預算可用 CRAWL_TICK_BUDGET_MINUTES",
+  },
+  {
+    name: "拿掉逐批完成記錄（整輪被放棄就白跑）",
+    file: "v3/src/watcher.js",
+    from: "        try {\n          await completeCoveringPlan({ successfulJobs: [job], memberRequirements: [], at: nowIso() });\n        } catch (error) {",
+    to: "        try {\n          void completeCoveringPlan;\n        } catch (error) {",
+    expect: "watcher 逐批記錄完成",
+  },
+  {
+    name: "逐批記錄不再要求「每個來源都成功」（保守政策被放寬）",
+    file: "v3/src/watcher.js",
+    from: "      ? (jobs || []).filter((job) => sourceSuccess.every((set) => set.has(job.searchUrl)))",
+    to: "      ? (jobs || []).filter(() => true)",
+    expect: "watcher 逐批記錄完成",
+  },
+  {
+    name: "排程器又回上一輪的 lastRun（每分鐘重印逾時錯誤）",
+    file: "v3/src/server.js",
+    from: "      return {\n        skipped: \"busy\",\n        busy_ms: tickGate.ageMs(),",
+    to: "      return lastRun || {\n        skipped: \"busy\",\n        busy_ms: tickGate.ageMs(),",
+    expect: "排程器遇到「這一輪還在跑」",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5533,6 +5565,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /api-fallbacks/.test(testFile) ? APIFALLBACK_MUTATIONS
   : /server-module-wiring/.test(testFile) ? WIRING_MUTATIONS
   : /crm-parity/.test(testFile) ? CRMENQ_MUTATIONS
+  : /crawl-round-progress/.test(testFile) ? CRAWLROUND_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

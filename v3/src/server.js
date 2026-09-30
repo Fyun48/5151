@@ -3973,7 +3973,16 @@ function traceStep(label, promise) {
 async function tick(reason = "schedule") {
   if (tickGate.isBusy() && reason === "schedule") {
     if (!tickGate.isStale()) {
-      return lastRun || { skipped: "busy", reason, checked_at: new Date().toISOString(), searches: [], events: [] };
+      // 第九十一批：回「這一輪還在跑」而不是 `lastRun`。`lastRun` 可能還留著**上一輪**的逾時錯誤，
+      // 排程器每秒/每分鐘印一次就會變成「一直在報錯」的假象（實際上是同一輪還在跑）。
+      return {
+        skipped: "busy",
+        busy_ms: tickGate.ageMs(),
+        reason,
+        checked_at: new Date().toISOString(),
+        searches: [],
+        events: [],
+      };
     }
     tickGate.abandon();
     lastRun = {

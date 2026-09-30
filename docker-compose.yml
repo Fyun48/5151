@@ -22,6 +22,10 @@ services:
       # 見 docs/runbooks/postgres-cutover-day-checklist.md 步驟 5。
       DB_DRIVER: ${DB_DRIVER:-sqlite}
       PG_URL: ${PG_URL:-}
+      # 抓取輪次預算（分鐘）。2026-09-30（第九十一批）：正式站一輪「取頁 ＋ 落地」實測 25 分鐘上下，
+      # 原本固定的 15 分鐘會在落地階段放棄 ⇒ 完成紀錄寫不進去、覆蓋條件每輪重跑。
+      # 程式碼仍會逐批記錄完成（watcher.js），這裡只是把預算放寬到足以跑完。
+      CRAWL_TICK_BUDGET_MINUTES: ${CRAWL_TICK_BUDGET_MINUTES:-40}
       # 媒體 CDN（Cloudflare R2）：MEDIA_SERVE=r2 時，會員素材庫的「公開顯示檔」由 CDN 直送；
       # `_o.jpg`（未浮水印原圖）與身分自拍照永不外流。預設 local＝行為與以前完全相同。
       # 值放在同目錄的 .env（發版只覆蓋 compose 與程式，不動 .env）。

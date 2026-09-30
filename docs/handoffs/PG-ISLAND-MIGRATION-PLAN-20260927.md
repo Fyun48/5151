@@ -5084,6 +5084,81 @@ Owner 回報：重新整理後 `acefengyun@gmail.com` 變成訪客，重新登�
   動完請跑 `v3/test/server-module-wiring.test.js`。
 - 掛「保底 handler」的順序不變量是**最後一條路由之後**，不是「static 之前」。
 
+## 二之負六十二、2026-09-30 第九十一批：修「抓取輪次永遠跑不完」（覆蓋紀錄凍結 3 天）
+
+### 91.1 症狀與量測
+
+正式站日誌每分鐘重複（第九十批部署後仍在）：
+
+```
+排程抓取回報錯誤（0ms）：這輪抓取超過 15 分鐘沒結束，已自動放棄
+排程抓取失敗（900005ms）： 這輪抓取超過 15 分鐘沒結束，已自動放棄
+```
+
+實際資料（2026-09-30 實查正式 PG）：
+
+| 觀測 | 值 | 意義 |
+|---|---|---|
+| `settings.lastCoveringAt`（整輪完成時間） | `2026-09-27T04:08:05Z` | **3 天沒有完成過任何一輪** |
+| `crawl_covers.last_run_at`（38 列） | 全部 `2026-09-27T04:05:35Z` | 覆蓋條件的完成紀錄凍結 |
+| `settings.lastSystemCoveringAt` | 持續更新（04:30:34Z） | 輪次**有在跑**、只是跑不完 |
+| `crawlScheduleV1.attempts` | 單一覆蓋條件累積到 **2971** 次 | 同一批條件被重複排入近 3000 次 |
+| 每來源最新 `last_seen_at` | 591＝今天 04:53；sinyi／hbhousing／housefun／ddroom＝09-29 22:00；**houseprice＝09-26 17:01** | 591 一直有更新；後面幾個來源只有在「跑得比較遠」的那一輪才輪到 |
+
+本機以 `CRAWL_TRACE=1` ＋ `PG_URL=repro` 重跑同一條路徑：`expireStaleVerifyTokens` 14ms／
+`pauseIdleMembers` 1178ms／`isSystemCoveringDue` 14ms／`reserveCoveringPlan` 80ms，
+**`runWatch`（取頁 ＋ 落地）超過 20 分鐘仍未結束**。
+
+### 91.2 根因
+
+1. **完成紀錄只在整輪結束時寫**（`watcher.js` 最後的 `completeCoveringPlan({... memberRequirements })`），
+   而整輪在正式站要 25 分鐘上下 ⇒ 15 分鐘的 `TICK_BUDGET_MS` 一定在**落地階段**放棄它。
+2. 被放棄的輪次**沒有任何完成紀錄** ⇒ `crawl_covers` 永遠是「該抓了」⇒ 下一輪把同一批再抓一次
+   （`attempts` 累積到近 3000）。
+3. 附帶：排程器在「這一輪還在跑」時回傳 `lastRun`（上一輪的逾時錯誤）⇒ 每分鐘印一次同樣的錯誤，
+   看起來像連環故障，其實只是同一輪還沒跑完。
+
+### 91.3 做法
+
+- **逐批記錄完成**（`watcher.js`）：在落地迴圈之前先算好「這一批的來源是否全部成功」
+  （政策不變：`sourceSuccess.every(...)`），每個批次落地後立刻
+  `completeCoveringPlan({ successfulJobs: [job], memberRequirements: [], at })`。
+  被放棄的輪次從此**留下已完成的覆蓋條件**；同一輪同一條件只記一次；記錄失敗只 push 進 `errors`，不讓整輪掛掉。
+- **預算可調**（`crawlWatchdog.js`）：`CRAWL_TICK_BUDGET_MINUTES`（預設不變 15 分），
+  compose 對 v3 服務設 **40**（正式站一輪實測 25 分鐘上下）。
+- **排程器回報安靜的 busy**（`server.js`）：不再回上一輪的 `lastRun`，改回
+  `{ skipped: "busy", busy_ms, ... }`（日誌變「排程抓取略過：busy」，看得出是同一輪還在跑）。
+
+### 91.4 測試
+
+- `v3/test/crawl-round-progress.test.js`（新檔，3 項全綠）：預算環境變數（含 0／負值／非數字回預設，
+  以子程序驗證模組載入期讀值）、watcher 的逐批記錄（條件／位置／去重／最終記錄仍在）、
+  排程器 busy 分支。
+- `v3/test/crawl-schedule.test.js` 新增一項：逐批記錄（單一 job、`memberRequirements: []`）要落地、
+  可重複、不推遲會員，且成功集合為空時什麼都不寫（保守政策不變）。
+- 變異 `CRAWLROUND_MUTATIONS` **4 條全殺**（含一條「收斂的字面比對漏殺、要加 `\s*`」的踩點）。
+
+### 91.5 順手排除的另一個告警：PG 的「active 4 天」不是卡住
+
+先前提醒的「PG 有一個 backend `state=active` 持續約 4 天（pid 39）」實查為：
+
+```
+usename=replicator  application_name=walreceiver
+query=START_REPLICATION SLOT "standby_a" 1/91000000 TIMELINE 8
+wait_event=WalSenderMain   backend_start=2026-09-26T00:56:57Z
+```
+
+那是 **streaming replication 的 WAL sender**（shadow HA 的 standby 連線），`active` 是它的正常狀態、
+「持續 4 天」只是複寫連線沒斷過。**不需要處理**；判斷方式：看 `usename`／`application_name`
+（`walreceiver`）與 `wait_event=WalSenderMain`，而不是只看 `state` 與 `query_start`。
+
+### 91.6 待追蹤（下一批）
+
+`houseprice`（5168）自 2026-09-26 起沒有新資料；本機同一支 `fetchHpCoveringListings()` 實測
+701ms 抓到 20 筆、沒有錯誤 ⇒ 不是來源壞掉，而是**那一輪還沒輪到它就已經被放棄**
+（來源是依序抓：591 → 住商 → 信義 → 5168 → 租租通 → 好房網 → 樂屋網）。預算放寬後應會恢復，
+若沒有，再依 `searches[].errors` 個別處理。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

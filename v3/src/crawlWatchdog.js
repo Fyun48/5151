@@ -2,7 +2,16 @@
 import { crawlRequestSignal, throwIfCrawlCancelled, withCrawlExecution } from "./crawlExecution.js";
 
 export const LIST_FETCH_TIMEOUT_MS = 8_000;
-export const TICK_BUDGET_MS = 15 * 60 * 1000;
+// 一輪抓取的預算。2026-09-30（第九十一批）改成可用環境變數覆寫：
+// 正式站實測「取頁 ~10-13 分鐘 ＋ 落地（PG 寫入／配對）~10 分鐘以上」⇒ 15 分鐘會在落地階段
+// 被 withBudget() 放棄，`completeCoveringPlan()` 永遠跑不到，`crawl_covers.last_run_at` 從此凍結
+// （2026-09-27 起就沒再更新），覆蓋條件每輪重跑。預設值不變（15 分），正式站用
+// `CRAWL_TICK_BUDGET_MINUTES` 調高。
+export const TICK_BUDGET_MS = (() => {
+  const raw = Number(process.env.CRAWL_TICK_BUDGET_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.round(raw * 60 * 1000);
+  return 15 * 60 * 1000;
+})();
 export const CONSECUTIVE_TIMEOUT_LIMIT = 3;
 
 export function isAbortError(error) {
