@@ -4806,6 +4806,10 @@ CI 內沒有任何 `schedule:`／`cron:`（實查 `.github/workflows/*` 命中 0
 因此這條呼叫不計入 SQLite 卡點。影響：PG 模式下管理員改回饋狀態時，CRM outbox 寫進**本機**，
 而且快照取自本機那一列（別的節點建立的回饋可能根本不在本機）⇒ CRM 連結靜默失效。
 `enqueueCrmFromFeedback` 目前**沒有** async 版本（`crmOutboxAsync.js` 只有 `enqueueCrmOutboxAsync`）。
+>
+> ✅ **2026-09-30 第九十批已修好**：新增 `crmAsync.enqueueCrmFromFeedbackAsync()`（PG 讀＋PG 寫、
+> 閘門與回傳值都與同步版對齊）並讓路由改走它；補回 import 之後尺規也看見這條路由了
+> （先變 MIXED、修好後回到 PG）。詳見 §二之負六十一。
 
 ### 88.5 正式站實查（本次盤點順手確認）
 
@@ -4995,6 +4999,72 @@ Unexpected token '<', "<!DOCTYPE "... is not valid JSON
     `ssh casa-nas docker inspect 591-tracker-v3` 顯示 Config.Image 就是上表 digest、狀態 `running`。
 
 > ⚠️ 之後要再部署時，**每次都要 Owner 當次明確批准**；本節只是紀錄這一次的核准與結果。
+
+## 二之負六十一、2026-09-30 第九十批：修「登入後仍是訪客」的兩個接線缺陷（＋把這類缺陷變成 CI 會紅）
+
+### 90.1 症狀
+
+Owner 回報：重新整理後 `acefengyun@gmail.com` 變成訪客，重新登入也一樣。前一則回報的
+`Unexpected token '<'` 在第八十九批修掉（HTML → JSON）之後，症狀從「紅色錯誤框」變成「靜默變訪客」——
+因為前端把 `/api/me` 的失敗當成未登入（`loadState()` → `!me.ok` → `setGuestMode(true)`）。
+
+### 90.2 根因（兩個，都在**接線**，CI 全綠）
+
+1. **第四十八批（`c49a43b`）移除 import、呼叫端還在**：`/api/consents` 改走 async 島嶼時，
+   `listMyConsents`／`pendingMemberDocuments` 的 import 被一起刪掉，但 **`/api/me` 那兩行還在呼叫同步版**
+   ⇒ 已登入會員每次打 `/api/me` 都丟 `ReferenceError: pendingMemberDocuments is not defined`
+   （HTML 500 ⇒ 第八十九批之後變 JSON 500 ⇒ 前端顯示訪客）。
+2. **第五十四批的 `adminMembersAsync.execFor()` 少一個 `await`**：
+   `(await import("./pgSharedDriver.js")).sharedPgDriver()` 回傳的是 **Promise**（`sharedPgDriver()` 是 async）
+   ⇒ `pgDriver.query is not a function`。離線與 live 測試**都注入 `exec`／`pgDriver`**，
+   只有正式站（島嶼自己呼叫 `sharedPgDriver()`）會踩到。
+
+同一輪掃描還抓到 **另外 6 個缺 import**（全部是同一類）：
+`getMailTemplatesAsync`（`queueSystemMailAsync()`；少了它**任何系統信都寄不出**且 500）、
+`registerUserWithConsentsAsync`（`/api/register`＋OAuth callback）、`searchAdminListingsAsync`（後台列表搜尋）、
+`sharePageExtrasAsync`（分享頁）、`getSystemCrawlAsync`／`refreshSiteCatalogStatsAsync`／`saveSystemCrawlAsync`
+（`/api/admin/system-crawl`）、`enqueueCrmFromFeedback`（`PATCH /api/admin/feedback/:id`）。
+
+### 90.3 做法
+
+- `v3/src/server.js`：補回上述 8 個 import；`/api/me` 的兩支改用 **async 島嶼**
+  （`pendingRequiredDocumentsAsync`／`listMyConsentsAsync`，PG 模式才讀得到 PG）。
+- `v3/src/adminMembersAsync.js`：`execFor()` 補 `await`。
+- 🚨 順手修掉第八十九批自己造成的**路由遮蔽**：`app.use("/api", apiNotFoundHandler())` 原本掛在
+  `express.static` 之前，但 `/api/events/revision`、`/api/events/stream` 註冊在**檔案後段**
+  ⇒ 被 404 蓋掉（本機煙霧測試才發現）。兩個保底 handler 都移到**最後一條路由之後**。
+- **順手把 §88.4 的尺規盲點修成 PG**：補回 `enqueueCrmFromFeedback` 的 import 之後，尺規立刻看見
+  `PATCH /api/admin/feedback/:id` 是 MIXED（sqlite: `crmDeliveryControl`／`crmOutboxStats`／
+  `enqueueCrmFromFeedback`／`enqueueCrmOutbox`）。新增 `crmAsync.enqueueCrmFromFeedbackAsync()`
+  （PG 讀 `crm_cases`＋PG 寫 `crm_outbox`，閘門用 `crmDeliveryControlAsync`，回傳值刻意維持
+  同步版的「案件數」語意），路由改走它 ⇒ 尺規回到 `PG 268／MIXED 0`。
+- 新增兩支守衛測試 `v3/test/server-module-wiring.test.js`：
+  1. **server.js 呼叫的模組 export 都必須真的 import**（用括號配對解析 import，容忍區塊內註解）。
+  2. **`sharedPgDriver()` 一定要被 await**（判準用「還沒關閉的 `(` 是否以 await 開頭」，
+     抓的就是 `(await import(...)).sharedPgDriver()` 這種「await 的是 import，不是呼叫」的形狀）。
+- `v3/test/member-auth-live-pg.test.js` 新增一條**不注入驅動**的 live 測試：只靠 `PG_URL`＋
+  `DB_DRIVER=postgres` 呼叫 `getUserByIdAsync()`／`countOpenSelfListingsAsync()`（＝`/api/me` 的內容），
+  直接守住「正式站才走得到的那條路」。
+
+### 90.4 證據
+
+- 本機以**正式站的 session 簽章密鑰**偽造 cookie，對「以正式 PG 為後端」的本機伺服器實測：
+  `/api/me` → `200 {"ok":true,"email":"acefengyun@gmail.com","role":"admin",...}`；
+  `/api/admin/system-crawl`／`/api/admin/feedback`／`/api/events/revision`／`/api/consents`／
+  `/api/admin/listing-imports` 全部 200；`PATCH /api/admin/feedback/999999` → JSON 404（不是 ReferenceError）。
+  （修好前同一組實測：`/api/me` 500 `me_failed`，log 為 `pendingMemberDocuments is not defined` 與
+  `pgDriver.query is not a function`。）
+- 變異：`WIRING_MUTATIONS` 4 條全殺（拿掉 import、拿掉 await、拿掉解析器的註解處理都會紅）。
+- 正式站的 PG 資料查核：`users` 只有一列該 Email、`deleted_at` 為空、`email_verified=1`、
+  `last_login_at` 有更新 ⇒ 登入本身是成功的，問題純在前端拿不到 `/api/me`。
+
+### 90.5 教訓（寫給下一個 session）
+
+- 這個 repo 的島嶼測試**幾乎都注入 `exec`／`pgDriver`**；注入越完整，越容易漏掉「島嶼自己解析驅動」的路。
+  新島嶼請至少留一條**不注入**的測試（live 檔最適合）。
+- 「刪掉看起來沒用的 import」在 server.js 是危險動作：那裡有 600+ 個匯入名字與大量**後段註冊**的路由。
+  動完請跑 `v3/test/server-module-wiring.test.js`。
+- 掛「保底 handler」的順序不變量是**最後一條路由之後**，不是「static 之前」。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 

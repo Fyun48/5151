@@ -262,7 +262,7 @@ import { confirmVerifyTokenAsync, issueVerifyTokenAsync } from "./emailVerifyAsy
 // 通勤快照（地圖卡片的通勤欄位）的 PG 島嶼入口。
 import { listingCommutePatchesAsync } from "./listingCommuteAsync.js";
 import { requestTempPasswordAsync } from "./forgotPasswordAsync.js";
-import { recordShareEventAsync } from "./rentalShareGrowthAsync.js";
+import { recordShareEventAsync, sharePageExtrasAsync } from "./rentalShareGrowthAsync.js";
 // 法律文案（免責聲明／個資說明）的 PG 島嶼入口：一份文案、兩個 store
 // （settings 與 content_documents），同步版在 PG 站是「寫本機、訪客讀不到」的靜默失效。
 import { getLegalCopyAsync, saveLegalCopyAsync } from "./legalCopyAsync.js";
@@ -279,8 +279,11 @@ import {
 // 會員帳號的 PG 島嶼入口（登入、身分來源）。
 // `defaultUserIdAsync` 特別重要：沒有 session 時同步版會在**本機**建一個 admin 帳號、
 // 回傳**本機** id，之後拿它去讀 PG 設定就會跨店錯位。
+// 第九十批補回 `registerUserWithConsentsAsync`：`/api/register` 與 OAuth callback 都在呼叫它
+// （少了 import ⇒ 註冊直接 500）。
 import {
   changeUserPasswordAsync,
+  registerUserWithConsentsAsync,
   defaultUserIdAsync,
   findUserByEmailAsync,
   listUserIdsAsync,
@@ -300,7 +303,7 @@ import {
   listAdminMembersAsync,
 } from "./adminMembersAsync.js";
 import { runSameHouseBackfillAsync, sameHouseBackfillStatusAsync } from "./sameHouseAsync.js";
-import { createCaseFromFeedbackAsync, setCrmEnabledAsync } from "./crmAsync.js";
+import { createCaseFromFeedbackAsync, enqueueCrmFromFeedbackAsync, setCrmEnabledAsync } from "./crmAsync.js";
 import { deleteWishExampleAsync, getWishExampleAsync, saveWishExampleAsync } from "./wishExampleAsync.js";
 import { closeSelfListingAsync, hideSelfListingAsync, reportSelfListingAsync } from "./selfListingsAsync.js";
 // 許願房的 PG 島嶼入口：檢舉／回覆／關閉＋列表／詳情＋生命週期寫入（更新／刊登／重開）。
@@ -461,12 +464,15 @@ import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
 import { hideManyAsync } from "./personalFlagsAsync.js";
+// 第九十批補回 `getSystemCrawlAsync` 等三支：`/api/admin/system-crawl` 還在呼叫它們
+// （少了 import 就是 ReferenceError → HTML 500）。
 import {
   getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync,
   getHousingDataRawAsync, writeHousingDataAsync, getSpiritAsync,
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
+  getSystemCrawlAsync, refreshSiteCatalogStatsAsync, saveSystemCrawlAsync,
 } from "./siteContentAsync.js";
-import { crawlSourceHealthAsync } from "./adminOverviewAsync.js";
+import { crawlSourceHealthAsync, searchAdminListingsAsync } from "./adminOverviewAsync.js";
 import {
   confirmSuspectedMatchAsync,
   mergeSameHouseForUserAsync,
@@ -529,6 +535,8 @@ import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js
 import { auditFailureStats } from "./adminAuditHealth.js";
 // 後台設定（郵件／OAuth／贊助／品牌）的 driver-aware 入口。寫入的兩個
 // （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
+// 第九十批補回 `getMailTemplatesAsync`：`queueSystemMailAsync()` 用它讀 PG 的範本
+// （少了 import 就寄不出任何系統信，而且會是 HTML 500）。
 import {
   getAdminMailSettingsAsync,
   getStoredSmtpAsync,
@@ -539,6 +547,7 @@ import {
   publicSponsorSettingsAsync,
   saveAdminSponsorSettingsAsync,
   saveBrandMascotAsync,
+  getMailTemplatesAsync,
 } from "./adminSettingsAsync.js";
 // Support 後台列表（卡點全在 handler 內的那一群）。
 import {
@@ -968,8 +977,13 @@ app.get("/api/me", async (req, res) => {
     disclaimer_text: legal.disclaimer,
     privacy_check: legal.privacyCheck,
     disclaimer_check: legal.disclaimerCheck,
-    pending_documents: session?.userId ? pendingMemberDocuments(session.userId) : [],
-    consents: session?.userId ? listMyConsents(session.userId) : [],
+    // ⚠️ 這兩支必須用 **async 島嶼**（PG 模式要讀 PG；同步版讀的是節點本機的舊資料）。
+    // 第四十八批把 `/api/consents` 改成 async 版時，連這兩支的 import 一起移除了，
+    // 但 `/api/me` 這兩行**還在呼叫同步版** ⇒ 已登入的會員每次打 `/api/me` 都丟
+    // `ReferenceError: pendingMemberDocuments is not defined`（HTML 500 → 前端顯示
+    // 「Unexpected token '<'」／登入後仍顯示訪客）。第八十九批修的是訊息形狀，這一包修的是根因。
+    pending_documents: session?.userId ? await pendingRequiredDocumentsAsync(session.userId) : [],
+    consents: session?.userId ? await listMyConsentsAsync(session.userId) : [],
     open_self_listings: session?.userId ? await countOpenSelfListingsAsync(session.userId) : 0,
     configured: true,
     canRegister: true,
@@ -2398,7 +2412,9 @@ app.patch("/api/admin/feedback/:id", requireAdminApi, async (req, res) => {
   try {
     const row = await updateFeedbackAsync(req.params.id, req.body || {});
     // CRM 連結是可選的（同步版也是 try/catch 後忽略）：失敗不該擋住狀態更新。
-    try { enqueueCrmFromFeedback(opsDeliveryDb(), Number(req.params.id) || 0); } catch { /* 可選 */ }
+    // 第九十批：改走 PG 島嶼——同步版讀本機 `crm_cases`、寫本機 `crm_outbox`，
+    // PG 模式下是靜默失效（別的節點開的案件看不到、站上也永遠不會送出）。
+    try { await enqueueCrmFromFeedbackAsync(Number(req.params.id) || 0); } catch { /* 可選 */ }
     res.json(row);
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
@@ -3747,14 +3763,7 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
   }
 });
 
-// 第八十九批：`/api/*` 的 JSON 保底（順序很重要）
-//   1. 未知的 API 路徑 → JSON 404（原本是 Express 預設的 HTML 404 ⇒ 前端 `res.json()` 爆
-//      「Unexpected token '<'」）。
-//   2. 錯誤中介層掛在**靜態檔之後**（Express 只認最後註冊的那一個），
-//      `/api/*` 回 JSON、其他路徑維持原本的 HTML 行為。
-app.use("/api", apiNotFoundHandler());
 app.use(express.static(path.join(__dirname, "../public")));
-app.use(apiErrorHandler());
 
 let timer = null;
 let lastRun = null;
@@ -4757,6 +4766,16 @@ app.get("/api/events/stream", (req, res) => {
   clients.add(client);
   req.on("close", () => clients.delete(client));
 });
+
+// 第八十九批：`/api/*` 的 JSON 保底（順序很重要）
+//   1. 未知的 API 路徑 → JSON 404（原本是 Express 預設的 HTML 404 ⇒ 前端 `res.json()` 爆
+//      「Unexpected token '<'」）。
+//   2. 錯誤中介層最後註冊（Express 只認最後一個錯誤中介層）。
+// ⚠️ 兩個都必須在**最後一條路由之後**：`/api/events/revision` 與 `/api/events/stream`
+//    註冊在檔案後段（4.7k 行附近），第一版把 404 掛在 static 之前 ⇒ 那兩條被 404 蓋掉
+//    （本機煙霧測試才發現）。`v3/test/api-fallbacks.test.js` 有一條守衛盯著這個順序。
+app.use("/api", apiNotFoundHandler());
+app.use(apiErrorHandler());
 
 function runHousingRefresh() {
   // ⚠️ 這是**排程**的居住數據自動更新（日誌「居住數據自動更新：N 筆」就是它）。

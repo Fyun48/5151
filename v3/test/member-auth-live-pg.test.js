@@ -223,3 +223,67 @@ test("live PG：後台會員列表要算得出 PG 的關注數／刊登數／通
   assert.equal(patched.plan, "sponsor");
   assert.equal((await query("SELECT plan FROM users WHERE id = $1", [uid]))[0].plan, "sponsor");
 });
+
+// 2026-09-30（第九十批）：**不注入驅動**的真實路徑。
+//
+// 正式站的呼叫端不會傳 `exec`／`pgDriver`——島嶼自己用 `sharedPgDriver()` 取得連線。
+// 第五十四批的 `adminMembersAsync.execFor()` 少了一個 `await`（回傳 Promise），
+// 離線與 live 測試**都注入驅動**所以一路綠，只有正式站踩到：
+// `pgDriver.query is not a function` ⇒ `/api/me` 500 ⇒ 已登入會員顯示成訪客。
+// 這一條刻意**不注入**任何驅動，只靠 `PG_URL`／`DB_DRIVER=postgres`。
+test("live PG：不注入驅動的真實路徑（sharedPgDriver）也要能算 /api/me 的那幾個值", { skip }, async (t) => {
+  const saved = { PG_URL: process.env.PG_URL, DB_DRIVER: process.env.DB_DRIVER };
+  process.env.DB_DRIVER = "postgres";
+  process.env.PG_URL = RAW;
+  const closeShared = async () => {
+    try {
+      const { closeSharedPgDriver } = await import("../src/pgSharedDriver.js");
+      await closeSharedPgDriver();
+    } catch { /* 盡力而為 */ }
+  };
+  t.after(async () => {
+    await closeShared();
+    if (saved.PG_URL === undefined) delete process.env.PG_URL; else process.env.PG_URL = saved.PG_URL;
+    if (saved.DB_DRIVER === undefined) delete process.env.DB_DRIVER; else process.env.DB_DRIVER = saved.DB_DRIVER;
+  });
+
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const adminAsync = await import("../src/adminMembersAsync.js");
+  const usersAsync = await import("../src/usersAsync.js");
+  const selfAsync = await import("../src/selfListingsAsync.js");
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  const { sqliteHandle } = await import("../src/db.js");
+
+  const seed = await createPostgresDriver({ connectionString: RAW });
+  const query = async (sql, params = []) => (await seed.query(sql, params)).rows;
+  assert.equal((await query("SELECT current_database() AS db"))[0].db, DB, "連到的資料庫必須與 URL 一致");
+  await ensurePgSchema(seed, sqliteHandle(), { tables: ["users", "listings"], indexes: false });
+
+  const TOKEN = `livetest-nodriver-${Date.now()}`;
+  const uid = Number((await query(
+    "INSERT INTO users(email, password_hash, role, plan, created_at, signup_count) VALUES ($1,'','member','free',$2,1) RETURNING id",
+    [`${TOKEN}@example.test`, new Date().toISOString()],
+  ))[0].id);
+  const now = new Date().toISOString();
+  await query(
+    `INSERT INTO listings(post_id, title, url, source, source_key, self_status, listed_by_user_id,
+                          first_seen_at, last_seen_at)
+     VALUES ($1, $2, $3, 'self', $4, 'open', $5, $6, $6)`,
+    [930901, `live nodriver ${TOKEN}`, "https://example.test/930901", `1|930901`, uid, now],
+  );
+  t.after(async () => {
+    try { await query("DELETE FROM listings WHERE post_id = 930901"); } catch { /* 盡力而為 */ }
+    try { await query("DELETE FROM users WHERE id = $1", [uid]); } catch { /* 盡力而為 */ }
+    try { await seed.close(); } catch { /* 已關就算了 */ }
+  });
+
+  // 這三支就是 `/api/me` 的內容：全部**不傳 options**。
+  const user = await usersAsync.getUserByIdAsync(uid);
+  assert.equal(Number(user?.id), uid, "getUserByIdAsync 走 sharedPgDriver 也要讀得到");
+
+  const openCount = await adminAsync.countOpenSelfListingsAsync(uid);
+  assert.equal(openCount, 1, "countOpenSelfListingsAsync 走 sharedPgDriver 要數得出 1 筆（少 await 會丟 is not a function）");
+
+  const expired = await selfAsync.expireOpenSelfListingsAsync(async (sql, params = []) => (await seed.query(sql, params)).rows, new Date());
+  void expired; // 只證明這條路徑不會炸
+});

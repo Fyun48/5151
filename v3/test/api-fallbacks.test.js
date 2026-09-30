@@ -126,17 +126,28 @@ test("apiErrorHandler：headersSent 之後不插話、log 失敗也不影響回�
   assert.equal(res.calls.json.error, "y");
 });
 
-test("server.js 接線：JSON 404 在靜態檔之前、錯誤中介層在最後", () => {
+test("server.js 接線：JSON 404 與錯誤中介層都必須在**最後一條路由之後**", () => {
   const server = read("v3/src/server.js");
   assert.ok(server.includes('import { apiErrorHandler, apiNotFoundHandler, statusOfApiError } from "./apiFallbacks.js";'),
     "要 import 兩個保底 handler（與 /api/me 用的 status 判定）");
   const notFoundAt = server.indexOf('app.use("/api", apiNotFoundHandler());');
-  const staticAt = server.indexOf('app.use(express.static(path.join(__dirname, "../public")));');
   const errorAt = server.indexOf("app.use(apiErrorHandler());");
-  assert.ok(notFoundAt > 0 && staticAt > 0 && errorAt > 0, "三個都必須存在");
-  assert.ok(notFoundAt < staticAt, "JSON 404 必須在靜態檔之前（否則 /api/* 會被當檔案找）");
-  assert.ok(errorAt > staticAt, "錯誤中介層必須最後註冊（Express 只認最後一個）");
+  assert.ok(notFoundAt > 0 && errorAt > 0, "兩個都必須存在");
+  assert.ok(errorAt > notFoundAt, "錯誤中介層要在 404 之後（Express 只認最後一個錯誤中介層）");
+
+  // ⚠️ 這一條是踩過的坑：`/api/events/revision`／`/api/events/stream` 註冊在檔案後段，
+  // 第一版把 404 掛在 `express.static` 之前 ⇒ 那兩條被 404 蓋掉（煙霧測試才發現）。
+  // 不變量是「在所有 route 註冊之後」，不是「在 static 之前」。
+  const routeRe = /^app\.(?:get|post|put|patch|delete)\(/gm;
+  let last = -1;
+  for (const m of server.matchAll(routeRe)) last = Math.max(last, m.index);
+  assert.ok(last > 0, "找得到路由註冊");
+  assert.ok(notFoundAt > last, "JSON 404 必須在最後一條路由之後（否則會蓋掉後段註冊的 /api 路由）");
   assert.ok(errorAt > notFoundAt);
+  for (const route of ['app.get("/api/events/revision"', 'app.get("/api/events/stream"']) {
+    const at = server.indexOf(route);
+    assert.ok(at > 0 && at < notFoundAt, `${route} 必須在 404 之前（實測被蓋掉過）`);
+  }
 });
 
 test("server.js：/api/me 有 try/catch（啟動路徑不得回 HTML）", () => {

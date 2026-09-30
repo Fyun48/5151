@@ -40,7 +40,10 @@ const rowsOf = (raw) => (Array.isArray(raw) ? raw : (raw?.rows || []));
 
 async function execFor(options) {
   if (options.exec) return async (sql, params = []) => rowsOf(await options.exec(sql, params));
-  const pgDriver = options.pgDriver || (await import("./pgSharedDriver.js")).sharedPgDriver();
+  // ⚠️ 一定要 `await`：`sharedPgDriver()` 是 async，少一個 await 會拿到 Promise，
+  // 之後 `pgDriver.query(...)` 就是 `is not a function`（第五十四批就是這樣寫的，
+  // 只有**沒有注入 exec／pgDriver** 的真實路徑才會踩到，離線與 live 測試都注入驅動 ⇒ 一路綠）。
+  const pgDriver = options.pgDriver || (await (await import("./pgSharedDriver.js")).sharedPgDriver());
   const { toPostgresSql } = await import("./sqlDialect.js");
   return async (sql, params = []) => (await pgDriver.query(toPostgresSql(sql), params)).rows;
 }
