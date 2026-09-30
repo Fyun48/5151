@@ -5184,6 +5184,104 @@ wait_event=WalSenderMain   backend_start=2026-09-26T00:56:57Z
 （來源是依序抓：591 → 住商 → 信義 → 5168 → 租租通 → 好房網 → 樂屋網）。預算放寬後應會恢復，
 若沒有，再依 `searches[].errors` 個別處理。
 
+## 二之負六十三、2026-09-30 第九十二批：來源連續失敗的放行政策（完成紀錄不再被單一來源卡死）
+
+> 政策變更：Owner 於 2026-09-30 **當次明確同意**「連續失敗就放行並告警」（原案見 §91.6）。
+
+### 92.1 症狀（接手 §91.6 的追蹤）與實查
+
+第九十一批（digest `sha256:287008ed…`、容器 env `CRAWL_TICK_BUDGET_MINUTES=40`）部署後，
+逾時錯誤消失、輪次真的跑滿 40 分鐘、591 房源持續落地（近 60 分鐘 2,362 筆 ≈ 39 筆/分），
+**但完成紀錄仍然寫不進去**（2026-09-30 唯讀實查正式 PG）：
+
+| 觀測 | 值 | 意義 |
+|---|---|---|
+| `crawl_covers.last_run_at`（38 列） | 全部 `2026-09-27T04:05:35Z` | 覆蓋條件的完成紀錄凍結 3 天 |
+| `settings.lastCoveringAt` | `2026-09-27T04:08:05Z` | 整輪完成時間同樣凍結 |
+| `settings.lastSystemCoveringAt` | `2026-09-30T06:19:30Z` | 輪次其實一直在跑 |
+| `crawlScheduleV1.completed` | **空的** | 沒有任何一組覆蓋條件被記成完成 |
+| `crawlScheduleV1.attempts` | 每組 2991～3010（`counter` 3010） | 同一批條件反覆排入 |
+
+啟用來源 6 個（`crawlSources` 實查）：591／住商／信義／5168／租租通／好房網
+（樂屋網 Owner 關閉；「自行刊登」是站內來源、不走網路抓取）。
+
+**根因**（§91.6 已定位、本批修掉）：完成判定是「該覆蓋條件在**每一個啟用來源**都成功」
+（`watcher.js` 的 `sourceSuccess.every(...)`）。6 個來源裡只要有任何一個失敗／部分失敗，
+`successfulJobs` 就是空集合 ⇒ 連第九十一批加的逐批記錄（用同一個條件）也不會觸發。
+
+### 92.2 政策（本批起）
+
+1. 每個來源逐輪記錄 `crawlScheduleV1.sourceStreaks[source]`：**連續失敗輪數**、最後錯誤樣本、
+   最後失敗時間、最後成功時間。
+2. **連續失敗達 3 輪**的來源不再阻擋完成紀錄，但一定伴隨：
+   (a) 輪次結果的 `warnings` ＋ server log 的 `console.warn`；
+   (b) 後台「抓取來源」卡片（`GET /api/admin/crawl-sources`）顯示
+   「連續失敗 N 輪（已放行完成紀錄）」與原因。
+3. 來源恢復成功 ⇒ 連續失敗**立刻歸零**、退出容忍名單，照舊從嚴。
+4. **安全閥（本批加碼的保守設計）**：如果**所有**來源都在容忍名單裡（等於全滅），
+   仍然不記完成紀錄。理由：那種輪次不該被當成「已覆蓋」而讓會員的 `memberFetchDueAt` 往後推。
+
+> 判定粒度是「每個來源、每一輪」：**部分成功仍算失敗輪**（6 組條件只覆蓋 5 組就累加一次），
+> 只有整輪每一組條件都成功才歸零。
+
+### 92.3 做法
+
+- 新增 `v3/src/crawlSourceStreaks.js`（純函式，沒有 DB、沒有 driver）：
+  `SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED=3`、`normalizeSourceStreak()`、`isCoveredRound()`、
+  `applySourceRound()`、`toleratedCrawlSources()`、`blockingCrawlSources()`、
+  `jobCoveredByBlockingSources()`、`sourceRoundWarnings()`。
+- `v3/src/crawlScheduleAsync.js`：
+  - `stateForUpdate()` 的預設形狀加 `sourceStreaks:{}`（舊狀態沒有這個鍵時不會壞）。
+  - `recordCrawlSourceRoundAsync({rounds, at})`：在**同一個交易**裡讀-改-寫
+    `crawlScheduleV1`（PG 走 `SELECT … FOR UPDATE`、SQLite 走 `BEGIN IMMEDIATE`）。
+  - `readCrawlSourceStreaksAsync()`：後台／診斷用的讀取（容忍名單的判定只有一份）。
+  - 為什麼不另開一個設定鍵：`crawlScheduleV1` 已經是抓取排程的持久狀態
+    （`counter`／`attempts`／`completed`），沿用它可以拿到同一套鎖與兩個 driver 的同一份語意。
+- `v3/src/watcher.js`：
+  - `sourceSuccess` 每一組從「只有集合」改成 `{ source, urls }`（7 個網路來源都帶 id）；
+    新增 `sourceRounds`（`{source, covered, total, error}`，錯誤樣本最多 3 則）。
+  - 收集階段跑完、`!collected.length` **之前**呼叫 `recordCrawlSourceRoundAsync()`：
+    這樣「全部來源都沒抓到」的輪次也會累積失敗輪數，而且落地迴圈的逐批記錄與整輪最終記錄
+    用的是同一份容忍名單。記錄失敗時**維持從嚴**（不知道容忍名單就不放行），只留一則錯誤訊息。
+  - 完成判定改成 `blockingCrawlSources()` ＋ `jobCoveredByBlockingSources()`
+    （逐批記錄與整輪最終記錄共用同一個 `isCoveredJob()`）。
+  - 輪次結果新增 `warnings`（人看得懂的告警字串）與 `sources`（每個來源的 covered/total、
+    連續失敗數、是否已放行、最後錯誤）。
+- `v3/src/adminOverview.js` / `adminOverviewAsync.js`：來源健康度新增 `consecutiveFailures`、
+  `tolerated`、`lastFailureAt`、`lastRoundSuccessAt` 四個欄位與兩個新狀態
+  `retrying`（連續失敗但還在阻擋）／`failing`（已放行）；`crawlSourceHealthAsync()` 把
+  `sourceStreaks` 併進 `/api/admin/crawl-sources`（讀不到 streak 時當作沒有，後台不會因此壞掉）。
+  前端 `admin.html` 的來源卡片本來就會渲染 `statusLabel`／`reason`／`lastError`，
+  所以這次**沒有動前端**就看得到（`sourceDot()` 對未知狀態回 warning 燈號）。
+
+### 92.4 測試與證據
+
+- `v3/test/crawl-source-streaks.test.js`（**9 項全綠**，新檔）：門檻 3 輪的行為（前兩輪仍阻擋、
+  第三輪才放行且只警告一次）、恢復歸零、部分成功算失敗輪、安全閥（全滅不記完成）、
+  warning 文案與錯誤樣本截短、SQLite 讀寫來回且不蓋掉 `counter`/`attempts`/`completed`、
+  watcher 接線（來源 id、記錄位置、warning 進輪次結果、容忍名單交給完成判定）、
+  後台健康度（`retrying`／`failing`、關掉的來源不被 streak 蓋掉）、後台端點併入 streak，
+  以及一條**政策鏈**測試：用真的 `reserveCoveringPlan`／`completeCoveringPlan`
+  跑三輪（前兩輪 `crawl_covers` 0 列、第三輪 6 列、`lastCoveringAt` 落地），
+  並附對照組（容忍名單空 ⇒ 跑十輪仍是 0 列，也就是原本的凍結狀態）。
+- 變異：新增 `CRAWLSTREAK_MUTATIONS` **15 條全殺**；`CRAWLROUND_MUTATIONS` 4 條也全殺
+  （其中「逐批記錄不再要求每個來源都成功」那條的錨點跟著本批改寫）。
+- `v3/test/crawl-source-streaks-live-pg.test.js`（**live PG，隔離庫 `repro`**）：這一支刻意
+  **不注入任何 driver**（只設 `DB_DRIVER=postgres` ＋ `PG_URL`），驗證島嶼自己解析驅動那條路
+  （第九十批的教訓）：三輪失敗後 `crawlScheduleV1.sourceStreaks` 真的落在 PG、
+  `counter`/`attempts`/`completed` 沒有被蓋掉、`crawlSourceHealthAsync()` 這條後台鏈路也看得到
+  「已放行完成紀錄」、再一輪成功後歸零。
+- 尺規不受影響：`node v3/scripts/route-data-map.mjs` 仍是 `PG 268／無直接DB 20／MIXED 0／SQLite 0`
+  （本批只動非路由工具與後台聚合，沒有新增或改動任何路由）。
+
+### 92.5 這一包沒有做（留給下一批／需要 Owner）
+
+1. **沒有部署**。政策變更只到「合併進 `master`」為止；上正式站要 Owner 當次明確說「可部署」，
+   再走三條 manual-only workflow（§6 的流程）。
+2. `houseprice`（5168）自 2026-09-26 沒有新資料這件事**沒有解決**：本批只讓它不再卡住完成紀錄。
+   來源本身的問題（本機實測同一支 `fetchHpCoveringListings()` 701ms／20 筆正常）要另外追。
+3. 40 分鐘仍跑不完（落地約 1.5 秒/筆）⇒ 批次寫入／並行化仍待辦（§91.6 的同一項）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

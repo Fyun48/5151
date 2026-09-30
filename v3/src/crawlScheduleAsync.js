@@ -6,6 +6,7 @@ import { coverFingerprint } from './crawlCovers.js';
 import { coversFromMemberSettings, coversFromWatchDistricts, coveringJobsFromMembers, coverContains } from './covering.js';
 import { parseSettingRows, planIntervalMinutes } from './settingsState.js';
 import { COVERING_JOBS_PER_RUN } from './crawlPolicy.js';
+import { applySourceRound, toleratedCrawlSources } from './crawlSourceStreaks.js';
 
 import { crawlSourceEnabled } from './crawlSources.js';
 
@@ -42,7 +43,7 @@ async function stateForUpdate(exec,pg) {
   await exec('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING',[KEY,'{}']);
   const rows=await exec('SELECT value FROM settings WHERE key=?'+(pg?' FOR UPDATE':''),[KEY]);
   const state=JSON.parse(rows[0].value);
-  return {counter:0,attempts:{},completed:{},...state};
+  return {counter:0,attempts:{},completed:{},sourceStreaks:{},...state};
 }
 async function readPlan(exec,{now=Date.now(),includeSystem=true}={}) {
   const globalRows=await exec('SELECT key,value FROM settings');
@@ -111,5 +112,33 @@ export async function completeCoveringPlan({successfulJobs=[],memberRequirements
     await exec(UPSERT,[KEY,JSON.stringify(state)]);
     await exec(UPSERT,['lastCoveringAt',JSON.stringify(at)]);
     return {completedUserIds,coversTouched:true};
+  });
+}
+
+// 第九十二批：逐輪記錄各來源的成敗（連續失敗輪數、最後錯誤樣本、最後成功時間）。
+//
+// 為什麼放在同一個 `crawlScheduleV1` 狀態裡：這份狀態已經是「抓取排程的持久狀態」
+// （counter／attempts／completed），而且讀寫都走 `scheduleTransaction`（PG 用 SELECT … FOR UPDATE
+// 交易、SQLite 用 BEGIN IMMEDIATE）⇒ 兩個 driver 的並行安全與其他排程狀態一致，
+// 不需要為了連續失敗另外開一個設定鍵與一套鎖。
+export async function recordCrawlSourceRoundAsync({rounds=[],at=new Date().toISOString()}={},options={}) {
+  if(!Array.isArray(rounds)||!rounds.length) return {streaks:{},tolerated:[],toleratedNow:[],recovered:[],failed:[]};
+  return scheduleTransaction(options,async(exec,pg)=>{
+    const state=await stateForUpdate(exec,pg);
+    const applied=applySourceRound(state.sourceStreaks,rounds,{at});
+    state.sourceStreaks=applied.streaks;
+    await exec(UPSERT,[KEY,JSON.stringify(state)]);
+    return applied;
+  });
+}
+
+// 讀目前狀態（後台來源健康度、診斷用）。單一真相：容忍名單的判定在 crawlSourceStreaks.js。
+export async function readCrawlSourceStreaksAsync(options={}) {
+  return scheduleTransaction(options,async(exec)=>{
+    const rows=await exec('SELECT value FROM settings WHERE key=?',[KEY]);
+    let state={};
+    try { state=rows.length?JSON.parse(rows[0].value):{}; } catch { state={}; }
+    const streaks=state.sourceStreaks&&typeof state.sourceStreaks==='object'?state.sourceStreaks:{};
+    return {streaks,tolerated:toleratedCrawlSources(streaks)};
   });
 }
