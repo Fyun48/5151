@@ -4112,10 +4112,10 @@ const CRAWLROUND_MUTATIONS = [
     expect: "watcher 逐批記錄完成",
   },
   {
-    name: "逐批記錄不再要求「每個來源都成功」（保守政策被放寬）",
+    name: "逐批記錄忽略容忍名單（第九十二批的連續失敗放行失效、永遠從嚴）",
     file: "v3/src/watcher.js",
-    from: "      ? (jobs || []).filter((job) => sourceSuccess.every((set) => set.has(job.searchUrl)))",
-    to: "      ? (jobs || []).filter(() => true)",
+    from: "  const blockingSources = blockingCrawlSources(sourceSuccess, sourcePolicy.tolerated);",
+    to: "  const blockingSources = sourceSuccess;",
     expect: "watcher 逐批記錄完成",
   },
   {
@@ -4124,6 +4124,115 @@ const CRAWLROUND_MUTATIONS = [
     from: "      return {\n        skipped: \"busy\",\n        busy_ms: tickGate.ageMs(),",
     to: "      return lastRun || {\n        skipped: \"busy\",\n        busy_ms: tickGate.ageMs(),",
     expect: "排程器遇到「這一輪還在跑」",
+  },
+];
+
+// 第九十二批：來源連續失敗的容忍政策（門檻、恢復歸零、安全閥、後台可見、watcher 接線）。
+const CRAWLSTREAK_MUTATIONS = [
+  {
+    name: "門檻被改掉（連續失敗不會再有放行的一天）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "export const SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED = 3;",
+    to: "export const SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED = 99;",
+    expect: "門檻 3 輪",
+  },
+  {
+    name: "恢復成功不歸零（失敗輪數只增不減，來源永遠回不到嚴格）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "      next[id] = { ...prev, fails: 0, lastSuccessAt: at };",
+    to: "      next[id] = { ...prev, lastSuccessAt: at };",
+    expect: "恢復成功立刻歸零",
+  },
+  {
+    name: "部分成功算成功（保守政策被放寬）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "  return total > 0 && covered >= total;",
+    to: "  return total > 0;",
+    expect: "恢復成功立刻歸零",
+  },
+  {
+    name: "容忍名單不看門檻（第一次失敗就放行）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "    .filter(([, row]) => normalizeSourceStreak(row).fails >= threshold)",
+    to: "    .filter(() => true)",
+    expect: "門檻 3 輪",
+  },
+  {
+    name: "越過門檻的那一輪不發 warning",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "    if (fails === threshold) toleratedNow.push(id);",
+    to: "    if (false) toleratedNow.push(id);",
+    expect: "門檻 3 輪",
+  },
+  {
+    name: "安全閥被拿掉（所有來源都放行時，等於任何輪次都算覆蓋完成）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "  if (!list.length) return false;",
+    to: "  if (!list.length) return true;",
+    expect: "安全閥",
+  },
+  {
+    name: "忽略容忍名單（永遠從嚴，第九十二批等於沒做）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "  return (Array.isArray(entries) ? entries : []).filter((entry) => !toleratedSet.has(String(entry?.source || \"\")));",
+    to: "  return (Array.isArray(entries) ? entries : []).filter(() => true);",
+    expect: "安全閥",
+  },
+  {
+    name: "連續失敗狀態沒有寫進排程狀態（記錄等於沒做）",
+    file: "v3/src/crawlScheduleAsync.js",
+    from: "    state.sourceStreaks=applied.streaks;",
+    to: "    state.sourceStreaks=state.sourceStreaks||{};",
+    expect: "落 PG／SQLite 的排程狀態",
+  },
+  {
+    name: "讀取時不解析 sourceStreaks（後台與下一輪都看不到）",
+    file: "v3/src/crawlScheduleAsync.js",
+    from: "    const streaks=state.sourceStreaks&&typeof state.sourceStreaks==='object'?state.sourceStreaks:{};",
+    to: "    const streaks={};",
+    expect: "落 PG／SQLite 的排程狀態",
+  },
+  {
+    name: "後台不顯示連續失敗（政策放寬變成靜默漏抓）",
+    file: "v3/src/adminOverview.js",
+    from: "  } else if (fails >= SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED) {",
+    to: "  } else if (false) {",
+    expect: "後台可見",
+  },
+  {
+    name: "後台來源清單不併入 streak",
+    file: "v3/src/adminOverviewAsync.js",
+    from: "    streak: streaks?.[row.id],",
+    to: "    streak: undefined,",
+    expect: "後台端點",
+  },
+  {
+    name: "watcher 逐輪記錄沒有把這一輪的結果送進去",
+    file: "v3/src/watcher.js",
+    from: "      sourcePolicy = await recordCrawlSourceRoundAsync({ rounds: sourceRounds, at: nowIso() });",
+    to: "      sourcePolicy = await recordCrawlSourceRoundAsync({ rounds: [], at: nowIso() });",
+    expect: "watcher 接線",
+  },
+  {
+    name: "watcher 不把容忍名單交給完成判定（政策變更沒接上）",
+    file: "v3/src/watcher.js",
+    from: "  const blockingSources = blockingCrawlSources(sourceSuccess, sourcePolicy.tolerated);",
+    to: "  const blockingSources = blockingCrawlSources(sourceSuccess, []);",
+    expect: "watcher 接線",
+  },
+  {
+    name: "輪次結果不帶 warning（只剩 console，事後查不到）",
+    file: "v3/src/watcher.js",
+    from: "      errors,\n      warnings: sourceWarnings,\n      sources: sourceRounds,\n      skipped: \"portals\",",
+    to: "      errors,\n      warnings: [],\n      sources: sourceRounds,\n      skipped: \"portals\",",
+    expect: "watcher 接線",
+  },
+  {
+    name: "warning 不寫日誌",
+    file: "v3/src/watcher.js",
+    from: "  for (const warning of sourceWarnings) console.warn(warning);",
+    to: "  for (const warning of sourceWarnings) void warning;",
+    expect: "watcher 接線",
   },
 ];
 
@@ -5566,6 +5675,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /server-module-wiring/.test(testFile) ? WIRING_MUTATIONS
   : /crm-parity/.test(testFile) ? CRMENQ_MUTATIONS
   : /crawl-round-progress/.test(testFile) ? CRAWLROUND_MUTATIONS
+  : /crawl-source-streaks/.test(testFile) ? CRAWLSTREAK_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

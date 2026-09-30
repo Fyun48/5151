@@ -22,36 +22,37 @@
 ## 2. 目前狀態（2026-09-30 06:30Z）
 
 - **PG 島嶼遷移：路由缺口 0**。尺規 `PG 268／無直接DB 20／MIXED 0／SQLite 0`。
-- 第 61～91 批全部合併；**第 85～91 批已部署**。
+- 第 61～92 批全部合併；**第 85～91 批已部署，第九十二批尚未部署**（等 Owner 當次說「可部署」）。
   - 目前正式站 digest：`sha256:287008eda3a0c0b6bf5d7d7585f516a1239f4b2ea4f909e22b239ca2c334e24f`
     （source `54c826a9814604e260d7f878d949a931c737c6f0`，第九十一批）
   - 上一個 digest（rollback 參考）：`sha256:1423cc90c1f6e53c8095dd3b608315519ebbd52c0428e01c84d5d0681a6e7983`
-- 最近七批在做什麼：85 OAuth callback／86 建立外部匯入／87 建立許願房提案（缺口歸零）／
+- 最近八批在做什麼：85 OAuth callback／86 建立外部匯入／87 建立許願房提案（缺口歸零）／
   88 非路由工具安全閥／89 `/api/*` 一律回 JSON／90 修「登入後變訪客」（缺 import ＋ 漏 await）／
-  91 抓取輪次預算 ＋ 逐批完成記錄。
+  91 抓取輪次預算 ＋ 逐批完成記錄／92 來源連續失敗的放行政策（見 §3）。
 - 正式站現況：`/api/health` ok；**登入已恢復正常（Owner 已確認）**；`houseprice`(5168) 自 09-26 無新資料。
 
-## 3. 最重要：下一批（第九十二批）＝抓取完成判定，**待 Owner 同意政策變更**
+## 3. 第九十二批：來源連續失敗的放行政策（**已實作並合併，尚未部署**）
 
-現況（實查正式 PG，2026-09-30）：
-- `crawl_covers.last_run_at` 38 列全部凍結在 `2026-09-27T04:05:35Z`、`settings.lastCoveringAt` 凍結在
-  `2026-09-27T04:08:05Z`；`crawlScheduleV1.completed` **空**、`attempts` 已累積到 **3010**。
-- 但 `lastSystemCoveringAt` 持續更新、591 房源持續落地（近 60 分鐘 2,362 筆 ≈ 39 筆/分 ≈ 1.5 秒/筆）
-  ⇒ 輪次有在跑，只是**完成紀錄永遠寫不進去**。
-- 根因：完成判定是「該覆蓋條件在**每一個啟用來源**都成功」（`watcher.js` 的
-  `sourceSuccess.every(set => set.has(job.searchUrl))`，刻意的保守設計）。任何一個來源／分頁失敗
-  ⇒ `successfulJobs` 空集合 ⇒ 連第九十一批加的「逐批記錄」也不會觸發。
-- 已做的緩解（第九十一批，已部署）：預算 15→40 分鐘（`CRAWL_TICK_BUDGET_MINUTES`，compose 設 40）、
-  逐批記錄完成、排程器 busy 不再重印逾時錯誤。**這些還不足以讓完成紀錄落地。**
+政策變更已由 Owner 於 2026-09-30 當次明確同意；實作與完整紀錄見主文件
+`docs/handoffs/PG-ISLAND-MIGRATION-PLAN-20260927.md` §92（二之負六十三）。
 
-計畫（等 Owner 點頭）：
-1. `sourceSuccess` 每組帶上**來源 id**（目前只有集合），逐輪記錄 `state.sourceStreaks[source]`：
-   連續失敗輪數、最後錯誤樣本、最後成功時間。
-2. 連續失敗達門檻（建議 3 輪）⇒ 該來源**不再阻擋**完成紀錄，但必須
-   (a) 輪次結果與日誌留明確 warning、(b) 後台可見（`crawlSourceHealthAsync` 已有來源健康資料）。
-3. 來源恢復成功立刻歸零、照舊從嚴。
-4. 之後再處理 `houseprice`（本機同支 `fetchHpCoveringListings()` 實測 701ms／20 筆無錯誤 ⇒ 不是來源壞，
-   很可能是被這個判定卡住）。
+- 根因（不變）：完成判定原本是「該覆蓋條件在**每一個啟用來源**都成功」（`watcher.js` 的
+  `sourceSuccess.every(...)`）。6 個啟用來源裡只要有一個失敗／部分失敗，`successfulJobs` 就是
+  空集合 ⇒ `crawl_covers.last_run_at` 38 列凍結在 `2026-09-27T04:05:35Z`、
+  `settings.lastCoveringAt` 停在 `2026-09-27T04:08:05Z`、`crawlScheduleV1.completed` 一直是空的。
+- 這一包做的事：逐輪記錄 `crawlScheduleV1.sourceStreaks[source]`（連續失敗輪數、最後錯誤樣本、
+  最後成功時間）；**連續失敗達 3 輪**的來源不再阻擋完成紀錄，但會留下輪次 `warnings`＋
+  `console.warn`，後台「抓取來源」卡片顯示「連續失敗 N 輪（已放行完成紀錄）」；
+  來源恢復成功立刻歸零。另加安全閥：**所有**來源都在容忍名單時（全滅）仍然不記完成。
+- 驗證：`v3/test/crawl-source-streaks.test.js` 9 項全綠、變異 `CRAWLSTREAK_MUTATIONS` 15 條全殺、
+  `CRAWLROUND_MUTATIONS` 4 條全殺；`v3/test/crawl-source-streaks-live-pg.test.js` 在隔離庫
+  `repro` 上**不注入驅動**實測通過（島嶼自己解析 driver 的那條路）。
+- **還沒做的事**：沒有部署。上線後要看的指標是
+  `crawl_covers.last_run_at`／`settings.lastCoveringAt`／`crawlScheduleV1.completed` 有沒有開始前進，
+  以及後台來源卡片有沒有出現「已放行」字樣。
+- 接著要處理：`houseprice`（5168）自 09-26 沒有新資料（本機同一支 `fetchHpCoveringListings()`
+  實測 701ms／20 筆正常 ⇒ 要另外追來源本身，不是完成判定）；
+  以及 40 分鐘仍跑不完的落地效率（約 1.5 秒/筆，批次寫入／並行化）。
 
 ## 4. 其他待辦（依優先序）
 
@@ -86,6 +87,8 @@ node v3/scripts/mutation-check.mjs v3/test/<name>.test.js --check-anchors-only
 # live PG（隔離庫 repro；**不要**用 PG_TEST_URL）
 set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a
 node --test v3/test/<name>-live-pg.test.js
+#   第九十二批那支會自己把 DB_DRIVER/PG_URL 指向 repro（刻意不注入 driver）：
+#   node --test v3/test/crawl-source-streaks-live-pg.test.js
 
 # 正式站診斷（唯讀）：健康、容器 digest、日誌
 curl -s https://jibbyrenth.reversalplay.me/api/health
@@ -130,3 +133,10 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
 9. 文件「現況表」由 `v3/test/route-data-map.test.js` 守著：動了尺規數字要同步改
    `docs/handoffs/PG-ISLAND-MIGRATION-PLAN-20260927.md` 的表現況表。
 10. 變異工具會**就地改寫** `v3/src/*.js`：一定要在 repo 內跑（工具已加守衛），不要在正式站原始碼目錄跑。
+11. **變異錨點要唯一化到「同一句話在檔案裡只出現一次」**（第九十二批實測）：`warnings: sourceWarnings,`
+    在 `watcher.js` 出現兩次（正常結束與 `skipped: "portals"` 兩條回傳路徑），只寫那一行會被工具以
+    「錨點出現 2 次」擋下；改用含前後行的片段（`errors,\n      warnings: …,\n      sources: …,\n      skipped: "portals",`）。
+    同理，測試若用 `assert.match(src, /…/)` 驗一個出現兩次的字串，變異只改其中一處時**會漏殺**
+    ⇒ 改成數出現次數（`src.split(x).length - 1 === 2`）。
+12. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+    ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。

@@ -32,7 +32,14 @@ import {
   routeJobKeyFor,
   pushPayloadFromEvents,
 } from "./db.js";
-import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync } from "./crawlScheduleAsync.js";
+import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync, recordCrawlSourceRoundAsync } from "./crawlScheduleAsync.js";
+// 第九十二批：來源連續失敗的容忍政策（Owner 2026-09-30 同意）。純函式在 crawlSourceStreaks.js，
+// 這裡只負責「逐輪餵結果、拿回誰還會阻擋完成紀錄」。
+import {
+  blockingCrawlSources,
+  jobCoveredByBlockingSources,
+  sourceRoundWarnings,
+} from "./crawlSourceStreaks.js";
 // 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
 // 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
 import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
@@ -715,7 +722,19 @@ export async function runWatch(options = {}) {
   const hbPages = CRAWL_PAGES_EXTERNAL;
   const collected = [];
   const errors = [];
+  // 第九十二批：`sourceSuccess` 每一組都帶上**來源 id**（原本只有集合，出錯時看不出是誰），
+  // `sourceRounds` 則是這一輪各來源的成敗，收尾時一次寫進 `crawlScheduleV1.sourceStreaks`。
   const sourceSuccess = [];
+  const sourceRounds = [];
+  const noteSourceRound = (source, urls, sourceErrors) => {
+    sourceRounds.push({
+      source,
+      covered: urls.size,
+      total: jobs.length,
+      // 只留少量樣本（狀態會寫進 settings 的單一 JSON 值，不要把整包錯誤塞進去）。
+      error: [...new Set((sourceErrors || []).filter(Boolean))].slice(0, 3).join("；"),
+    });
+  };
   const fetchOptions = {
     minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     excludeKeywords: settings.excludeKeywords,
@@ -729,7 +748,8 @@ export async function runWatch(options = {}) {
 
   if (want591) {
     const successful = new Set();
-    sourceSuccess.push(successful);
+    const sourceErrors = [];
+    sourceSuccess.push({ source: "591", urls: successful });
     let consecutiveTimeouts = 0;
     for (const job of jobs) {
       try {
@@ -744,6 +764,7 @@ export async function runWatch(options = {}) {
       } catch (error) {
         throwIfCrawlCancelled();
         errors.push(`${job.searchUrl} → ${error.message}`);
+        sourceErrors.push(error.message);
         const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
         consecutiveTimeouts = skip.consecutive;
         if (skip.skipRest) {
@@ -752,18 +773,22 @@ export async function runWatch(options = {}) {
         }
       }
     }
+    noteSourceRound("591", successful, sourceErrors);
   }
 
-  async function collectExternal(label, run) {
+  async function collectExternal(source, label, run) {
     const successful = new Set();
-    sourceSuccess.push(successful);
+    const sourceErrors = [];
+    sourceSuccess.push({ source, urls: successful });
     try {
       const batches = await run();
       throwIfCrawlCancelled();
       for (const batch of batches) {
         if (!batch.errors?.length && batch.searchUrl) successful.add(batch.searchUrl);
         for (const error of batch.errors || []) {
-          errors.push(`${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`);
+          const line = `${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`;
+          errors.push(line);
+          sourceErrors.push(line);
         }
         if (batch.errors?.length && !batch.listings.length && batch.progress?.resetReason !== "PAGE_OUT_OF_RANGE") continue;
         collected.push(batch);
@@ -774,25 +799,27 @@ export async function runWatch(options = {}) {
     } catch (error) {
       throwIfCrawlCancelled();
       errors.push(`${label} → ${error.message}`);
+      sourceErrors.push(error.message);
     }
+    noteSourceRound(source, successful, sourceErrors);
   }
 
   if (wantHb) {
-    await collectExternal("住商", () => fetchHbCoveringListings(jobs, {
+    await collectExternal("hbhousing", "住商", () => fetchHbCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postJson: options.hbPostJson,
     }));
   }
   if (wantSinyi) {
-    await collectExternal("信義", () => fetchSinyiCoveringListings(jobs, {
+    await collectExternal("sinyi", "信義", () => fetchSinyiCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.sinyiPostForm,
     }));
   }
   if (wantHp) {
-    await collectExternal("5168", () => fetchHpCoveringListings(jobs, {
+    await collectExternal("houseprice", "5168", () => fetchHpCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       getHtml: options.hpGetHtml,
@@ -800,14 +827,14 @@ export async function runWatch(options = {}) {
     }));
   }
   if (wantDd) {
-    await collectExternal("租租通", () => fetchDdCoveringListings(jobs, {
+    await collectExternal("ddroom", "租租通", () => fetchDdCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       getJson: options.ddGetJson,
     }));
   }
   if (wantHf) {
-    await collectExternal("好房網", () => fetchHfCoveringListings(jobs, {
+    await collectExternal("housefun", "好房網", () => fetchHfCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.hfPostForm,
@@ -817,13 +844,30 @@ export async function runWatch(options = {}) {
     repairRakuyaScopes(db, jobs);
     // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼（重抓或跳頁）。
     const startPages = await getRakuyaPageCursorsAsync();
-    await collectExternal("樂屋網", () => fetchRakuyaCoveringListings(jobs, {
+    await collectExternal("rakuya", "樂屋網", () => fetchRakuyaCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       fetchText: options.rakuyaFetchText,
       startPages,
     }));
   }
+
+  // 第九十二批：**先**把這一輪的來源成敗寫進 `crawlScheduleV1.sourceStreaks`，再決定誰會阻擋完成紀錄。
+  // 判定放在這裡（收集階段之後、落地迴圈與 `!collected.length` 之前）有三個理由：
+  //   1. 來源集合已經收齊，這一輪誰成功誰失敗已成定局；
+  //   2. 全部來源都沒抓到東西的輪次也要累積失敗輪數（否則「永遠失敗」的來源不會被放行）；
+  //   3. 落地迴圈裡的逐批完成記錄要用同一份容忍名單。
+  // 記錄失敗時**維持從嚴**（不知道容忍名單就不放行），只留一則錯誤訊息。
+  let sourcePolicy = { streaks: {}, tolerated: [], toleratedNow: [], recovered: [], failed: [] };
+  if (sourceRounds.length) {
+    try {
+      sourcePolicy = await recordCrawlSourceRoundAsync({ rounds: sourceRounds, at: nowIso() });
+    } catch (error) {
+      errors.push(`來源連續失敗紀錄失敗（這一輪維持從嚴）：${error?.message || error}`);
+    }
+  }
+  const sourceWarnings = sourceRoundWarnings(sourcePolicy, sourceRounds);
+  for (const warning of sourceWarnings) console.warn(warning);
 
   if (!collected.length) {
     if (want591) {
@@ -834,6 +878,8 @@ export async function runWatch(options = {}) {
       searches: [],
       events: [],
       errors,
+      warnings: sourceWarnings,
+      sources: sourceRounds,
       skipped: "portals",
       message: errors.join("；") || "外站這次沒抓到資料（可能被擋或暫時失敗）",
     };
@@ -851,15 +897,17 @@ export async function runWatch(options = {}) {
   // 覆蓋條件永遠是「該抓了」，每輪重跑同一批（正式站 2026-09-27～09-30 的實際狀態：
   // `crawl_covers.last_run_at` 全部凍結、`attempts` 累積到近 3000）。
   //
-  // 政策不變：只有「該 job 在**每一個**啟用的來源都成功」才能記成完成（保守，避免某個來源
-  // 掛掉時靜默漏抓），這裡只是把同一組判定提前算好，讓每個批次落地後就能立刻記錄。
+  // 政策（第九十二批起）：只有「該 job 在**每一個還在嚴格的來源**都成功」才能記成完成。
+  // 「還在嚴格」＝ 連續失敗還沒到門檻（`SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED`）；
+  // 連續失敗達門檻的來源已被放行（見上方 `sourcePolicy`），但仍留 warning 與後台可見的狀態。
+  // 安全閥：如果所有來源都被放行（等於全滅），`jobCoveredByBlockingSources()` 回 false ⇒
+  // 這種輪次不會被當成「已覆蓋」。
   const jobBySearchUrl = new Map();
   for (const job of jobs || []) if (job?.searchUrl) jobBySearchUrl.set(job.searchUrl, job);
+  const blockingSources = blockingCrawlSources(sourceSuccess, sourcePolicy.tolerated);
+  const isCoveredJob = (job) => jobCoveredByBlockingSources(job, blockingSources);
   const successfulJobUrls = new Set(
-    (sourceSuccess.length
-      ? (jobs || []).filter((job) => sourceSuccess.every((set) => set.has(job.searchUrl)))
-      : []
-    ).map((job) => job.searchUrl),
+    (jobs || []).filter((job) => isCoveredJob(job)).map((job) => job.searchUrl),
   );
   const recordedCoverUrls = new Set();
 
@@ -1026,10 +1074,11 @@ export async function runWatch(options = {}) {
   }
   // 整輪完成的紀錄（lastCoveringAt／lastSystemCoveringAt ＋ crawl_covers.last_run_at）要走 driver-aware
   // 入口：只寫 SQLite 的話，PG 模式的「該抓了」判定永遠讀到舊值 → 每分鐘重跑一整輪（2026-09-24 事故）。
-  // A partial source failure is not a successful cover. Be conservative until
-  // every enabled source reports success; never postpone unprocessed members.
+  // A partial source failure is not a successful cover. Be conservative until every source that is
+  // still strict reports success; tolerated (long-failing) sources no longer block, but they always
+  // leave a warning. Never postpone unprocessed members.
   await completeCoveringPlan({
-    successfulJobs: jobs.filter(job => sourceSuccess.length > 0 && sourceSuccess.every(set => set.has(job.searchUrl))),
+    successfulJobs: jobs.filter((job) => isCoveredJob(job)),
     memberRequirements: plan.memberRequirements,
     at: nowIso(),
   });
@@ -1047,6 +1096,14 @@ export async function runWatch(options = {}) {
     })),
     events,
     errors,
+    // 第九十二批：輪次結果要能看出「哪個來源失敗、連續幾輪、有沒有被放行」。
+    warnings: sourceWarnings,
+    sources: sourceRounds.map((round) => ({
+      ...round,
+      fails: Number(sourcePolicy.streaks?.[round.source]?.fails) || 0,
+      tolerated: sourcePolicy.tolerated.includes(round.source),
+      lastError: sourcePolicy.streaks?.[round.source]?.lastError || "",
+    })),
     offline: offlineSweep,
     checked_at: nowIso(),
   };

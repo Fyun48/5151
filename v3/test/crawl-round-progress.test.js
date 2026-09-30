@@ -43,8 +43,12 @@ test("watcher 逐批記錄完成：條件、位置與去重都對", () => {
   const successSet = src.indexOf("const successfulJobUrls = new Set(");
   const batchLoop = src.indexOf("for (const batch of collected) {");
   assert.ok(successSet > 0 && batchLoop > successSet, "successfulJobUrls 必須在落地迴圈之前算好");
-  assert.match(src.slice(successSet, successSet + 400), /sourceSuccess\.every\(\(set\) => set\.has\(job\.searchUrl\)\)/,
-    "政策不變：必須**每一個**來源都成功才算成功");
+  // 第九十二批：條件從「**每一個**啟用來源都成功」改成「每一個**還在嚴格的**來源都成功」；
+  // 連續失敗達門檻的來源由 `sourcePolicy.tolerated` 放行（政策變更經 Owner 同意）。
+  const policyAt = src.indexOf("const blockingSources = blockingCrawlSources(sourceSuccess, sourcePolicy.tolerated);");
+  assert.ok(policyAt > 0 && policyAt < successSet, "容忍名單必須在 successfulJobUrls 之前算好");
+  assert.match(src.slice(successSet, successSet + 200), /isCoveredJob\(job\)/,
+    "逐批記錄要沿用同一組判定（不是另外再寫一次）");
   // 逐批記錄：在批次迴圈內、且帶 memberRequirements: []（不推遲會員）。
   const recordAt = src.indexOf("await completeCoveringPlan({ successfulJobs: [job], memberRequirements: [], at: nowIso() });");
   const loopEnd = src.indexOf("// Only advance after those pages have been stored successfully.");

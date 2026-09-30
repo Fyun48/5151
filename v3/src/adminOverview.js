@@ -17,6 +17,12 @@ import { IMPORT_STATUSES } from "./listingImport.js";
 import { listingPrepAdminStats } from "./listingEnrichQueue.js";
 // 2.3b 第二段：後台統計的 driver-aware 版本（DB_DRIVER=postgres 時讀 PostgreSQL）。
 import { listingPrepAdminStatsAsync } from "./listingEnrichQueueAsync.js";
+// 第九十二批：來源連續失敗的狀態（第九十二批政策：連續失敗達門檻就不再阻擋完成紀錄，
+// 但必須在後台看得見）。判定只有一份，這裡只負責翻譯成人看得懂的字。
+import {
+  SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED,
+  normalizeSourceStreak,
+} from "./crawlSourceStreaks.js";
 
 const RAKUYA_OWNER_OFF = "Owner 手動停用";
 
@@ -39,6 +45,11 @@ export function sourceHealthFromRow(row, stats = {}) {
   const lastSuccess = stats.lastSeen || "";
   const todayNew = Number(stats.todayNew) || 0;
   const lastError = stats.lastError || "";
+  // 第九十二批：輪次層級的連續失敗（`crawlScheduleV1.sourceStreaks`）。
+  // ⚠️ `lastSuccess` 是「底庫最近寫入時間」＝曾經成功過，不代表這一輪成功；
+  // 連續失敗要看 `fails`，而 `fails >= 門檻` 的來源已經被放行（不再阻擋完成紀錄）。
+  const streak = normalizeSourceStreak(stats.streak || {});
+  const fails = streak.fails;
   let status = "disabled";
   let statusLabel = "已關閉";
   let reason = "";
@@ -54,6 +65,24 @@ export function sourceHealthFromRow(row, stats = {}) {
     status = "parse_failed";
     statusLabel = "解析失敗";
     reason = lastError || "解析失敗";
+  } else if (fails >= SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED) {
+    // 這一輪起不再阻擋完成紀錄，但一定要在後台看得見（否則就是靜默漏抓）。
+    status = "failing";
+    statusLabel = `連續失敗 ${fails} 輪（已放行完成紀錄）`;
+    reason = [
+      `已連續 ${fails} 輪沒有完整覆蓋，這一輪起不再阻擋覆蓋完成紀錄`,
+      streak.lastFailureAt ? `最後失敗：${streak.lastFailureAt}` : "",
+      streak.lastError ? `最後錯誤樣本：${streak.lastError}` : "",
+      "請檢查來源是否改版或被封鎖",
+    ].filter(Boolean).join("；");
+  } else if (fails > 0) {
+    status = "retrying";
+    statusLabel = `連續失敗 ${fails} 輪（還在阻擋完成紀錄）`;
+    reason = [
+      `連續失敗 ${fails} 輪，滿 ${SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED} 輪後會先放行完成紀錄並持續告警`,
+      streak.lastFailureAt ? `最後失敗：${streak.lastFailureAt}` : "",
+      streak.lastError ? `最後錯誤樣本：${streak.lastError}` : "",
+    ].filter(Boolean).join("；");
   } else {
     // last_seen 只代表「曾經寫入底庫」，不是現在健康。沒有 runtime probe 就不要標綠色正常。
     status = "unchecked";
@@ -70,6 +99,10 @@ export function sourceHealthFromRow(row, stats = {}) {
     lastSuccess,
     lastError,
     todayNew,
+    consecutiveFailures: fails,
+    tolerated: fails >= SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED,
+    lastFailureAt: streak.lastFailureAt,
+    lastRoundSuccessAt: streak.lastSuccessAt,
   };
 }
 

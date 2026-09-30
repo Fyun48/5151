@@ -18,6 +18,7 @@ import {
   searchAdminListings as searchAdminListingsSync,
 } from "./adminOverview.js";
 import { getCrawlSourcesAsync } from "./siteContentAsync.js";
+import { readCrawlSourceStreaksAsync } from "./crawlScheduleAsync.js";
 
 const LAST_SEEN_SQL =
   `SELECT COALESCE(source, '591') AS source, MAX(last_seen_at) AS last_seen
@@ -62,12 +63,24 @@ export async function sourceListingStatsAsync(options = {}) {
 }
 
 // adminOverview.js crawlSourceHealth() 的 PG 分支。
+//
+// 第九十二批：除了底庫的 lastSeen／todayNew，再帶上輪次層級的來源狀態
+// （`crawlScheduleV1.sourceStreaks`：連續失敗輪數、最後錯誤樣本、最後成功時間），
+// 這樣「連續失敗達門檻 ⇒ 不再阻擋完成紀錄」這個政策放寬在後台看得見。
+// 讀不到 streak 時一律當作沒有（與 lastSeen 同樣的容忍度）：後台總覽不該因為診斷資訊而壞掉。
 export async function crawlSourceHealthAsync(options = {}) {
   const items = (await getCrawlSourcesAsync(options)).items || [];
   const { lastSeen, todayNew } = await sourceListingStatsAsync(options);
+  let streaks = {};
+  try {
+    ({ streaks } = await readCrawlSourceStreaksAsync(options));
+  } catch {
+    streaks = {};
+  }
   return items.map((row) => sourceHealthFromRow(row, {
     lastSeen: lastSeen.get(row.id) || "",
     todayNew: todayNew.get(row.id) || 0,
+    streak: streaks?.[row.id],
   }));
 }
 
