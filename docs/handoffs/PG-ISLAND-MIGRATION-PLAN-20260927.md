@@ -5771,6 +5771,36 @@ region 4 section 1 → zip    → sid 0
 - 測試：`v3/test/source-recovery.test.js` 新增「不適用：這一輪沒有可抓行政區的來源不算失敗、
   也不可以擋住完成紀錄」；變異 `SRCRECOVERY_MUTATIONS` 共 **21 條全殺**。
 
+### 97.5 沙盒驗證與正式站部署（2026-09-30，Owner 當次核准「可部署」）
+
+**沙盒**（`5151-crawl-sandbox`，第九十四批建的常駐容器）在新程式下的第 2 輪：
+
+| 觀測 | 修正前 | **修正後（第 2 輪）** |
+|---|---|---|
+| `houseprice`（5168）covered | 每輪 **0/6** | **1/6**（第一次有整組條件被完整覆蓋） |
+| 5168 最新落地 | 11:51 之後就沒有 | **14:50:12**（重新開始供料） |
+| 該輪落地總數 | 1,904 筆 | **9,632 筆**（含其他來源恢復） |
+| 其他外站 | 全部 0/6 | 住商 2/6、租租通 2/6、好房網 2/6、信義 1/6 |
+
+⇒ 同輪去重（不再重複打同一頁）＋被擋冷卻重試（等 90 秒再試一次，而不是立刻放棄整輪）
+合起來讓 5168 從「每一輪 0 筆」變成「有條件被完整覆蓋、房源重新落地」。
+
+**正式站部署**：
+
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36731168659](https://github.com/Fyun48/5151/actions/runs/36731168659) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36731369774](https://github.com/Fyun48/5151/actions/runs/36731369774) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36731634634](https://github.com/Fyun48/5151/actions/runs/36731634634) | success |
+
+- **Source SHA**：`890eb7a97758936ea55d902de93442a475edc735`（第九十六批）
+- **Image digest**：`sha256:3dcbdcc81532e3b5e2ba7b361be073984645ce6610486a90ab0b30bb3d0b5927`
+- **部署前備份**：`/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260930-144501`
+- **Rollback identity**：前一個 digest `sha256:8c96c00300a066ac0bb25d6bb2438bc5f1b5953c65d3622a41df858ca0be88ad`（第九十五批）
+- **部署後外部實測**：`/api/health` `{"ok":true,"version":"3.57"}`；容器 `Config.Image` 與上表一致、`running`（14:47:38Z 起）。
+- 部署前的正式站狀態（14:07 那一輪）：5168 的錯誤樣本變成 `5168 三芝區 第 2 頁 [FETCH_BLOCKED]`（新北市），
+  顯示它確實會被派到台北／新北以外的…更正：三芝區屬新北，代表它仍在被抓、只是在第 2 頁被擋。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
