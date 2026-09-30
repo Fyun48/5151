@@ -4897,6 +4897,13 @@ node v3/scripts/route-data-map.mjs
 > （已逐一檢查 `writeFileSync`／`cpSync`／`git checkout` 的目標都是暫存目錄）
 > ⇒ 判定為 runner 端偶發，不是程式缺陷。看到這兩個測試紅時**先重跑**，不要往程式面找。
 >
+> 🐌 **同一個 flake 的第三次實測（2026-09-30，PR #587，純文件 PR）**：`Run Tests` 紅在
+> `v3/test/notify-queue-parity.test.js` 的兩條（`the notification queue reads and writes through
+> the driver-aware entry point`／`recentEventsAsync：PG 分支讀的是 PG 的 user_events`），
+> 錯誤是 `The requested module './selfListings.js' does not provide an export named 'SELF_CONTACT_MAX'`
+> ——`SELF_CONTACT_MAX` 在 master 上確實有 export，本機單跑該檔 3 項全綠，
+> `gh run rerun 36654237810 --failed` 之後四項全綠。⇒ 同一類 runner 端假紅，先重跑。
+>
 > 🐌 **已知的 CI flake（2026-09-28 實測）**：`v3/test/commute-route-live.test.js` 的
 > 「cursor walks past the old 2000-row candidate cap」會間歇紅。機制是它的 `runIsolated()`
 > 給子程序 **30 秒**上限（2105 列 ＋ 路線計算），超時時 `result.status` 是 `null`
