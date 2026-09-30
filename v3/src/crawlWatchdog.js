@@ -55,6 +55,35 @@ export function isSourceBlocked(error) {
 export const SOURCE_BLOCK_PAUSE_LIMIT = 2;
 
 /**
+ * 達門檻之後「先冷卻再重試」要等多久（毫秒）。
+ *
+ * 為什麼需要：2026-09-30 實測（正式站容器，同一顆 IP）——5168 被記 403 的**幾分鐘後**
+ * 同一個網址就回 200（sid 3/5/8/12 各 20 張卡片）。擋的是一個短窗口，不是永久封鎖。
+ * 所以第 2 次被擋時先等這個時間再試一次，比立刻放棄整輪划算。
+ * `CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS` 可覆寫（0 ＝ 不等待，測試用）。
+ */
+export const SOURCE_BLOCK_COOLDOWN_MS = (() => {
+  const raw = Number(process.env.CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS);
+  if (Number.isFinite(raw) && raw >= 0) return Math.round(raw * 1000);
+  return 90 * 1000;
+})();
+
+/** 這一輪結束時「因為被擋而停工」的來源，冷卻到什麼時候（給下一輪跳過用）。 */
+export function sourceBlockedUntil(at, cooldownMs = SOURCE_BLOCK_COOLDOWN_MS) {
+  const base = Date.parse(String(at || ""));
+  if (!Number.isFinite(base)) return "";
+  const ms = Math.max(0, Math.trunc(Number(cooldownMs) || 0));
+  if (!ms) return "";
+  return new Date(base + ms).toISOString();
+}
+
+/** 這一輪該不該跳過這個來源（上一輪被擋、還在冷卻期）。 */
+export function isSourceCoolingDown(streak, now = Date.now()) {
+  const until = Date.parse(String(streak?.blockedUntil || ""));
+  return Number.isFinite(until) && until > Number(now);
+}
+
+/**
  * 逐頁 fail-soft 的「被擋幾次才暫停這一家」計數器。
  *
  * 為什麼不是第一次被擋就暫停（2026-09-30 沙盒實測）：5168 只在**部分行政區**被擋，
