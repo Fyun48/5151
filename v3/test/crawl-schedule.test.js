@@ -58,6 +58,25 @@ test('SQLite persistent fairness, cumulative completion, partial failure and unc
  await completeCoveringPlan({successfulJobs:changed.jobs,memberRequirements:changed.memberRequirements,at:later},{driver:'sqlite'});
  assert.equal(read(),JSON.stringify(later));
 });
+test('第九十一批：逐批完成記錄（單一 job、memberRequirements 空）要落地且可重複',async()=>{
+ seed();
+ const due=()=>db.prepare("SELECT value FROM user_settings WHERE user_id=101 AND key='memberFetchDueAt'").get().value;
+ const plan=await reserveCoveringPlan({now:Date.parse(later),includeSystem:false},{driver:'sqlite'});
+ const job=plan.jobs[0];
+ const done=await completeCoveringPlan({successfulJobs:[job],memberRequirements:[],at:later},{driver:'sqlite'});
+ assert.deepEqual(done.completedUserIds,[],'沒有帶會員需求時不得推遲任何會員');
+ assert.equal(due(),JSON.stringify(at),'會員的 memberFetchDueAt 不能被逐批記錄動到');
+ const covers=db.prepare('SELECT region_id,section_ids,price_min,price_max,last_run_at FROM crawl_covers').all();
+ assert.equal(covers.length,1,'這一組覆蓋條件要留下完成紀錄');
+ assert.equal(covers[0].last_run_at,later);
+ // 再記一次（模擬同一輪多個批次、或整輪結束時的最終記錄）不得長出第二列。
+ await completeCoveringPlan({successfulJobs:[job],memberRequirements:[],at:later},{driver:'sqlite'});
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM crawl_covers').get().n,1);
+ // 沒有成功的 job 時什麼都不寫（保守政策不變）。
+ await completeCoveringPlan({successfulJobs:[],memberRequirements:plan.memberRequirements,at:later},{driver:'sqlite'});
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM crawl_covers').get().n,1);
+});
+
 test('real PG persistent schedule, atomic reservations and cumulative member completion without SQLite I/O',{skip:!process.env.PG_TEST_URL},async()=>{
  seed();
  await withPgFixture(db,async driver=>withoutSqliteIO(db,async()=>{

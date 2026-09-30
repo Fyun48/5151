@@ -843,6 +843,26 @@ export async function runWatch(options = {}) {
   const freshIds = [];
   const searchReports = [];
 
+  // 第九十一批：**逐批記錄完成**。
+  //
+  // 為什麼：一輪的「取頁 ＋ 落地」在正式站要 25 分鐘上下，超過 `TICK_BUDGET_MS` 就會被
+  // `withBudget()` 放棄；而完成紀錄（`lastCoveringAt`／`crawl_covers.last_run_at`／
+  // `crawlScheduleV1.completed`）原本只在整輪結束時才寫 ⇒ 被放棄的輪次等於白跑，
+  // 覆蓋條件永遠是「該抓了」，每輪重跑同一批（正式站 2026-09-27～09-30 的實際狀態：
+  // `crawl_covers.last_run_at` 全部凍結、`attempts` 累積到近 3000）。
+  //
+  // 政策不變：只有「該 job 在**每一個**啟用的來源都成功」才能記成完成（保守，避免某個來源
+  // 掛掉時靜默漏抓），這裡只是把同一組判定提前算好，讓每個批次落地後就能立刻記錄。
+  const jobBySearchUrl = new Map();
+  for (const job of jobs || []) if (job?.searchUrl) jobBySearchUrl.set(job.searchUrl, job);
+  const successfulJobUrls = new Set(
+    (sourceSuccess.length
+      ? (jobs || []).filter((job) => sourceSuccess.every((set) => set.has(job.searchUrl)))
+      : []
+    ).map((job) => job.searchUrl),
+  );
+  const recordedCoverUrls = new Set();
+
   // 取頁階段（整輪最久的一段）跑完就先記進度：輪次可能超過 15 分鐘，不能等整輪結束才更新，
   // 否則 isSystemCoveringDue() 在這段期間只會看到上一輪的舊時間（2026-09-24 事故）。
   await markCoveringProgressAsync({ at: nowIso(), includeSystem: plan.includeSystem === true });
@@ -921,6 +941,21 @@ export async function runWatch(options = {}) {
       if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
       await enqueueListingEventAsync(saved, evt);
+    }
+
+    // 這一批的物件都落地了 ⇒ 如果它的來源全部成功，立刻記錄「這組覆蓋條件已完成」。
+    // 整輪若在後面的階段被 `withBudget()` 放棄，這筆紀錄仍然留著（見上方第九十一批說明）。
+    if (successfulJobUrls.has(batch.searchUrl) && !recordedCoverUrls.has(batch.searchUrl)) {
+      const job = jobBySearchUrl.get(batch.searchUrl);
+      if (job) {
+        recordedCoverUrls.add(batch.searchUrl);
+        try {
+          await completeCoveringPlan({ successfulJobs: [job], memberRequirements: [], at: nowIso() });
+        } catch (error) {
+          // 記錄失敗不該讓整輪掛掉（下一輪會再記一次）。
+          errors.push(`${batch.searchUrl} → 覆蓋完成記錄失敗：${error?.message || error}`);
+        }
+      }
     }
   }
 
