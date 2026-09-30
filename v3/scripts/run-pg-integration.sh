@@ -14,7 +14,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 
 if [ -z "${PG_URL:-}${PG_TEST_URL:-}${PGHOST:-}" ] && [ "${DB_DRIVER:-}" != "postgres" ]; then
-  echo "[pg] 沒有設定 PG（PG_URL／PG_TEST_URL／PGHOST／DB_DRIVER=postgres）⇒ 不執行整合測試" >&2
+  # 第八十八批：原本這裡靜默 exit 0，於是「PG 整合測試通過」可能只是「根本沒跑」。
+  # 現在明講 SKIP；需要「沒 PG 就失敗」的場合設 REQUIRE_PG=1（CI 的 PG job 就是這種）。
+  echo "[pg] SKIP：沒有設定 PG（PG_URL／PG_TEST_URL／PGHOST／DB_DRIVER=postgres）⇒ 沒有執行任何整合測試" >&2
+  if [ "${REQUIRE_PG:-}" = "1" ]; then
+    echo "[pg] REQUIRE_PG=1 ⇒ 視為失敗" >&2
+    exit 1
+  fi
   exit 0
 fi
 

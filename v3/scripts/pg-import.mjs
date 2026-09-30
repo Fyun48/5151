@@ -21,6 +21,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { importStore, userTables } from "../src/pgSchema.js";
+import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 
 const env = process.env;
 const snapshot = String(env.SNAP_DB || "").trim();
@@ -58,6 +59,10 @@ if (dryRun) {
   process.exit(0);
 }
 
+// 這支會**直接寫入 PG_URL 指的庫**（建 schema ＋ 灌列）；PG 模式下來源快照已過時，
+// 指到正式庫就是灌舊資料 ⇒ 目標庫必須在允許清單內（要對正式庫動手得明確設
+// ALLOW_PRODUCTION_PG_TARGET=1）。
+assertPgTargetAllowed("pg-import", env.PG_URL || env.DATABASE_URL || "");
 const pgDriver = await createPostgresDriver({});
 const started = Date.now();
 try {

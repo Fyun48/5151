@@ -17,6 +17,7 @@ import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { buildListRequestContextFromPg, buildListListingsClauses } from "../src/db.js";
 import { districtClosureIds } from "../src/listingSearchNodePg.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
+import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 
 const COLS_43 = `post_id, source, source_id, source_key, url, price, price_num,
   extra_fee, extra_fees, extra_fee_text, price_contain_text,
@@ -90,6 +91,9 @@ async function measure(drv, label, columns, where, params) {
   };
 }
 
+// 這支會在目標庫 `INSERT INTO listings` 500 筆 `colab|%` 假房源（finally 才刪）⇒
+// 只允許跑在拋棄式／受控測試庫；正式庫要動手得明確設 ALLOW_PRODUCTION_PG_TARGET=1。
+assertPgTargetAllowed("pg-columns-ab", process.env.PG_URL || process.env.DATABASE_URL || "");
 const drv = await createPostgresDriver({ env: process.env });
 try {
   const exec = async (sql, params = []) => (await drv.query(toPostgresSql(sql), params)).rows;

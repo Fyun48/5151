@@ -7,6 +7,21 @@ import {
   saveRentalMarketplaceFlags,
 } from "/app/src/db.js";
 
+// 第八十八批安全閥（判定與 `v3/src/domainToolGuards.js` 相同）：本腳本只吃**同步 SQLite handle**，
+// PG 模式下它會動到容器本機 v3.db（站上讀 PG ⇒ 等於沒生效），但流程會回報成功。
+// ⚠️ 這裡是**刻意內嵌**的複本：本檔是 `docker cp` 進「目前已部署」的容器執行，
+//    不能依賴 /app/src 底下要等下次部署才會出現的新模組。
+function assertSqliteMode(tool) {
+  const raw = String(process.env.DB_DRIVER || "sqlite").trim().toLowerCase();
+  if (!["postgres", "postgresql", "pg"].includes(raw)) return;
+  throw new Error(
+    `${tool}：只支援 SQLite 模式（目前 DB_DRIVER=${raw}）。這個腳本用同步 SQLite handle 讀寫，`
+    + "PG 模式下只會動到容器本機 v3.db（站上讀 PG ⇒ 等於沒生效）。"
+    + "PG 模式請改用產品端 PG-aware 入口（例：PUT /api/admin/rental-marketplace-flags）。",
+  );
+}
+assertSqliteMode("activate-rental-marketplace-pra-domain");
+
 const RESERVED = [
   "owner_matching_enabled",
   "offer_enabled",
