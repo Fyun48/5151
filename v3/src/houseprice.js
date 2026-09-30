@@ -10,7 +10,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js"
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
-import { noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
+import { SOURCE_BLOCK_COOLDOWN_MS, noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HP_SOURCE = "houseprice";
 export const HP_POST_ID_BASE = 2_400_000_000;
@@ -1042,7 +1042,16 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   let sourcePaused = false;
   // 連續被擋次數（成功一頁就歸零）：第一次被擋只跳過那一頁，連續 SOURCE_BLOCK_PAUSE_LIMIT 次才停工。
   let blockedStreak = 0;
+  let cooledDown = false;   // 這一輪是否已用過「先冷卻再重試」那一次
   const pauseLimit = Number(options.blockPauseLimit) || undefined;
+  const cooldownMs = options.blockCooldownMs === undefined
+    ? SOURCE_BLOCK_COOLDOWN_MS
+    : Math.max(0, Number(options.blockCooldownMs) || 0);
+  // 第九十六批 A：同一輪裡「同一個 sid 的同一頁」只抓一次。
+  // 為什麼需要：覆蓋條件本來就會重疊（系統全區 `1|1..12` ＋ 會員子集 `1|2,3,8,9`），
+  // 同一頁會被重複打——而重複的請求正是把我們推進 5168 封鎖窗口的來源之一，
+  // 也會讓同一個行政區的同一筆錯誤在輪次結果裡出現兩次（看起來像「只被擋一次」）。
+  const pageCache = new Map();
 
   for (const job of jobs || []) {
     if (sourcePaused) break;
@@ -1053,7 +1062,12 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       const sid = hpSidForDistrict(regionId, sectionId);
       if (sid && !targets.some((row) => row.sid === sid)) targets.push({ sid, sectionId });
     }
-    if (!targets.length) continue;
+    if (!targets.length) {
+      // 「這個縣市 5168 沒有對應 sid」⇒ 這一組覆蓋條件對它不適用（不是失敗）：
+      // 推一個 applicable:false 的批次，watcher 會把這一輪記成「不適用」而不是「失敗」。
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `5168 · 地區 ${regionId}`, href: `${HP_SITE}/` }, total: 0, listings: [], errors: [], applicable: false });
+      continue;
+    }
 
     const listings = [];
     const errors = [];
@@ -1067,15 +1081,28 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       let sidTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
         let result;
-        try {
-          result = await fetchHpPage({ sid, page, getHtml });
-        } catch (error) {
-          if (isCrawlCancelled()) throw error;
-          errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
-          const note = noteSourceBlock(blockedStreak, error, pauseLimit);
-          blockedStreak = note.consecutive;
-          sourcePaused = note.pause;
-          break;
+        const cacheKey = `${sid}|${page}`;
+        if (pageCache.has(cacheKey)) {
+          result = pageCache.get(cacheKey);
+        } else {
+          try {
+            result = await fetchHpPage({ sid, page, getHtml });
+            pageCache.set(cacheKey, result);
+          } catch (error) {
+            if (isCrawlCancelled()) throw error;
+            errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
+            const note = noteSourceBlock(blockedStreak, error, pauseLimit);
+            blockedStreak = note.consecutive;
+            if (note.pause && !cooledDown) {
+              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。
+              cooledDown = true;
+              blockedStreak = 0;
+              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));
+            } else {
+              sourcePaused = note.pause;
+            }
+            break;
+          }
         }
         blockedStreak = 0;
         if (page === 1) {
@@ -1112,7 +1139,13 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
               errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page, stage: "detail" });
               const note = noteSourceBlock(blockedStreak, error, pauseLimit);
               blockedStreak = note.consecutive;
-              sourcePaused = note.pause;
+              if (note.pause && !cooledDown) {
+                cooledDown = true;
+                blockedStreak = 0;
+                if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));
+              } else {
+                sourcePaused = note.pause;
+              }
             }
             if (canFetchAddress) addressBudget -= 1;
             else detailBudget -= 1;
@@ -1135,6 +1168,8 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       total,
       listings,
       errors,
+      // 這一輪是不是「因為被擋而停工」（watcher 會據此記下冷卻期，下一輪跳過這一家）。
+      blocked: sourcePaused,
     });
   }
 

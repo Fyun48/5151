@@ -4157,8 +4157,8 @@ const CRAWLSTREAK_MUTATIONS = [
   {
     name: "恢復成功不歸零（失敗輪數只增不減，來源永遠回不到嚴格）",
     file: "v3/src/crawlSourceStreaks.js",
-    from: "      next[id] = { ...prev, fails: 0, lastSuccessAt: at };",
-    to: "      next[id] = { ...prev, lastSuccessAt: at };",
+    from: "      next[id] = { ...prev, fails: 0, lastSuccessAt: at, blockedUntil: \"\" };",
+    to: "      next[id] = { ...prev, lastSuccessAt: at, blockedUntil: \"\" };",
     expect: "恢復成功立刻歸零",
   },
   {
@@ -4192,8 +4192,8 @@ const CRAWLSTREAK_MUTATIONS = [
   {
     name: "忽略容忍名單（永遠從嚴，第九十二批等於沒做）",
     file: "v3/src/crawlSourceStreaks.js",
-    from: "  return (Array.isArray(entries) ? entries : []).filter((entry) => !toleratedSet.has(String(entry?.source || \"\")));",
-    to: "  return (Array.isArray(entries) ? entries : []).filter(() => true);",
+    from: "    if (entry?.applicable === false) return false;\n    return !toleratedSet.has(String(entry?.source || \"\"));",
+    to: "    return true;",
     expect: "安全閥",
   },
   {
@@ -4290,14 +4290,14 @@ const SRCRECOVERY_MUTATIONS = [
     file: "v3/src/houseprice.js",
     from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });",
     to: "          void error;",
-    expect: "5168：被擋（403）時",
+    expect: "連續被擋達門檻兩次才停工",
   },
   {
-    name: "5168：連續被擋也不暫停（同一輪繼續打同一家）",
+    name: "5168：連續被擋也不停工（同一輪繼續打同一家）",
     file: "v3/src/houseprice.js",
-    from: "          const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n          blockedStreak = note.consecutive;\n          sourcePaused = note.pause;",
-    to: "          const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n          blockedStreak = note.consecutive;",
-    expect: "5168：被擋（403）時",
+    from: "            } else {\n              sourcePaused = note.pause;\n            }\n            break;\n          }\n        }\n        blockedStreak = 0;",
+    to: "            }\n            break;\n          }\n        }\n        blockedStreak = 0;",
+    expect: "連續被擋達門檻兩次才停工",
   },
   {
     name: "第一次被擋就停工（第九十五批要修掉的正是這個）",
@@ -4306,13 +4306,8 @@ const SRCRECOVERY_MUTATIONS = [
     to: "  if (isSourceBlocked(error)) return { consecutive: 1, pause: true };\n  return { consecutive: 0, pause: false };",
     expect: "單次被擋不可以讓整個來源停工",
   },
-  {
-    name: "被擋計數不因成功而歸零（偶發阻擋會累積成停工）",
-    file: "v3/src/houseprice.js",
-    from: "        blockedStreak = 0;\n        if (page === 1) {",
-    to: "        if (page === 1) {",
-    expect: "單次被擋不可以讓整個來源停工",
-  },
+  // 第九十六批移除「被擋計數不因成功而歸零」：加了冷卻重試之後，達門檻本身也會把計數歸零，
+  // 所以「成功不歸零」與「成功歸零」的行為幾乎等價（只差多等一次冷卻）——依規則移除等價變異。
   {
     name: "5168 明細量回到 280 筆（流量大宗又回來了）",
     file: "v3/src/houseprice.js",
@@ -4323,23 +4318,23 @@ const SRCRECOVERY_MUTATIONS = [
   {
     name: "住商：單頁失敗不記錄（整批照樣歸零）",
     file: "v3/src/hbhousing.js",
-    from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n          const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n          blockedStreak = note.consecutive;\n          sourcePaused = note.pause;\n          break;",
+    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;\n            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。\n              cooledDown = true;\n              blockedStreak = 0;\n              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
     to: "          break;",
-    expect: "住商：連續兩次被擋才暫停",
+    expect: "住商：連續被擋達門檻兩次才停工",
   },
   {
     name: "信義：單頁失敗不記錄（整批照樣歸零）",
     file: "v3/src/sinyi.js",
-    from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n          const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n          blockedStreak = note.consecutive;\n          sourcePaused = note.pause;\n          break;",
+    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;\n            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。\n              cooledDown = true;\n              blockedStreak = 0;\n              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
     to: "          break;",
-    expect: "信義：連續兩次被限速才暫停",
+    expect: "信義：連續被限速達門檻兩次才停工",
   },
   {
     name: "被封鎖的判定永遠回 false（403 也當成一般失敗一直重打）",
     file: "v3/src/crawlWatchdog.js",
     from: "  if (SOURCE_BLOCKED_CODES.includes(code)) return true;\n  return /HTTP\\s*(401|403|429|503)\\b/.test(String(error?.message || \"\"));",
     to: "  return false;",
-    expect: "5168：被擋（403）時",
+    expect: "連續被擋達門檻兩次才停工",
   },
   {
     name: "HTTP 錯誤不帶出事的網址（403 之後查不出是哪一頁）",
@@ -4407,6 +4402,100 @@ const CRAWLSANDBOX_MUTATIONS = [
     from: 'scp -q -r "$REPO_ROOT/v3/src/." "$SANDBOX_HOST:$SANDBOX_DIR/v3/src/"',
     to: 'echo skip-src-sync',
     expect: "接線：compose 不發佈埠",
+  },
+];
+
+// 第九十六批：同輪去重（A）與被擋冷卻重試（B）。
+const SRCRECOVERY2_MUTATIONS = [
+  {
+    name: "同一輪不再去重（重複的覆蓋條件把同一頁打兩次）",
+    file: "v3/src/houseprice.js",
+    from: "        if (pageCache.has(cacheKey)) {\n          result = pageCache.get(cacheKey);\n        } else {",
+    to: "        if (false) {\n          result = pageCache.get(cacheKey);\n        } else {",
+    expect: "同一輪重複的覆蓋條件只抓同一頁一次",
+  },
+  {
+    name: "達門檻不冷卻重試（一次被擋就整輪放棄）",
+    file: "v3/src/houseprice.js",
+    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。\n              cooledDown = true;\n              blockedStreak = 0;",
+    to: "            if (false) {\n              cooledDown = true;\n              blockedStreak = 0;",
+    expect: "達門檻先冷卻重試",
+  },
+  {
+    name: "冷卻重試無限次（真的被擋也是每 90 秒重來一次，白耗預算）",
+    file: "v3/src/houseprice.js",
+    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。",
+    to: "            if (note.pause) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。",
+    expect: "連續被擋達門檻兩次才停工",
+  },
+  {
+    name: "批次不標記 blocked（冷卻期永遠不會被記住）",
+    file: "v3/src/houseprice.js",
+    from: "      blocked: sourcePaused,",
+    to: "      blocked: false,",
+    expect: "連續被擋達門檻兩次才停工",
+  },
+  {
+    name: "狀態不記冷卻期（下一輪又去撞同一面牆）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "      blockedUntil: round?.blocked === true\n        ? sourceBlockedUntil(at, Number(round?.cooldownMs) || undefined)\n        : prev.blockedUntil,",
+    to: '      blockedUntil: "",',
+    expect: "冷卻期：被擋到停工的來源",
+  },
+  {
+    name: "watcher 不看冷卻期（照樣每輪開頭就打）",
+    file: "v3/src/watcher.js",
+    from: "      if (isSourceCoolingDown(row)) cooling.add(id);",
+    to: "      void row;",
+    expect: "watcher：還在冷卻期的來源",
+  },
+  // 「watcher 不把 blocked 交給狀態」由整輪整合測試那一組的
+  // 「sourceRoundBlocked 永遠回 false」覆蓋（同一件事，不重複列）。
+  {
+    name: "不適用的輪次照樣累積失敗（5168 在非台北／新北的縣市被誤記成連續失敗）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "    if (round?.applicable === false) { notApplicable.push(id); continue; }",
+    to: "    if (false) { notApplicable.push(id); continue; }",
+    expect: "不適用：這一輪沒有可抓行政區的來源",
+  },
+  {
+    name: "不適用的來源仍進阻擋名單（完成紀錄永遠寫不出來）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "    if (entry?.applicable === false) return false;",
+    to: "    if (false) return false;",
+    expect: "不適用：這一輪沒有可抓行政區的來源",
+  },
+  {
+    name: "watcher 不再標記 applicable（不適用的來源被當成失敗輪）",
+    file: "v3/src/watcher.js",
+    from: "    const applicable = batches.some((batch) => batch?.applicable !== false);\n    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable);",
+    to: "    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), true);",
+    expect: "watcher：還在冷卻期的來源",
+  },
+];
+
+// 整輪整合測試（2026-09-30，第九十六批）：讓 runWatch 真的跑一輪。
+const ROUNDINT_MUTATIONS = [
+  {
+    name: "batches 宣告在 try 裡面（noteSourceRound 用到時 ReferenceError，整輪在收集階段炸掉）",
+    file: "v3/src/watcher.js",
+    from: "    let batches = [];\n    try {\n      batches = await run();",
+    to: "    try {\n      const batches = await run();",
+    expect: "runWatch 真的跑完一輪",
+  },
+  {
+    name: "sourceRoundBlocked 永遠回 false（被擋到停工不會被記錄，冷卻期永遠沒有）",
+    file: "v3/src/crawlSourceStreaks.js",
+    from: "  return (Array.isArray(batches) ? batches : []).some((batch) => batch?.blocked === true);",
+    to: "  return false;",
+    expect: "來源被擋到停工時",
+  },
+  {
+    name: "逐輪記錄不寫進排程狀態（來源健康度與政策都看不到）",
+    file: "v3/src/watcher.js",
+    from: "      sourcePolicy = await recordCrawlSourceRoundAsync({ rounds: sourceRounds, at: nowIso() });",
+    to: "      sourcePolicy = { streaks: {}, tolerated: [], toleratedNow: [], recovered: [], failed: [] };",
+    expect: "來源狀態要記進排程狀態",
   },
 ];
 
@@ -5850,8 +5939,9 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /crm-parity/.test(testFile) ? CRMENQ_MUTATIONS
   : /crawl-round-progress/.test(testFile) ? CRAWLROUND_MUTATIONS
   : /crawl-source-streaks/.test(testFile) ? CRAWLSTREAK_MUTATIONS
-  : /source-recovery/.test(testFile) ? SRCRECOVERY_MUTATIONS
+  : /source-recovery/.test(testFile) ? [...SRCRECOVERY_MUTATIONS, ...SRCRECOVERY2_MUTATIONS]
   : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
+  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

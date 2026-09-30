@@ -386,7 +386,11 @@ export async function fetchHfCoveringListings(jobs, options = {}) {
     const cityId = hfCityCode(regionId);
     const cityName = hfCityName(regionId);
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
-    if (!cityId || !sectionIds.length) continue;
+    if (!cityId || !sectionIds.length) {
+      // 好房網沒有這個縣市／沒有行政區 ⇒ 不適用（不是失敗）。
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `好房網 · 地區 ${regionId}`, href: `${HF_SITE}/` }, total: 0, listings: [], errors: [], applicable: false });
+      continue;
+    }
 
     const listings = [];
     const errors = [];

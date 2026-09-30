@@ -5,7 +5,7 @@ import { isExcludedByKeyword } from "./geo.js";
 import { listingKitFrom, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
-import { noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
+import { SOURCE_BLOCK_COOLDOWN_MS, noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HB_SOURCE = "hbhousing";
 export const HB_POST_ID_BASE = 2_200_000_000;
@@ -340,7 +340,13 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
   let sourcePaused = false;
   // 連續被擋次數（成功一頁就歸零）：第一次被擋只跳過那一頁，連續 SOURCE_BLOCK_PAUSE_LIMIT 次才停工。
   let blockedStreak = 0;
+  let cooledDown = false;   // 這一輪是否已用過「先冷卻再重試」那一次
   const pauseLimit = Number(options.blockPauseLimit) || undefined;
+  const cooldownMs = options.blockCooldownMs === undefined
+    ? SOURCE_BLOCK_COOLDOWN_MS
+    : Math.max(0, Number(options.blockCooldownMs) || 0);
+  // 第九十六批 A：同一輪裡「同一個郵遞區號的同一頁」只抓一次（覆蓋條件會重疊，重複請求會把我們推進封鎖窗口）。
+  const pageCache = new Map();
 
   for (const job of jobs || []) {
     if (sourcePaused) break;
@@ -351,7 +357,11 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
       const zip = zipForDistrict(regionId, sectionId);
       if (zip && !zips.some((row) => row.zip === zip)) zips.push({ zip, sectionId });
     }
-    if (!zips.length) continue;
+    if (!zips.length) {
+      // 這一組覆蓋條件在住商沒有對應的郵遞區號 ⇒ 不適用（不是失敗）。
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `住商 · 地區 ${regionId}`, href: `${HB_SITE}/renthouse` }, total: 0, listings: [], errors: [], applicable: false });
+      continue;
+    }
 
     const listings = [];
     const errors = [];
@@ -365,23 +375,36 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
       let zipTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
         let result;
-        try {
-          result = await fetchHbPage({
-            zip,
-            page,
-            pageRows,
-            priceMin: job.priceMin,
-            priceMax: job.priceMax,
-            postJson,
-          });
-        } catch (error) {
-          // 整輪被取消 ⇒ 往上丟（逐頁 fail-soft 不能吞掉取消）。
-          if (isCrawlCancelled()) throw error;
-          errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
-          const note = noteSourceBlock(blockedStreak, error, pauseLimit);
-          blockedStreak = note.consecutive;
-          sourcePaused = note.pause;
-          break;
+        const cacheKey = `${zip}|${page}`;
+        if (pageCache.has(cacheKey)) {
+          result = pageCache.get(cacheKey);
+        } else {
+          try {
+            result = await fetchHbPage({
+              zip,
+              page,
+              pageRows,
+              priceMin: job.priceMin,
+              priceMax: job.priceMax,
+              postJson,
+            });
+            pageCache.set(cacheKey, result);
+          } catch (error) {
+            // 整輪被取消 ⇒ 往上丟（逐頁 fail-soft 不能吞掉取消）。
+            if (isCrawlCancelled()) throw error;
+            errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
+            const note = noteSourceBlock(blockedStreak, error, pauseLimit);
+            blockedStreak = note.consecutive;
+            if (note.pause && !cooledDown) {
+              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。
+              cooledDown = true;
+              blockedStreak = 0;
+              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));
+            } else {
+              sourcePaused = note.pause;
+            }
+            break;
+          }
         }
         blockedStreak = 0;
         if (page === 1) {
@@ -415,6 +438,8 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
       total,
       listings,
       errors,
+      // 這一輪是不是「因為被擋而停工」（watcher 會據此記下冷卻期，下一輪跳過這一家）。
+      blocked: sourcePaused,
     });
   }
 

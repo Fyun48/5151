@@ -312,7 +312,11 @@ export async function fetchDdCoveringListings(jobs, options = {}) {
     const regionId = Number(job.regionId) || 0;
     const city = ddCityName(regionId);
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
-    if (!city || !sectionIds.length) continue;
+    if (!city || !sectionIds.length) {
+      // 租租通沒有這個縣市／沒有行政區 ⇒ 不適用（不是失敗）。
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `租租通 · 地區 ${regionId}`, href: `${DD_SITE}/search` }, total: 0, listings: [], errors: [], applicable: false });
+      continue;
+    }
 
     const listings = [];
     const errors = [];

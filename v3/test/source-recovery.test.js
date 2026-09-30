@@ -203,39 +203,85 @@ test("591：連第一頁都失敗時維持「整個 job 失敗」的語意（wat
   );
 });
 
-test("5168：被擋（403）時只暫停這家，已抓到的行政區與房源照樣回報", async () => {
-  // 第九十五批：**連續兩次**被擋才暫停這一家（第一次只跳過那一頁）。
-  // 所以要有四個行政區：1 成功、2 被擋（只跳過）、3 被擋（達門檻→暫停）、4 不可以再打。
-  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5], searchUrl: "scope" }];
+test("5168：連續被擋達門檻兩次才停工，之前抓到的行政區與房源照樣回報", async () => {
+  // 第九十六批 B 之後的完整語意：
+  //   第 2 次連續被擋 → **先冷卻重試**（cooledDown），計數歸零；
+  //   再連續 2 次被擋 → 才真的讓這一家這一輪停工。
+  // 所以要有六個行政區：1 成功、2/3 被擋（冷卻）、4/5 被擋（停工）、6 不可以再打。
+  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5, 7, 3], searchUrl: "scope" }];
   const listCalls = [];
   const [batch] = await fetchHpCoveringListings(jobs, {
     pages: 1,
     detailGapMs: 0,
     gapMs: 0,
+    blockCooldownMs: 0,
     getHtml: async (url) => {
       if (!String(url).includes("/list/")) return fixture("houseprice-list.html"); // 明細走 HTML 版
       listCalls.push(String(url));
-      // 第 2、3 個行政區的列表頁被擋（正式站的 403 就是發生在列表頁）。
-      if (listCalls.length === 2 || listCalls.length === 3) {
+      if (listCalls.length >= 2 && listCalls.length <= 5) {
         throw Object.assign(new Error(`5168 暫時無法抓取（HTTP 403；${url}）`), { code: "FETCH_BLOCKED" });
       }
       return fixture("houseprice-list.html");
     },
   });
+  assert.equal(listCalls.length, 5, "冷卻重試一次之後仍連續被擋 ⇒ 第六個行政區不可以再打");
+  assert.equal(batch.blocked, true, "批次要標記「這一輪被擋到停工」（watcher 據此記冷卻期）");
   assert.ok(batch.listings.length > 0, "被擋之前抓到的房源不可以被 403 吃掉");
-  assert.equal(listCalls.length, 3, "連續兩次被擋之後就不該再打同一家（第四個行政區也不可以打）");
-  assert.equal(batch.errors.length, 2);
+  assert.equal(batch.errors.length, 4);
   assert.equal(batch.errors[0].code, "FETCH_BLOCKED");
-  assert.equal(batch.errors[0].page, 1);
   assert.ok(batch.errors[0].district, "錯誤要指出是哪個行政區");
   assert.match(batch.errors[0].message, /https:\/\/rent\.houseprice\.tw\/list\//, "錯誤樣本一定要帶出事的網址");
 });
 
-test("住商：連續兩次被擋才暫停，之前抓到的行政區要留下來", async () => {
-  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }];
+test("5168：達門檻先冷卻重試，不會一次被擋就放棄整輪（第九十六批 B）", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5], searchUrl: "scope" }];
+  const listCalls = [];
+  const [batch] = await fetchHpCoveringListings(jobs, {
+    pages: 1, detailGapMs: 0, gapMs: 0, blockCooldownMs: 0,
+    getHtml: async (url) => {
+      if (!String(url).includes("/list/")) return fixture("houseprice-list.html");
+      listCalls.push(String(url));
+      // 第 2、3 次被擋（達門檻 → 冷卻重試），第 4 個行政區恢復成功。
+      if (listCalls.length === 2 || listCalls.length === 3) {
+        throw Object.assign(new Error("5168 暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
+      }
+      return fixture("houseprice-list.html");
+    },
+  });
+  assert.equal(listCalls.length, 4, "冷卻之後要繼續抓後面的行政區（不可以整輪放棄）");
+  assert.equal(batch.blocked, false, "冷卻後恢復成功 ⇒ 不算被擋到停工");
+  assert.equal(batch.errors.length, 2);
+});
+
+test("5168：同一輪重複的覆蓋條件只抓同一頁一次（第九十六批 A）", async () => {
+  // 覆蓋條件本來就會重疊（系統全區 `1|1..12` ＋ 會員子集 `1|2,3,8,9`）：
+  // 沒有快取時同一頁會被重複打，既浪費流量、也讓同一區的同一筆錯誤重複出現。
+  const jobs = [
+    { regionId: 1, sectionIds: [8, 10], searchUrl: "job-a" },
+    { regionId: 1, sectionIds: [8, 10], searchUrl: "job-b" },
+  ];
+  const listCalls = [];
+  const batches = await fetchHpCoveringListings(jobs, {
+    pages: 1, detailGapMs: 0, gapMs: 0, detailLimit: 0, addressDetailLimit: 0,
+    getHtml: async (url) => {
+      if (!String(url).includes("/list/")) return fixture("houseprice-list.html");
+      listCalls.push(String(url));
+      return fixture("houseprice-list.html");
+    },
+  });
+  assert.equal(listCalls.length, 2, `兩個 job 用到同樣兩個行政區 ⇒ 只該打兩頁，實際 ${listCalls.length}`);
+  assert.equal(new Set(listCalls).size, 2, "兩個行政區各一頁");
+  assert.equal(batches.length, 2, "兩個 job 仍然各自回報一個批次");
+  // ⚠️ 第二個批次可以是空的：同一批房源在第一個 job 已經收進 `seen`（post_id 去重），
+  // 這是原本就有的行為，不是快取造成的。要驗的是「總共有房源、而且頁面沒有被重打」。
+  assert.ok(batches.reduce((n, batch) => n + batch.listings.length, 0) > 0, "快取的結果要照樣產生房源");
+});
+
+test("住商：連續被擋達門檻兩次才停工，之前抓到的行政區要留下來", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5, 7, 3], searchUrl: "scope" }];
   let calls = 0;
   const [batch] = await fetchHbCoveringListings(jobs, {
-    pages: 1, gapMs: 0,
+    pages: 1, gapMs: 0, blockCooldownMs: 0,
     postJson: async () => {
       calls += 1;
       if (calls >= 2) throw Object.assign(new Error("住商暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
@@ -243,18 +289,18 @@ test("住商：連續兩次被擋才暫停，之前抓到的行政區要留下�
     },
   });
   assert.ok(batch.listings.length > 0);
-  assert.equal(batch.errors.length, 2);
+  assert.equal(batch.blocked, true);
+  assert.equal(batch.errors.length, 4, "第 2/3 次先冷卻重試，第 4/5 次才停工");
   assert.equal(batch.errors[0].code, "FETCH_BLOCKED");
-  assert.equal(batch.errors[0].page, 1);
   assert.ok(batch.errors[0].district, "錯誤要指出是哪個行政區");
-  assert.equal(calls, 3, "連續兩次被擋之後就不該再打同一家（第三個行政區也不可以打）");
+  assert.equal(calls, 5, "停工之後第六個行政區不可以再打");
 });
 
-test("信義：連續兩次被限速才暫停，之前抓到的行政區要留下來", async () => {
-  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }];
+test("信義：連續被限速達門檻兩次才停工，之前抓到的行政區要留下來", async () => {
+  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5, 7, 3], searchUrl: "scope" }];
   let calls = 0;
   const [batch] = await fetchSinyiCoveringListings(jobs, {
-    pages: 1, gapMs: 0,
+    pages: 1, gapMs: 0, blockCooldownMs: 0,
     postForm: async () => {
       calls += 1;
       if (calls >= 2) throw Object.assign(new Error("信義暫時無法抓取（HTTP 429）"), { code: "RATE_LIMITED" });
@@ -262,10 +308,11 @@ test("信義：連續兩次被限速才暫停，之前抓到的行政區要留�
     },
   });
   assert.ok(batch.listings.length > 0);
-  assert.equal(batch.errors.length, 2);
+  assert.equal(batch.blocked, true);
+  assert.equal(batch.errors.length, 4);
   assert.equal(batch.errors[0].code, "RATE_LIMITED");
   assert.ok(batch.errors[0].district);
-  assert.equal(calls, 3, "連續兩次被限速之後就不該再打同一家（第三個行政區也不可以打）");
+  assert.equal(calls, 5);
 });
 
 test("單次被擋不可以讓整個來源停工（第九十五批：正式站就是這樣整輪 0 筆）", async () => {
@@ -274,7 +321,7 @@ test("單次被擋不可以讓整個來源停工（第九十五批：正式站�
   const hp = [{ regionId: 1, sectionIds: [8, 10, 12, 5, 7], searchUrl: "scope" }];
   const listCalls = [];
   const [hpBatch] = await fetchHpCoveringListings(hp, {
-    pages: 1, detailGapMs: 0, gapMs: 0,
+    pages: 1, detailGapMs: 0, gapMs: 0, blockCooldownMs: 0,
     getHtml: async (url) => {
       if (!String(url).includes("/list/")) return fixture("houseprice-list.html");
       listCalls.push(String(url));
@@ -290,7 +337,7 @@ test("單次被擋不可以讓整個來源停工（第九十五批：正式站�
   // 住商／信義同一組政策。
   let hbCalls = 0;
   const [hbBatch] = await fetchHbCoveringListings([{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }], {
-    pages: 1, gapMs: 0,
+    pages: 1, gapMs: 0, blockCooldownMs: 0,
     postJson: async () => {
       hbCalls += 1;
       if (hbCalls === 2) throw Object.assign(new Error("住商暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
@@ -400,4 +447,71 @@ test("5168 明細量：預設從 280 筆降到 60 筆，且可用 options／環�
   assert.ok(detailCalls.length > 0, "還是要抓明細（只是有上限）");
   assert.ok(detailCalls.length <= 4, `上限 1＋1 時最多兩筆明細（API＋HTML 各一次），實際 ${detailCalls.length}`);
   assert.ok(batch.listings.length > 0, "明細有上限不影響列表頁的房源落地");
+});
+
+test("冷卻期：被擋到停工的來源會記住冷卻到什麼時候，下一輪跳過（第九十六批 B）", async () => {
+  const { applySourceRound } = await import("../src/crawlSourceStreaks.js");
+  const { isSourceCoolingDown, sourceBlockedUntil, SOURCE_BLOCK_COOLDOWN_MS } = await import("../src/crawlWatchdog.js");
+  const at = "2026-09-30T12:00:00.000Z";
+  assert.ok(SOURCE_BLOCK_COOLDOWN_MS > 0, "預設要有冷卻時間（0 只是測試用的覆寫）");
+  // 這一輪被擋到停工 ⇒ 記下 blockedUntil。
+  const blocked = applySourceRound({}, [{ source: "houseprice", covered: 0, total: 6, blocked: true, cooldownMs: 60000, error: "403" }], { at });
+  assert.deepEqual(blocked.blocked, ["houseprice"]);
+  assert.equal(blocked.streaks.houseprice.blockedUntil, "2026-09-30T12:01:00.000Z");
+  assert.equal(isSourceCoolingDown(blocked.streaks.houseprice, Date.parse(at) + 30_000), true, "冷卻期內要跳過");
+  assert.equal(isSourceCoolingDown(blocked.streaks.houseprice, Date.parse(at) + 90_000), false, "冷卻期過了就照常嘗試");
+  // 沒有被擋（一般逾時／解析失敗）不該產生冷卻期。
+  const plain = applySourceRound({}, [{ source: "houseprice", covered: 0, total: 6, error: "timeout" }], { at });
+  assert.equal(plain.streaks.houseprice.blockedUntil, "");
+  assert.equal(isSourceCoolingDown(plain.streaks.houseprice, Date.parse(at)), false);
+  // 恢復成功要清掉冷卻期（照舊從嚴、不留殘影）。
+  const recovered = applySourceRound(blocked.streaks, [{ source: "houseprice", covered: 6, total: 6 }], { at: "2026-09-30T12:02:00.000Z" });
+  assert.equal(recovered.streaks.houseprice.blockedUntil, "");
+  assert.equal(sourceBlockedUntil("壞掉的字串", 60000), "", "時間解析不出來就不要寫冷卻期");
+  assert.equal(sourceBlockedUntil(at, 0), "");
+});
+
+test("watcher：還在冷卻期的來源這一輪要跳過，並在輪次結果留 warning", () => {
+  const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
+  assert.match(src, /const cooling = new Set\(\);/);
+  assert.match(src, /if \(isSourceCoolingDown\(row\)\) cooling\.add\(id\);/);
+  for (const source of ["591", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"]) {
+    assert.match(src, new RegExp(`cooling\\.has\\("${source}"\\)`), `${source} 要有冷卻判斷`);
+  }
+  // 讀不到狀態時不可以讓整輪掛掉。
+  assert.match(src, /const \{ streaks \} = await readCrawlSourceStreaksAsync\(\);/);
+  assert.match(src, /catch \{\n    cooling\.clear\(\);\n  \}/);
+  // 跳過要留紀錄（輪次結果 warnings）。
+  assert.match(src, /仍在冷卻期（跳過這一家，讓對方的封鎖窗口過期）/);
+  // 逐輪記錄要把 blocked 帶進狀態（否則永遠不會有冷卻期）。
+  assert.match(src, /blocked: blocked === true,/);
+  // 這一條刻意盯「用純函式而不是行內運算式」：2026-09-30 沙盒第一輪就是因為行內用到
+  // try 區塊內的 `batches` 而 `ReferenceError`（文字斷言看不到作用域，整合測試才看得到）。
+  assert.match(src, /noteSourceRound\(source, successful, sourceErrors, sourceRoundBlocked\(batches\), applicable\);/);
+  assert.match(src, /let batches = \[\];\n    try \{\n      batches = await run\(\);/);
+});
+
+test("不適用：這一輪沒有可抓行政區的來源不算失敗、也不可以擋住完成紀錄（第九十六批追加）", async () => {
+  const { applySourceRound, blockingCrawlSources, jobCoveredByBlockingSources } = await import("../src/crawlSourceStreaks.js");
+  const at = "2026-09-30T13:00:00.000Z";
+  // 5168 只有台北／新北的 sid：其他縣市的覆蓋條件對它「不適用」。
+  const round = applySourceRound(
+    { houseprice: { fails: 2, lastError: "舊的 403" } },
+    [{ source: "houseprice", covered: 0, total: 6, applicable: false }],
+    { at },
+  );
+  assert.equal(round.streaks.houseprice.fails, 2, "不適用不可以累積失敗輪（原本會被記成第 3 輪失敗）");
+  assert.deepEqual(round.notApplicable, ["houseprice"]);
+  assert.deepEqual(round.recovered, [], "不適用也不是恢復成功");
+  // 不適用的來源不可以擋住完成紀錄（它的 urls 是空的）。
+  const entries = [
+    { source: "591", urls: new Set(["u1"]) },
+    { source: "houseprice", urls: new Set(), applicable: false },
+  ];
+  const blocking = blockingCrawlSources(entries, []);
+  assert.deepEqual(blocking.map((row) => row.source), ["591"], "不適用的來源不得進阻擋名單");
+  assert.equal(jobCoveredByBlockingSources({ searchUrl: "u1" }, blocking), true);
+  // 有錯誤的失敗輪仍然要照舊累積（不能被這條放寬）。
+  const failed = applySourceRound({ houseprice: { fails: 2 } }, [{ source: "houseprice", covered: 0, total: 6, error: "403" }], { at });
+  assert.equal(failed.streaks.houseprice.fails, 3);
 });

@@ -14,10 +14,13 @@
 //   3. 來源一旦恢復成功，連續失敗立刻歸零、照舊從嚴。
 //   4. 安全閥：如果**所有**來源都在容忍名單裡（等於全滅），就不記完成紀錄——
 //      那種輪次不該被當成「已覆蓋」，寧可維持現狀並大聲告警。
+//   5. 被擋而停工的來源會記下 `blockedUntil`（冷卻期）：下一輪若還在冷卻就跳過這一家，
+//      不要每一輪開頭都去撞同一面牆（2026-09-30 第九十六批）。
 //
 // 這一支只有純函式（沒有 DB、沒有 driver），落地的讀寫在 `crawlScheduleAsync.js`
 // （`recordCrawlSourceRoundAsync`／`readCrawlSourceStreaksAsync`），設定鍵沿用 `crawlScheduleV1`。
 import { CRAWL_SOURCE_CATALOG } from "./crawlSources.js";
+import { sourceBlockedUntil } from "./crawlWatchdog.js";
 
 /** 連續失敗幾輪之後，該來源不再阻擋完成紀錄（政策門檻）。 */
 export const SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED = 3;
@@ -38,6 +41,8 @@ export function normalizeSourceStreak(row) {
     lastError: String(row?.lastError || "").slice(0, SOURCE_ERROR_SAMPLE_MAX),
     lastFailureAt: String(row?.lastFailureAt || ""),
     lastSuccessAt: String(row?.lastSuccessAt || ""),
+    // 第九十六批：被擋而停工的來源要「記住冷卻到什麼時候」，下一輪才不會一開頭就去撞同一面牆。
+    blockedUntil: String(row?.blockedUntil || ""),
   };
 }
 
@@ -77,33 +82,57 @@ export function applySourceRound(streaks, rounds, options = {}) {
   const failed = [];
   const recovered = [];
   const toleratedNow = [];
+  const blocked = [];
+  const notApplicable = [];
   for (const round of Array.isArray(rounds) ? rounds : []) {
     const id = String(round?.source || "");
     if (!id) continue;
+    // 「這一輪這個來源沒有可抓的行政區」⇒ 不算成功、也不算失敗，狀態原封不動。
+    if (round?.applicable === false) { notApplicable.push(id); continue; }
     const prev = next[id] || normalizeSourceStreak();
     if (isCoveredRound(round)) {
       // 恢復成功立刻歸零（照舊從嚴）；最後錯誤樣本留著當歷史，不影響判定。
       if (prev.fails > 0) recovered.push(id);
-      next[id] = { ...prev, fails: 0, lastSuccessAt: at };
+      next[id] = { ...prev, fails: 0, lastSuccessAt: at, blockedUntil: "" };
       continue;
     }
     const fails = prev.fails + 1;
     if (fails === threshold) toleratedNow.push(id);
     failed.push(id);
+    if (round?.blocked === true) blocked.push(id);
     next[id] = {
       ...prev,
       fails,
       lastFailureAt: at,
       lastError: String(round?.error || prev.lastError || "").slice(0, SOURCE_ERROR_SAMPLE_MAX),
+      // 這一輪因為被擋而停工 ⇒ 記下冷卻到什麼時候；否則保留原本的值（下一輪若還在冷卻就跳過）。
+      blockedUntil: round?.blocked === true
+        ? sourceBlockedUntil(at, Number(round?.cooldownMs) || undefined)
+        : prev.blockedUntil,
     };
   }
-  return { streaks: next, tolerated: toleratedCrawlSources(next, { threshold }), toleratedNow, recovered, failed };
+  return { streaks: next, tolerated: toleratedCrawlSources(next, { threshold }), toleratedNow, recovered, failed, blocked, notApplicable };
+}
+
+/**
+ * 這一輪的批次裡有沒有「被擋到停工」的來源？
+ *
+ * 抽成純函式有兩個理由：(1) watcher 的 `collectExternal` 在 try/catch 之後才用得到它，
+ * 寫成行內運算式很容易踩到作用域錯誤（2026-09-30 沙盒第一輪就是 `batches is not defined`）；
+ * (2) 這樣才有單元測試蓋得到（純函式可測，不必驅動整個 runWatch）。
+ */
+export function sourceRoundBlocked(batches) {
+  return (Array.isArray(batches) ? batches : []).some((batch) => batch?.blocked === true);
 }
 
 /** 這一輪「還算嚴格」的來源：只有它們會阻擋完成紀錄。 */
 export function blockingCrawlSources(entries, tolerated) {
   const toleratedSet = new Set((tolerated || []).map(String));
-  return (Array.isArray(entries) ? entries : []).filter((entry) => !toleratedSet.has(String(entry?.source || "")));
+  return (Array.isArray(entries) ? entries : []).filter((entry) => {
+    // 這一輪「沒有可抓行政區」的來源不可能覆蓋任何條件，不可以讓它擋住完成紀錄。
+    if (entry?.applicable === false) return false;
+    return !toleratedSet.has(String(entry?.source || ""));
+  });
 }
 
 /**

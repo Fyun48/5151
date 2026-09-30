@@ -32,14 +32,18 @@ import {
   routeJobKeyFor,
   pushPayloadFromEvents,
 } from "./db.js";
-import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync, recordCrawlSourceRoundAsync } from "./crawlScheduleAsync.js";
+import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync, recordCrawlSourceRoundAsync, readCrawlSourceStreaksAsync } from "./crawlScheduleAsync.js";
 // 第九十二批：來源連續失敗的容忍政策（Owner 2026-09-30 同意）。純函式在 crawlSourceStreaks.js，
 // 這裡只負責「逐輪餵結果、拿回誰還會阻擋完成紀錄」。
 import {
   blockingCrawlSources,
+  crawlSourceLabel,
   jobCoveredByBlockingSources,
+  sourceRoundBlocked,
   sourceRoundWarnings,
 } from "./crawlSourceStreaks.js";
+// 第九十六批 B：被擋而停工的來源會記下冷卻期；還在冷卻的這一輪直接跳過（不要每輪開頭都去撞同一面牆）。
+import { isSourceCoolingDown, SOURCE_BLOCK_COOLDOWN_MS } from "./crawlWatchdog.js";
 // 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
 // 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
 import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
@@ -700,6 +704,17 @@ export async function runWatch(options = {}) {
     };
   }
   const settings = runtime.settings;
+  // 第九十六批 B：開工前先看哪些來源還在冷卻期（上一輪被擋到停工）。
+  // 讀不到就當作沒有（維持原本行為，不讓診斷狀態擋住整輪）。
+  const cooling = new Set();
+  try {
+    const { streaks } = await readCrawlSourceStreaksAsync();
+    for (const [id, row] of Object.entries(streaks || {})) {
+      if (isSourceCoolingDown(row)) cooling.add(id);
+    }
+  } catch {
+    cooling.clear();
+  }
   const plan = Array.isArray(options.jobs)
     ? {
       jobs: options.jobs,
@@ -726,11 +741,18 @@ export async function runWatch(options = {}) {
   // `sourceRounds` 則是這一輪各來源的成敗，收尾時一次寫進 `crawlScheduleV1.sourceStreaks`。
   const sourceSuccess = [];
   const sourceRounds = [];
-  const noteSourceRound = (source, urls, sourceErrors) => {
+  const noteSourceRound = (source, urls, sourceErrors, blocked = false, applicable = true) => {
     sourceRounds.push({
       source,
       covered: urls.size,
       total: jobs.length,
+      // 這一輪是不是「因為被擋而停工」（會換算成 blockedUntil 冷卻期）。
+      blocked: blocked === true,
+      cooldownMs: SOURCE_BLOCK_COOLDOWN_MS,
+      // 這一輪有沒有「這個來源真的能抓的行政區」？
+      // 2026-09-30 沙盒實測：5168 只有台北／新北的 sid，其他縣市的覆蓋條件會讓它一個批次都生不出來
+      // ⇒ 原本被算成「失敗輪」，`fails` 一路累積、後台顯示「連續失敗 7 輪」卻沒有任何錯誤訊息。
+      applicable: applicable !== false,
       // 只留少量樣本（狀態會寫進 settings 的單一 JSON 值，不要把整包錯誤塞進去）。
       error: [...new Set((sourceErrors || []).filter(Boolean))].slice(0, 3).join("；"),
     });
@@ -746,7 +768,7 @@ export async function runWatch(options = {}) {
     workLng: settings.workLng,
   };
 
-  if (want591) {
+  if (want591 && !cooling.has("591")) {
     const successful = new Set();
     const sourceErrors = [];
     sourceSuccess.push({ source: "591", urls: successful });
@@ -773,17 +795,25 @@ export async function runWatch(options = {}) {
         }
       }
     }
-    noteSourceRound("591", successful, sourceErrors);
+    noteSourceRound("591", successful, sourceErrors, false, true);
   }
 
   async function collectExternal(source, label, run) {
     const successful = new Set();
     const sourceErrors = [];
     sourceSuccess.push({ source, urls: successful });
+    // ⚠️ 一定要宣告在 try 外面：`noteSourceRound(...)` 在 try/catch 之後要用它，
+    // 寫在 try 裡面會是 `ReferenceError: batches is not defined`（2026-09-30 沙盒第一輪就抓到，
+    // 當時的 watcher 測試只比對原始碼文字，抓不到這種作用域錯誤）。
+    let batches = [];
     try {
-      const batches = await run();
+      batches = await run();
       throwIfCrawlCancelled();
-      for (const batch of batches) {
+      // 「沒有可抓的行政區」的批次（`applicable: false`）不進 collected、也不算成功，
+      // 但要讓這一輪知道「這個來源這一輪不適用」，才不會被誤記成失敗。
+      const applicableBatches = batches.filter((batch) => batch?.applicable !== false);
+      if (!applicableBatches.length) sourceSuccess[sourceSuccess.length - 1].applicable = false;
+      for (const batch of applicableBatches) {
         if (!batch.errors?.length && batch.searchUrl) successful.add(batch.searchUrl);
         for (const error of batch.errors || []) {
           const line = `${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`;
@@ -801,24 +831,26 @@ export async function runWatch(options = {}) {
       errors.push(`${label} → ${error.message}`);
       sourceErrors.push(error.message);
     }
-    noteSourceRound(source, successful, sourceErrors);
+    // 這一批是不是「被擋到停工」：只要有任一批次回報 blocked，就當這一家這一輪被擋。
+    const applicable = batches.some((batch) => batch?.applicable !== false);
+    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable);
   }
 
-  if (wantHb) {
+  if (wantHb && !cooling.has("hbhousing")) {
     await collectExternal("hbhousing", "住商", () => fetchHbCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postJson: options.hbPostJson,
     }));
   }
-  if (wantSinyi) {
+  if (wantSinyi && !cooling.has("sinyi")) {
     await collectExternal("sinyi", "信義", () => fetchSinyiCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.sinyiPostForm,
     }));
   }
-  if (wantHp) {
+  if (wantHp && !cooling.has("houseprice")) {
     await collectExternal("houseprice", "5168", () => fetchHpCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
@@ -826,21 +858,21 @@ export async function runWatch(options = {}) {
       hasGeo: listingHasTrustedGeo,
     }));
   }
-  if (wantDd) {
+  if (wantDd && !cooling.has("ddroom")) {
     await collectExternal("ddroom", "租租通", () => fetchDdCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       getJson: options.ddGetJson,
     }));
   }
-  if (wantHf) {
+  if (wantHf && !cooling.has("housefun")) {
     await collectExternal("housefun", "好房網", () => fetchHfCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.hfPostForm,
     }));
   }
-  if (wantRakuya) {
+  if (wantRakuya && !cooling.has("rakuya")) {
     repairRakuyaScopes(db, jobs);
     // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼（重抓或跳頁）。
     const startPages = await getRakuyaPageCursorsAsync();
@@ -867,6 +899,9 @@ export async function runWatch(options = {}) {
     }
   }
   const sourceWarnings = sourceRoundWarnings(sourcePolicy, sourceRounds);
+  for (const id of cooling) {
+    sourceWarnings.push(`抓取來源「${crawlSourceLabel(id)}」上一輪被擋，這一輪仍在冷卻期（跳過這一家，讓對方的封鎖窗口過期）`);
+  }
   for (const warning of sourceWarnings) console.warn(warning);
 
   if (!collected.length) {
@@ -1102,6 +1137,7 @@ export async function runWatch(options = {}) {
       ...round,
       fails: Number(sourcePolicy.streaks?.[round.source]?.fails) || 0,
       tolerated: sourcePolicy.tolerated.includes(round.source),
+      applicable: round.applicable !== false,
       lastError: sourcePolicy.streaks?.[round.source]?.lastError || "",
     })),
     offline: offlineSweep,
