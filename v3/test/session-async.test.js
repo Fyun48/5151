@@ -35,10 +35,13 @@ const db = (await import("../src/db.js")).sqliteHandle();
 const {
   SESSION_BY_EMAIL_SQL,
   isStaticAssetPath,
+  publicPath,
   readSession,
   readSessionAsync,
+  requireAuth,
   resolveSession,
   sessionCookie,
+  skippableStaticAsset,
 } = await import("../src/auth.js");
 
 const PG = { driver: "postgres" };
@@ -215,6 +218,54 @@ test("靜態資產即使帶 cookie 也不解析 session（/media、/vendor、/ic
   await runMiddleware(apiReq, { ...PG, exec });
   assert.equal(readSession(apiReq)?.userId, 51, "/api/media 是 API，必須解析 session");
   assert.equal(exec.calls.length, 1);
+});
+
+test("🚨 2026-09-30 事故：requireAuth 會擋的靜態資產不得跳過解析（後台 .js 對所有人 302）", async () => {
+  // 事故：`resolveSession()` 對**所有**靜態副檔名路徑都寫入「未登入」，但 `requireAuth()`
+  // 仍然要擋 `/admin-ia.js` 這幾支（它們不在 `publicPath()` 裡）⇒ 連已登入的 Owner 都拿到
+  // 302 → `/login.html`，瀏覽器把登入頁 HTML 當成 JS 執行（SyntaxError）⇒ 後台只剩靜態骨架
+  //（左側功能分類與各卡片內容都不會 render）。判準：只有「公開的」靜態資產可以跳過解析。
+  const GATED = ["/admin-ia.js", "/admin-support.js", "/admin-providers.js"];
+  for (const p of GATED) {
+    assert.equal(publicPath({ path: p }), false, `${p} 是「需要登入」的路徑（這條守衛的前提）`);
+    assert.equal(isStaticAssetPath(p), true, `${p} 符合靜態副檔名`);
+    assert.equal(skippableStaticAsset(p), false, `${p} 需要身分，跳過解析等於讓登入者也被導去登入頁`);
+  }
+  // 公開的靜態資產仍然要跳過（效能理由不變：一次載入 30 個檔案不該查 30 次 users）。
+  for (const p of ["/mascot.js", "/tokens.css", "/support-page.js", "/media/lib/a.png",
+    "/vendor/htmx.min.js", "/icons/i.svg", "/brand/b.png", "/kit/components.css"]) {
+    assert.equal(publicPath({ path: p }), true, `${p} 應該是公開路徑`);
+    assert.equal(skippableStaticAsset(p), true, `${p} 是公開資產，必須跳過解析`);
+  }
+
+  // 端到端（中介層 ＋ requireAuth 一起跑）：登入者要真的被放行，未登入者仍然要被擋。
+  const exec = resetUsers();
+  seedUser(exec.raw, { id: 91, email: "asset@example.test", role: "admin" });
+  const fakeRes = () => {
+    const res = {
+      location: undefined,
+      redirect(url) { res.location = url; },
+      status() { return res; },
+      json() { return res; },
+    };
+    return res;
+  };
+  for (const p of GATED) {
+    const req = { headers: { cookie: cookieHeader("asset@example.test") }, path: p, accepts: () => "html" };
+    await runMiddleware(req, { ...PG, exec });
+    assert.ok(readSession(req), `${p}：解析後必須有 session（否則 requireAuth 一定擋）`);
+    const res = fakeRes();
+    let nexted = 0;
+    requireAuth(req, res, () => { nexted += 1; });
+    assert.equal(res.location, undefined, `${p} 不該被導去登入頁（實際 ${res.location}）`);
+    assert.equal(nexted, 1, `${p} 必須放行到靜態檔處理`);
+  }
+  const anonReq = { headers: {}, path: "/admin-ia.js", accepts: () => "html" };
+  await runMiddleware(anonReq, { ...PG, exec });
+  assert.equal(readSession(anonReq), null);
+  const anonRes = fakeRes();
+  requireAuth(anonReq, anonRes, () => { throw new Error("未登入不得放行後台資產"); });
+  assert.equal(anonRes.location, "/login.html", "未登入仍然要擋（不能為了修這個把後台資產變成公開）");
 });
 
 test("isStaticAssetPath：靜態檔要跳過、動態路由不得被誤判", () => {

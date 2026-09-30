@@ -30,6 +30,12 @@
   88 非路由工具安全閥／89 `/api/*` 一律回 JSON／90 修「登入後變訪客」（缺 import ＋ 漏 await）／
   91 抓取輪次預算 ＋ 逐批完成記錄／92 來源連續失敗的放行政策（見 §3）。
 - 正式站現況：`/api/health` ok；**登入已恢復正常（Owner 已確認）**；`houseprice`(5168) 自 09-26 無新資料。
+- 🚨 **2026-09-30 追加事故（已修、尚未部署）**：後台「版面與功能分類全不見」。根因是
+  `resolveSession()` 對**所有**靜態副檔名路徑都寫入「未登入」，但 `requireAuth()` 仍要擋
+  `/admin-ia.js`／`/admin-support.js`／`/admin-providers.js` ⇒ 那三支檔對**已登入的人**也回
+  302 到 `/login.html`，瀏覽器把登入頁 HTML 當 JS 執行（SyntaxError）⇒ 後台只剩靜態骨架。
+  修法：`auth.js` 新增 `skippableStaticAsset()`（只有「公開的」靜態資產才跳過解析）。
+  詳見主文件 §93（二之負六十四）。**部署後才會好**。
 
 ## 3. 第九十二批：來源連續失敗的放行政策（**已實作並合併，尚未部署**）
 
@@ -138,5 +144,10 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     「錨點出現 2 次」擋下；改用含前後行的片段（`errors,\n      warnings: …,\n      sources: …,\n      skipped: "portals",`）。
     同理，測試若用 `assert.match(src, /…/)` 驗一個出現兩次的字串，變異只改其中一處時**會漏殺**
     ⇒ 改成數出現次數（`src.split(x).length - 1 === 2`）。
-12. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+12. **中介層的「跳過」條件必須與守門條件一致**（2026-09-30 事故）：`resolveSession()` 為了效能
+    跳過靜態資產的 session 解析，但 `requireAuth()` 還是要擋同一批檔案 ⇒ 需要登入的靜態資產
+    （`/admin-ia.js` 等）變成「對任何人都未登入」→ 302 到登入頁 → 瀏覽器把 HTML 當 JS 執行，
+    整頁初始化靜默死掉（畫面只剩靜態骨架，console 只有一句 SyntaxError）。
+    寫這種 skip 條件時，問句要改成「這個路徑**本來就不需要身分**嗎」，不是「它像不像靜態檔」。
+13. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
     ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。
