@@ -14,10 +14,14 @@
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { sqliteHandle } from "../src/db.js";
 import { createIndexStatements, importStore } from "../src/pgSchema.js";
+import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 
 // SQLite 專用的函式／語法：這些索引在 PG 上不可能成立，明確跳過並記錄。
 const SQLITE_ONLY = /instr\s*\(|julianday\s*\(|strftime\s*\(|datetime\s*\(|date\s*\(|COLLATE\s+NOCASE|GLOB\b|printf\s*\(/i;
 
+// 這支會把 SQLite 的 schema 與列鏡射進 PG_URL 指的庫 ⇒ 目標庫必須在允許清單內
+// （CI 的拋棄式 PG 是 tracker_test，在清單內；正式庫要動手得明確設 ALLOW_PRODUCTION_PG_TARGET=1）。
+assertPgTargetAllowed("pg-integration-setup", process.env.PG_URL || process.env.DATABASE_URL || "");
 const drv = await createPostgresDriver({ env: process.env });
 const db = sqliteHandle();
 try {

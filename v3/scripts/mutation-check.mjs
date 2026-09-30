@@ -7,6 +7,7 @@
 //   mutation 清單寫在 MUTATIONS，每條都要指名「預期被殺掉的測試」。
 //   `from` 必須在檔案中**恰好出現一次**（避免改錯地方，見 AGENT-RULES §七.2）。
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { execFileSync as execFileSyncForGuard } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -16,6 +17,27 @@ const SRC = "v3/src/sameHouseAsync.js";
 const USER_SRC = "v3/src/userSameHouseAsync.js";
 const AUDIT_SRC = "v3/src/adminAuditAsync.js";
 const AUDIT_HEALTH_SRC = "v3/src/adminAuditHealth.js";
+
+// 🚨 第八十八批安全閥：這支工具會**就地改寫 `v3/src/*.js`**，跑完才還原。
+// 正式站的 compose 把 `./v3/src` 掛進容器並用 `node --watch-path=src` 執行
+// （`docker-compose.yml:43-45`）⇒ 在正式站原始碼目錄跑這支，變異版原始碼會被**熱載入**；
+// 被 SIGKILL 打斷還可能留下變異檔。正式站那份是 SCP 進去的、**不是 git 工作區**，
+// 所以這裡用「必須在 git work tree 內」當守衛（本機 repo 一定過）。
+// 真的要在非 git 目錄跑（例如拋棄式複本）請設 MUTATION_CHECK_ALLOW_NON_GIT=1。
+function assertMutableSourceTree() {
+  if (String(process.env.MUTATION_CHECK_ALLOW_NON_GIT || "") === "1") return;
+  try {
+    const top = execFileSyncForGuard("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    if (!top) throw new Error("empty");
+  } catch {
+    console.error(
+      "[mutation] 拒絕執行：這裡不是 git 工作區。這支工具會就地改寫 v3/src/*.js，"
+      + "在正式站原始碼目錄（容器 --watch-path 會熱載入）跑可能把變異版程式碼送進正式站。"
+      + "請在 repo 內跑；確定要在非 git 目錄跑請設 MUTATION_CHECK_ALLOW_NON_GIT=1。",
+    );
+    process.exit(2);
+  }
+}
 
 // 稽核失敗可視性的變異集（v3/test/admin-audit-visibility.test.js）。
 // 這一組要證明的是「痕跡真的會留下」——因為「沒有痕跡」正是原本壞掉的東西。
@@ -3867,6 +3889,81 @@ const OFFERCREATE_MUTATIONS = [
   },
 ];
 
+// 維運／CI 腳本的 store 安全閥（第八十八批）。
+// 這一組要證明的是「跑錯 store 會變成看得見的錯誤」——因為原本的失敗模式是**靜默寫錯**。
+const DOMAINGUARD_MUTATIONS = [
+  {
+    name: "PG 模式下不再拒絕（同步工具照樣寫本機 v3.db）",
+    file: "v3/src/domainToolGuards.js",
+    from: "  if (driverOf(env) !== \"postgres\") return;",
+    to: "  return;",
+    expect: "assertSynchronousDomainTool",
+  },
+  {
+    name: "允許清單被繞過（任何資料庫都放行）",
+    file: "v3/src/domainToolGuards.js",
+    from: "  if (allow.includes(db)) return db;",
+    to: "  return db;",
+    expect: "assertPgTargetAllowed",
+  },
+  {
+    name: "覆寫旗標失效（正式庫永遠進不去，連明示也不行）",
+    file: "v3/src/domainToolGuards.js",
+    from: "  if (String(env[PG_TARGET_OVERRIDE_ENV] || \"\").trim() === \"1\") return db;",
+    to: "  if (false) return db;",
+    expect: "assertPgTargetAllowed",
+  },
+  {
+    name: "取不出資料庫名稱也照跑（不猜目標的守衛失效）",
+    file: "v3/src/domainToolGuards.js",
+    from: "  if (!db) {\n    throw new Error(`${tool}：PG_URL 看不出資料庫名稱，拒絕執行（不猜目標）`);\n  }",
+    to: "  if (!db) {\n    return db;\n  }",
+    expect: "assertPgTargetAllowed",
+  },
+  {
+    name: "pg-import 不檢查目標庫（正式庫照灌）",
+    file: "v3/scripts/pg-import.mjs",
+    from: 'assertPgTargetAllowed("pg-import", env.PG_URL || env.DATABASE_URL || "");',
+    to: 'void assertPgTargetAllowed;',
+    expect: "v3/scripts 的 PG 工具",
+  },
+  {
+    name: "stage1 domain 腳本拿掉 PG 守衛（靜默寫本機）",
+    file: ".github/scripts/activate-rental-marketplace-stage1-domain.mjs",
+    from: '  assertSqliteMode("activate-rental-marketplace-stage1-domain");',
+    to: "  // assertSqliteMode removed",
+    expect: "只吃 SQLite handle 的 CI 腳本",
+  },
+  {
+    name: "PG 整合測試入口又變回靜默跳過",
+    file: "v3/scripts/run-pg-integration.sh",
+    from: '  echo "[pg] SKIP：沒有設定 PG（PG_URL／PG_TEST_URL／PGHOST／DB_DRIVER=postgres）⇒ 沒有執行任何整合測試" >&2',
+    to: '  : >&2',
+    expect: "run-pg-integration.sh",
+  },
+  {
+    name: "REQUIRE_PG 失效（沒跑也回成功）",
+    file: "v3/scripts/run-pg-integration.sh",
+    from: '  if [ "${REQUIRE_PG:-}" = "1" ]; then',
+    to: '  if [ "0" = "1" ]; then',
+    expect: "run-pg-integration.sh",
+  },
+  {
+    name: "變異工具不再要求 git 工作區（可在正式站原始碼目錄跑）",
+    file: "v3/scripts/mutation-check.mjs",
+    from: "assertMutableSourceTree();\n\nconst testFile =",
+    to: "const testFile =",
+    expect: "mutation-check",
+  },
+  {
+    name: "變異工具的守衛用 exit 0 假裝沒事（呼叫端看不出被拒絕）",
+    file: "v3/scripts/mutation-check.mjs",
+    from: "      + \"請在 repo 內跑；確定要在非 git 目錄跑請設 MUTATION_CHECK_ALLOW_NON_GIT=1。\",\n    );\n    process.exit(2);",
+    to: "      + \"請在 repo 內跑；確定要在非 git 目錄跑請設 MUTATION_CHECK_ALLOW_NON_GIT=1。\",\n    );\n    process.exit(0);",
+    expect: "mutation-check",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5270,6 +5367,8 @@ const PROFILEASYNC_MUTATIONS = [
   },
 ];
 
+assertMutableSourceTree();
+
 const testFile = process.argv[2] || "v3/test/reject-match-async.test.js";
 const asJson = process.argv.includes("--json");
 // --only=<子字串>：只跑名稱含該子字串的變異（除錯用）。
@@ -5299,6 +5398,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /oauth-callback-async/.test(testFile) ? OAUTHCB_MUTATIONS
   : /listing-import-start-async/.test(testFile) ? IMPORTSTART_MUTATIONS
   : /wish-offer-create-async/.test(testFile) ? OFFERCREATE_MUTATIONS
+  : /domain-tool-guards/.test(testFile) ? DOMAINGUARD_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

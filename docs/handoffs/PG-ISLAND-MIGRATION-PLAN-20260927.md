@@ -4827,15 +4827,15 @@ CI 內沒有任何 `schedule:`／`cron:`（實查 `.github/workflows/*` 命中 0
 
 | 優先序 | 項目 | 理由 |
 |---|---|---|
-| **高** | CI `activate-rental-marketplace-*`／`prepare-…-fixtures` | 「回報成功但正式站等於沒啟用」＝最容易被誤信的一種；修法小（改走 `saveRentalMarketplaceFlagsAsync` 或直接改 PG settings） |
-| **高** | CI `production-uat-stages-functional` | 正式站 UAT 目前是**自我一致的假通過**，會讓「UAT 綠」失去意義 |
+| **高** | CI `activate-rental-marketplace-*`／`prepare-…-fixtures` | ✅ **第八十八批已 fail-closed**（PG 模式直接拒絕、不再靜默寫本機）；PG 化的啟用路徑見第八十九批 |
+| **高** | CI `production-uat-stages-functional` | ✅ **第八十八批已 fail-closed**（不再假通過）；PG 版 fixture 待做 |
 | **高** | 提案逾期 tick（`runWishOfferExpiryTick`） | 使用者看得到的狀態錯誤：PG 的 pending 提案不會自己過期 |
 | **高** | 租賃通知 tick（`runRentalNotifyTick`） | PG deliveries 沒有 drain；目前因 outbound 關閉而衝擊有限，一旦打開就會立刻顯現 |
 | **中** | 許願房生命週期 tick（`runWishLifecycleTick`） | 狀態／統計與到期提醒不更新；配對仍正確 |
 | **中** | CRM 遞送 loop ＋ route 內的 `enqueueCrmFromFeedback` | CRM 連結靜默失效；async 零件已齊，工程量小 |
-| **中** | `mutation-check.mjs` 的執行位置紀律 | 不碰 DB，但在正式站原始碼目錄跑會被容器熱載入；**建議在文件與工具輸出加警語** |
-| **中** | `pg-import`／`cutover-*`／`test:pg`／`sqlite-consistency-snapshot` 的目標與新鮮度 | 指到正式庫就會寫錯；建議加「目標庫必須是允許清單」的 fail-closed 檢查 |
-| **低** | `migrate-v3-data-volume.yml`、`predeploy` 的 `v3.db` 前置條件、`run-pg-integration.sh` 的靜默跳過 | 卡流程或產生假訊號，不寫錯資料 |
+| **中** | `mutation-check.mjs` 的執行位置紀律 | ✅ **第八十八批已加守衛**（非 git 工作區拒絕執行，exit 2） |
+| **中** | `pg-import`／`test:pg`／`pg-columns-ab` 的目標庫 | ✅ **第八十八批已加目標庫允許清單**；`cutover-*` 的快照新鮮度仍待處理 |
+| **低** | `migrate-v3-data-volume.yml`、`predeploy` 的 `v3.db` 前置條件、`run-pg-integration.sh` 的靜默跳過 | ✅ 靜默跳過已修（大聲 SKIP＋`REQUIRE_PG=1`）；其餘兩項仍待處理 |
 | **低** | `workerConvergence.js` 接線＋PG migration runner | 不是缺陷，是「已寫好未接線」；可作為上面幾項的統一做法（`jobQueueFor()` 已支援兩種 driver） |
 
 > ⚠️ 以上都**沒有**在本次盤點中動手修改；要不要移植、以什麼順序移植，等 Owner 決定。
@@ -4863,6 +4863,67 @@ grep -E '^DB_DRIVER=' /home/cline/.secrets/apps/5151-prod-casaos.env
    來源 PR #498 尚未合併 ⇒ 主機上還有多少「repo 沒有的腳本」需要一次盤點。
 4. 爬蟲那一輪為何超過 15 分鐘、以及 pid 39 那條 4 天的 active backend 是什麼（需另外查）。
 5. `V3_OPS_COMMAND_APPLY_URL`／`OPS_REMOTE_CS_DELIVERY` 的預期長期狀態（目前兩者皆未設＝停用中）。
+
+## 二之負五十九、2026-09-30 第八十八批：非路由工具的安全閥（把「跑錯 store」變成看得見的錯誤）
+
+### 88-2.1 範圍
+
+第八十七批之後的盤點（§二之負五十八）指出：正式站已是 PG，但一批**非路由工具**仍假設
+「本機 SQLite 就是正式資料」——它們會靜默寫進容器本機 `/data/v3.db`（站上讀 PG ⇒ 等於沒生效），
+而 workflow 照樣回報成功；另一批會寫 PG 的工具則完全由 `PG_URL` 決定目標，指到正式庫就寫正式庫。
+
+本批**不改任何產品程式碼**，只做兩件事：**拒絕跑錯地方**（fail-closed）＋把正確做法寫進訊息。
+真正的 PG 化（啟用腳本改走 async 島嶼、UAT fixture 的 PG 版）留給下一批。
+
+### 88-2.2 做法
+
+- 新增 `v3/src/domainToolGuards.js`：
+  - `assertSynchronousDomainTool(tool, { env, hint })`：`DB_DRIVER=postgres` 時**拒絕執行**，
+    訊息寫明「只會寫進容器本機 v3.db（站上讀 PG ⇒ 等於沒生效）」與替代做法。
+  - `assertPgTargetAllowed(tool, url, { env, allow })`：PG 目標庫必須在允許清單
+    （`repro`／`tracker_test`／`repro2`，與 live PG 測試同一組）；清單外要動手必須明確設
+    `ALLOW_PRODUCTION_PG_TARGET=1`；取不出資料庫名稱一律拒絕（不猜目標）。
+  - `driverOf()`／`databaseNameFromUrl()` 兩個純函式（`driverOf` 直接走 `resolveDbDriver`，判定只有一份）。
+- `.github/scripts/**` 五支只吃 SQLite handle 的腳本（`activate-rental-marketplace-stage1-domain`／
+  `-stages-domain`／`-pra-domain`／`-stage1-postcheck`、`production-uat-stages-wiring`）
+  各加一個**內嵌**的 `assertSqliteMode(tool)`，放在任何 DB 存取之前。
+  ⚠️ 內嵌是刻意的：這些腳本是 `docker cp` 進「目前已部署」的容器執行，而
+  `v3/src/domainToolGuards.js` 要等下一次部署才會進到 `/app/src`；直接 import 會讓現行部署的
+  workflow 以 `ERR_MODULE_NOT_FOUND` 失敗（那比原本的錯誤更難懂）。兩邊判定條件一致。
+- `v3/scripts/pg-import.mjs`／`pg-integration-setup.mjs`／`pg-columns-ab.mjs` 接上
+  `assertPgTargetAllowed()`（`pg-columns-ab` 會在目標庫插 500 筆假房源、`pg-import` 會灌舊快照）。
+- `v3/scripts/run-pg-integration.sh`：沒有 PG 時改成**大聲 SKIP**（原本靜默 `exit 0`，
+  於是「PG 整合測試通過」可能只是「根本沒跑」）；需要嚴格模式設 `REQUIRE_PG=1` 讓它失敗。
+- `v3/scripts/mutation-check.mjs`：新增 `assertMutableSourceTree()`——不是 git 工作區就拒絕執行。
+  理由：正式站 compose 把 `./v3/src` 掛進容器並用 `node --watch-path=src` 執行
+  （`docker-compose.yml:43-45`），在正式站原始碼目錄跑變異工具會被**熱載入**變異版程式碼；
+  正式站那份是 SCP 進去的、不是 git 工作區。要在非 git 目錄跑（拋棄式複本）設
+  `MUTATION_CHECK_ALLOW_NON_GIT=1`。
+
+### 88-2.3 測試
+
+- `v3/test/domain-tool-guards.test.js`（**8 項全綠**，新檔）：
+  守衛的 PG 模式拒絕／SQLite 模式放行、`driverOf` 判定、允許清單與覆寫、
+  空／壞 URL 拒絕、三支 v3 工具與五支 CI 腳本的接線（含「守衛必須早於第一個 DB 存取」的
+  位置斷言）、以子程序實跑確認拒絕、`run-pg-integration.sh` 的 SKIP 與 `REQUIRE_PG=1`、
+  `mutation-check` 在非 git 目錄以 exit 2 拒絕。
+- **變異 10 條全殺**（`DOMAINGUARD_MUTATIONS`）。
+- 既有 activation 家族測試（41 項）不受影響：SQLite 模式下守衛是 no-op。
+- 踩點：位置斷言原本用「檔案前 40 行」與 `db.prepare(` 當記號 → **誤報**（`countDemandPosts(db)`
+  這種吃參數的純函式在檔案開頭就出現、狀態機的定義也在 `main()` 之前）。改成盯
+  「`main()` 真的開始做事」的呼叫點記號（`await import(href)`／`  runStage1Domain({`／
+  `const mode = String(`）。
+
+### 88-2.4 這一包沒有做（留給下一批）
+
+1. **PG 模式下真正的啟用路徑**：把 stage1／stages／pra 三個 domain 腳本的 flags 讀寫改成
+   async 島嶼（`rentalCatalogAsync.getRentalMarketplaceFlagsAsync`／`saveRentalMarketplaceFlagsAsync`），
+   狀態機改成 async（測試呼叫點要一起加 `await`）。在那之前，PG 模式要改 flag 請用產品端
+   `PUT /api/admin/rental-marketplace-flags`（已是 PG-aware）。
+   > ✅ **2026-09-30 更新：已完成**，見 §二之負六十（第八十九批）。
+2. **UAT fixture 的 PG 版**（`production-uat-stages-wiring.mjs` 目前 fail-closed）。
+3. `cutover-backfill.mjs`／`cutover-conflicts.mjs` 的「快照新鮮度」檢查（它們不連 DB，只產 SQL）。
+4. `sqlite-consistency-snapshot.mjs` 在 PG 模式下會對過期 SQLite 做快照並寫進正式資料卷。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
