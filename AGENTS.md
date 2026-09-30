@@ -66,6 +66,22 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 反面教材（2026-09-30 事故）：5168 一個間歇性 403 就讓整批歸零，表面上卻是「來源連續失敗」，
 4 天沒有新資料也查不出原因。**不要只加測試來補這種缺陷，第一線就要擋。**
 
+### 開 PR 前先跑沙盒（Owner 指定，2026-09-30 起）
+
+抓取邏輯**不准再拿正式站當白老鼠**。沙盒容器 `5151-crawl-sandbox`（casa-nas，寫隔離庫
+`crawl_sandbox`）用真程式、真來源、同一顆映像跑完整輪次：
+
+```bash
+SANDBOX_ROUNDS=1 bash v3/scripts/crawl-sandbox-sync.sh   # 同步目前 checkout 並跑一輪
+SANDBOX_ROUNDS=3 bash v3/scripts/crawl-sandbox-sync.sh   # 時間相關政策（連續 N 輪）要跑滿 N 輪
+ssh casa-nas "docker exec 5151-crawl-sandbox tail -3 /data/crawl-sandbox.jsonl"   # 報告
+```
+
+- 動到 fetch／頁碼／重試／暫停／政策／預算的 PR，**必須附上沙盒報告**（哪一輪、耗時、
+  每來源 covered/total、`completed` 與 `covers_max_last_run_at` 有沒有前進）。沒有報告不算測過。
+- 沙盒只寫隔離庫（程式啟動時會用 `assertPgTargetAllowed()` 再檢查一次）；
+  它**不會**自動跟著部署更新——同步時機由人決定，這樣才能測「還沒上線的候選版本」。
+
 ## Pull requests 與部署（Owner 覆寫，2026-09-10 起強制）
 
 做完工作後請開**非草稿** PR（`draft: false`）。

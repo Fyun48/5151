@@ -5543,6 +5543,63 @@ Owner 追問「不是擋 IP 吧」之後實測（從正式站容器、用容器�
 3. `houseprice`（5168）自 09-26 沒有新資料這件事仍未解決：本批只讓它不再吃掉整批、
    也不再阻擋完成紀錄；來源本身要依上面兩項處理。
 
+## 二之負六十六、2026-09-30 第九十四批：抓取沙盒（常駐測試容器）
+
+> Owner 2026-09-30 指示：「爬蟲的功能另做一個測試容器去盡情測試，不要做完部署完又說有問題、
+> 一直改來改去。」這一包就是那個容器。
+
+### 95.1 為什麼要有它
+
+第九十一～九十三批**全部**都是部署後拿正式站當白老鼠才發現問題：
+
+| 批次 | 部署後才發現的事 | 沙盒能不能先抓到 |
+|---|---|---|
+| 91 | 一輪 25～40 分鐘跑不完、完成紀錄永遠寫不進去 | **可以**（沙盒會量出每輪耗時與是否被預算放棄） |
+| 92 | 連續失敗政策沒生效（`sourceSuccess.every` 讓成功集合永遠是空的） | **可以**（跑 3～4 輪就看得到 `completed` 有沒有動） |
+| 93 | 一個 403 讓整個來源歸零 | **可以、而且一定會踩到**（5168 當時天天 403） |
+
+在此之前，`runWatch`（真實抓取那條路徑）**沒有被任何測試或腳本以真實來源驅動過**——
+所有測試都注入假 fetcher，所以「真來源在真實量之下的行為」只能等正式站的輪次。
+
+### 95.2 做法
+
+| 元件 | 內容 |
+|---|---|
+| `v3/scripts/crawl-sandbox.mjs` | 用**真程式、真來源**跑 `reserveCoveringPlan → runWatch`，寫進隔離庫，每輪輸出一行 JSON 報告 |
+| `docker-compose.crawl-sandbox.yml` | 常駐服務 `5151-crawl-sandbox`：**不發佈任何埠**、同一顆映像、掛載 repo 的 `v3/src`／`v3/scripts`、`restart: unless-stopped` |
+| `v3/scripts/crawl-sandbox-setup.sh` | 一次性建置：在隔離 PG 建 `crawl_sandbox` 庫 → `pg-integration-setup.mjs` 鏡射 schema → 準備 NAS 目錄與 `.env`(600) → 起容器 |
+| `v3/scripts/crawl-sandbox-sync.sh` | 把**這一份 checkout** 的 `v3/src`／`v3/scripts` 同步到沙盒並重啟（＝可以測「還沒部署的候選版本」） |
+| `v3/scripts/crawl-sandbox-seed.mjs` | 把正式站的抓取條件（`crawlSources`／`systemWatchDistricts`／…）**唯讀**複製進沙盒，並清掉沙盒自己的排程進度 |
+
+安全設計（三個都要成立才跑，`checkSandboxTarget()`）：
+
+1. `DB_DRIVER=postgres`——沙盒**不得**退回節點本機 SQLite（那會測到別的東西）。
+2. `PG_URL` 的資料庫名必須在 `assertPgTargetAllowed()` 允許清單內（新增 `crawl_sandbox`；
+   正式庫 `5151_shadow` 一律拒絕）。
+3. 不設任何寄信／推播變數，compose 也不掛 tunnel：沙盒只抓資料，不對外發通知、不服務請求。
+
+**位置**：容器跑在 **casa-nas（192.168.0.140）**——與正式站同一台、**同一個出口 IP**，
+這樣「來源對我們的量／IP 的反應」才測得準；資料庫在**隔離的 repro PG 實例**
+（syn-nas `192.168.0.220:15434`）的獨立庫 `crawl_sandbox`，與 live 測試的 `repro` 分開。
+憑證在 `/home/cline/.secrets/postgres/5151-crawl-sandbox.env`（`SANDBOX_PG_URL`）。
+
+### 95.3 驗收紀律（已寫進 repo 的 `AGENTS.md`）
+
+**凡是動到外部來源抓取（fetch／頁碼／重試／暫停／政策／預算）的 PR，開 PR 前必須附
+「沙盒一輪」的報告**（`bash v3/scripts/crawl-sandbox-sync.sh` ＋ `SANDBOX_ROUNDS=1`），
+沒有報告就不算測過。時間相關的政策（連續失敗 N 輪才放行、被擋暫停）要用 `--rounds N` 跑滿 N 輪。
+
+### 95.4 測試與證據
+
+- `v3/test/crawl-sandbox.test.js`（**5 項全綠**，新檔）：命令列參數、**安全閥**
+  （sqlite／正式庫／空 URL 都要拒絕）、報告形狀（逾時判定、來源覆蓋與放行、完成紀錄進度、
+  錯誤樣本上限）、摘要文字、以及 compose／同步腳本的接線（**不得發佈埠**、不得有寄信變數、
+  必須掛載 `v3/src`／`v3/scripts`）。
+- 變異：新增 `CRAWLSANDBOX_MUTATIONS` **8 條全殺**（含「compose 偷偷發佈埠」與
+  「同步腳本不再送 src」這兩條接線變異）。
+- 實機：容器已在 casa-nas 起來（`running`），第一輪先回 `idle`（沙盒庫還沒有抓取條件），
+  以 `crawl-sandbox-seed.mjs` 從正式站複製條件後開始跑真實輪次。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

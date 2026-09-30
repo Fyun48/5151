@@ -1,0 +1,41 @@
+# 抓取沙盒（2026-09-30，第九十四批；Owner 指定）。
+#
+# 為什麼要有這一台：第九十一～九十三批都是**部署後拿正式站當白老鼠**才發現問題
+# （整輪跑不完、政策沒生效、一個 403 吃掉整批）。沙盒用**同一顆映像、同一條 runWatch 路徑、
+# 真實來源**，但寫進**隔離庫**，所以可以盡情跑、跑壞了也沒關係。
+#
+# 安全設計：
+#   * 不發佈任何埠（沙盒不服務請求，也不在 Cloudflare Tunnel 的 ingress 裡）。
+#   * `PG_URL` 由同目錄的 `.env`（600）提供；`crawl-sandbox.mjs` 啟動時會再用
+#     `assertPgTargetAllowed()` 檢查資料庫名（不在允許清單就拒絕啟動）。
+#   * 不設任何寄信／推播變數：沙盒只抓資料，不對外發通知。
+#
+# 用法（在 NAS 的 /mnt/Storage1/apps/5151-sandbox/）：
+#   docker compose -f docker-compose.crawl-sandbox.yml up -d
+#   docker logs -f 5151-crawl-sandbox
+#   docker exec 5151-crawl-sandbox tail -3 /data/crawl-sandbox.jsonl
+#
+# 程式碼來源：`./v3/src`、`./v3/scripts` 由 `crawl-sandbox-sync.sh` 從 repo 同步過來
+# （刻意**不**跟正式站的自動部署綁在一起：沙盒要能在部署前測「還沒上線的候選版本」）。
+name: 591-tracker-sandbox
+
+services:
+  5151-crawl-sandbox:
+    container_name: 5151-crawl-sandbox
+    image: ${V3_IMAGE:-ghcr.io/fyun48/5151:latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      TZ: Asia/Taipei
+      # 沙盒必須走 PG（隔離庫）；`crawl-sandbox.mjs` 會拒絕 sqlite 模式。
+      DB_DRIVER: postgres
+      CRAWL_TICK_BUDGET_MINUTES: ${CRAWL_TICK_BUDGET_MINUTES:-40}
+      CRAWL_SANDBOX_INTERVAL_MINUTES: ${CRAWL_SANDBOX_INTERVAL_MINUTES:-30}
+      CRAWL_SANDBOX_REPORT: /data/crawl-sandbox.jsonl
+    volumes:
+      - ${SANDBOX_DATA_ROOT:-/mnt/Storage1/docker_data/5151-crawl-sandbox}:/data
+      - ./v3/src:/app/src:ro
+      - ./v3/scripts:/app/scripts:ro
+    command: ["node", "scripts/crawl-sandbox.mjs"]

@@ -4329,6 +4329,66 @@ const SRCRECOVERY_MUTATIONS = [
   },
 ];
 
+// 抓取沙盒（2026-09-30，第九十四批）：安全閥、報告形狀、容器接線。
+const CRAWLSANDBOX_MUTATIONS = [
+  {
+    name: "沙盒不再檢查驅動（退回節點本機 SQLite 也能跑）",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: '  if (driver !== "postgres") {',
+    to: "  if (false) {",
+    expect: "安全閥：沙盒只認",
+  },
+  {
+    name: "沙盒不再檢查目標資料庫（可以指向正式庫）",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: '    const database = assertPgTargetAllowed("crawl-sandbox", url, { env });',
+    to: '    const database = String(url).split("/").pop() || "crawl_sandbox";',
+    expect: "安全閥：沙盒只認",
+  },
+  {
+    name: "逾時不再標記（被預算放棄的輪次看起來像成功）",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: '    timed_out: durationMs >= budgetMs || /沒結束，已自動放棄/.test(String(result.error || "")),',
+    to: "    timed_out: false,",
+    expect: "報告：逾時、來源狀態",
+  },
+  {
+    name: "報告不留完成紀錄進度（看不出政策有沒有生效）",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: "    completed: Object.keys(state.completed || {}).length,",
+    to: "    completed: 0,",
+    expect: "報告：逾時、來源狀態",
+  },
+  {
+    name: "報告不記覆蓋紀錄最新時間",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: "    covers_max_last_run_at: maxRunAt,",
+    to: '    covers_max_last_run_at: "",',
+    expect: "報告：逾時、來源狀態",
+  },
+  {
+    name: "--once 不會停（變成常駐，驗收時永遠等不到）",
+    file: "v3/scripts/crawl-sandbox.mjs",
+    from: "  const rounds = once ? 1 : index >= 0 ? Math.max(1, Math.trunc(Number(argv[index + 1]) || 1)) : 0;",
+    to: "  const rounds = index >= 0 ? Math.max(1, Math.trunc(Number(argv[index + 1]) || 1)) : 0;",
+    expect: "命令列",
+  },
+  {
+    name: "沙盒 compose 對外發佈埠（暴露到網路上）",
+    file: "docker-compose.crawl-sandbox.yml",
+    from: "    restart: unless-stopped",
+    to: "    restart: unless-stopped\n    ports:\n      - \"127.0.0.1:5253:5153\"",
+    expect: "接線：compose 不發佈埠",
+  },
+  {
+    name: "同步腳本不再送 v3/src（沙盒跑的是舊程式碼）",
+    file: "v3/scripts/crawl-sandbox-sync.sh",
+    from: 'scp -q -r "$REPO_ROOT/v3/src/." "$SANDBOX_HOST:$SANDBOX_DIR/v3/src/"',
+    to: 'echo skip-src-sync',
+    expect: "接線：compose 不發佈埠",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5770,6 +5830,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /crawl-round-progress/.test(testFile) ? CRAWLROUND_MUTATIONS
   : /crawl-source-streaks/.test(testFile) ? CRAWLSTREAK_MUTATIONS
   : /source-recovery/.test(testFile) ? SRCRECOVERY_MUTATIONS
+  : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
