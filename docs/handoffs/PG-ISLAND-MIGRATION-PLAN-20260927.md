@@ -4717,6 +4717,153 @@ node v3/scripts/route-data-map.mjs
 
 > ⚠️ 之後要再部署時，**每次都要 Owner 當次明確批准**；本節只是紀錄這一次的核准與結果。
 
+## 二之負五十八、2026-09-30 非路由入口盤點（第八十八批前置；Owner 指定「先盤點、不移植」）
+
+### 88.1 為什麼要盤點
+
+尺規（`v3/scripts/route-data-map.mjs`）**只涵蓋 server.js 的 HTTP 路由**（見該檔開頭「方法」第 5 點），
+所以「缺口 0」的意義是「每一條路由都走 PG 島嶼」，**不等於整個系統都 driver-aware**。
+本節把非路由入口逐項查清楚，作為「要不要移植」的決策依據。
+判定欄位：`✅ 已 driver-aware`／`❌ 同步 SQLite-only`／`➖ 不碰網站主庫`。
+
+### 88.2 v3 內部的排程與背景工作（server.js 啟動區）
+
+| 入口 | 位置 | 觸發 | 判定 | PG 模式下的後果 |
+|---|---|---|---|---|
+| 居住數據自動更新 | `server.js:4742`（`runHousingRefresh`）→ `server.js:4779-4780` | 啟動後 30 秒、每 24 小時 | ✅ `getHousingDataRawAsync`／`writeHousingDataAsync` | 無（第六批已修，見 §6.2） |
+| Ops feedback 遞送 | `server.js:4786-4790` | 每 `OPS_FEEDBACK_DELIVERY` 週期 | ✅ 有 driver 分流（PG 走 `startDeliveryLoopAsync`） | 無 |
+| 許願房生命週期 tick | `server.js:4792` → `db.js:1669` → `wishLifecycleLoop.js:32` | 每 5 分鐘 | ❌ 同步 `runWishLifecycleTick(db=本機)` | PG 的 `demand_posts` 不會被標記逾期／休眠；本機 cursor 與 PG 無關。配對查詢仍用 `expires_at` 擋逾期心願 ⇒ 影響偏向狀態／統計與「即將到期」提醒不更新 |
+| 提案逾期 tick | `server.js:4793` → `db.js:1680` → `wishOfferWorker.js:27` | 每 5 分鐘 | ❌ 同步 `runWishOfferExpiryTick(db=本機)` | PG 的 pending 提案不會被主動過期。**只有使用者對該筆動作時**才 lazy 補（`expirePendingIfDueAsync` 只被 `wishOffersAsync.js:651/689` 呼叫）⇒ 清單一直顯示 pending |
+| 租賃通知 tick | `server.js:4794` → `db.js:2262` → `rentalNotifyWorker.js:42` | 每 5 分鐘 | ❌ 同步 `runRentalNotifyTick(db=本機)` | 事件**產生**有 async 路徑（`emitRentalNotifyEventAsync`／`queueDeliveriesAsync`），但「投遞／抑制／重試／摘要／清理」只在同步 tick、且只讀本機表 ⇒ **PG 的 `rental_notify_deliveries` 沒有 drain**，會停在 pending |
+| CRM 遞送 loop | `server.js:4795` | 每 `OPS_CRM_DELIVERY_INTERVAL_MS`（預設 20 秒） | ❌ 同步 `startCrmDeliveryLoop(opsDeliveryDb(), …)`（`crmDelivery.js:111`） | `opsDeliveryDb()` 回的是**網站主庫 handle**（`db.js:1947`）⇒ 只讀本機 outbox。async 零件已齊（`crmOutboxAsync.js` 的 claim／sent／failure／stats／control），缺 loop 本體 |
+| 啟動首次抓取 ＋ 帳號維護 | `server.js:4799-4827` → `server.js:3945`（`tick`） | 啟動後 20 秒 | ✅（`expireStaleVerifyTokensAsync`／`pauseIdleMembersAsync`／`coveringPlanAsync`／`withPgCrawlOwner`／`runWatch`） | 無 |
+| 上班地址補座標 | `server.js:3799`（`ensureWorkCoords`） | 啟動首次抓取前 | ✅（`defaultUserIdAsync`／`getSettingsAsync`／`setCachedGeoAsync`／`saveSettingsAsync`） | 無 |
+| geo backfill 佇列 | `server.js:3821`（`queueGeoBackfill`） | 啟動、抓取後、後台改設定 | ✅（`getSettingsAsync`／`settingsForGeoBackfillAsync`） | 無 |
+| 訪客搜尋 projection 補建 | `db.js:572` | 啟動後 1.5 秒 | ✅ 有守衛 `if (resolveDbDriver() !== "postgres")` | 無（PG 模式不跑） |
+| 爬蟲所有權心跳 | `crawlOwnership.js:52` | 持有 PG advisory lock 期間 | ✅ PG 專用 | 無 |
+| durable job 佇列 | `jobQueue.js`（`createJobQueue({driver})`）＋ `queueDispatch.js:jobQueueFor()` | 由呼叫端決定 | ✅ 兩種 driver 都有實作 | 目前**只有測試在用**：`workerConvergence.js`（CRM／enrich 收斂 worker）沒有任何 runtime 呼叫端 ⇒ 是「已寫好、未接線」的遷移路徑 |
+
+> ⚠️ **正式站這三條 ❌ 的 tick 真的在跑**：正式容器沒有設 `APP_ROLE` ⇒ `resolveAppRole()` 預設 `all`
+> ⇒ `startWorkerLoops()` 執行；而且正式站旗標 `wish.offer_enabled=true`／`lifecycle_enabled=true`／
+> `notifications_enabled=true`（本次實查 settings）⇒ 三支都不會走 `skipped` 分支
+> （只有 `outbound_mail_enabled`／`outbound_push_enabled`／`digest_enabled` 是 `false`）。
+
+### 88.3 CLI／腳本／CI／主機排程入口
+
+**A. 高風險：在 PG 模式下「會寫錯地方」或「假通過」**
+
+| 入口 | 位置 | 問題 |
+|---|---|---|
+| `activate-rental-marketplace-{stage1,stages,pra}.yml`、`prepare-rental-marketplace-stage1-fixtures.yml` | `.github/scripts/activate-rental-marketplace-stage1-domain.mjs:218-224` → `db.js:1443` → `db.js:876-880`（`writeSettingKey`，**無 driver 分支**） | 這幾條 workflow 用 `mod.db`（SQLite handle）寫 `settings` 與 fixture ⇒ PG 模式下只寫進容器本機，正式站（讀 PG）**等於沒啟用**，但 workflow 回報成功 |
+| `production-uat-stages-functional.yml` | `production-uat-stages-remote.sh:66-76` → `production-uat-stages-wiring.mjs:264,285`（`/app/src/db.js` ＋ `dbMod.db`） | 在正式容器內用 SQLite handle 建／清 fixture，**驗證對象也是同一份 SQLite ⇒ 自我一致的假通過** |
+| `pg-columns-ab.mjs`（若拿正式 `PG_URL` 跑） | `v3/scripts/pg-columns-ab.mjs:119-123,185` | 會 `INSERT INTO listings` 500 筆 `colab\|%` 假房源，finally 才刪；CI 用拋棄式 PG 沒問題 |
+| `pg-import.mjs`／`deploy/shadow-ha/pg-import-run.sh` | `pg-import.mjs:21-22,38,61-73`；`pg-import-run.sh:17,34,47` | 來源是**已過期的 SQLite 快照**；目標由 `PG_URL`／`IMPORT_DB` 決定，指到正式庫就是灌舊資料（預設目標是 `5151_import_test`） |
+| `cutover-backfill.mjs`／`cutover-conflicts.mjs` | `:18,91,151,167`／`:20,105,131,174,195-200` | 產出的 SQL 由過期快照算出（`--pg-keys`／`--pg-values` 靠人工從 psql 匯出）⇒ 套用前必須人工確認新鮮度 |
+| `npm run test:pg`／`pg-integration-setup.mjs` | `package.json:15`；`v3/scripts/pg-integration-setup.mjs:14-24,40` | 會把 SQLite schema＋列鏡射進 **`PG_URL` 指到的庫**；正式站 `PG_URL` 指的就是正式庫 |
+| `sqlite-consistency-snapshot.mjs` | `:15-18,35-37` | 對過期 SQLite 做 `VACUUM INTO`，快照寫回正式資料卷（吃空間、內容過期） |
+| `migrate-v3-data-volume.yml` | `migrate-v3-data-volume-remote.sh:26,33-48` | 搬的是已作廢的 SQLite 目錄、還要重啟容器（停機），無實質效果 |
+| `deploy/shadow-ha/drill.sh` | `:33,41,62-84` | 對 `5151_shadow` 做 `DROP/CREATE TABLE repl_test` ＋寫測試列（手動觸發；PG primary 上跑就會動到正式庫的那張表） |
+| `mutation-check.mjs`（不碰 DB，但**後果最嚴重**） | `:5399,5465,5470` 就地 `writeFileSync` 改 `v3/src/*.js`；`docker-compose.yml:43-45` 是 `./v3/src:/app/src:ro` ＋ `node --watch-path=src` | 在正式站原始碼目錄（`/mnt/Storage1/apps/5151`）跑，變異版原始碼會被容器**熱載入**；被 SIGKILL 打斷就可能留下變異檔 ⇒ **一律在本機 repo 跑，不要在正式站目錄跑** |
+
+**B. 無效（讀過期本機 SQLite，不會寫壞但結論不能用）**
+`kind-parity-probe.mjs:59-79`、`node-vs-sql-diff.mjs:11-12`、
+`run-pg-integration.sh:16-19`（沒設 PG 就靜默 `exit 0` ⇒ 「PG 整合測試通過」可能是假訊號）、
+`production-predeploy-remote.sh:47,195-216`（要求 `v3.db` 存在才備份 ⇒ PG 模式下若本機檔不在會**誤擋發版**；
+那份 SQLite 備份是垃圾，但 PG 備份同時有做、且 fail-closed 不會寫錯）。
+
+**C. 唯讀／安全**：`pg-stats-check.mjs`、`pg-affiliate-facts.mjs`、`pg-explain-forensics.mjs`（`BEGIN READ ONLY`）、
+`pg-stage-forensics.mjs`、`kind-column-verify.mjs`、`kind-e2e-parity.mjs`、`q-e2e-parity.mjs`、
+`search-keys-parity.mjs`、`listingSearchNodePgPerf.mjs`、`node-pg-ab-compare.mjs`、`node-pg-scale.mjs`、
+`pg-identity-sequences.mjs --check`、`pg-island-inventory.mjs`、`route-data-map.mjs`、`node-readonly-evidence.sh`、
+`prb-search-benchmark.mjs`（私有 schema ＋ finally `DROP SCHEMA`）、`prb-nas-verify.sh`（拋棄式容器／網路）、
+`v3/evidence/pr-d-20260918/seed-local.mjs`、`deploy/gitea/*.sh`。
+
+**D. OPS Console 容器（5154）＝完全獨立的 SQLite，安全**
+`ops/src/opsDb.js:3,11,1725-1745`（`ops.db`，`migrateOpsSchema` 版本不符 fail-closed）；整個 `ops/src`
+對 `PG_URL`／`DB_DRIVER`／`resolveDbDriver` **命中 0 筆**；compose 沒有掛 v3 資料卷
+（`docker-compose.yml:47-60`、`docker-compose.ops.synology.yml:21-25`）。對 v3 唯一通道是 HTTP
+`/api/ops/commands/apply`，且需 `V3_OPS_COMMAND_APPLY_URL` ＋ `OPS_REMOTE_CS_DELIVERY=1` 雙閘門
+（`ops/src/siteCommand.js:10,136-145,305-337,369-386`）——**本次實查正式容器兩個閘門都沒設 ⇒ `delivery_off`**。
+
+**E. 主機排程（casa-nas `systemctl list-timers '5151*'` 實查，4 條）**
+
+| timer | 頻率 | 判定 |
+|---|---|---|
+| `5151-media-mount-guard.timer` | 每 2 分鐘 | ➖ 不碰 DB，但會 `docker restart 591-tracker-v3` |
+| `5151-crawl-staleness-monitor.timer` | 每 5 分鐘 | ✅ 進容器跑 `crawl-staleness-check.mjs`，用 `PG_URL` 只做 SELECT |
+| `5151-projection-monitor.timer` | 每 15 分鐘 | ✅ 唯讀（`REPEATABLE READ READ ONLY`＋只有 SELECT）；實查 log `ok=1`。⚠️ **repo 內沒有這支 unit／腳本**（來源是尚未合併的 PR #498，主機 `/opt/5151-scripts/` 才是實體）⇒ 可稽核性問題 |
+| `5151-pg-backup.timer` | 每日 20:30 | ✅ 從 standby `pg_dump -Fc 5151_shadow`＋`pg_restore -l` 驗證，只留 7 份 |
+
+CI 內沒有任何 `schedule:`／`cron:`（實查 `.github/workflows/*` 命中 0 筆）。
+
+### 88.4 🚨 尺規盲點：db.js 的「轉出」不會被追進原始模組
+
+`PATCH /api/admin/feedback/:id`（`server.js:2389`）在尺規上是 **PG**，但 body 內有一行**同步 SQLite 寫入**：
+`enqueueCrmFromFeedback(opsDeliveryDb(), Number(req.params.id) || 0)`。
+
+機制：`enqueueCrmFromFeedback` 由 `db.js:294` **轉出**（`export { … } from "./crm.js"`），
+尺規只解析 server.js 直接 import 的名字，遇到 db.js 的轉出**不會再追進原始模組**（`crm.js:456`），
+因此這條呼叫不計入 SQLite 卡點。影響：PG 模式下管理員改回饋狀態時，CRM outbox 寫進**本機**，
+而且快照取自本機那一列（別的節點建立的回饋可能根本不在本機）⇒ CRM 連結靜默失效。
+`enqueueCrmFromFeedback` 目前**沒有** async 版本（`crmOutboxAsync.js` 只有 `enqueueCrmOutboxAsync`）。
+
+### 88.5 正式站實查（本次盤點順手確認）
+
+- `.env`：`DB_DRIVER=postgres`（正式站確實是 PG 模式）。
+- `rentalMarketplaceFlags`：`wish.offer_enabled=true`、`lifecycle_enabled=true`、`owner_matching_enabled=true`、
+  `notifications_enabled=true`、`public_share_v2_enabled=true`；`outbound_mail_enabled`／`outbound_push_enabled`／
+  `digest_enabled=false`。
+- `rental_notify_deliveries`：`delivered=10`、`suppressed=30`；近 24 小時 `rental_notify_events=0`
+  ⇒ 通知佇列目前是靜的（所以 88.2 的「沒有 drain」目前衝擊有限）。
+- PG migration：`002_pg_reconcile_indexes.sql` 的三個索引（`idx_listings_addr_norm_trgm`／
+  `idx_listings_community_norm`／`idx_listings_lat_lng`）與 `pg_trgm` 都已套用在正式庫；
+  但**沒有 runner**（`migrate.js` 只跑 SQLite），只能人工 psql 套用。
+- 爬蟲現況（順手看到，非本節範圍）：advisory lock `5151/20260926` 由 pid 25827 持有，
+  排程每 60 秒回報「這輪抓取超過 15 分鐘沒結束」；但投影監控顯示 `listings` 仍在成長
+  （01:13Z：137,337 筆、`missing=0 orphan=0 dup=0 ok=1`）⇒ 有一輪長抓取在跑、排程器被該輪卡住。
+  另外 PG 有一個 backend `state=active` 已持續約 4 天（pid 39），看起來是殘留的長查詢，值得另外查。
+
+### 88.6 影響評估與建議優先序
+
+| 優先序 | 項目 | 理由 |
+|---|---|---|
+| **高** | CI `activate-rental-marketplace-*`／`prepare-…-fixtures` | 「回報成功但正式站等於沒啟用」＝最容易被誤信的一種；修法小（改走 `saveRentalMarketplaceFlagsAsync` 或直接改 PG settings） |
+| **高** | CI `production-uat-stages-functional` | 正式站 UAT 目前是**自我一致的假通過**，會讓「UAT 綠」失去意義 |
+| **高** | 提案逾期 tick（`runWishOfferExpiryTick`） | 使用者看得到的狀態錯誤：PG 的 pending 提案不會自己過期 |
+| **高** | 租賃通知 tick（`runRentalNotifyTick`） | PG deliveries 沒有 drain；目前因 outbound 關閉而衝擊有限，一旦打開就會立刻顯現 |
+| **中** | 許願房生命週期 tick（`runWishLifecycleTick`） | 狀態／統計與到期提醒不更新；配對仍正確 |
+| **中** | CRM 遞送 loop ＋ route 內的 `enqueueCrmFromFeedback` | CRM 連結靜默失效；async 零件已齊，工程量小 |
+| **中** | `mutation-check.mjs` 的執行位置紀律 | 不碰 DB，但在正式站原始碼目錄跑會被容器熱載入；**建議在文件與工具輸出加警語** |
+| **中** | `pg-import`／`cutover-*`／`test:pg`／`sqlite-consistency-snapshot` 的目標與新鮮度 | 指到正式庫就會寫錯；建議加「目標庫必須是允許清單」的 fail-closed 檢查 |
+| **低** | `migrate-v3-data-volume.yml`、`predeploy` 的 `v3.db` 前置條件、`run-pg-integration.sh` 的靜默跳過 | 卡流程或產生假訊號，不寫錯資料 |
+| **低** | `workerConvergence.js` 接線＋PG migration runner | 不是缺陷，是「已寫好未接線」；可作為上面幾項的統一做法（`jobQueueFor()` 已支援兩種 driver） |
+
+> ⚠️ 以上都**沒有**在本次盤點中動手修改；要不要移植、以什麼順序移植，等 Owner 決定。
+
+### 88.7 可重跑的檢查指令
+
+```bash
+# 1) 尺規現況（只涵蓋路由）
+node v3/scripts/route-data-map.mjs --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).tally))'
+# 2) server.js 內「直接拿本機 handle」的痕跡（非路由入口快速指標）
+grep -n "opsDeliveryDb()\|sqliteHandle()" v3/src/server.js
+# 3) 三個同步 tick 與 CRM loop 的進入點
+grep -n "startWishLifecycleLoop\|startWishOfferExpiryLoop\|startRentalNotifyLoop\|startCrmDeliveryLoop" v3/src/server.js
+# 4) 主機排程（casa-nas）
+ssh casa-nas "systemctl list-timers '5151*' --all --no-pager"
+# 5) 正式站是不是 PG 模式（只看鍵，不印值）
+grep -E '^DB_DRIVER=' /home/cline/.secrets/apps/5151-prod-casaos.env
+```
+
+### 88.8 未確認／待人工複核
+
+1. `npm test` 內是否每個測試檔都只用自己的暫存 DB（本次只確認指令與 CI 設定，未逐檔查）。
+2. `ops.db` 是否有排程備份（只找到部署時複製：`.github/scripts/deploy-ops-synology-remote.sh:77,127,138`）。
+3. repo 與主機的落差：`5151-projection-monitor` 的 unit／腳本只存在於主機（`/opt/5151-scripts/`），
+   來源 PR #498 尚未合併 ⇒ 主機上還有多少「repo 沒有的腳本」需要一次盤點。
+4. 爬蟲那一輪為何超過 15 分鐘、以及 pid 39 那條 4 天的 active backend 是什麼（需另外查）。
+5. `V3_OPS_COMMAND_APPLY_URL`／`OPS_REMOTE_CS_DELIVERY` 的預期長期狀態（目前兩者皆未設＝停用中）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
