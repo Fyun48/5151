@@ -47,11 +47,15 @@ test("live PG：來源連續失敗狀態落在 crawlScheduleV1，且不蓋掉排
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
 
   const KEY = "crawlScheduleV1";
+  const SOURCES_KEY = "crawlSources";
   const saved = (await query("SELECT value FROM settings WHERE key = $1", [KEY]))[0]?.value ?? null;
+  const savedSources = (await query("SELECT value FROM settings WHERE key = $1", [SOURCES_KEY]))[0]?.value ?? null;
   t.after(async () => {
     try {
       if (saved == null) await query("DELETE FROM settings WHERE key = $1", [KEY]);
       else await query("UPDATE settings SET value = $1 WHERE key = $2", [saved, KEY]);
+      if (savedSources == null) await query("DELETE FROM settings WHERE key = $1", [SOURCES_KEY]);
+      else await query("UPDATE settings SET value = $1 WHERE key = $2", [savedSources, SOURCES_KEY]);
     } catch { /* 盡力而為 */ }
     try { await pgDriver.close(); } catch { /* 已關就算了 */ }
     try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows lock */ }
@@ -91,6 +95,16 @@ test("live PG：來源連續失敗狀態落在 crawlScheduleV1，且不蓋掉排
   assert.deepEqual(back.tolerated, ["houseprice"]);
 
   // 後台那條鏈路（同樣不注入）：來源健康度要看得出「連續失敗 3 輪（已放行完成紀錄）」。
+  // ⚠️ 先把 houseprice **打開**再驗：CI 的拋棄式 PG 是全新資料庫（沒有 `crawlSources` 鍵
+  // ⇒ 走預設值，只有 591／自行刊登開啟），而 `sourceHealthFromRow()` 對未啟用的來源一律回
+  // 「已關閉」（那是刻意的優先序）。第一版沒開，CI 的 PG job 就紅在 `'已關閉'` 上。
+  await query(
+    "INSERT INTO settings(key,value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    [SOURCES_KEY, JSON.stringify([
+      { id: "591", label: "591 租屋", stub: false, enabled: true },
+      { id: "houseprice", label: "5168 租屋", stub: false, enabled: true },
+    ])],
+  );
   const health = await crawlSourceHealthAsync();
   const hp = health.find((row) => row.id === "houseprice");
   assert.ok(hp, "來源清單要有 houseprice");
