@@ -10,7 +10,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js"
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
-import { isSourceBlocked, sourceHttpError } from "./crawlWatchdog.js";
+import { noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HP_SOURCE = "houseprice";
 export const HP_POST_ID_BASE = 2_400_000_000;
@@ -1031,12 +1031,18 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   const getHtml = options.getHtml || defaultGetHtml;
   const batches = [];
   const seen = new Set();
-  let detailBudget = Math.max(0, Number(options.detailLimit ?? 80));
-  let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? 200));
+  // 明細量（2026-09-30 第九十五批）：原本每輪最多 80（其他）＋200（地址）＝280 筆，
+  // 是 5168 流量的大宗，很可能就是「跑完一輪就被擋」的來源。降到 20＋40＝60，
+  // 並保留 options／環境變數覆寫（沙盒可以 A/B，不必改程式）。
+  let detailBudget = Math.max(0, Number(options.detailLimit ?? process.env.HP_DETAIL_LIMIT ?? 20));
+  let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? process.env.HP_ADDRESS_DETAIL_LIMIT ?? 40));
   // 第一線 fail-soft（2026-09-30）：一個 403 不該讓整個來源歸零。
   // 被擋（403／429／503）就別再打這個站台，但**已經抓到的批次照樣往上回報**
   //（形狀與 ddroom／housefun／rakuya 相同：批次帶 `errors`，watcher 會逐筆記進輪次結果）。
   let sourcePaused = false;
+  // 連續被擋次數（成功一頁就歸零）：第一次被擋只跳過那一頁，連續 SOURCE_BLOCK_PAUSE_LIMIT 次才停工。
+  let blockedStreak = 0;
+  const pauseLimit = Number(options.blockPauseLimit) || undefined;
 
   for (const job of jobs || []) {
     if (sourcePaused) break;
@@ -1066,9 +1072,12 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
         } catch (error) {
           if (isCrawlCancelled()) throw error;
           errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
-          sourcePaused = isSourceBlocked(error);
+          const note = noteSourceBlock(blockedStreak, error, pauseLimit);
+          blockedStreak = note.consecutive;
+          sourcePaused = note.pause;
           break;
         }
+        blockedStreak = 0;
         if (page === 1) {
           sidTotal = Number(result.total) || 0;
           total += sidTotal;
@@ -1101,7 +1110,9 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
               if (isCrawlCancelled()) throw error;
               // 明細失敗只損失「補齊的欄位」，這一筆房源本身（列表頁拿到的）要留下來。
               errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page, stage: "detail" });
-              sourcePaused = isSourceBlocked(error);
+              const note = noteSourceBlock(blockedStreak, error, pauseLimit);
+              blockedStreak = note.consecutive;
+              sourcePaused = note.pause;
             }
             if (canFetchAddress) addressBudget -= 1;
             else detailBudget -= 1;
