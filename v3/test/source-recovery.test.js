@@ -204,9 +204,9 @@ test("591：連第一頁都失敗時維持「整個 job 失敗」的語意（wat
 });
 
 test("5168：被擋（403）時只暫停這家，已抓到的行政區與房源照樣回報", async () => {
-  // ⚠️ 一定要有**第三個**行政區：只有兩個的話，「被擋後暫停」與「不暫停」的呼叫次數一樣，
-  // 變異測試實測會活下來（第一版就是這樣漏掉的）。
-  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }];
+  // 第九十五批：**連續兩次**被擋才暫停這一家（第一次只跳過那一頁）。
+  // 所以要有四個行政區：1 成功、2 被擋（只跳過）、3 被擋（達門檻→暫停）、4 不可以再打。
+  const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5], searchUrl: "scope" }];
   const listCalls = [];
   const [batch] = await fetchHpCoveringListings(jobs, {
     pages: 1,
@@ -215,55 +215,90 @@ test("5168：被擋（403）時只暫停這家，已抓到的行政區與房源�
     getHtml: async (url) => {
       if (!String(url).includes("/list/")) return fixture("houseprice-list.html"); // 明細走 HTML 版
       listCalls.push(String(url));
-      // 第二個行政區的列表頁被擋（正式站 08:24 的 403 就是發生在列表頁）。
-      if (listCalls.length === 2) {
+      // 第 2、3 個行政區的列表頁被擋（正式站的 403 就是發生在列表頁）。
+      if (listCalls.length === 2 || listCalls.length === 3) {
         throw Object.assign(new Error(`5168 暫時無法抓取（HTTP 403；${url}）`), { code: "FETCH_BLOCKED" });
       }
       return fixture("houseprice-list.html");
     },
   });
-  assert.ok(batch.listings.length > 0, "第一個行政區抓到的房源不可以被 403 吃掉");
-  assert.equal(listCalls.length, 2, "被擋之後不該再打同一家（sourcePaused；第三個行政區也不可以打）");
-  assert.equal(batch.errors.length, 1);
+  assert.ok(batch.listings.length > 0, "被擋之前抓到的房源不可以被 403 吃掉");
+  assert.equal(listCalls.length, 3, "連續兩次被擋之後就不該再打同一家（第四個行政區也不可以打）");
+  assert.equal(batch.errors.length, 2);
   assert.equal(batch.errors[0].code, "FETCH_BLOCKED");
   assert.equal(batch.errors[0].page, 1);
   assert.ok(batch.errors[0].district, "錯誤要指出是哪個行政區");
   assert.match(batch.errors[0].message, /https:\/\/rent\.houseprice\.tw\/list\//, "錯誤樣本一定要帶出事的網址");
 });
 
-test("住商：第二個來源請求失敗時，第一個行政區的房源要留下來", async () => {
+test("住商：連續兩次被擋才暫停，之前抓到的行政區要留下來", async () => {
   const jobs = [{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }];
   let calls = 0;
   const [batch] = await fetchHbCoveringListings(jobs, {
     pages: 1, gapMs: 0,
     postJson: async () => {
       calls += 1;
-      if (calls === 2) throw Object.assign(new Error("住商暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
+      if (calls >= 2) throw Object.assign(new Error("住商暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
       return HB_FIXTURE;
     },
   });
   assert.ok(batch.listings.length > 0);
+  assert.equal(batch.errors.length, 2);
   assert.equal(batch.errors[0].code, "FETCH_BLOCKED");
   assert.equal(batch.errors[0].page, 1);
   assert.ok(batch.errors[0].district, "錯誤要指出是哪個行政區");
-  assert.equal(calls, 2, "被擋之後不該再打同一家（sourcePaused）");
+  assert.equal(calls, 3, "連續兩次被擋之後就不該再打同一家（第三個行政區也不可以打）");
 });
 
-test("信義：第二個來源請求失敗時，第一個行政區的房源要留下來", async () => {
+test("信義：連續兩次被限速才暫停，之前抓到的行政區要留下來", async () => {
   const jobs = [{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }];
   let calls = 0;
   const [batch] = await fetchSinyiCoveringListings(jobs, {
     pages: 1, gapMs: 0,
     postForm: async () => {
       calls += 1;
-      if (calls === 2) throw Object.assign(new Error("信義暫時無法抓取（HTTP 429）"), { code: "RATE_LIMITED" });
+      if (calls >= 2) throw Object.assign(new Error("信義暫時無法抓取（HTTP 429）"), { code: "RATE_LIMITED" });
       return SINYI_FIXTURE;
     },
   });
   assert.ok(batch.listings.length > 0);
+  assert.equal(batch.errors.length, 2);
   assert.equal(batch.errors[0].code, "RATE_LIMITED");
   assert.ok(batch.errors[0].district);
-  assert.equal(calls, 2, "被限速之後不該再打同一家（sourcePaused）");
+  assert.equal(calls, 3, "連續兩次被限速之後就不該再打同一家（第三個行政區也不可以打）");
+});
+
+test("單次被擋不可以讓整個來源停工（第九十五批：正式站就是這樣整輪 0 筆）", async () => {
+  // 關鍵是「**不連續**的被擋」：第 2、4 個行政區各被擋一次、中間夾一次成功。
+  // 這樣才驗得出「成功一頁就把計數歸零」——被擋計數若只累加不歸零，第 4 次就會誤觸門檻而停工。
+  const hp = [{ regionId: 1, sectionIds: [8, 10, 12, 5, 7], searchUrl: "scope" }];
+  const listCalls = [];
+  const [hpBatch] = await fetchHpCoveringListings(hp, {
+    pages: 1, detailGapMs: 0, gapMs: 0,
+    getHtml: async (url) => {
+      if (!String(url).includes("/list/")) return fixture("houseprice-list.html");
+      listCalls.push(String(url));
+      if (listCalls.length === 2 || listCalls.length === 4) {
+        throw Object.assign(new Error("5168 暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
+      }
+      return fixture("houseprice-list.html");
+    },
+  });
+  assert.equal(listCalls.length, 5, "偶發被擋（不連續）時，五個行政區都要照抓");
+  assert.equal(hpBatch.errors.length, 2);
+  assert.ok(hpBatch.listings.length > 0);
+  // 住商／信義同一組政策。
+  let hbCalls = 0;
+  const [hbBatch] = await fetchHbCoveringListings([{ regionId: 1, sectionIds: [8, 10, 12], searchUrl: "scope" }], {
+    pages: 1, gapMs: 0,
+    postJson: async () => {
+      hbCalls += 1;
+      if (hbCalls === 2) throw Object.assign(new Error("住商暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
+      return HB_FIXTURE;
+    },
+  });
+  assert.equal(hbCalls, 3, "住商只被擋一次也要繼續跑後面的行政區");
+  assert.equal(hbBatch.errors.length, 1);
 });
 
 test("逐頁 fail-soft 不可以吞掉整輪取消（預算用盡要立刻停手）", async () => {
@@ -325,4 +360,44 @@ test("來源 HTTP 錯誤要帶代碼與出事的網址（否則 403 之後查不
   assert.equal(isSourceBlocked(new Error("591 回應 500")), false);
   assert.equal(isSourceBlocked(Object.assign(new Error("x"), { code: "RATE_LIMITED" })), true);
   assert.deepEqual([...SOURCE_BLOCKED_CODES], ["FETCH_BLOCKED", "RATE_LIMITED", "SOURCE_UNAVAILABLE"]);
+});
+
+test("noteSourceBlock：連續兩次才暫停、成功一頁就歸零", async () => {
+  const { noteSourceBlock, SOURCE_BLOCK_PAUSE_LIMIT } = await import("../src/crawlWatchdog.js");
+  assert.equal(SOURCE_BLOCK_PAUSE_LIMIT, 2);
+  const blocked = Object.assign(new Error("5168 暫時無法抓取（HTTP 403）"), { code: "FETCH_BLOCKED" });
+  const first = noteSourceBlock(0, blocked);
+  assert.deepEqual(first, { consecutive: 1, pause: false }, "第一次被擋只跳過那一頁");
+  const second = noteSourceBlock(first.consecutive, blocked);
+  assert.deepEqual(second, { consecutive: 2, pause: true }, "連續第二次才暫停這一家");
+  // 中間成功一頁 ⇒ 歸零（WAF 偶發阻擋不該讓整輪停工）。
+  assert.deepEqual(noteSourceBlock(second.consecutive, new Error("ok")), { consecutive: 0, pause: false });
+  // 非「被擋」的錯誤不算（逾時／解析失敗有自己的規則）。
+  assert.deepEqual(noteSourceBlock(0, Object.assign(new Error("591 回應 500"), { code: "FETCH_FAILED" })), { consecutive: 0, pause: false });
+  // 門檻可覆寫（沙盒 A/B 用）。
+  assert.equal(noteSourceBlock(0, blocked, 1).pause, true);
+});
+
+test("5168 明細量：預設從 280 筆降到 60 筆，且可用 options／環境變數覆寫", async () => {
+  // 預設值用原始碼釘住（功能上很難用夾具造出 280 筆的差別）：原本 80＋200，第九十五批改成 20＋40。
+  const sourceText = readFileSync(new URL("../src/houseprice.js", import.meta.url), "utf8");
+  assert.match(sourceText, /options\.detailLimit \?\? process\.env\.HP_DETAIL_LIMIT \?\? 20/,
+    "其他明細上限預設 20（原本 80）");
+  assert.match(sourceText, /options\.addressDetailLimit \?\? process\.env\.HP_ADDRESS_DETAIL_LIMIT \?\? 40/,
+    "地址明細上限預設 40（原本 200）");
+  // 功能：覆寫要真的生效（沙盒 A/B 靠它）。
+  const jobs = [{ regionId: 1, sectionIds: [8], searchUrl: "scope" }];
+  const detailCalls = [];
+  const [batch] = await fetchHpCoveringListings(jobs, {
+    pages: 1, gapMs: 0, detailGapMs: 0,
+    detailLimit: 1, addressDetailLimit: 1,
+    getHtml: async (url) => {
+      if (String(url).includes("/list/")) return fixture("houseprice-list.html");
+      detailCalls.push(String(url));
+      return readFileSync(new URL("fixtures/houseprice-detail-api.json", import.meta.url), "utf8");
+    },
+  });
+  assert.ok(detailCalls.length > 0, "還是要抓明細（只是有上限）");
+  assert.ok(detailCalls.length <= 4, `上限 1＋1 時最多兩筆明細（API＋HTML 各一次），實際 ${detailCalls.length}`);
+  assert.ok(batch.listings.length > 0, "明細有上限不影響列表頁的房源落地");
 });

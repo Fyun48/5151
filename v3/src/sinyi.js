@@ -6,7 +6,7 @@ import { kitFromActiveNames, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict, districtKeyForZip } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
-import { isSourceBlocked, sourceHttpError } from "./crawlWatchdog.js";
+import { noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
 
 export const SINYI_SOURCE = "sinyi";
 export const SINYI_POST_ID_BASE = 2_300_000_000;
@@ -236,6 +236,9 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
   const seenNo = new Set();
   // 第一線 fail-soft（2026-09-30）：一個行政區／一頁失敗不得讓整個來源歸零（形狀同住商／ddroom）。
   let sourcePaused = false;
+  // 連續被擋次數（成功一頁就歸零）：第一次被擋只跳過那一頁，連續 SOURCE_BLOCK_PAUSE_LIMIT 次才停工。
+  let blockedStreak = 0;
+  const pauseLimit = Number(options.blockPauseLimit) || undefined;
 
   for (const job of jobs || []) {
     if (sourcePaused) break;
@@ -265,9 +268,12 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
         } catch (error) {
           if (isCrawlCancelled()) throw error;
           errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
-          sourcePaused = isSourceBlocked(error);
+          const note = noteSourceBlock(blockedStreak, error, pauseLimit);
+          blockedStreak = note.consecutive;
+          sourcePaused = note.pause;
           break;
         }
+        blockedStreak = 0;
         if (page === 1) {
           zipTotal = Number(result.total) || 0;
           total += zipTotal;

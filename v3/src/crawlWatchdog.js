@@ -51,6 +51,24 @@ export function isSourceBlocked(error) {
   return /HTTP\s*(401|403|429|503)\b/.test(String(error?.message || ""));
 }
 
+/** 被擋幾次才放棄這一家（逐頁 fail-soft 的暫停門檻）。 */
+export const SOURCE_BLOCK_PAUSE_LIMIT = 2;
+
+/**
+ * 逐頁 fail-soft 的「被擋幾次才暫停這一家」計數器。
+ *
+ * 為什麼不是第一次被擋就暫停（2026-09-30 沙盒實測）：5168 只在**部分行政區**被擋，
+ * 第一次就暫停會讓整輪 0 筆（正式站 09-30 就是這樣：`houseprice` 的 `last_seen_at` 停在 09-26）；
+ * 連續 2 次才暫停時，被擋之前抓到的行政區照樣留下來（沙盒同一輪落了 239 筆）。
+ * 中間只要有一頁成功就歸零：WAF 的偶發阻擋不該讓整個來源整輪停工。
+ */
+export function noteSourceBlock(consecutive, error, limit = SOURCE_BLOCK_PAUSE_LIMIT) {
+  if (!isSourceBlocked(error)) return { consecutive: 0, pause: false };
+  const next = Math.trunc(Number(consecutive) || 0) + 1;
+  const cap = Math.max(1, Math.trunc(Number(limit) || SOURCE_BLOCK_PAUSE_LIMIT));
+  return { consecutive: next, pause: next >= cap };
+}
+
 /**
  * 來源的 HTTP 錯誤（帶 `code` 與**出事的網址**）。
  *
