@@ -20,7 +20,7 @@
 import { resolveDbDriver } from "./dbDriver.js";
 
 /** 允許 CLI 工具直接寫入的資料庫名稱（與 live PG 測試同一組）。 */
-export const ALLOWED_PG_TARGET_DBS = Object.freeze(["repro", "tracker_test", "repro2"]);
+export const ALLOWED_PG_TARGET_DBS = Object.freeze(["repro", "tracker_test", "repro2", "crawl_sandbox"]);
 
 /** 要對清單外的資料庫動手時，必須明確設定這個環境變數。 */
 export const PG_TARGET_OVERRIDE_ENV = "ALLOW_PRODUCTION_PG_TARGET";
