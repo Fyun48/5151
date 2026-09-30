@@ -35,6 +35,39 @@ export function isCrawlTimeoutError(error) {
   return /沒回應，已放棄|沒結束，已自動放棄/.test(String(error?.message || ""));
 }
 
+/** 來源被封鎖／限速的錯誤碼。這些碼代表「別再打這個站台」，與一般查詢失敗不同。 */
+export const SOURCE_BLOCKED_CODES = Object.freeze(["FETCH_BLOCKED", "RATE_LIMITED", "SOURCE_UNAVAILABLE"]);
+
+/**
+ * 這個錯誤是不是「整個來源暫時不能打」？
+ *
+ * 逐頁 fail-soft 的暫停條件：被擋（403／401）或限速（429／503）就別再打同一家，
+ * 但**已經抓到的批次要照樣回報**；其他錯誤（逾時、解析失敗）只跳過那一頁。
+ * 訊息比對是為了相容注入式 fetcher／舊呼叫端丟出的純 Error（沒有 `code`）。
+ */
+export function isSourceBlocked(error) {
+  const code = String(error?.code || "");
+  if (SOURCE_BLOCKED_CODES.includes(code)) return true;
+  return /HTTP\s*(401|403|429|503)\b/.test(String(error?.message || ""));
+}
+
+/**
+ * 來源的 HTTP 錯誤（帶 `code` 與**出事的網址**）。
+ *
+ * 為什麼一定要帶網址：2026-09-30 診斷 5168 的 403 時，輪次結果只留下
+ * 「5168 暫時無法抓取（HTTP 403）」，看不出是哪一頁、哪個行政區中槍，只能靠人工重跑站台才找得到。
+ * 錯誤樣本（`crawlScheduleV1.sourceStreaks[].lastError`）直接吃這個訊息。
+ */
+export function sourceHttpError(label, status, url = "") {
+  const blocked = status === 401 || status === 403 || status === 429 || status === 503;
+  const code = status === 429 ? "RATE_LIMITED"
+    : (status === 401 || status === 403) ? "FETCH_BLOCKED"
+      : status === 503 ? "SOURCE_UNAVAILABLE" : "FETCH_FAILED";
+  const where = url ? `；${url}` : "";
+  const message = blocked ? `${label}暫時無法抓取（HTTP ${status}${where}）` : `${label}搜尋 ${status}${where}`;
+  return Object.assign(new Error(message), { code, status, url });
+}
+
 export function noteConsecutiveTimeout(consecutive, error, limit = CONSECUTIVE_TIMEOUT_LIMIT) {
   if (!isCrawlTimeoutError(error)) return { consecutive: 0, skipRest: false };
   const next = Number(consecutive || 0) + 1;

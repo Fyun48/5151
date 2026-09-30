@@ -1,4 +1,4 @@
-import { crawlRequestSignal } from "./crawlExecution.js";
+import { crawlRequestSignal, isCrawlCancelled } from "./crawlExecution.js";
 import { appendAppearanceTags, passesAttributeFilters, passesGeoFilters, sanitizeFloorName } from "./floors.js";
 import { decodeEntities } from "./htmlEntities.js";
 import { kitFrom591Detail, listingKitFields } from "./listingKit.js";
@@ -12,7 +12,7 @@ import {
   parseCommunityPayload,
   preferCommunityLocation,
 } from "./location.js";
-import { LIST_FETCH_TIMEOUT_MS, abortSignalTimeout, humanTimeoutMessage, isAbortError } from "./crawlWatchdog.js";
+import { LIST_FETCH_TIMEOUT_MS, abortSignalTimeout, humanTimeoutMessage, isAbortError, CONSECUTIVE_TIMEOUT_LIMIT } from "./crawlWatchdog.js";
 import { fetchHtmlDirect, fetchListingPage } from "./providers/scraping.js";
 
 const LIST_URL = "https://bff-house.591.com.tw/v3/web/rent/list";
@@ -509,21 +509,51 @@ export async function fetchListings(searchUrl, pages = 40, options = {}) {
   const parsed = parseSearchUrl(searchUrl);
   parsed.query.delete("kind");
   const listings = [];
+  const errors = [];
   let total = 0;
+  let consecutiveFailures = 0;
+  let fatalError = null;
   const maxPages = Math.max(1, Math.min(Number(pages) || MAX_LIST_PAGES, MAX_LIST_PAGES));
+  // 注入點（與其他來源的 `getHtml`／`postJson`／`getJson` 同一個形狀）：測試要能離線驗
+  // 「第 N 頁失敗時其他頁要留下來」，不必真的打 591。正式路徑不會帶這個選項。
+  const fetchPageImpl = typeof options.fetchPage === "function" ? options.fetchPage : fetchPage;
   for (let page = 0; page < maxPages; page += 1) {
-    const { total: t, items } = await fetchPage(parsed.query, page * LIST_PAGE_SIZE, options.timeoutMs);
-    total = t;
-    listings.push(
-      ...(await mapKeptListings(items, options)),
-    );
+    let pageResult;
+    try {
+      const result = await fetchPageImpl(parsed.query, page * LIST_PAGE_SIZE, options.timeoutMs);
+      // 篩選與正規化也算這一頁的一部分：壞資料只該損失那一頁，不該讓整個縣市歸零。
+      pageResult = { total: result.total, items: result.items, kept: await mapKeptListings(result.items, options) };
+    } catch (error) {
+      // 整輪被取消 ⇒ 往上丟（逐頁 fail-soft 不能吞掉取消，否則預算用盡後還會繼續打站台）。
+      if (isCrawlCancelled()) throw error;
+      fatalError = fatalError || error;
+      // 第一線 fail-soft（2026-09-30）：單一頁面失敗（逾時／被封鎖／解析錯誤）不得丟掉這一輪
+      // 已經抓到的其他頁。原本這裡直接往上丟，watcher 會把整個縣市記成失敗、已抓到的房源全部消失。
+      errors.push({ page: page + 1, code: error?.code || "FETCH_FAILED", message: error?.message || String(error) });
+      consecutiveFailures += 1;
+      // 連續失敗代表來源掛了（不是單頁走運）⇒ 別再打，保留已抓到的部分。
+      if (consecutiveFailures >= CONSECUTIVE_TIMEOUT_LIMIT) break;
+      if (page + 1 < maxPages) await new Promise((resolve) => setTimeout(resolve, 1200));
+      continue;
+    }
+    consecutiveFailures = 0;
+    total = pageResult.total;
+    listings.push(...pageResult.kept);
     const fetched = (page + 1) * LIST_PAGE_SIZE;
-    if (items.length < LIST_PAGE_SIZE || fetched >= total) break;
+    if (pageResult.items.length < LIST_PAGE_SIZE || fetched >= total) break;
     if (page + 1 < maxPages) {
       await new Promise((resolve) => setTimeout(resolve, 1200));
     }
   }
-  return { searchUrl, parsed, total, listings };
+  if (!listings.length && errors.length) {
+    // 連第一頁都沒成功 ⇒ 維持「整個 job 失敗」的語意：watcher 的連續逾時政策與日誌都靠它。
+    // ⚠️ 要丟**原本的錯誤物件**（保留 code／name）：重建一個 Error 會讓 `isCrawlTimeoutError()`
+    // 之類的判斷失準，也會把「整輪被取消」變成看起來像一般來源錯誤。
+    const fatal = fatalError || new Error(errors[0].message);
+    fatal.errors = errors;
+    throw fatal;
+  }
+  return { searchUrl, parsed, total, listings, errors };
 }
 
 async function mapKeptListings(items, options) {

@@ -1,10 +1,11 @@
-import { crawlRequestSignal } from "./crawlExecution.js";
+import { crawlRequestSignal, isCrawlCancelled } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
 import { listingKitFrom, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { lookupDistrict } from "./regions.js";
+import { isSourceBlocked, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HB_SOURCE = "hbhousing";
 export const HB_POST_ID_BASE = 2_200_000_000;
@@ -317,9 +318,9 @@ async function defaultPostJson(url, body) {
     signal: crawlRequestSignal(AbortSignal.timeout(12000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
-    throw new Error(`住商暫時無法抓取（HTTP ${res.status}）`);
+    throw sourceHttpError("住商", res.status, url);
   }
-  if (!res.ok) throw new Error(`住商搜尋 ${res.status}`);
+  if (!res.ok) throw sourceHttpError("住商", res.status, url);
   return res.json();
 }
 
@@ -334,8 +335,12 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
   const postJson = options.postJson || defaultPostJson;
   const batches = [];
   const seenSn = new Set();
+  // 第一線 fail-soft（2026-09-30）：一個行政區／一頁失敗不得讓整個來源歸零。
+  // 形狀照 ddroom／housefun：批次帶 `errors`（含行政區與頁碼），被擋就暫停這家、其餘照跑。
+  let sourcePaused = false;
 
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
     const zips = [];
@@ -346,21 +351,33 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
     if (!zips.length) continue;
 
     const listings = [];
+    const errors = [];
     let total = 0;
     const names = [];
     for (const { zip, sectionId } of zips) {
+      if (sourcePaused) break;
       const district = lookupDistrict(`${regionId}-${sectionId}`);
+      const area = district?.name || `郵遞區號 ${zip}`;
       if (district?.name) names.push(district.name.replace(/區$/, ""));
       let zipTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
-        const result = await fetchHbPage({
-          zip,
-          page,
-          pageRows,
-          priceMin: job.priceMin,
-          priceMax: job.priceMax,
-          postJson,
-        });
+        let result;
+        try {
+          result = await fetchHbPage({
+            zip,
+            page,
+            pageRows,
+            priceMin: job.priceMin,
+            priceMax: job.priceMax,
+            postJson,
+          });
+        } catch (error) {
+          // 整輪被取消 ⇒ 往上丟（逐頁 fail-soft 不能吞掉取消）。
+          if (isCrawlCancelled()) throw error;
+          errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
+          sourcePaused = isSourceBlocked(error);
+          break;
+        }
         if (page === 1) {
           zipTotal = Number(result.total) || 0;
           total += zipTotal;
@@ -378,7 +395,7 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
           seenSn.add(sn);
           listings.push(row);
         }
-        if (result.items.length < pageRows || page * pageRows >= zipTotal) break;
+        if (sourcePaused || result.items.length < pageRows || page * pageRows >= zipTotal) break;
         if (page < pages) await new Promise((resolve) => setTimeout(resolve, options.gapMs ?? 400));
       }
     }
@@ -391,6 +408,7 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
       },
       total,
       listings,
+      errors,
     });
   }
 
