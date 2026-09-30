@@ -5058,7 +5058,25 @@ Owner 回報：重新整理後 `acefengyun@gmail.com` 變成訪客，重新登�
 - 正式站的 PG 資料查核：`users` 只有一列該 Email、`deleted_at` 為空、`email_verified=1`、
   `last_login_at` 有更新 ⇒ 登入本身是成功的，問題純在前端拿不到 `/api/me`。
 
-### 90.5 教訓（寫給下一個 session）
+### 90.5 正式站部署（2026-09-30，Owner 當次核准「可部署」）
+
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36666397123](https://github.com/Fyun48/5151/actions/runs/36666397123) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36666501334](https://github.com/Fyun48/5151/actions/runs/36666501334) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36666647965](https://github.com/Fyun48/5151/actions/runs/36666647965) | success |
+
+- **Source SHA**：`dc59a653d35377af489fc8eebe3d50b684ed0121`
+- **Image digest**：`sha256:1423cc90c1f6e53c8095dd3b608315519ebbd52c0428e01c84d5d0681a6e7983`
+- **Rollback identity**：前一個 digest `sha256:5b5e54e7027f352c15ac889e4dc654c57e500fd7c8e89d51731342bded57e89f`
+- **部署後外部實測**（以正式站 session 金鑰簽出的 cookie 直接打正式站）：
+  `GET /api/me` → `200 {"ok":true,"role":"admin",...}`（**修好前是 500**）；
+  `/api/events/revision`／`/api/admin/system-crawl`／`/api/consents`／`/api/admin/crm` 全 200；
+  `GET /api/nope`（未登入）→ JSON 401；`POST /api/login` 帶壞 JSON → JSON 400；
+  `GET /api/health` → `{"ok":true,"version":"3.57","audit_failures":0}`；
+  容器 `Config.Image` 與本次 digest 一致、狀態 `running`。
+
+### 90.6 教訓（寫給下一個 session）
 
 - 這個 repo 的島嶼測試**幾乎都注入 `exec`／`pgDriver`**；注入越完整，越容易漏掉「島嶼自己解析驅動」的路。
   新島嶼請至少留一條**不注入**的測試（live 檔最適合）。
