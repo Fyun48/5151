@@ -49,6 +49,23 @@ Cloud Agent 環境由 `.cursor/environment.json` 自動 `npm ci` 並啟動 v3 �
 - **Plugins / MCP**：`Figma`（設計規格）、`Playwright`（實機操作與 RWD 驗證）、`Mobbin`（設計參考）、`Shadcn`（元件）。
 - **Agents（依 `agent-routing.mdc`）**：Design Research Agent 先研究 → Figma 建立／更新規格 → Builder Agent 才實作前端 → Playwright 實機操作並分別檢查 375px / 768px / 1440px → UX Reviewer 與 Security Reviewer 審查。Reviewer 不得批准自己實作的修改；禁止只以「看起來更漂亮」作為完成標準。
 
+## 外部來源抓取：第一線就要 fail-soft（Owner 指定，2026-09-30 起）
+
+任何打外部站台的抓取程式碼（`v3/src/client591.js`、`houseprice.js`、`hbhousing.js`、`sinyi.js`、
+`ddroom.js`、`housefun.js`、`rakuya.js` …）**每一頁／每一筆都要各自 try/catch**，
+一個失敗只損失那一頁：
+
+1. 失敗要記進該批次的 `errors[]`（帶 `code`、行政區、頁碼、**出事的網址**），往上回報；
+   已經抓到的房源必須照樣回傳、照樣落地。
+2. 被擋／限速（401／403／429／503）⇒ 這一輪**暫停這一家**（`sourcePaused`），不要繼續打。
+3. `catch` 的第一行必須是 `if (isCrawlCancelled()) throw error;`：
+   整輪被取消（預算用盡／被新的一輪取代）要立刻停手，逐頁 fail-soft **不可以吞掉取消**。
+4. 只有「連第一頁都沒成功」才維持整個 job 失敗的語意（watcher 的逾時政策靠它），
+   而且要丟**原本的錯誤物件**（保留 `code`／`name`）。
+
+反面教材（2026-09-30 事故）：5168 一個間歇性 403 就讓整批歸零，表面上卻是「來源連續失敗」，
+4 天沒有新資料也查不出原因。**不要只加測試來補這種缺陷，第一線就要擋。**
+
 ## Pull requests 與部署（Owner 覆寫，2026-09-10 起強制）
 
 做完工作後請開**非草稿** PR（`draft: false`）。

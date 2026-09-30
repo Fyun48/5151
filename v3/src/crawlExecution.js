@@ -27,6 +27,20 @@ export function crawlRequestSignal(requestSignal) {
   return current ? AbortSignal.any([current.signal, requestSignal]) : requestSignal;
 }
 
+/**
+ * 這一輪是不是已經被取消（預算用盡／被新的一輪取代）？
+ *
+ * 為什麼需要它：來源的「逐頁 fail-soft」（單頁失敗不丟掉整批）**不可以吞掉整輪取消**——
+ * 被取消時要立刻往上丟，否則輪次會在預算用盡後繼續打外部站台。
+ * 逐頁 catch 的判斷一律寫成：
+ *   `catch (error) { if (isCrawlCancelled()) throw error; …記一筆錯誤、繼續跑… }`
+ * （單一請求自己的逾時不算取消：那種情形就是我們要容忍的「這一頁失敗」。）
+ */
+export function isCrawlCancelled() {
+  const current = execution.getStore();
+  return Boolean(current?.signal?.aborted);
+}
+
 // Rollback remains possible after cancellation. COMMIT/END never bypass guards.
 export function isCrawlRollback(sql) {
   return /^\s*ROLLBACK(?:\s+TRANSACTION|\s+TO(?:\s+SAVEPOINT)?\s+[a-z_][a-z_0-9]*)?\s*;?\s*$/i.test(String(sql));

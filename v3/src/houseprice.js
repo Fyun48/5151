@@ -1,4 +1,4 @@
-import { crawlRequestSignal } from "./crawlExecution.js";
+import { crawlRequestSignal, isCrawlCancelled } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { appendAppearanceTags, appearanceLabelFromText, passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { listingKitFields } from "./listingKit.js";
@@ -10,6 +10,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js"
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
+import { isSourceBlocked, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HP_SOURCE = "houseprice";
 export const HP_POST_ID_BASE = 2_400_000_000;
@@ -1014,9 +1015,9 @@ async function defaultGetHtml(url) {
     signal: crawlRequestSignal(AbortSignal.timeout(15000)),
   });
   if (res.status === 403 || res.status === 429 || res.status === 503) {
-    throw new Error(`5168 暫時無法抓取（HTTP ${res.status}）`);
+    throw sourceHttpError("5168 ", res.status, url);
   }
-  if (!res.ok) throw new Error(`5168 搜尋 ${res.status}`);
+  if (!res.ok) throw sourceHttpError("5168 ", res.status, url);
   return res.text();
 }
 
@@ -1032,8 +1033,13 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   const seen = new Set();
   let detailBudget = Math.max(0, Number(options.detailLimit ?? 80));
   let addressBudget = Math.max(0, Number(options.addressDetailLimit ?? 200));
+  // 第一線 fail-soft（2026-09-30）：一個 403 不該讓整個來源歸零。
+  // 被擋（403／429／503）就別再打這個站台，但**已經抓到的批次照樣往上回報**
+  //（形狀與 ddroom／housefun／rakuya 相同：批次帶 `errors`，watcher 會逐筆記進輪次結果）。
+  let sourcePaused = false;
 
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
     const targets = [];
@@ -1044,19 +1050,31 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
     if (!targets.length) continue;
 
     const listings = [];
+    const errors = [];
     let total = 0;
     const names = [];
     for (const { sid, sectionId } of targets) {
+      if (sourcePaused) break;
       const district = lookupDistrict(`${regionId}-${sectionId}`);
+      const area = district?.name || `sid ${sid}`;
       if (district?.name) names.push(district.name.replace(/區$/, ""));
       let sidTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
-        const result = await fetchHpPage({ sid, page, getHtml });
+        let result;
+        try {
+          result = await fetchHpPage({ sid, page, getHtml });
+        } catch (error) {
+          if (isCrawlCancelled()) throw error;
+          errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
+          sourcePaused = isSourceBlocked(error);
+          break;
+        }
         if (page === 1) {
           sidTotal = Number(result.total) || 0;
           total += sidTotal;
         }
         for (const item of result.items) {
+          if (sourcePaused) break;
           const id = String(item.id || "");
           if (!id || seen.has(id)) continue;
           let row = normalizeHpItem(item, { regionId, sectionId });
@@ -1076,8 +1094,15 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           const canFetchAddress = missingAddr && addressBudget > 0;
           const canFetchOther = needDetail && !canFetchAddress && detailBudget > 0;
           if (canFetchAddress || canFetchOther) {
-            const detail = await fetchHpDetail(id, getHtml);
-            if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
+            try {
+              const detail = await fetchHpDetail(id, getHtml);
+              if (detail) row = enrichHpListingFromDetail(row, detail, { regionId, sectionId });
+            } catch (error) {
+              if (isCrawlCancelled()) throw error;
+              // 明細失敗只損失「補齊的欄位」，這一筆房源本身（列表頁拿到的）要留下來。
+              errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page, stage: "detail" });
+              sourcePaused = isSourceBlocked(error);
+            }
             if (canFetchAddress) addressBudget -= 1;
             else detailBudget -= 1;
             const gap = options.detailGapMs ?? options.gapMs ?? 300;
@@ -1085,7 +1110,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
           }
           listings.push(row);
         }
-        if (result.items.length < HP_PAGE_ROWS || page * HP_PAGE_ROWS >= sidTotal) break;
+        if (sourcePaused || result.items.length < HP_PAGE_ROWS || page * HP_PAGE_ROWS >= sidTotal) break;
         if (page < pages) await new Promise((resolve) => setTimeout(resolve, options.gapMs ?? 400));
       }
     }
@@ -1098,6 +1123,7 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       },
       total,
       listings,
+      errors,
     });
   }
 

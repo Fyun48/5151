@@ -4254,6 +4254,81 @@ const CRAWLSTREAK_MUTATIONS = [
   },
 ];
 
+// 來源的「第一線 fail-soft」（2026-09-30）：單頁失敗不得讓整個來源歸零。
+// 事故：5168 一個 403 就讓整批（已抓到的行政區與房源）消失，表面上卻是「來源連續失敗」。
+const SRCRECOVERY_MUTATIONS = [
+  {
+    name: "591：單頁失敗直接往上丟（已抓到的頁面全部丟掉）",
+    file: "v3/src/client591.js",
+    from: "      errors.push({ page: page + 1, code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error) });",
+    to: "      throw error;",
+    expect: "591：第 2 頁失敗時",
+  },
+  {
+    name: "591：連續失敗不再停手（被打爆還一路打到最後一頁）",
+    file: "v3/src/client591.js",
+    from: "      if (consecutiveFailures >= CONSECUTIVE_TIMEOUT_LIMIT) break;",
+    to: "      if (false) break;",
+    expect: "591：第 2 頁失敗時",
+  },
+  {
+    name: "591：連第一頁都失敗也回空結果（watcher 的逾時政策與日誌失去依據）",
+    file: "v3/src/client591.js",
+    from: "  if (!listings.length && errors.length) {",
+    to: "  if (false) {",
+    expect: "591：連第一頁都失敗時",
+  },
+  {
+    name: "逐頁 catch 吞掉整輪取消（預算用盡後還繼續打站台）",
+    file: "v3/src/client591.js",
+    from: "      if (isCrawlCancelled()) throw error;",
+    to: "      if (false) throw error;",
+    expect: "不可以吞掉整輪取消",
+  },
+  {
+    name: "5168：列表頁失敗不再記錄（錯誤樣本沒有行政區與頁碼）",
+    file: "v3/src/houseprice.js",
+    from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });",
+    to: "          void error;",
+    expect: "5168：被擋（403）時",
+  },
+  {
+    name: "5168：被擋之後不暫停（同一輪繼續打同一家）",
+    file: "v3/src/houseprice.js",
+    from: "          sourcePaused = isSourceBlocked(error);\n          break;",
+    to: "          break;",
+    expect: "5168：被擋（403）時",
+  },
+  {
+    name: "住商：單頁失敗不記錄也不暫停（整批照樣歸零）",
+    file: "v3/src/hbhousing.js",
+    from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n          sourcePaused = isSourceBlocked(error);\n          break;",
+    to: "          break;",
+    expect: "住商：第二個來源請求失敗時",
+  },
+  {
+    name: "信義：單頁失敗不記錄也不暫停（整批照樣歸零）",
+    file: "v3/src/sinyi.js",
+    from: "          errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n          sourcePaused = isSourceBlocked(error);\n          break;",
+    to: "          break;",
+    expect: "信義：第二個來源請求失敗時",
+  },
+  {
+    name: "被封鎖的判定永遠回 false（403 也當成一般失敗一直重打）",
+    file: "v3/src/crawlWatchdog.js",
+    from: "  if (SOURCE_BLOCKED_CODES.includes(code)) return true;\n  return /HTTP\\s*(401|403|429|503)\\b/.test(String(error?.message || \"\"));",
+    to: "  return false;",
+    expect: "5168：被擋（403）時",
+  },
+  {
+    name: "HTTP 錯誤不帶出事的網址（403 之後查不出是哪一頁）",
+    file: "v3/src/crawlWatchdog.js",
+    from: "  const where = url ? `；${url}` : \"\";",
+    to: "  const where = \"\";",
+    expect: "來源 HTTP 錯誤要帶代碼與出事的網址",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5694,6 +5769,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /crm-parity/.test(testFile) ? CRMENQ_MUTATIONS
   : /crawl-round-progress/.test(testFile) ? CRAWLROUND_MUTATIONS
   : /crawl-source-streaks/.test(testFile) ? CRAWLSTREAK_MUTATIONS
+  : /source-recovery/.test(testFile) ? SRCRECOVERY_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

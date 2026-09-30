@@ -1,4 +1,4 @@
-import { crawlRequestSignal } from "./crawlExecution.js";
+import { crawlRequestSignal, isCrawlCancelled } from "./crawlExecution.js";
 import { createHash } from "node:crypto";
 import { passesAttributeFilters, sanitizeFloorName } from "./floors.js";
 import { isExcludedByKeyword } from "./geo.js";
@@ -6,6 +6,7 @@ import { kitFromActiveNames, listingKitFields } from "./listingKit.js";
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict, districtKeyForZip } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
+import { isSourceBlocked, sourceHttpError } from "./crawlWatchdog.js";
 
 export const SINYI_SOURCE = "sinyi";
 export const SINYI_POST_ID_BASE = 2_300_000_000;
@@ -209,14 +210,14 @@ async function defaultPostForm(url, body) {
       signal: crawlRequestSignal(AbortSignal.timeout(12000)),
     });
     if (res.status === 403 || res.status === 429) {
-      throw new Error(`信義暫時無法抓取（HTTP ${res.status}）`);
+      throw sourceHttpError("信義", res.status, url);
     }
     if (res.status === 503) {
-      lastError = new Error("信義暫時無法抓取（HTTP 503）");
+      lastError = sourceHttpError("信義", 503, url);
       await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
       continue;
     }
-    if (!res.ok) throw new Error(`信義搜尋 ${res.status}`);
+    if (!res.ok) throw sourceHttpError("信義", res.status, url);
     return res.json();
   }
   throw lastError || new Error("信義搜尋失敗");
@@ -233,8 +234,11 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
   const postForm = options.postForm || defaultPostForm;
   const batches = [];
   const seenNo = new Set();
+  // 第一線 fail-soft（2026-09-30）：一個行政區／一頁失敗不得讓整個來源歸零（形狀同住商／ddroom）。
+  let sourcePaused = false;
 
   for (const job of jobs || []) {
+    if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
     const zips = [];
@@ -245,14 +249,25 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
     if (!zips.length) continue;
 
     const listings = [];
+    const errors = [];
     let total = 0;
     const names = [];
     for (const { zip, sectionId } of zips) {
+      if (sourcePaused) break;
       const district = lookupDistrict(`${regionId}-${sectionId}`);
+      const area = district?.name || `郵遞區號 ${zip}`;
       if (district?.name) names.push(district.name.replace(/區$/, ""));
       let zipTotal = 0;
       for (let page = 1; page <= pages; page += 1) {
-        const result = await fetchSinyiPage({ zip, page, pageRows, postForm });
+        let result;
+        try {
+          result = await fetchSinyiPage({ zip, page, pageRows, postForm });
+        } catch (error) {
+          if (isCrawlCancelled()) throw error;
+          errors.push({ code: error?.code || "FETCH_FAILED", message: error?.message || String(error), district: area, page });
+          sourcePaused = isSourceBlocked(error);
+          break;
+        }
         if (page === 1) {
           zipTotal = Number(result.total) || 0;
           total += zipTotal;
@@ -270,7 +285,7 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
           seenNo.add(no);
           listings.push(row);
         }
-        if (result.items.length < pageRows || page * pageRows >= zipTotal) break;
+        if (sourcePaused || result.items.length < pageRows || page * pageRows >= zipTotal) break;
         if (page < pages) await new Promise((resolve) => setTimeout(resolve, options.gapMs ?? 400));
       }
     }
@@ -283,6 +298,7 @@ export async function fetchSinyiCoveringListings(jobs, options = {}) {
       },
       total,
       listings,
+      errors,
     });
   }
 
