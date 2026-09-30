@@ -7550,7 +7550,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids: postIds }),
         });
-        const data = await res.json();
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "併入失敗");
         exitMergeSelect();
         $("status").textContent = data.message || "已併入同房源";
@@ -8280,7 +8280,7 @@
         const res = await fetch(
           `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}${cursorParam}&districts=${districts}`,
         );
-        const data = await res.json();
+        const data = await readApi(res);
         if (gen !== listLoadGen) return;
         if (!res.ok) throw Object.assign(new Error(data.error || "搜尋暫時無法使用，請稍後重試"), { code: data.code });
         if (!options.force && !append && watchNoteBusy()) {
@@ -8354,7 +8354,9 @@
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
           const res = await fetch("/api/me", { cache: "no-store", signal: AbortSignal.timeout(5000) });
-          me = await res.json();
+          // ⚠️ 一定要用 readApi()：這一支是啟動路徑，若伺服器回 HTML（404／500／proxy 錯誤頁），
+          // 原本的 res.json() 會直接把 `Unexpected token '<'…` 顯示給使用者（2026-09-30 正式站回報）。
+          me = await readApi(res);
           lastError = "";
           break;
         } catch (error) {
@@ -8651,7 +8653,7 @@
       if (!id) return;
       try {
         const res = await fetch(`/api/profiles/${encodeURIComponent(id)}/load`, { method: "POST" });
-        const data = await res.json();
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "載入失敗");
         fillSettings(data.settings);
         const waitMins = mePlan === "sponsor" ? 5 : 8;
@@ -8672,7 +8674,7 @@
       if (!window.confirm(`確定刪除設定檔「${name}」？不會刪物件紀錄。`)) return;
       try {
         const res = await fetch(`/api/profiles/${encodeURIComponent(id)}`, { method: "DELETE" });
-        const data = await res.json();
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "刪除失敗");
         fillSettings(data.settings);
         $("saveMsg").textContent = "設定檔已刪除";
@@ -9402,7 +9404,7 @@
             })),
           }),
         });
-        const data = await res.json();
+        const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "同意失敗");
         paintReaccept(data.pending_documents || []);
         closeReacceptOverlay();
@@ -9554,7 +9556,7 @@
       }
       try {
         const res = await fetch(`/api/self-listings/${id}`);
-        const data = await res.json();
+        const data = await readApi(res);
         if (res.ok) openSelfDetail(data);
       } catch {
         // ignore

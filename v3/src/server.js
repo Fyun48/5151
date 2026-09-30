@@ -1,5 +1,8 @@
 import "./env.js";
 import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./appRole.js";
+// `/api/*` 的 JSON 保底（404／錯誤中介層）：原本這兩種情況會回 HTML，前端 `res.json()` 直接爆
+// 「Unexpected token '<'」（第八十九批，正式站實際回報）。
+import { apiErrorHandler, apiNotFoundHandler, statusOfApiError } from "./apiFallbacks.js";
 import { searchPublicListingsAsync } from "./publicListingSearchAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { loadListingPage } from "./listingSearchPage.js";
@@ -930,6 +933,10 @@ app.use("/vendor", express.static(path.join(__dirname, "../public/vendor"), { ma
 app.use("/icons", express.static(path.join(__dirname, "../public/icons"), { maxAge: "7d" }));
 
 app.get("/api/me", async (req, res) => {
+  // ⚠️ 這一條是**啟動路徑**（前端 `loadState()` 第一支就打它）：它原本沒有 try/catch，
+  // 只要其中一支 async 查詢丟錯就會變成 Express 預設的 HTML 500，前端 `res.json()` 直接爆
+  // 「Unexpected token '<'」。現在失敗一律回 JSON（並保留 `ok:false` 的訪客語意）。
+  try {
   const session = readSession(req);
   // 這一頁的會員欄位與「開著的自主刊登數」都必須讀 PG（`readSession` 的身分也來自 PG）：
   // 讀本機在 PG 站會顯示別台節點看不到的舊資料（第七十一批）。
@@ -971,6 +978,11 @@ app.get("/api/me", async (req, res) => {
     vapidPublicKey: publicVapidKey(),
     sponsor: session ? await publicSponsorSettingsAsync(session) : { show: false, links: [], sponsored: false, intro: "", thanks: "" },
   });
+  } catch (error) {
+    // 這條是啟動路徑：寧可回「訪客 + 需要重試」，也不要讓前端拿到 HTML 而顯示天書。
+    console.error("[api] GET /api/me 失敗：", error?.message || error);
+    res.status(statusOfApiError(error)).json({ error: "個人資料暫時無法載入，請稍後再試", code: error?.code || "me_failed" });
+  }
 });
 
 app.patch("/api/profile", async (req, res) => {
@@ -3735,7 +3747,14 @@ app.post("/api/admin/mail/test", requireAdminApi, async (req, res) => {
   }
 });
 
+// 第八十九批：`/api/*` 的 JSON 保底（順序很重要）
+//   1. 未知的 API 路徑 → JSON 404（原本是 Express 預設的 HTML 404 ⇒ 前端 `res.json()` 爆
+//      「Unexpected token '<'」）。
+//   2. 錯誤中介層掛在**靜態檔之後**（Express 只認最後註冊的那一個），
+//      `/api/*` 回 JSON、其他路徑維持原本的 HTML 行為。
+app.use("/api", apiNotFoundHandler());
 app.use(express.static(path.join(__dirname, "../public")));
+app.use(apiErrorHandler());
 
 let timer = null;
 let lastRun = null;

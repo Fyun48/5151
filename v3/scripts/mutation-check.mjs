@@ -3964,6 +3964,73 @@ const DOMAINGUARD_MUTATIONS = [
   },
 ];
 
+// `/api/*` 的 JSON 保底（第八十九批）：正式站回報「Unexpected token '<'」的根因兩層。
+const APIFALLBACK_MUTATIONS = [
+  {
+    name: "未知的 API 路徑回 200（前端以為成功）",
+    file: "v3/src/apiFallbacks.js",
+    from: '    res.status(404).json({ error: "找不到這個 API 路徑", code: "api_not_found" });',
+    to: '    res.status(200).json({ error: "找不到這個 API 路徑", code: "api_not_found" });',
+    expect: "apiNotFoundHandler",
+  },
+  {
+    name: "5xx 把內部訊息送給前端（外洩 DB／堆疊字串）",
+    file: "v3/src/apiFallbacks.js",
+    from: '    return { status, body: { error: GENERIC_SERVER_ERROR, code: code || "internal" } };',
+    to: '    return { status, body: { error: friendlyClientMessage(error), code: code || "internal" } };',
+    expect: "apiErrorBody",
+  },
+  {
+    name: "奇怪的 status 不再收斂成 500（可能回 200 或 999）",
+    file: "v3/src/apiFallbacks.js",
+    from: "  if (!Number.isFinite(raw) || raw < 400 || raw > 599) return 500;",
+    to: "  if (!Number.isFinite(raw)) return 500;",
+    expect: "奇怪的 status",
+  },
+  {
+    name: "body-parser 的解析錯誤直接外洩（英文語法訊息）",
+    file: "v3/src/apiFallbacks.js",
+    from: '  if (error?.type === "entity.parse.failed" || /Unexpected token|JSON at position/i.test(message)) {\n    return "請求內容格式不正確";\n  }',
+    to: '  if (false) {\n    return "請求內容格式不正確";\n  }',
+    expect: "body-parser",
+  },
+  {
+    name: "錯誤中介層把非 API 路徑也吃掉（HTML 頁面變成 JSON）",
+    file: "v3/src/apiFallbacks.js",
+    from: "    if (!isApi) return next(error);",
+    to: "    if (false) return next(error);",
+    expect: "apiErrorHandler：/api 回 JSON",
+  },
+  {
+    name: "headersSent 之後還想回應（double-send）",
+    file: "v3/src/apiFallbacks.js",
+    from: "    if (res.headersSent) return next(error);",
+    to: "    if (false) return next(error);",
+    expect: "headersSent",
+  },
+  {
+    name: "JSON 404 被移到靜態檔之後（/api/* 會被當檔案找）",
+    file: "v3/src/server.js",
+    from: 'app.use("/api", apiNotFoundHandler());\napp.use(express.static(path.join(__dirname, "../public")));',
+    to: 'app.use(express.static(path.join(__dirname, "../public")));\napp.use("/api", apiNotFoundHandler());',
+    expect: "server.js 接線",
+  },
+  {
+    name: "/api/me 的 catch 不再回 JSON（啟動路徑回到 HTML 500）",
+    file: "v3/src/server.js",
+    from: '    res.status(statusOfApiError(error)).json({ error: "個人資料暫時無法載入，請稍後再試", code: error?.code || "me_failed" });',
+    to: '    res.status(500).send("<html>boom</html>");',
+    expect: "server.js：/api/me",
+  },
+  {
+    name: "前端啟動路徑改回 raw res.json()（HTML 又變天書）",
+    file: "v3/public/index.html",
+    from: "          me = await readApi(res);",
+    to: "          me = await res.json();",
+    expect: "前端啟動路徑",
+  },
+];
+
 const REJECT_MUTATIONS = [
   {
     name: "拿掉 user_match_votes 的 upsert（票不會落地）",
@@ -5399,6 +5466,7 @@ const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /listing-import-start-async/.test(testFile) ? IMPORTSTART_MUTATIONS
   : /wish-offer-create-async/.test(testFile) ? OFFERCREATE_MUTATIONS
   : /domain-tool-guards/.test(testFile) ? DOMAINGUARD_MUTATIONS
+  : /api-fallbacks/.test(testFile) ? APIFALLBACK_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
