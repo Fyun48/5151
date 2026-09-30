@@ -2265,11 +2265,29 @@ const SESSION_MUTATIONS = [
     expect: "fail-open",
   },
   {
-    name: "靜態資產不再跳過（帶 cookie 載入 30 個圖檔 = 30 次 users 查詢）",
+    name: "公開靜態資產不再跳過（帶 cookie 載入 30 個圖檔 = 30 次 users 查詢）",
     file: AUTH_SRC,
-    from: "    if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {",
+    from: "    if (!cookie.includes(`${COOKIE}=`) || skippableStaticAsset(req.path)) {",
     to: "    if (!cookie.includes(`${COOKIE}=`)) {",
     expect: "靜態資產即使帶 cookie",
+  },
+  {
+    // 2026-09-30 正式站事故的變異版：跳過的條件從「公開的靜態資產」放寬回「所有靜態資產」
+    // ⇒ requireAuth 會擋的 `/admin-ia.js` 等檔案，對**已登入**的人也回 302 到 /login.html。
+    name: "靜態資產一律跳過解析（後台 .js 對已登入者也被導去登入頁）",
+    file: AUTH_SRC,
+    from: "  return isStaticAssetPath(p) && publicPath({ path: p });",
+    to: "  return isStaticAssetPath(p);",
+    expect: "2026-09-30 事故",
+  },
+  {
+    name: "跳過解析的判準拿掉副檔名判斷（公開的動態路由也被當靜態）",
+    file: AUTH_SRC,
+    from: "  return isStaticAssetPath(p) && publicPath({ path: p });",
+    to: "  return publicPath({ path: p });",
+    // 殺手是「公開路徑也要解析 session」那一組（`/api/me` 是 publicPath 但一定要有身分），
+    // 不是事故那條測試——事故測的是反方向（需要登入的靜態資產不能跳過）。
+    expect: "核心：PG 有、節點本機沒有的使用者",
   },
   {
     name: "靜態判斷退回四個前綴（public 根目錄的 .js／.css 每個檔案都查一次 users）",

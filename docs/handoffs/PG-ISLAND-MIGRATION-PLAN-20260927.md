@@ -5305,6 +5305,78 @@ wait_event=WalSenderMain   backend_start=2026-09-26T00:56:57Z
    來源本身的問題（本機實測同一支 `fetchHpCoveringListings()` 701ms／20 筆正常）要另外追。
 3. 40 分鐘仍跑不完（落地約 1.5 秒/筆）⇒ 批次寫入／並行化仍待辦（§91.6 的同一項）。
 
+## 二之負六十四、2026-09-30 正式站事故：後台靜態資產一律 302（「版面與功能分類全不見」）
+
+> 這不是第九十二批造成的：事故由 **PR #529（2026-09-28 合併、隨第 85～91 批部署）** 帶進來，
+> 第九十二批當時**還沒部署**。Owner 於 2026-09-30 回報後才發現。
+
+### 93.1 症狀
+
+Owner 進 `https://jibbyrenth.reversalplay.me/admin.html` 看到的畫面：頁首、搜尋框、「常用」與
+各卡片**標題**都在，但**左側功能分類整排不見**、每張卡片的内容都是空的（房源狀態／抓取狀態／
+系統服務／待處理／5168 資料準備全部沒有數字）。
+
+### 93.2 根因（一層接線不一致）
+
+`admin.html` 用三個 `<script src>` 載入版面與各頁邏輯：`/admin-ia.js`（左側分類與導覽）、
+`/admin-support.js`、`/admin-providers.js`。這三個檔案**不在** `publicPath()` 裡，所以
+`requireAuth()` 會擋（要登入才看得到）。但同一個請求會先經過 `resolveSession()`：
+
+```js
+if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {
+  req[SESSION_SLOT] = null;   // ← 對「所有」靜態副檔名寫入「未登入」
+```
+
+⇒ 兩者的判定不一致：**守門的要登入、解析身分的卻直接跳過**。結果是那三個 .js
+**對任何人都回 302 到 `/login.html`**（連已登入的 Owner 也一樣，實測見下）。
+瀏覽器把登入頁的 HTML 當成 JS 執行（`SyntaxError: Unexpected token '<'`），
+於是 `<script>` 之後的整段初始化全部沒跑：左側分類與卡片内容都不會 render，只剩靜態骨架。
+
+實測（正式站，帶**有效**的 admin session）：
+
+| 路徑 | 修前 | 說明 |
+|---|---|---|
+| `/api/me` | 200 `{"ok":true,…}` | 身分有效 |
+| `/admin.html` | 200 | 不是靜態副檔名 ⇒ 有解析 session |
+| `/admin-ia.js`／`/admin-support.js`／`/admin-providers.js` | **302 → `/login.html`** | 被跳過解析 ⇒ 永遠未登入 |
+| `/mascot.js` | 200 | 公開路徑，本來就不擋 |
+
+本機以同樣條件重現（`PORT=5198 DATA_DIR=… node v3/src/server.js` ＋ 自簽 session）也得到同一組狀態碼。
+
+### 93.3 做法
+
+- `v3/src/auth.js`：新增 `skippableStaticAsset(pathname)` ＝
+  `isStaticAssetPath(p) && publicPath({ path: p })`，`resolveSession()` 改用它。
+  判準變成「**只有本來就不需要登入的**靜態資產才跳過解析」：
+  - 公開資產（`/media`、`/vendor`、`/icons`、`/brand`、`/mascot.js`、`/tokens.css`、`/kit/*.css`…）
+    照舊跳過 ⇒ 「一次載入 30 個檔案不該查 30 次 `users`」的效能理由仍然成立；
+  - 需要登入的靜態資產（後台那三支 .js）照常解析 ⇒ `requireAuth()` 看得到身分。
+  - 未登入者仍然被擋（沒有為了修這個把後台資產變成公開）。
+- 沒有動 `requireAuth()`／`publicPath()`：事故的成因是「兩份判定不一致」，
+  修在一處（跳過解析的條件）比放寬守門安全。
+
+### 93.4 測試與證據
+
+- `v3/test/session-async.test.js` 新增一條
+  「🚨 2026-09-30 事故：requireAuth 會擋的靜態資產不得跳過解析」：先釘住前提
+  （那三支 .js 不在 `publicPath()`），再驗純函式判準（公開資產仍要跳過），
+  最後**把 `resolveSession()` 與 `requireAuth()` 一起跑**：登入者必須被放行、
+  未登入者必須仍被導去 `/login.html`。13 項全綠。
+- 變異：`SESSION_MUTATIONS` 由 11 條增為 **13 條全殺**（新增「靜態資產一律跳過解析」與
+  「跳過判準拿掉副檔名判斷」；原本那條的錨點跟著本批改寫）。
+- 本機實跑（修好後，帶有效 session）：`/admin-ia.js`、`/admin-support.js`、
+  `/admin-providers.js` 都回 `200 text/javascript`；未登入仍 `302`；以瀏覽器開
+  `http://127.0.0.1:5198/admin.html` 得到 **47 個導覽連結**、五張卡片都有內容、console 0 錯誤。
+- 順手盤點「還有沒有別的頁面中同一槍」：掃過 `v3/public/*.html` 參照到的 31 個路徑，
+  屬於「需要登入的靜態資產」的**只有 admin.html 那三支**（`reset.html`／`spirit.html`／
+  `data.html`／`listing.html`／`wish.html` 參照到的都是公開資產），修好後三支的
+  `skippableStaticAsset()` 都是 `false`（＝會正常解析身分）。
+
+### 93.5 部署狀態
+
+**修好但尚未部署**（寫這一段時正式站仍是第 91 批 digest `sha256:287008ed…`）。
+正式站的後台在部署前仍然是壞的；上線要 Owner 當次明確說「可部署」。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

@@ -153,12 +153,30 @@ export function isStaticAssetPath(pathname) {
   return !DYNAMIC_ASSET_PATHS.includes(p);
 }
 
+// 什麼時候可以「不解析 session」？——只有**本來就不需要登入**的靜態資產。
+//
+// 🚨 2026-09-30 正式站事故（後台「版面與功能分類全不見」）：`resolveSession()` 原本對
+// **所有**靜態副檔名路徑都寫入「未登入」，但 `requireAuth()` 仍然要擋 `/admin-ia.js`、
+// `/admin-support.js`、`/admin-providers.js`（它們不在 `publicPath()` 裡）⇒ 那三個檔案
+// **對任何人都回 302 到 `/login.html`**（連已登入的 Owner 也一樣）。瀏覽器把登入頁的 HTML
+// 當成 JS 執行（`SyntaxError: Unexpected token '<'`），於是 `<script>` 之後的整段初始化
+// 全部沒跑：左側功能分類與各卡片內容都不會 render，只剩靜態骨架。
+//
+// 判準：靜態資產 **且** `publicPath()` 放行（`/media`、`/vendor`、`/icons`、`/brand`、
+// `/mascot.js`、`/tokens.css`…）才跳過解析——那些檔案本來就不需要身分，跳過才不會為每個檔案
+// 查一次 `users`（一次載入 30 個檔案的效能理由仍然成立）。需要登入才看得到的靜態資產
+// （後台那三支 .js）一定要照常解析，否則 `requireAuth()` 永遠看不到身分。
+export function skippableStaticAsset(pathname) {
+  const p = String(pathname || "");
+  return isStaticAssetPath(p) && publicPath({ path: p });
+}
+
 // 掛在 app 層（所有路由註冊之前）：每請求解析一次並快取。
-// 沒有 cookie 或純靜態資產直接寫入 null，完全不碰 DB。
+// 沒有 cookie、或「公開的」靜態資產直接寫入 null，完全不碰 DB。
 export function resolveSession(options = {}) {
   return async function resolveSessionMiddleware(req, _res, next) {
     const cookie = String(req.headers?.cookie || "");
-    if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {
+    if (!cookie.includes(`${COOKIE}=`) || skippableStaticAsset(req.path)) {
       req[SESSION_SLOT] = null;
       next();
       return;
