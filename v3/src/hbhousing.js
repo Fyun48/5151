@@ -342,6 +342,7 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
   let blockedStreak = 0;
   let cooledDown = false;   // 這一輪是否已用過「先冷卻再重試」那一次
   const pauseLimit = Number(options.blockPauseLimit) || undefined;
+  // 這一輪**不等待**；這個值只往上傳（watcher 會據此把被擋到停工的來源記成跨輪冷卻 blockedUntil）。
   const cooldownMs = options.blockCooldownMs === undefined
     ? SOURCE_BLOCK_COOLDOWN_MS
     : Math.max(0, Number(options.blockCooldownMs) || 0);
@@ -396,10 +397,12 @@ export async function fetchHbCoveringListings(jobs, options = {}) {
             const note = noteSourceBlock(blockedStreak, error, pauseLimit);
             blockedStreak = note.consecutive;
             if (note.pause && !cooledDown) {
-              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。
+              // 第一次達門檻：不放棄這一家，改成「這一輪剩下的部分就是重試」。
+              // ⚠️ 2026-09-30 踩點：第一版在這裡 `await` 睡 90 秒，五個來源 × 兩次就把收集階段
+              // 拖過 40 分鐘的輪次預算（正式站實測：輪次 70 分鐘沒收尾、下一輪又開始 → 兩輪重疊）。
+              // 真正需要等待的是**跨輪**冷卻（blockedUntil），不是同一輪裡空等。
               cooledDown = true;
               blockedStreak = 0;
-              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));
             } else {
               sourcePaused = note.pause;
             }

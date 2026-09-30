@@ -4318,14 +4318,14 @@ const SRCRECOVERY_MUTATIONS = [
   {
     name: "住商：單頁失敗不記錄（整批照樣歸零）",
     file: "v3/src/hbhousing.js",
-    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;\n            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。\n              cooledDown = true;\n              blockedStreak = 0;\n              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
+    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;",
     to: "          break;",
     expect: "住商：連續被擋達門檻兩次才停工",
   },
   {
     name: "信義：單頁失敗不記錄（整批照樣歸零）",
     file: "v3/src/sinyi.js",
-    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;\n            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一個行政區重來。\n              cooledDown = true;\n              blockedStreak = 0;\n              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
+    from: "            errors.push({ code: error?.code || \"FETCH_FAILED\", message: error?.message || String(error), district: area, page });\n            const note = noteSourceBlock(blockedStreak, error, pauseLimit);\n            blockedStreak = note.consecutive;",
     to: "          break;",
     expect: "信義：連續被限速達門檻兩次才停工",
   },
@@ -4417,15 +4417,15 @@ const SRCRECOVERY2_MUTATIONS = [
   {
     name: "達門檻不冷卻重試（一次被擋就整輪放棄）",
     file: "v3/src/houseprice.js",
-    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。\n              cooledDown = true;\n              blockedStreak = 0;",
-    to: "            if (false) {\n              cooledDown = true;\n              blockedStreak = 0;",
-    expect: "達門檻先冷卻重試",
+    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻",
+    to: "            if (false) {\n              // 第一次達門檻",
+    expect: "達門檻不放棄整輪",
   },
   {
     name: "冷卻重試無限次（真的被擋也是每 90 秒重來一次，白耗預算）",
     file: "v3/src/houseprice.js",
-    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。",
-    to: "            if (note.pause) {\n              // 第一次達門檻：先冷卻再重試（實測擋的窗口只有幾分鐘），這一頁跳過、下一區重來。",
+    from: "            if (note.pause && !cooledDown) {\n              // 第一次達門檻",
+    to: "            if (note.pause) {\n              // 第一次達門檻：不放棄這一家，改成「這一輪剩下的部分就是重試」——",
     expect: "連續被擋達門檻兩次才停工",
   },
   {
@@ -4451,6 +4451,27 @@ const SRCRECOVERY2_MUTATIONS = [
   },
   // 「watcher 不把 blocked 交給狀態」由整輪整合測試那一組的
   // 「sourceRoundBlocked 永遠回 false」覆蓋（同一件事，不重複列）。
+  {
+    name: "落地階段不理會整輪取消（預算用盡後仍把上萬筆寫完，下一輪重疊）",
+    file: "v3/src/watcher.js",
+    from: "    throwIfCrawlCancelled();\n    const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;",
+    to: "    const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;",
+    expect: "落地階段要真的停下來",
+  },
+  {
+    name: "落地房源迴圈不定期檢查取消",
+    file: "v3/src/watcher.js",
+    from: "      if (upserts % 20 === 0) throwIfCrawlCancelled();\n",
+    to: "",
+    expect: "落地階段要真的停下來",
+  },
+  {
+    name: "被擋時在同一輪空等 90 秒（把收集階段拖過預算）",
+    file: "v3/src/houseprice.js",
+    from: "              cooledDown = true;\n              blockedStreak = 0;\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
+    to: "              cooledDown = true;\n              blockedStreak = 0;\n              if (cooldownMs > 0) await new Promise((resolve) => setTimeout(resolve, cooldownMs));\n            } else {\n              sourcePaused = note.pause;\n            }\n            break;",
+    expect: "不可以在同一輪空等",
+  },
   {
     name: "不適用的輪次照樣累積失敗（5168 在非台北／新北的縣市被誤記成連續失敗）",
     file: "v3/src/crawlSourceStreaks.js",

@@ -951,6 +951,11 @@ export async function runWatch(options = {}) {
   await markCoveringProgressAsync({ at: nowIso(), includeSystem: plan.includeSystem === true });
 
   for (const batch of collected) {
+    // 第九十六批追加：落地階段也要理會「整輪被 withBudget 放棄」。
+    // 原本只有取頁階段會檢查，於是預算用盡後這一輪仍把上萬筆寫完（正式站實測 70 分鐘沒收尾），
+    // 下一輪又開始 ⇒ 兩輪重疊、DB 連線與 CPU 互相排擠，收集階段被拖到 40 分鐘以上。
+    // 被放棄的輪次留下的是「已落地的批次 ＋ 逐批完成紀錄」，其餘下一輪再抓。
+    throwIfCrawlCancelled();
     const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;
     searchReports.push({
       label: batch.parsed.label,
@@ -967,6 +972,8 @@ export async function runWatch(options = {}) {
     await markCoveringProgressAsync({ at: nowIso() });
     for (const listing of batch.listings) {
       if (seen.has(listing.post_id)) continue;
+      // 每 20 筆檢查一次取消（用既有的 upserts 計數，成本可忽略）。
+      if (upserts % 20 === 0) throwIfCrawlCancelled();
       seen.add(listing.post_id);
 
       // Awaited so change detection reads the same store persistListing() writes to
