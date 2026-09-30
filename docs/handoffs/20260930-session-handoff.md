@@ -22,22 +22,23 @@
 ## 2. 目前狀態（2026-09-30 06:30Z）
 
 - **PG 島嶼遷移：路由缺口 0**。尺規 `PG 268／無直接DB 20／MIXED 0／SQLite 0`。
-- 第 61～92 批全部合併；**第 85～91 批已部署，第九十二批尚未部署**（等 Owner 當次說「可部署」）。
-  - 目前正式站 digest：`sha256:287008eda3a0c0b6bf5d7d7585f516a1239f4b2ea4f909e22b239ca2c334e24f`
-    （source `54c826a9814604e260d7f878d949a931c737c6f0`，第九十一批）
-  - 上一個 digest（rollback 參考）：`sha256:1423cc90c1f6e53c8095dd3b608315519ebbd52c0428e01c84d5d0681a6e7983`
+- 第 61～92 批全部合併；**第 85～92 批已部署**（第九十二批與後台資產修正同一顆映像，
+  2026-09-30 08:17Z，Owner 當次核准）。
+  - 目前正式站 digest：`sha256:f5ba2b0f6c840f53b4591ebb4316eb0bb1cf86fc23d90c58c998abfff82f6844`
+    （source `e46f1fd24111db766a5370a2571f7bf702c52d72`，第九十二批 ＋ 後台資產修正）
+  - 上一個 digest（rollback 參考）：`sha256:287008eda3a0c0b6bf5d7d7585f516a1239f4b2ea4f909e22b239ca2c334e24f`（第九十一批）
 - 最近八批在做什麼：85 OAuth callback／86 建立外部匯入／87 建立許願房提案（缺口歸零）／
   88 非路由工具安全閥／89 `/api/*` 一律回 JSON／90 修「登入後變訪客」（缺 import ＋ 漏 await）／
   91 抓取輪次預算 ＋ 逐批完成記錄／92 來源連續失敗的放行政策（見 §3）。
 - 正式站現況：`/api/health` ok；**登入已恢復正常（Owner 已確認）**；`houseprice`(5168) 自 09-26 無新資料。
-- 🚨 **2026-09-30 追加事故（已修、尚未部署）**：後台「版面與功能分類全不見」。根因是
+- 🚨 **2026-09-30 追加事故（已修、已部署，08:17Z）**：後台「版面與功能分類全不見」。根因是
   `resolveSession()` 對**所有**靜態副檔名路徑都寫入「未登入」，但 `requireAuth()` 仍要擋
   `/admin-ia.js`／`/admin-support.js`／`/admin-providers.js` ⇒ 那三支檔對**已登入的人**也回
   302 到 `/login.html`，瀏覽器把登入頁 HTML 當 JS 執行（SyntaxError）⇒ 後台只剩靜態骨架。
   修法：`auth.js` 新增 `skippableStaticAsset()`（只有「公開的」靜態資產才跳過解析）。
-  詳見主文件 §93（二之負六十四）。**部署後才會好**。
+  詳見主文件 §93（二之負六十四）。部署後外部實測：三支 .js 已由 302 變 200。
 
-## 3. 第九十二批：來源連續失敗的放行政策（**已實作並合併，尚未部署**）
+## 3. 第九十二批：來源連續失敗的放行政策（**已實作、已合併、已部署 2026-09-30 08:17Z**）
 
 政策變更已由 Owner 於 2026-09-30 當次明確同意；實作與完整紀錄見主文件
 `docs/handoffs/PG-ISLAND-MIGRATION-PLAN-20260927.md` §92（二之負六十三）。
@@ -53,9 +54,12 @@
 - 驗證：`v3/test/crawl-source-streaks.test.js` 9 項全綠、變異 `CRAWLSTREAK_MUTATIONS` 15 條全殺、
   `CRAWLROUND_MUTATIONS` 4 條全殺；`v3/test/crawl-source-streaks-live-pg.test.js` 在隔離庫
   `repro` 上**不注入驅動**實測通過（島嶼自己解析 driver 的那條路）。
-- **還沒做的事**：沒有部署。上線後要看的指標是
-  `crawl_covers.last_run_at`／`settings.lastCoveringAt`／`crawlScheduleV1.completed` 有沒有開始前進，
-  以及後台來源卡片有沒有出現「已放行」字樣。
+- **上線後第一輪實測（08:24:45Z）**：`crawlScheduleV1.sourceStreaks` 第一次寫進正式站——
+  591 成功（fails 0）、其餘五個外站各 fails 1，其中 **houseprice 的錯誤樣本是
+  `5168 暫時無法抓取（HTTP 403）`** ⇒ 這就是「每一輪都被單一來源卡住」的那個來源
+  （也回答了 §91.7：正式站的 5168 是回 403，不是沒被輪到）。
+  預期第 3 輪起該來源被放行、`crawl_covers.last_run_at`／`lastCoveringAt`／`completed` 開始前進
+  （一輪 25～40 分鐘）。
 - 接著要處理：`houseprice`（5168）自 09-26 沒有新資料（本機同一支 `fetchHpCoveringListings()`
   實測 701ms／20 筆正常 ⇒ 要另外追來源本身，不是完成判定）；
   以及 40 分鐘仍跑不完的落地效率（約 1.5 秒/筆，批次寫入／並行化）。

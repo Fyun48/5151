@@ -5297,6 +5297,39 @@ wait_event=WalSenderMain   backend_start=2026-09-26T00:56:57Z
 4. 對照組：若上線後仍然完全沒有完成紀錄，代表**所有**來源都在容忍名單（安全閥生效）
    ⇒ 要往來源本身查，而不是再放寬判定。
 
+### 92.7 正式站部署（2026-09-30，Owner 當次核准「可部署」，與後台資產修正同一顆映像）
+
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36688255138](https://github.com/Fyun48/5151/actions/runs/36688255138) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36688444081](https://github.com/Fyun48/5151/actions/runs/36688444081) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36688662998](https://github.com/Fyun48/5151/actions/runs/36688662998) | success |
+
+- **Source SHA**：`e46f1fd24111db766a5370a2571f7bf702c52d72`（第九十二批 ＋ §93 後台資產修正）
+- **Image digest**：`sha256:f5ba2b0f6c840f53b4591ebb4316eb0bb1cf86fc23d90c58c998abfff82f6844`
+- **部署前備份**：`/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260930-081444`
+  （含 `pg-5151_shadow.dump`）
+- **Rollback identity**：前一個 digest `sha256:287008eda3a0c0b6bf5d7d7585f516a1239f4b2ea4f909e22b239ca2c334e24f`（第九十一批）
+- **部署後外部實測**（不是 workflow 自報）：`/api/health` → `{"ok":true,"version":"3.57","audit_failures":0}`；
+  容器 `Config.Image` 與上表 digest 一致、狀態 `running`。
+
+#### 上線後第一輪的追蹤（08:18Z 啟動、08:24:45Z 收集階段結束）
+
+`crawlScheduleV1.sourceStreaks` 第一次真的寫進正式站（這段以前是空的）：
+
+| 來源 | 連續失敗 | 最後成功 | 最後錯誤樣本 |
+|---|---:|---|---|
+| 591 | 0 | `2026-09-30T08:24:45Z` | — |
+| hbhousing | 1 | — | （沒有錯誤樣本：這一輪沒有成功覆蓋任何一組條件） |
+| sinyi | 1 | — | 同上 |
+| **houseprice** | 1 | — | **`5168 暫時無法抓取（HTTP 403）`** |
+| ddroom | 1 | — | 同上 |
+| housefun | 1 | — | 同上 |
+
+⇒ 這也回答了 §91.7 的疑問：**5168（houseprice）在正式站是回 HTTP 403**（本機同一支函式卻正常），
+所以它每一輪都失敗、也就每一輪都阻擋完成紀錄。政策生效後它會在第 3 輪被放行（並持續告警）。
+`crawl_covers.last_run_at`／`lastCoveringAt` 目前仍是舊值（本節寫於第一輪，預期第 3 輪起才會前進）。
+
 ### 92.6 這一包沒有做（留給下一批／需要 Owner）
 
 1. **沒有部署**。政策變更只到「合併進 `master`」為止；上正式站要 Owner 當次明確說「可部署」，
@@ -5372,10 +5405,26 @@ if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {
   `data.html`／`listing.html`／`wish.html` 參照到的都是公開資產），修好後三支的
   `skippableStaticAsset()` 都是 `false`（＝會正常解析身分）。
 
-### 93.5 部署狀態
+### 93.5 部署狀態（2026-09-30 已部署，Owner 當次核准「可部署」）
 
-**修好但尚未部署**（寫這一段時正式站仍是第 91 批 digest `sha256:287008ed…`）。
-正式站的後台在部署前仍然是壞的；上線要 Owner 當次明確說「可部署」。
+與第九十二批**同一顆映像**一起上線（source `e46f1fd`、digest `sha256:f5ba2b0f…`）：
+run [36688255138](https://github.com/Fyun48/5151/actions/runs/36688255138)（建置）→
+[36688444081](https://github.com/Fyun48/5151/actions/runs/36688444081)（部署前檢查 PASS）→
+[36688662998](https://github.com/Fyun48/5151/actions/runs/36688662998)（部署）；
+備份 `…/591-tracker-v3-backups/predeploy-20260930-081444`；rollback 前一個 digest `sha256:287008ed…`。
+完整身分表見 §92.7（兩批共用同一顆映像，不重複列）。
+
+**部署後外部實測**（帶正式站有效 admin session 打正式站）：
+
+| 路徑 | 修前 | 修後 |
+|---|---|---|
+| `/admin-ia.js` | 302 → `/login.html` | **200 `text/javascript`** |
+| `/admin-support.js` | 302 | **200 `text/javascript`** |
+| `/admin-providers.js` | 302 | **200 `text/javascript`** |
+| `/admin.html` | 200 | 200 |
+| `/api/me` | 200 | 200 |
+| `/admin-ia.js`（未登入） | 302 | **302**（仍然要登入，沒有變成公開） |
+| `/mascot.js`（未登入） | 200 | 200 |
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
