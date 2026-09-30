@@ -4693,6 +4693,30 @@ node v3/scripts/route-data-map.mjs
 288 條入口：**PG 268／無直接DB 20／MIXED 0／SQLite 0**。也就是說，所有直接碰 DB 的路由
 都已經是 driver-aware 的 PG 島嶼；剩下的 20 條是沒有直接 DB 存取的入口（靜態檔、manifest 等）。
 
+### 87.5 正式站部署紀錄（2026-09-30，Owner 當次核准「可部署」）
+
+第 61～87 批（缺口 19 → 0 的最後一段）已走完三條 manual-only workflow，全部從 `master` 觸發：
+
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36650481761](https://github.com/Fyun48/5151/actions/runs/36650481761) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36650638892](https://github.com/Fyun48/5151/actions/runs/36650638892) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36650798786](https://github.com/Fyun48/5151/actions/runs/36650798786) | success |
+
+- **Source SHA**：`2c0e01a530589e2dd8801c182d5333e502cfc02d`（＝第八十七批 squash merge）
+- **Image digest**：`sha256:4332e6de15337ff47148b588bee9106839ad7e5ebd5583efab507a7fc144b291`
+- **部署前備份**：`/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260930-003046`
+  （`verified: true`，hash `sha256:2252656404c7bc32af5c9116a7b0f92feebf4d9e494db0a50f45b39125e9c69c`）
+- **Rollback identity**：前一個 digest `sha256:0911adf57dd22b491d8c10122facf4ec25067bff50c700d60b9b7790ce520b34`
+  （來源 `280398ed91318af5c9e55dc21077a59af0b93be1`）
+- **部署後驗證**：`deploy-v3.yml` 的健康檢查自報 `passed: true`（health／landing／login／container_running
+  全 true），而且讀回容器的 image digest 與 oci_revision 都與上表一致；
+  `ssh casa-nas docker inspect 591-tracker-v3` 也顯示 Config.Image 就是該 digest、狀態 running。
+  `GET https://jibbyrenth.reversalplay.me/api/health` → `{"ok":true,"version":"3.57","audit_failures":0}`
+  （`version` 是應用程式內部的版號常數，這幾批沒有動它，所以仍是 3.57；部署身分以 image digest 為準）。
+
+> ⚠️ 之後要再部署時，**每次都要 Owner 當次明確批准**；本節只是紀錄這一次的核准與結果。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
