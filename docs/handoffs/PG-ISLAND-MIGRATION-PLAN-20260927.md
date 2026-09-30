@@ -5367,6 +5367,10 @@ if (!cookie.includes(`${COOKIE}=`) || isStaticAssetPath(req.path)) {
 - 本機實跑（修好後，帶有效 session）：`/admin-ia.js`、`/admin-support.js`、
   `/admin-providers.js` 都回 `200 text/javascript`；未登入仍 `302`；以瀏覽器開
   `http://127.0.0.1:5198/admin.html` 得到 **47 個導覽連結**、五張卡片都有內容、console 0 錯誤。
+- 順手盤點「還有沒有別的頁面中同一槍」：掃過 `v3/public/*.html` 參照到的 31 個路徑，
+  屬於「需要登入的靜態資產」的**只有 admin.html 那三支**（`reset.html`／`spirit.html`／
+  `data.html`／`listing.html`／`wish.html` 參照到的都是公開資產），修好後三支的
+  `skippableStaticAsset()` 都是 `false`（＝會正常解析身分）。
 
 ### 93.5 部署狀態
 
