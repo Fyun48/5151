@@ -4975,10 +4975,26 @@ Unexpected token '<', "<!DOCTYPE "... is not valid JSON
   超過 body 上限也回 JSON；`/api/nope`（未登入）維持 JSON 401（`requireAuth` 先攔），
   `/nope.html` 維持 302 導向登入頁（HTML 行為不變）。
 
-### 89.4 正式站狀態
+### 89.4 正式站部署（2026-09-30，Owner 當次核准「可部署」）
 
-這一包**尚未部署**；正式站在部署前仍會出現同一個症狀（若 `/api/me` 因故失敗）。
-部署後：`/api/*` 的失敗一律是 JSON，前端啟動路徑也會顯示「伺服器沒有正確回應，請重新整理後再試」。
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36661602567](https://github.com/Fyun48/5151/actions/runs/36661602567) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36661725274](https://github.com/Fyun48/5151/actions/runs/36661725274) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36661875156](https://github.com/Fyun48/5151/actions/runs/36661875156) | success |
+
+- **Source SHA**：`2ad5c528b4aa282eae28595da3ba82c35deefdd9`
+- **Image digest**：`sha256:5b5e54e7027f352c15ac889e4dc654c57e500fd7c8e89d51731342bded57e89f`
+- **部署前備份**：`/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260930-025148`（`verified: true`）
+- **Rollback identity**：前一個 digest `sha256:4332e6de15337ff47148b588bee9106839ad7e5ebd5583efab507a7fc144b291`
+- **部署後驗證**（外部實測，非 workflow 自報）：
+  - `POST /api/login` 帶壞掉的 JSON body → `HTTP 400` ＋ `{"error":"請求內容格式不正確"}`（`application/json`）
+    ——**部署前同一支是 HTML 400**，這正是本批修好的那一類。
+  - `GET /api/nope`（未登入）→ `HTTP 401 {"error":"請先登入","login":true}`（JSON，非 HTML）。
+  - `GET /api/health` → `{"ok":true,"version":"3.57","audit_failures":0}`；
+    `ssh casa-nas docker inspect 591-tracker-v3` 顯示 Config.Image 就是上表 digest、狀態 `running`。
+
+> ⚠️ 之後要再部署時，**每次都要 Owner 當次明確批准**；本節只是紀錄這一次的核准與結果。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
