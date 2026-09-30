@@ -5651,6 +5651,37 @@ Owner 追問「不是擋 IP 吧」之後實測（從正式站容器、用容器�
   SURVIVED：原本的測試只有三個行政區，被擋一次之後沒有第二次，驗不出累加；
   改成五個行政區（第 2、4 個被擋）之後才殺掉。
 
+### 96.4 沙盒驗證與正式站部署（2026-09-30，Owner 當次核准「可部署」）
+
+**沙盒（第九十四批建的 `5151-crawl-sandbox`）在這一包第一次派上用場**：
+
+| 沙盒輪次（新程式） | 結果 |
+|---|---|
+| 收集階段 | 五個外站連續失敗達 3 輪 ⇒ 日誌出現五則「這一輪起不再阻擋覆蓋完成紀錄」（每則都帶行政區／頁碼／網址） |
+| 完成紀錄 | `crawl_covers` 由 **0 列** 變成 **6 列**、`MAX(last_run_at)` = `2026-09-30T11:32:16Z`；`crawlScheduleV1.completed` 由 **0** 變成 **6** |
+| 5168 | 同一輪落地的房源含 5168（被擋之前的行政區）——這正是「暫停門檻」要修的行為 |
+| 明細量 | 每輪明細上限 280 → 60（`HP_DETAIL_LIMIT`／`HP_ADDRESS_DETAIL_LIMIT` 可覆寫） |
+
+> ⚠️ 沙盒抓到一個**新問題**（尚未修）：有一輪跑超過 40 分鐘預算後**沒有寫出報告**、
+> DB 也不再寫入（`pg_stat_activity` 留下一條 `idle in transaction`），也就是「預算中止之後
+> 這一輪沒有收尾」。正式站不受影響（它的排程器會照常記下逾時、下一輪照跑——
+> 12:00 實查 `lastCoveringAt` 仍在 11:52 前進、591 持續落地），但**沙盒自己必須有硬性收尾**
+> （超過預算＋緩衝就寫報告並讓容器重啟），否則會像這次一樣卡住一整輪。列為下一批第一項。
+
+**正式站部署**：
+
+| 步驟 | workflow | run | 結果 |
+|---|---|---|---|
+| 建置 | `build-production-image.yml` | [36712542492](https://github.com/Fyun48/5151/actions/runs/36712542492) | success |
+| 部署前檢查 | `production-predeploy-check.yml` | [36712698891](https://github.com/Fyun48/5151/actions/runs/36712698891) | success（PASS） |
+| 部署 | `deploy-v3.yml` | [36712902200](https://github.com/Fyun48/5151/actions/runs/36712902200) | success |
+
+- **Source SHA**：`a3b378633b35c8f4f7e54651ed91840909ab51a0`（第九十五批）
+- **Image digest**：`sha256:8c96c00300a066ac0bb25d6bb2438bc5f1b5953c65d3622a41df858ca0be88ad`
+- **部署前備份**：`/mnt/Storage1/docker_data/591-tracker-v3-backups/predeploy-20260930-120720`
+- **Rollback identity**：前一個 digest `sha256:bcb6a064fb62bad9560e3985079a7f6a0557720c2fba037b89bc7258a6a107ee`
+- **部署後外部實測**：`/api/health` `{"ok":true,"version":"3.57"}`；容器 `Config.Image` 與上表一致、`running`（12:09:51Z 起）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
