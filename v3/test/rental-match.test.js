@@ -418,3 +418,116 @@ test("default rules stay read-only and do not mention listing ranking", () => {
   assert.match(rules.note, /找房排序/);
   assert.equal(rules.privacy_threshold, 3);
 });
+
+test("B1：勾選的費用條件要同時滿足；另計是硬衝突、未確認只進 unmet_unknowns", () => {
+  const catalog = defaultCatalog();
+  const all = { utilities: "present", management: "present", parking_car: "unknown", parking_scooter: "unknown", internet: "unknown" };
+  // 兩項都「已含」⇒ 兩個都算符合
+  const both = evaluateMatch(
+    listing({ fee_state: { ...all, management: "present" } }),
+    wish({ fee_includes: ["utilities", "management"], fee_state: "split" }),
+    { catalog, now },
+  );
+  assert.equal(both.eligible, true);
+  assert.ok(both.matched_conditions.includes("fee:utilities"));
+  assert.ok(both.matched_conditions.includes("fee:management"));
+
+  // 其中一項標示「另計」⇒ 硬衝突（多選要同時滿足）
+  const absent = evaluateMatch(
+    listing({ fee_state: { ...all, management: "absent" } }),
+    wish({ fee_includes: ["utilities", "management"], fee_state: "split" }),
+    { catalog, now },
+  );
+  assert.equal(absent.eligible, false);
+  assert.ok(absent.hard_conflicts.some((row) => row.code === "fee:management"));
+  assert.ok(absent.matched_conditions.includes("fee:utilities"));
+
+  // 房源沒有資料 ⇒ 不能推定已包含：只是未確認，不算符合也不算衝突
+  const unknown = evaluateMatch(
+    listing({ fee_state: { ...all, internet: "unknown" } }),
+    wish({ fee_includes: ["internet"], fee_state: "split" }),
+    { catalog, now },
+  );
+  assert.equal(unknown.eligible, true);
+  assert.ok(unknown.unmet_unknowns.includes("fee:internet"));
+  assert.ok(!unknown.matched_conditions.includes("fee:internet"));
+
+  // 沒勾任何費用條件時，完全不受影響
+  const none = evaluateMatch(listing({ fee_state: null }), wish({ fee_includes: [], fee_state: "split" }), { catalog, now });
+  assert.equal(none.eligible, true);
+  assert.equal(none.matched_conditions.some((row) => String(row).startsWith("fee:")), false);
+});
+
+test("B1：舊的合併費用條件只標「待確認」，不展開成五項、也不當硬衝突", () => {
+  const catalog = defaultCatalog();
+  const legacy = evaluateMatch(
+    listing({ fee_state: null }),
+    wish({ fee_includes: [], fee_state: "legacy", fee_includes_legacy: true }),
+    { catalog, now },
+  );
+  assert.equal(legacy.eligible, true);
+  assert.ok(legacy.unmet_unknowns.includes("fee:legacy"));
+  assert.equal(legacy.hard_conflicts.some((row) => String(row.code).startsWith("fee:")), false);
+  assert.equal(legacy.matched_conditions.some((row) => String(row).startsWith("fee:")), false);
+});
+
+test("B1：房源端費用判定只採可靠資料，泛用「車位」不推定汽車位或機車位", () => {
+  const withFees = (row) => listingMatchSnapshot({
+    post_id: 5,
+    source: "self",
+    self_status: "open",
+    price_num: 20000,
+    district: "1-8",
+    listing_values: {},
+    ...row,
+  }).fee_state;
+  assert.equal(withFees({ price_contain_text: "含管理費" }).management, "present");
+  assert.equal(withFees({ extra_fee_text: "管理費 1000 另計" }).management, "absent");
+  assert.equal(withFees({ extra_fee_text: "網路費已含" }).internet, "present");
+  // 泛用車位／停車：兩個 key 都必須是 unknown
+  const generic = withFees({ extra_fee_text: "車位費 1500 另計" });
+  assert.equal(generic.parking_car, "unknown");
+  assert.equal(generic.parking_scooter, "unknown");
+  // 明確寫出汽車位才判定
+  const named = withFees({ extra_fee_text: "汽車位費 1500 另計" });
+  assert.equal(named.parking_car, "absent");
+  assert.equal(named.parking_scooter, "unknown");
+  // 其他來源（非站內刊登）一律 unknown，不拿來源文字推論
+  const other = listingMatchSnapshot({ post_id: 6, source: "591", price_num: 20000, price_contain_text: "含管理費" }).fee_state;
+  assert.equal(other, null);
+});
+
+test("B2／A4：捷運距離需求用同一條步行定義（≤ 1 公里），未查證不可當成符合", () => {
+  const catalog = defaultCatalog();
+  const need = wish({ mrt_walk: true });
+  // 已查證且在 1 公里內 ⇒ 符合
+  const ok = evaluateMatch(listing({ mrt_walk_km: 0.62 }), need, { catalog, now });
+  assert.equal(ok.eligible, true);
+  assert.ok(ok.matched_conditions.includes("mrt_walk"));
+  // 剛好 1 公里（含）也符合
+  assert.ok(evaluateMatch(listing({ mrt_walk_km: 1 }), need, { catalog, now }).matched_conditions.includes("mrt_walk"));
+  // 超過 1 公里 ⇒ 硬衝突（1.001 就不行）
+  const over = evaluateMatch(listing({ mrt_walk_km: 1.001 }), need, { catalog, now });
+  assert.equal(over.eligible, false);
+  assert.ok(over.hard_conflicts.some((row) => row.code === "mrt_walk"));
+  // 沒有已查證的步行距離 ⇒ 未確認（不算符合、也不算衝突）
+  const unknown = evaluateMatch(listing({ mrt_walk_km: null }), need, { catalog, now });
+  assert.equal(unknown.eligible, true);
+  assert.ok(unknown.unmet_unknowns.includes("mrt_walk"));
+  assert.ok(!unknown.matched_conditions.includes("mrt_walk"));
+  // 沒勾這個需求時完全不受影響
+  const notNeeded = evaluateMatch(listing({ mrt_walk_km: null }), wish(), { catalog, now });
+  assert.equal(notNeeded.eligible, true);
+  assert.ok(!notNeeded.unmet_unknowns.includes("mrt_walk"));
+});
+
+test("A4：房源快照只採已查證的步行距離（正數才有效）", () => {
+  const base = { post_id: 9, source: "self", self_status: "open", price_num: 20000, district: "1-8", listing_values: {} };
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: 0.8 }).mrt_walk_km, 0.8);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: 0 }).mrt_walk_km, null);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: -1 }).mrt_walk_km, null);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: "abc" }).mrt_walk_km, null);
+  assert.equal(listingMatchSnapshot({ ...base }).mrt_walk_km, null);
+  assert.equal(wishMatchSnapshot({ id: 1, mrt_walk: 1 }).mrt_walk, true);
+  assert.equal(wishMatchSnapshot({ id: 1 }).mrt_walk, false);
+});

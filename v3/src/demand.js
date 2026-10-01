@@ -1,4 +1,5 @@
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
+import { normalizeFeeIncludes, publicFeeIncludes } from "./feeIncludes.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
 import { digitsPhone, normalizeLineUrl, SELF_CONTACT_MAX } from "./selfListings.js";
 import {
@@ -402,6 +403,9 @@ function addWishColumns(db) {
     ["activity_score", "REAL"],
     ["continuous_active_from", "TEXT"],
     ["condition_choices", "TEXT"],
+    // B1：五個獨立「租金已包含」條件。空字串＝不曾用新制儲存過（見 feeIncludes.js）。
+    ["fee_includes", "TEXT NOT NULL DEFAULT ''"],
+    ["fee_includes_at", "TEXT"],
     ["closed_reason", "TEXT"],
     ["lifecycle_migrated_at", "TEXT"],
     ["fixture_namespace", "TEXT"],
@@ -938,6 +942,9 @@ export function normalizeWishFields(userId, input = {}, fallback = {}, contactTh
     input.rent_min != null ? input.rent_min : fallback.rent_min,
     input.rent_max != null ? input.rent_max : fallback.rent_max,
   );
+  // B1：新制（fee_includes）一旦寫入就以它為準；舊旗標**保留原值**不清空，
+  // 但讀取端（parseFeeIncludes）在新制非空時不會讓舊旗標生效，所以不會新舊同時生效。
+  const feeIncludes = normalizeFeeIncludes(input.fee_includes);
   const includesManagement = input.includes_management != null
     ? (input.includes_management === true || input.includes_management === 1 ? 1 : 0)
     : (Number(fallback.includes_management) === 1 ? 1 : 0);
@@ -987,6 +994,7 @@ export function normalizeWishFields(userId, input = {}, fallback = {}, contactTh
     rent_min,
     rent_max,
     includes_management: includesManagement,
+    fee_includes: feeIncludes != null ? feeIncludes : String(fallback.fee_includes || ""),
     housing_type: housing,
     ping_min: pingMin,
     layout,
@@ -1092,6 +1100,7 @@ export function decoratePostWith(loader, row, { viewerId = 0, includeHiddenRepli
     rent_min: Number(row.rent_min) || 0,
     rent_max: Number(row.rent_max) || 0,
     includes_management: Number(row.includes_management) === 1,
+    ...publicFeeIncludes(row),
     housing_type: housingTypeId(row.housing_type),
     housing_label: housingTypeLabel(row.housing_type),
     ping_min: Number(row.ping_min) || 0,
@@ -1157,6 +1166,10 @@ export function publicWishRoomView(post) {
     rent_min: post.rent_min,
     rent_max: post.rent_max,
     includes_management: post.includes_management,
+    fee_includes: post.fee_includes,
+    fee_includes_state: post.fee_includes_state,
+    fee_includes_labels: post.fee_includes_labels,
+    fee_includes_legacy: post.fee_includes_legacy,
     housing_type: post.housing_type,
     housing_label: post.housing_label,
     ping_min: post.ping_min,
@@ -1311,15 +1324,17 @@ export const DEMAND_INSERT_SQL = `INSERT INTO demand_posts(
       user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
       city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
       transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
-      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace,
+      fee_includes, fee_includes_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 // fixture 流程會指定 rowId（UAT 的可重現列），所以需要帶 id 的版本。
 export const DEMAND_INSERT_WITH_ID_SQL = `INSERT INTO demand_posts(
       id, user_id, districts, rent_max, housing_type, mrt_walk, body, status, created_at, expires_at,
       city, location_note, rent_min, includes_management, ping_min, layout, move_in_date, lease_duration,
       transit_note, destination_note, commute_minutes, must_have, nice_to_have, avoid,
-      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+      contact_name, phone, line_url, updated_at, published_at, condition_choices, fixture_namespace,
+      fee_includes, fee_includes_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 /** 新許願房的 INSERT 參數（不含 fixture 的 forced id；呼叫端要自己 `unshift`）。 */
 export function demandInsertParams(uid, fields, status, now, fixtureNs = "") {
@@ -1357,6 +1372,9 @@ export function demandInsertParams(uid, fields, status, now, fixtureNs = "") {
     published,
     JSON.stringify(fields.condition_choices || {}),
     fixtureNs || null,
+    String(fields.fee_includes || ""),
+    // 只有真的用新制儲存（fee_includes 非空）時才蓋確認時間。
+    String(fields.fee_includes || "") ? created : null,
   ];
 }
 
@@ -1414,7 +1432,8 @@ export const WRITE_ROW_SQL = `UPDATE demand_posts SET
       must_have=?, nice_to_have=?, avoid=?, contact_name=?, phone=?, line_url=?,
       updated_at=?, status=COALESCE(?, status), expires_at=COALESCE(?, expires_at),
       published_at=COALESCE(?, published_at), closed_at=COALESCE(?, closed_at),
-      condition_choices=COALESCE(?, condition_choices)
+      condition_choices=COALESCE(?, condition_choices),
+      fee_includes=?, fee_includes_at=COALESCE(?, fee_includes_at)
      WHERE id=?`;
 
 export function writeRowParams(id, fields, extra = {}) {
@@ -1447,6 +1466,8 @@ export function writeRowParams(id, fields, extra = {}) {
     extra.published_at || null,
     extra.closed_at === undefined ? null : extra.closed_at,
     fields.condition_choices ? JSON.stringify(fields.condition_choices) : null,
+    String(fields.fee_includes || ""),
+    String(fields.fee_includes || "") ? extra.updated_at || null : null,
     id,
   ];
 }
@@ -1709,6 +1730,7 @@ export function examplePayload(fields) {
     rent_min: fields.rent_min,
     rent_max: fields.rent_max,
     includes_management: fields.includes_management === 1,
+    ...publicFeeIncludes(fields),
     housing_type: fields.housing_type,
     ping_min: fields.ping_min,
     layout: fields.layout,

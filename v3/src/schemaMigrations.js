@@ -10,6 +10,7 @@ import { ensureListingPrepSchema } from "./listingEnrichQueue.js";
 import { ensureDemandSchema } from "./demand.js";
 import { ensureFeedbackSchema } from "./feedback.js";
 import { ensureFeedbackOutboxSchema } from "./feedbackOutbox.js";
+import { ensureFeedbackMediaSchema } from "./feedbackMedia.js";
 import { ensureCrmSchema } from "./crm.js";
 import { ensureCrmOutboxSchema } from "./crmOutbox.js";
 import { ensureBudgetSchema } from "./budgetGuard.js";
@@ -94,6 +95,15 @@ export const SCHEMA_MIGRATIONS = [
         after_json TEXT
       )`);
       db.exec("CREATE INDEX IF NOT EXISTS idx_admin_audit_at ON admin_audit(at DESC)");
+    },
+  },
+  {
+    // C3：意見回饋附圖。獨立一張表（與 OPS 服務同名的表無關），只寫本機檔案、
+    // 只由 requireAdminApi 的路由讀取，不掛 express.static。
+    version: 6,
+    name: "feedback_attachment_schema",
+    up(db) {
+      ensureFeedbackMediaSchema(db);
     },
   },
 ];

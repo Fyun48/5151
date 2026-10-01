@@ -216,8 +216,87 @@ export function passesPriceFilter(listing, settings = {}) {
   return true;
 }
 
-export function feeFieldsFromBlob({ extraFee = 0, extraFeeText = "", containText = "", blob = "" } = {}) {
-  const listing = {
+/**
+ * B1：房源端的「租金已包含」判定。
+ *
+ * 回傳 `{ utilities, management, parking_car, parking_scooter, internet }`，
+ * 每個值是 `"present"`（標示已含）／`"absent"`（標示另計）／`"unknown"`（沒有可靠資料）。
+ *
+ * 兩條原則：
+ *   1. **沒有資料一律 unknown，不推定**。
+ *   2. 其他站來源常常只寫泛用的「車位／停車」，分不出汽車位或機車位 —— 這種情況
+ *      `parking_car` 與 `parking_scooter` 都必須是 unknown；只有明確寫出「汽車位」或
+ *      「機車位」才判定。同一項目同時出現「已含」與「另計」時也回 unknown。
+ */
+const FEE_INCLUDE_MATCHERS = Object.freeze({
+  utilities: /水費|電費|瓦斯費|水電/,
+  management: /管理費|公共基金/,
+  parking_car: /汽車位/,
+  parking_scooter: /機車位/,
+  internet: /網路費|網路|寬頻|第四台|有線電視/,
+});
+
+function feeStateFromRows(rows) {
+  const kinds = {};
+  for (const key of Object.keys(FEE_INCLUDE_MATCHERS)) kinds[key] = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const name = toHalfWidth(String(row?.name || "")).trim();
+    if (!name) continue;
+    // extraFeeRows 在沒有具名費用時會補一列泛用的「額外費用」，它的 value 只是原文片段：
+    // 拿它比對會把原文裡的關鍵字誤判成「該費用已含／另計」，所以整列略過。
+    if (name === "額外費用") continue;
+    const kind = row?.included === true || String(row?.key || "") === "contain"
+      ? "present"
+      : String(row?.key || "") === "extra" ? "absent" : "";
+    if (!kind) continue;
+    // name + value 一起比對：parseNamedMonthlyFees 只把命中片段當 name（例如「汽車位費」會被
+    // FEE_KIND 截成「車位費」），「汽車位／機車位」的上下文留在 value 裡，不看 value 會分不出來。
+    const blob = `${name} ${toHalfWidth(String(row?.value || ""))}`.trim();
+    for (const [key, re] of Object.entries(FEE_INCLUDE_MATCHERS)) {
+      if (re.test(blob)) kinds[key].add(kind);
+    }
+  }
+  const states = {};
+  for (const key of Object.keys(FEE_INCLUDE_MATCHERS)) {
+    const set = kinds[key];
+    states[key] = set.size === 1 ? [...set][0] : "unknown";
+  }
+  return states;
+}
+
+function explicitFeeIncludes(listing) {
+  const raw = listing?.fee_includes;
+  if (raw == null || raw === "") return null;
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try { parsed = JSON.parse(raw); } catch { return null; }
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+}
+
+export function feeInclusionStates(listing = {}) {
+  const states = {};
+  for (const key of Object.keys(FEE_INCLUDE_MATCHERS)) states[key] = "unknown";
+  // 1) 站內刊登自己填的三態（最可靠；未知的 key 才往下找來源資料）
+  const explicit = explicitFeeIncludes(listing);
+  if (explicit) {
+    for (const key of Object.keys(states)) {
+      const value = explicit[key];
+      if (value === 1 || value === true || value === "present" || value === "included") states[key] = "present";
+      else if (value === 0 || value === false || value === "absent" || value === "extra") states[key] = "absent";
+    }
+  }
+  // 2) 其他站來源：沿用既有費用解析器，逐列比對名稱（含 price_contain_text 的「租金含」列）
+  const parsed = feeStateFromRows(extraFeeRows(listing));
+  for (const key of Object.keys(states)) {
+    if (states[key] === "unknown") states[key] = parsed[key] || "unknown";
+  }
+  return states;
+}
+
+export const FEE_INCLUDE_KEYS_FOR_MATCH = Object.freeze(Object.keys(FEE_INCLUDE_MATCHERS));
+
+export function feeFieldsFromBlob({ extraFee = 0, extraFeeText = "", containText = "", blob = "" } = {}) {  const listing = {
     extra_fee: extraFee,
     extra_fee_text: extraFeeText,
     price_contain_text: containText,

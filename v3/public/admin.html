@@ -1054,6 +1054,7 @@
               <button type="button" class="primary" id="catalogDrawerSave">寫入草稿</button>
               <button type="button" class="ghost" id="catalogDrawerClose">關閉</button>
             </div>
+            <p class="hint">「寫入草稿」只存草稿，前台不會變。要按列表下方的「確認並發布」才會套用到前台。</p>
           </div>
           <p class="hint" id="catalogDiff" hidden></p>
           <div class="row" style="margin-top:10px">
@@ -1068,6 +1069,7 @@
           <h2>有房刊登設定</h2>
           <p class="hint">刊登表單仍讀共用目錄裡「有房刊登使用」的條件。房屋標題、地址、聯絡方式不進目錄。改開關請到共用條件目錄。</p>
           <p class="hint">配對語意：可開伙／可養寵物／可報稅在刊登端可以是允許、不允許或未指定；與許願房「要有」不同，正式比對在後續 PR B。</p>
+          <p class="hint" id="listingCatalogPreviewTitle" hidden></p>
           <div id="listingCatalogPreview" class="catalog-list"></div>
         </section>
       </div>
@@ -2576,6 +2578,15 @@
     function catalogWorking() {
       return catalogState.draft || catalogState.published;
     }
+    // A3：後台畫面顯示的是草稿，前台讀的是「已發布」目錄。這裡把「還沒發布」明確畫出來，
+    // 避免管理員以為存了檔前台就會跟著改（實際要按「確認並發布」）。
+    function catalogDiffIds() {
+      const d = catalogState.diff || {};
+      return new Set([...(d.added_ids || []), ...(d.changed_ids || []), ...(d.disabled_ids || [])]);
+    }
+    function catalogPendingBadge(id) {
+      return catalogState.draft && id && catalogDiffIds().has(id) ? "（草稿，未發布）" : "";
+    }
     function renderCatalogAdmin() {
       const catalog = catalogWorking();
       const cats = catalog.categories || [];
@@ -2584,7 +2595,7 @@
       if (catHost) {
         catHost.innerHTML = cats.map((row) => (
           `<div class="catalog-cat-row">
-            <button type="button" class="catalog-item${row.id === catalogCatId ? " on" : ""}" data-cat="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>
+            <button type="button" class="catalog-item${row.id === catalogCatId ? " on" : ""}" data-cat="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}${catalogPendingBadge(row.id)}</button>
             <button type="button" class="ghost" data-cat-edit="${esc(row.id)}">編輯</button>
           </div>`
         )).join("");
@@ -2593,7 +2604,7 @@
       const condHost = $("catalogConds");
       if (condHost) {
         condHost.innerHTML = conds.map((row) => (
-          `<button type="button" class="catalog-item" data-cond="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}</button>`
+          `<button type="button" class="catalog-item" data-cond="${esc(row.id)}">${esc(row.label)}${row.enabled === false ? "（停用）" : ""}${catalogPendingBadge(row.id)}</button>`
         )).join("") || `<p class="hint">這個分類還沒有條件。</p>`;
       }
       const pick = $("catalogTemplatePick");
@@ -2613,6 +2624,19 @@
           diffEl.hidden = true;
           diffEl.textContent = "";
         }
+      }
+      const publishBtn = $("catalogPublishDraft");
+      if (publishBtn) {
+        publishBtn.textContent = catalogState.draft
+          ? `尚未發布：確認並發布${catalogState.diff?.changed ? `（${catalogState.diff.changed} 項已改）` : ""}`
+          : "確認並發布";
+      }
+      const previewTitle = $("listingCatalogPreviewTitle");
+      if (previewTitle) {
+        previewTitle.hidden = !catalogState.draft;
+        previewTitle.textContent = catalogState.draft
+          ? "以下是草稿內容（尚未發布，前台仍是已發布版本）："
+          : "";
       }
       const listingHost = $("listingCatalogPreview");
       if (listingHost) {
@@ -3962,6 +3986,16 @@
       }
       box.innerHTML = parts.join(" ");
     }
+    // C3：附件縮圖。圖片只在站方（requireAdminApi）的路由拿得到，一般會員與公開頁沒有入口。
+    function renderFeedbackImages(row) {
+      const list = Array.isArray(row.attachments) ? row.attachments : [];
+      if (!list.length) return "";
+      return `<div class="fb-images" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+        ${list.map((item, i) => `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" title="開啟原圖">
+          <img src="${escapeHtml(item.thumb_url)}" alt="回饋附圖 ${i + 1}" style="width:88px;height:88px;object-fit:cover;border:1px solid var(--line);border-radius:8px" />
+        </a>`).join("")}
+      </div>`;
+    }
     function renderFeedbackList(items) {
       const box = $("feedbackList");
       if (!box) return;
@@ -3976,6 +4010,7 @@
             <span class="hint">${formatTime(row.created_at)}</span>
           </div>
           <p style="white-space:pre-wrap;margin:8px 0">${escapeHtml(row.body)}</p>
+          ${renderFeedbackImages(row)}
           ${row.contact ? `<p class="hint">聯絡：${escapeHtml(row.contact)}</p>` : ""}
           <details class="hint" style="margin:6px 0"><summary>系統附帶資訊</summary><div style="margin-top:6px">${renderFeedbackContext(row.context) || "（無）"}</div></details>
           <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">

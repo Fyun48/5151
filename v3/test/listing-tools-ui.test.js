@@ -67,7 +67,15 @@ test("self listing form uses helper templates, required title, and bidirectional
   assert.doesNotMatch(post, /聯絡人稱呼/);
   assert.doesNotMatch(post, /公開電話/);
   assert.doesNotMatch(post, /LINE 連結/);
-  assert.doesNotMatch(html, /id="selfBodyEditor"/);
+  // A2：物件說明改成「看得到、可直接編輯」，而且就在「刊登物件」按鈕上方。
+  // （舊行為是說明只能由範本套用、輸入區藏在 #listingTools 且 #selfBody 是 hidden。）
+  assert.match(post, /id="selfBodyEditor"/);
+  assert.match(post, /id="selfBodyEditor"[^>]*contenteditable="true"/);
+  assert.match(post, /id="descTemplatePick"/);
+  assert.ok(html.indexOf('id="selfBodyEditor"') < html.indexOf('id="selfSubmit"'), "說明欄必須在刊登按鈕之前");
+  // 範本與手寫共用同一份 #selfBody：只能有一個寫入入口，否則畫面與送出的內容會不一致。
+  assert.match(html, /function setSelfBody\(/);
+  assert.match(html, /id="selfBody" maxlength="2500" hidden/);
   assert.match(html, /id="descBodyEditor"/);
   assert.match(html, /id="descTemplateEditConfirm"/);
   assert.match(html, /確認修改/);

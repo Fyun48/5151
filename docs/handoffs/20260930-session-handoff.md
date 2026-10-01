@@ -21,7 +21,12 @@
 
 ## 2. 目前狀態（2026-09-30 06:30Z）
 
-- **PG 島嶼遷移：路由缺口 0**。尺規 `PG 268／無直接DB 20／MIXED 0／SQLite 0`。
+- **PG 島嶼遷移：路由缺口 0**。尺規 `PG 273／無直接DB 20／MIXED 0／SQLite 0`（第九十九批，共 293 條入口）。
+- 🔶 **第九十九批（2026-10-01，分支 `fix/owner-workorder-20261001`，尚未部署）**：Owner 工作單
+  A1～C3（有房刊登／許願房／意見回饋）。摘要見主文件 §99。**這一包動了 schema**：
+  新增 `feedback_attachment` 表（migration version 6）與 `demand_posts.fee_includes`／`fee_includes_at`
+  （PG 用 `DEMAND_PG_ALTER_STATEMENTS` 的 `ADD COLUMN IF NOT EXISTS` 補）。
+  Production 維持 manual-only，**未經 Owner 核准不得部署**。
 - 第 61～96 批全部合併；**第 85～96 批已部署**（92／93 兩批於 2026-09-30 08:17Z 與 09:35Z 上線，
   Owner 當次核准）。
   - 目前正式站 digest：`sha256:d2ba53ce1f4f8b2562e96406c00759d885896414d14ebaf148ca0b1274f1ebcd`
@@ -102,6 +107,12 @@
 4. `migrate-v3-data-volume.yml` 搬的是已作廢的 SQLite 目錄；`predeploy` 仍要求 `v3.db` 存在。
 5. 主機 `/opt/5151-scripts/` 有 repo 沒有的腳本（`projection-monitor`，PR #498 未合併）⇒ 可稽核性。
 6. 爬蟲長輪次：40 分鐘仍跑不完（落地 1.5 秒/筆）⇒ 未來要批次寫入／並行化。
+7. **`mrt_cache` 的舊值沒有失效機制**（第九十九批記錄）：A4 把步行路線從「公開示範站的車用 profile」
+   換成真的 foot profile，但切換前寫入的快取值不會自動重算。最小作法是把 profile 名放進 cache key
+   （`mrt:v2:<lat>,<lng>`），舊 key 自然失效、不必新增欄位或做 PG 遷移。
+8. **站內刊登沒有費用與座標資料**：`feeInclusionStates()` 會讀 `extra_fees`／`price_contain_text`，
+   但站內刊登表單沒有這些欄位，`listings.lat/lng` 也沒寫 ⇒ 新加的費用與捷運配對條件對所有可配對
+   物件都會是「未確認」。要真的配對得到，得在刊登表單補三態費用欄位與定位（屬下一批）。
 
 ## 5. 常用指令（照抄）
 
@@ -190,5 +201,13 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     只放**兩個**受測對象時，「有暫停」與「沒暫停」的呼叫次數一樣 ⇒ 變異活下來；
     取消守衛只驗「有沒有丟錯」也不行（吞掉取消的版本最後仍會因整批失敗而丟錯）。
     **要驗「呼叫次數」與「後續有沒有再打」**，不是只驗最後的結果形狀。
-15. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+15. **自動化斷言全綠不等於畫面是對的**（2026-10-01 第九十九批實測）：分享頁的 `hidden` 屬性、
+    `aria-live`、DOM 斷言全部通過，但 `.auth .member { display:flex }` 的權重高於 UA 的
+    `[hidden]{display:none}`，於是**訪客也看到會員區的「回找房頁面／登出」**——是看 375px 截圖才發現的。
+    **每一批都要真的看一次手機截圖**，不要只用 DOM 屬性代理視覺。
+16. **`(candidates || []) is not iterable` 這一類錯誤＝把 async 函式傳進同步路徑**（第九十九批實測）：
+    `server.js` 傳給 `createSelfListingAsync()` 的 `matchCandidates` 是 async 的 PG 島嶼版本，
+    SQLite 分支直接往下傳給同步的 `createSelfListing()` ⇒ **每一筆站內刊登都 400**。
+    島嶼的 SQLite 分支要傳「同步版」而不是把呼叫端的 async 函式原封不動帶下去。
+17. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
     ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。

@@ -1,6 +1,7 @@
 // 使用者回饋（bug 回報／功能建議／其他）。
 // 設計目標：使用者輸入越少越好，系統自動補齊情境，方便日後自動化分類與優先排序。
 import { enqueueFeedbackOutbox } from "./feedbackOutbox.js";
+import { claimFeedbackAttachments } from "./feedbackMedia.js";
 
 export const FEEDBACK_KINDS = [
   { id: "bug", label: "回報問題", hint: "哪裡怪怪的、壞掉、看到錯誤" },
@@ -180,6 +181,9 @@ export function createFeedbackWithOutbox(db, userId, input = {}, { enqueue = tru
   db.exec("BEGIN IMMEDIATE");
   try {
     const res = createFeedback(db, userId, input, now);
+    // C3：附件綁定與回饋列**同一個交易**。附件不存在／已被綁走／不是本人的 ⇒ 整筆 rollback，
+    // 不會留下「回饋有寫、附件沒綁」的半套狀態。
+    if (res.id > 0) claimFeedbackAttachments(db, userId, input?.attachments, res.id, now);
     if (enqueue && res.id > 0) {
       const row = db.prepare("SELECT * FROM feedback WHERE id = ?").get(res.id);
       const ctx = parseContext(row.context);

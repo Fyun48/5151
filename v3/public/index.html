@@ -1753,6 +1753,24 @@
     .wish-card strong { display: block; margin-bottom: 4px; }
     .wish-card .muted { margin: 2px 0; }
     .wish-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
+    /* B2：六個需求選項放在同一區；小螢幕自動換行，不拆到不同區塊。 */
+    .wish-needs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0; }
+    .wish-need {
+      display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+      border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+      border-radius: 999px; padding: 8px 12px; font-size: var(--text-sm); cursor: pointer;
+    }
+    .wish-need:has(input:checked) { background: var(--accent-mist); border-color: var(--accent); color: var(--accent-deep); font-weight: 700; }
+    .wish-need input { margin: 0; }
+    .hint.is-warn { color: var(--danger, #b3261e); }
+    /* A4：可步行捷運的查詢狀態。五種狀態顏色與文案都不同，不讓人把「未查證」看成「符合」。 */
+    .mrt-access { margin: 8px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .mrt-access-line { margin: 0; font-size: var(--text-xs); color: var(--muted); line-height: 1.5; }
+    .mrt-access[data-state="within"] .mrt-access-line { color: var(--accent-deep); font-weight: 700; }
+    .mrt-access[data-state="none"] .mrt-access-line { color: var(--ink); }
+    .mrt-access[data-state="unknown"] .mrt-access-line,
+    .mrt-access[data-state="unlocatable"] .mrt-access-line,
+    .mrt-access[data-state="error"] .mrt-access-line { color: var(--danger, #b3261e); }
     .wish-chip {
       border: 1px solid var(--line); background: var(--accent-mist); color: var(--accent-deep);
       border-radius: 999px; padding: 4px 8px; font-size: var(--text-xs);
@@ -2247,6 +2265,17 @@
       font-size: 14px;
       line-height: 1;
     }
+    /* C3：回饋附圖（縮圖預覽＋刪除）。沿用 self-photo-chip 的視覺，但獨立命名避免互相影響。 */
+    .feedback-images { margin-top: 12px; }
+    .feedback-images-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .feedback-image-tray { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+    .feedback-image-chip { position: relative; width: 72px; height: 72px; }
+    .feedback-image-chip img { width: 72px; height: 72px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); }
+    .feedback-image-chip button {
+      position: absolute; top: -6px; right: -6px; width: 24px; height: 24px; padding: 0;
+      border-radius: 999px; font-size: 14px; line-height: 1;
+    }
+    .feedback-image-chip.is-error img { border-color: var(--danger, #b3261e); opacity: 0.5; }
     .media-lib { margin: 8px 0; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; background: var(--accent-mist); }
     .media-lib-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
     .media-tag-bar { margin: 8px 0; }
@@ -3625,9 +3654,6 @@
               <label for="demandRentMax">房租上限</label>
               <input type="number" id="demandRentMax" min="0" step="500" placeholder="例如 28000" />
             </div>
-            <div class="span-all">
-              <label class="pledge-row"><input type="checkbox" id="wishIncludesFee" /> <span>預算含水電／管理費</span></label>
-            </div>
             <div>
               <label for="wishPingMin">最小可用坪數</label>
               <input type="number" id="wishPingMin" min="0" step="0.5" placeholder="選填" />
@@ -3656,15 +3682,22 @@
               </select>
             </div>
             <div class="span-all">
-              <label for="wishTransit">捷運／車站</label>
-              <input type="text" id="wishTransit" maxlength="80" placeholder="例如劍潭站、士林站" />
-            </div>
-            <div class="span-all">
-              <label class="pledge-row"><input type="checkbox" id="demandMrt" /> <span>需要可步行捷運（1 公里內）</span></label>
-            </div>
-            <div class="span-all">
               <label>行政區</label>
               <div id="demandDistricts"></div>
+            </div>
+            <!-- B1／B2：五個「租金已包含」條件＋捷運距離需求，集中在同一個連續選項區（共六項）。
+                 未勾選＝未指定，不代表禁止；勾多項時要同時滿足。 -->
+            <div class="span-all" id="wishNeedsBlock">
+              <label id="wishNeedsLabel">租金與距離需求（可多選；未勾選代表未指定，不是禁止）</label>
+              <div class="wish-needs" id="wishNeeds" role="group" aria-labelledby="wishNeedsLabel">
+                <label class="wish-need"><input type="checkbox" data-fee-include="utilities" /> <span>租金含水電</span></label>
+                <label class="wish-need"><input type="checkbox" data-fee-include="management" /> <span>租金含管理費</span></label>
+                <label class="wish-need"><input type="checkbox" data-fee-include="parking_car" /> <span>租金含停汽車位</span></label>
+                <label class="wish-need"><input type="checkbox" data-fee-include="parking_scooter" /> <span>租金含停機車位</span></label>
+                <label class="wish-need"><input type="checkbox" data-fee-include="internet" /> <span>租金含網路</span></label>
+                <label class="wish-need"><input type="checkbox" id="demandMrt" /> <span>需要離捷運距離（可行徑路線 1 公里內）</span></label>
+              </div>
+              <p class="hint" id="wishFeeIncludesLegacy" hidden></p>
             </div>
             <div class="span-all" id="wishLegacyHint">
               <p class="hint">點一下條件，在必須有／希望有／不接受之間切換。不用全勾。</p>
@@ -3880,13 +3913,6 @@
       <div class="listing-tools" id="listingTools">
         <h3>刊登幫手</h3>
         <p class="copy-draft-banner" id="copyDraftBanner" hidden>這是複製來的未刊登草稿，原物件沒有被改。請檢查後再勾選聲明並送出，不會自動刊登。</p>
-        <p class="hint" id="descTemplateHint">說明範本贊助會員可存到 5 則。</p>
-        <div class="listing-tools-row">
-          <label class="visually-hidden" for="descTemplatePick">說明範本</label>
-          <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
-          <button type="button" class="ghost" id="descTemplateManage">新增/修改 說明範本</button>
-        </div>
-        <p class="hint" id="descTemplateApplied" hidden></p>
         <div class="listing-tools-row">
           <label class="visually-hidden" for="contactProfilePick">聯絡人</label>
           <select id="contactProfilePick"><option value="">選擇聯絡人</option></select>
@@ -3965,6 +3991,12 @@
           <div class="span-all">
             <label for="selfAddress">欲出租物件地址</label>
             <input id="selfAddress" maxlength="80" placeholder="例如 台北市士林區中正路 100 號" />
+            <!-- A4：地址輸入穩定後自動查「1 公里內可步行到達的捷運站」。
+                 狀態刻意分得開；還沒查證完成時不會顯示成「符合」或「確定沒有」。 -->
+            <div class="mrt-access" id="selfMrtAccess" data-state="idle" role="status" aria-live="polite">
+              <p class="mrt-access-line" id="selfMrtAccessText">輸入地址後，會自動查 1 公里內可步行到達的捷運站。</p>
+              <button type="button" class="ghost" id="selfMrtRetry" hidden>重新查詢</button>
+            </div>
             <input id="selfContactName" type="hidden" />
             <input id="selfPhone" type="hidden" />
             <input id="selfLine" type="hidden" />
@@ -3981,6 +4013,34 @@
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
+        <!-- A2：說明範本與說明輸入區直接展開，緊鄰「刊登物件」按鈕，不再收在刊登幫手裡。
+             範本與手寫共用同一個 #selfBody（可見的 contenteditable 只是它的輸入介面），
+             草稿、提交與重新編輯都讀同一份內容。 -->
+        <div class="self-body-block" id="selfBodyBlock">
+          <label for="selfBodyEditor">物件說明</label>
+          <p class="hint" id="descTemplateHint">可以選範本再修改，也可以直接自己寫。請寫一些這屋子的故事與回憶（至少 8 個字）。</p>
+          <div class="listing-tools-row">
+            <label class="visually-hidden" for="descTemplatePick">說明範本</label>
+            <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
+            <button type="button" class="ghost" id="descTemplateManage">新增/修改 說明範本</button>
+          </div>
+          <p class="hint" id="descTemplateQuota">說明範本贊助會員可存到 5 則。</p>
+          <p class="hint" id="descTemplateApplied" hidden></p>
+          <div class="rich-editor" data-rich-editor-wrap="selfBody">
+            <div class="rich-toolbar" role="toolbar" aria-label="物件說明格式">
+              <button type="button" class="ghost" data-rich="bold">粗體</button>
+              <button type="button" class="ghost" data-rich="italic">斜體</button>
+              <button type="button" class="ghost" data-rich="size" data-size="18px">大</button>
+              <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
+              <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
+              <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
+              <button type="button" class="ghost" data-rich-emoji-toggle="selfBody">表情</button>
+            </div>
+            <div class="rich-emoji" data-rich-emoji-bar="selfBody" hidden></div>
+            <div class="rich-area" id="selfBodyEditor" contenteditable="true" role="textbox" aria-label="物件說明" data-placeholder="例如：這間房子我們住了六年，採光好、巷子安靜，走路三分鐘有傳統市場。"></div>
+          </div>
+          <p class="hint" id="selfBodyCount" role="status" aria-live="polite"></p>
+        </div>
         <textarea id="selfBody" maxlength="2500" hidden></textarea>
         <label class="pledge-row">
           <input type="checkbox" id="selfPledge" />
@@ -4325,6 +4385,20 @@
         <p class="hint" id="feedbackKindHint" style="margin:8px 0 0">想要什麼、希望怎麼更好用</p>
         <label for="feedbackBody" style="margin-top:12px">想說的話</label>
         <textarea id="feedbackBody" name="body" maxlength="2000" style="min-height:120px" placeholder="例如：手機上篩選面板的 X 蓋到標題／希望可以依走路到捷運的時間排序"></textarea>
+        <!-- C3：附圖。貼上（Ctrl／⌘＋V）與選檔共用同一個清單，合計最多 4 張。 -->
+        <div class="feedback-images" id="feedbackImageBlock">
+          <div class="feedback-images-head">
+            <span id="feedbackImageLabel">附圖（選填）</span>
+            <span class="hint" id="feedbackImageCount">0／4 張</span>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            <button type="button" class="ghost" id="feedbackImagePick">選擇圖片</button>
+            <span class="hint">也可以直接貼上剪貼簿的截圖（Ctrl／⌘＋V）</span>
+          </div>
+          <input type="file" id="feedbackImages" accept="image/png,image/jpeg,image/webp" multiple hidden />
+          <div class="feedback-image-tray" id="feedbackImageTray" hidden></div>
+          <p class="msg" id="feedbackImageMsg"></p>
+        </div>
         <input type="text" id="feedbackHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" />
         <details class="feedback-context" id="feedbackContextBox" style="margin-top:12px">
           <summary>系統會一起送出的資訊（點開看）</summary>
@@ -4537,7 +4611,7 @@
         <label class="visually-hidden" for="descTemplateName">範本名稱</label>
         <input type="text" id="descTemplateName" maxlength="40" placeholder="範本名稱" />
       </div>
-      <div class="rich-editor" id="descBodyEditorWrap">
+      <div class="rich-editor" id="descBodyEditorWrap" data-rich-editor-wrap="descTemplateBody">
         <div class="rich-toolbar" role="toolbar" aria-label="說明範本格式">
           <button type="button" class="ghost" data-rich="bold">粗體</button>
           <button type="button" class="ghost" data-rich="italic">斜體</button>
@@ -4545,9 +4619,9 @@
           <button type="button" class="ghost" data-rich="size" data-size="14px">中</button>
           <button type="button" class="ghost" data-rich="color" data-color="#0f6f6a">綠</button>
           <button type="button" class="ghost" data-rich="color" data-color="#1c1917">黑</button>
-          <button type="button" class="ghost" id="descEmojiToggle">表情</button>
+          <button type="button" class="ghost" id="descEmojiToggle" data-rich-emoji-toggle="descTemplateBody">表情</button>
         </div>
-        <div class="rich-emoji" id="descEmojiBar" hidden></div>
+        <div class="rich-emoji" id="descEmojiBar" data-rich-emoji-bar="descTemplateBody" hidden></div>
         <div class="rich-area" id="descBodyEditor" contenteditable="true" role="textbox" aria-label="說明範本內容" data-placeholder="格局、設備、可入住日。"></div>
         <textarea id="descTemplateBody" maxlength="2500" hidden></textarea>
       </div>
@@ -9197,6 +9271,57 @@
     function syncSelfAddressPrefix() {
       applySelectsToAddress();
     }
+    // ── A4：1 公里內可步行捷運 ──
+    // 三個要求都在這裡落實：
+    //   1. 等地址穩定才查（debounce），不是每打一個字就打一次外部服務
+    //   2. 地址一變就清掉舊結果；較早的回應不能覆蓋最新的地址（用 requestSeq + 比對當下地址）
+    //   3. 五種狀態分得開；「未查證」不等於「符合」，也不等於「確定沒有」
+    const MRT_ACCESS_DEBOUNCE_MS = 900;
+    let mrtAccessTimer = 0;
+    let mrtAccessSeq = 0;
+    let mrtAccessInFlight = null;
+
+    function paintMrtAccess(state, text, { retry = false } = {}) {
+      const box = $("selfMrtAccess");
+      if (box) box.dataset.state = state;
+      if ($("selfMrtAccessText")) $("selfMrtAccessText").textContent = text;
+      if ($("selfMrtRetry")) $("selfMrtRetry").hidden = !retry;
+    }
+    function resetMrtAccess(text = "輸入地址後，會自動查 1 公里內可步行到達的捷運站。") {
+      paintMrtAccess("idle", text);
+    }
+    async function queryMrtAccess() {
+      const addrEl = $("selfAddress");
+      const address = String(addrEl?.value || "").trim();
+      if (address.length < 4) { resetMrtAccess(); return null; }
+      const seq = ++mrtAccessSeq;
+      paintMrtAccess("loading", "查詢步行路線中…");
+      try {
+        const res = await fetch(`/api/self-listings/mrt-access?address=${encodeURIComponent(address)}`, { cache: "no-store" });
+        const data = await readApi(res);
+        // 較早的回應丟掉：序號不是最新的，或地址已經被改過
+        if (seq !== mrtAccessSeq || String(addrEl?.value || "").trim() !== address) return null;
+        if (!res.ok) { paintMrtAccess("error", data.error || "查詢失敗，請稍後重試。", { retry: true }); return null; }
+        const status = String(data.status || "error");
+        paintMrtAccess(status, data.message || "查詢完成。", { retry: data.retryable === true || status === "error" });
+        return data;
+      } catch {
+        if (seq !== mrtAccessSeq) return null;
+        paintMrtAccess("error", "步行路線服務暫時無法使用，請稍後重試；不影響你繼續填寫與刊登。", { retry: true });
+        return null;
+      }
+    }
+    function scheduleMrtAccess({ immediate = false } = {}) {
+      if (mrtAccessTimer) window.clearTimeout(mrtAccessTimer);
+      // 地址一改就先把舊結果清掉（不要留著上一個地址的站名）
+      mrtAccessSeq += 1;
+      const address = String($("selfAddress")?.value || "").trim();
+      if (address.length < 4) { resetMrtAccess(); return; }
+      paintMrtAccess("pending", "地址已變更，等待查詢…");
+      mrtAccessTimer = window.setTimeout(() => { queryMrtAccess(); }, immediate ? 0 : MRT_ACCESS_DEBOUNCE_MS);
+    }
+    $("selfAddress")?.addEventListener("input", () => scheduleMrtAccess());
+    $("selfMrtRetry")?.addEventListener("click", () => scheduleMrtAccess({ immediate: true }));
     const SELF_TRAIT_GROUPS = [
       { id: "living", label: "生活條件", items: [
         { id: "nocook", label: "不可開伙" }, { id: "nopet", label: "不可養寵物" }, { id: "notax", label: "不可報稅／不可租補" }, { id: "short", label: "可短租" },
@@ -9564,6 +9689,15 @@
       if (!max) return "房租上限不限";
       return `房租上限 ${max.toLocaleString("zh-TW")} 元/月`;
     }
+    // B1：新制顯示五個獨立條件；舊的合併旗標只以「舊資料」字樣呈現，不推論成五項。
+    function wishFeeIncludesText(post) {
+      const labels = Array.isArray(post?.fee_includes_labels) ? post.fee_includes_labels : [];
+      if (labels.length) return ` · ${labels.join("、")}`;
+      if (post?.fee_includes_state === "legacy" || post?.fee_includes_legacy === true || post?.includes_management) {
+        return " · 含水電／管理費（舊資料，未拆分）";
+      }
+      return "";
+    }
     function wishAreaText(post) {
       return (post.district_labels || []).join("、") || post.city || "未填區域";
     }
@@ -9701,7 +9835,23 @@
         setLabel("wishLayout", copy.layout || "格局");
         setLabel("wishMoveIn", copy.move_in || "預計入住");
         setLabel("wishLease", copy.lease || "租期");
-        setLabel("wishTransit", copy.transit || "捷運／車站");
+      }
+    }
+    const WISH_FEE_INCLUDE_KEYS = ["utilities", "management", "parking_car", "parking_scooter", "internet"];
+    const WISH_FEE_LEGACY_NOTE = "這則建立時只有一個合併選項（含水電／管理費），系統無法確定原本是哪幾項。請重新勾選你要的項目，再儲存。";
+    function collectWishFeeIncludes() {
+      return [...document.querySelectorAll("#wishNeeds [data-fee-include]:checked")].map((el) => el.dataset.feeInclude);
+    }
+    function applyWishFeeIncludes(row = {}) {
+      const picked = new Set(Array.isArray(row.fee_includes) ? row.fee_includes : []);
+      document.querySelectorAll("#wishNeeds [data-fee-include]").forEach((el) => {
+        el.checked = picked.has(el.dataset.feeInclude);
+      });
+      const hint = $("wishFeeIncludesLegacy");
+      if (hint) {
+        const legacy = row.fee_includes_state === "legacy" || row.fee_includes_legacy === true;
+        hint.hidden = !legacy;
+        hint.textContent = legacy ? WISH_FEE_LEGACY_NOTE : "";
       }
     }
     function collectWishForm() {
@@ -9712,13 +9862,13 @@
         location_note: "",
         rent_min: 0,
         rent_max: Number($("demandRentMax")?.value) || 0,
-        includes_management: Boolean($("wishIncludesFee")?.checked),
+        // B1：五個獨立條件（未勾＝未指定）。不再送舊的合併旗標，避免新舊同時生效。
+        fee_includes: collectWishFeeIncludes(),
         housing_type: $("demandHousing")?.value || "any",
         ping_min: Number($("wishPingMin")?.value) || 0,
         layout: $("wishLayout")?.value || "",
         move_in_date: $("wishMoveIn")?.value || "",
         lease_duration: $("wishLease")?.value || "",
-        transit_note: $("wishTransit")?.value || "",
         destination_note: "",
         commute_minutes: 0,
         mrt_walk: Boolean($("demandMrt")?.checked),
@@ -9732,13 +9882,12 @@
     }
     function applyWishForm(row = {}) {
       if ($("demandRentMax")) $("demandRentMax").value = row.rent_max || "";
-      if ($("wishIncludesFee")) $("wishIncludesFee").checked = Boolean(row.includes_management);
+      applyWishFeeIncludes(row);
       if ($("demandHousing")) $("demandHousing").value = row.housing_type || "any";
       if ($("wishPingMin")) $("wishPingMin").value = row.ping_min || "";
       if ($("wishLayout")) $("wishLayout").value = row.layout || "";
       if ($("wishMoveIn")) $("wishMoveIn").value = row.move_in_date || "";
       if ($("wishLease")) $("wishLease").value = row.lease_duration || "";
-      if ($("wishTransit")) $("wishTransit").value = row.transit_note || "";
       if ($("demandMrt")) $("demandMrt").checked = Boolean(row.mrt_walk);
       if ($("demandBody")) $("demandBody").value = row.body || "";
       fillDemandDistricts();
@@ -9844,12 +9993,12 @@
         [wishCatalogOn() ? "不要" : "不接受", post.avoid_labels, "avoid"],
       ].filter((row) => row && (row[1] || []).length);
       return `
-        <p class="rent-price">${esc(wishBudgetText(post))}${post.includes_management ? " · 含水電管理費" : ""}</p>
+        <p class="rent-price">${esc(wishBudgetText(post))}${esc(wishFeeIncludesText(post))}</p>
         <p class="muted">${esc(wishAreaText(post))}</p>
         <p class="muted">${esc(post.housing_label || "不限類型")}${post.layout_label ? ` · ${esc(post.layout_label)}` : ""}${post.ping_min ? ` · ${esc(post.ping_min)} 坪以上` : ""}</p>
         <p class="muted">${post.move_in_date ? `預計 ${esc(post.move_in_date)} 入住` : "入住時間面議"}${post.lease_label ? ` · ${esc(post.lease_label)}` : ""}</p>
         ${post.transit_note ? `<p class="muted">捷運／車站：${esc(post.transit_note)}</p>` : ""}
-        ${post.mrt_walk ? `<p class="muted">需要可步行捷運（1 公里內）</p>` : ""}
+        ${post.mrt_walk ? `<p class="muted">需要離捷運距離（可行徑路線 1 公里內）</p>` : ""}
         ${post.body ? `<p>${esc(post.body)}</p>` : ""}
         ${groups.map(([title, labels, cls]) => `<div><div class="muted">${title}</div><div class="wish-chips">${labels.map((label) => `<span class="wish-chip ${cls}">${esc(label)}</span>`).join("")}</div></div>`).join("")}
         <p class="muted"><a href="${esc(post.public_path || `/w/${post.id}`)}">開啟公開頁</a></p>
@@ -9949,7 +10098,11 @@
       applySelectsToAddress();
     });
     $("selfDistrict")?.addEventListener("change", applySelectsToAddress);
-    $("selfAddress")?.addEventListener("blur", applyAddressToSelects);
+    $("selfAddress")?.addEventListener("blur", () => {
+      applyAddressToSelects();
+      // 失焦＝地址已穩定，立即查一次（不用等 debounce）。
+      scheduleMrtAccess({ immediate: true });
+    });
     $("profileNickname")?.addEventListener("input", () => { $("profileNickname").dataset.dirty = "1"; });
     let pendingClearAvatar = false;
     let pendingClearQr = false;
@@ -10758,7 +10911,7 @@
     }
     function applyImportToForm(row) {
       if ($("selfTitle")) $("selfTitle").value = row.imported_title || "";
-      if ($("selfBody")) $("selfBody").value = row.imported_text || "";
+      setSelfBody(row.imported_text || "");
       setDescTemplateApplied(row.imported_text ? "已套用匯入說明" : "", row.imported_text || "");
       selfPhotoDraft = [...(row.photos || row.listing?.photos || [])];
       renderSelfPhotoDraftAndGrid();
@@ -10856,38 +11009,58 @@
       }
     });
     const SELF_EMOJIS = ["😊","🏠","☀️","🌿","🛁","🍳","🅿️","🛗","🚇","🚲","🐕","🐱","👶","✅","❗"];
-    $("descBodyEditor")?.addEventListener("input", syncDescBodyFromEditor);
-    $("descBodyEditorWrap")?.addEventListener("click", (ev) => {
-      const btn = ev.target.closest("[data-rich]");
-      if (!btn) return;
-      ev.preventDefault();
-      const ed = $("descBodyEditor");
-      if (!ed) return;
-      ed.focus();
-      const cmd = btn.dataset.rich;
-      if (cmd === "bold") document.execCommand("bold");
-      else if (cmd === "italic") document.execCommand("italic");
-      else if (cmd === "size") document.execCommand("fontSize", false, "4");
-      else if (cmd === "color") document.execCommand("foreColor", false, btn.dataset.color || "#1c1917");
-      syncDescBodyFromEditor();
-    });
-    (function paintEmojis() {
-      const bar = $("descEmojiBar");
-      if (!bar) return;
-      bar.innerHTML = SELF_EMOJIS.map((mark) => `<button type="button" data-emoji="${mark}" aria-label="插入表情">${mark}</button>`).join("");
-    })();
-    $("descEmojiToggle")?.addEventListener("click", () => {
-      const bar = $("descEmojiBar");
-      if (bar) bar.hidden = !bar.hidden;
-    });
-    $("descEmojiBar")?.addEventListener("click", (ev) => {
-      const mark = ev.target.closest("[data-emoji]")?.dataset.emoji;
-      if (!mark) return;
-      const ed = $("descBodyEditor");
-      if (!ed) return;
-      ed.focus();
-      document.execCommand("insertText", false, mark);
-      syncDescBodyFromEditor();
+    // A2：說明範本編輯器與刊登表單的物件說明共用同一套工具列／表情列行為。
+    // 用 data-rich-editor-wrap="<輸出 textarea 的 id>" 綁定，不再寫死單一 id。
+    function richWrapOf(node) {
+      return node?.closest("[data-rich-editor-wrap]") || null;
+    }
+    function richAreaOf(wrap) {
+      return wrap?.querySelector(".rich-area") || null;
+    }
+    function richOutOf(wrap) {
+      const id = wrap?.dataset?.richEditorWrap;
+      return id ? $(id) : null;
+    }
+    function syncRichEditorOut(area) {
+      const wrap = richWrapOf(area);
+      const out = richOutOf(wrap);
+      if (area && out) out.value = area.innerHTML;
+      afterRichEdit(wrap);
+    }
+    function afterRichEdit(wrap) {
+      const id = wrap?.dataset?.richEditorWrap || "";
+      if (id !== "selfBody") return;
+      renderSelfBodyCount();
+      markDescTemplateEdited();
+    }
+    // 刊登表單的物件說明（#selfBodyEditor ⇄ #selfBody）由 setSelfBody() 統一寫入。
+    document.querySelectorAll("[data-rich-editor-wrap]").forEach((wrap) => {
+      const area = richAreaOf(wrap);
+      area?.addEventListener("input", () => syncRichEditorOut(area));
+      wrap.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-rich]");
+        if (!btn || !area) return;
+        ev.preventDefault();
+        area.focus();
+        const cmd = btn.dataset.rich;
+        if (cmd === "bold") document.execCommand("bold");
+        else if (cmd === "italic") document.execCommand("italic");
+        else if (cmd === "size") document.execCommand("fontSize", false, "4");
+        else if (cmd === "color") document.execCommand("foreColor", false, btn.dataset.color || "#1c1917");
+        syncRichEditorOut(area);
+      });
+      const bar = wrap.querySelector("[data-rich-emoji-bar]");
+      if (bar) bar.innerHTML = SELF_EMOJIS.map((mark) => `<button type="button" data-emoji="${mark}" aria-label="插入表情">${mark}</button>`).join("");
+      wrap.querySelector("[data-rich-emoji-toggle]")?.addEventListener("click", () => {
+        if (bar) bar.hidden = !bar.hidden;
+      });
+      bar?.addEventListener("click", (ev) => {
+        const mark = ev.target.closest("[data-emoji]")?.dataset.emoji;
+        if (!mark || !area) return;
+        area.focus();
+        document.execCommand("insertText", false, mark);
+        syncRichEditorOut(area);
+      });
     });
     let selfListingGate = { inFlight: false, key: "", fingerprint: "" };
     $("selfListingForm")?.addEventListener("submit", async (ev) => {
@@ -10923,11 +11096,20 @@
           fail("請先從刊登幫手選擇聯絡人");
           return;
         }
+        // A2：說明現在可以直接手寫，所以驗證改成看實際文字內容（與後端 listingBodyPlain 同一條規則），
+        // 失敗時只顯示訊息並把畫面帶到說明欄，已填內容一律保留。
         const body = String($("selfBody")?.value || "").trim();
-        if (!body) {
-          fail("請先從刊登幫手選擇或新增說明範本");
-          $("listingTools")?.scrollIntoView({ behavior: "smooth", block: "start" });
-          $("descTemplatePick")?.focus();
+        const bodyPlain = listingBodyPlainClient(body);
+        if (bodyPlain.length < SELF_BODY_MIN) {
+          fail(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+          $("selfBodyBlock")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          $("selfBodyEditor")?.focus();
+          return;
+        }
+        if (bodyPlain.length > SELF_BODY_PLAIN_MAX) {
+          fail(`物件說明最多 ${SELF_BODY_PLAIN_MAX} 個字，目前 ${bodyPlain.length} 個字，請縮短後再刊登。`);
+          $("selfBodyBlock")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          $("selfBodyEditor")?.focus();
           return;
         }
         const photoUrls = [...selfPhotoDraft];
@@ -10987,7 +11169,7 @@
         paintCopyDraftBanner(false);
         paintImportReview(null);
         if ($("importDeclaration")) $("importDeclaration").checked = false;
-        if ($("selfBody")) $("selfBody").value = "";
+        setSelfBody("");
         setDescTemplateApplied("");
         setContactTemplateApplied(null);
         if ($("selfPhotos")) $("selfPhotos").value = "";
@@ -11010,12 +11192,14 @@
     let descTemplates = [];
     let contactProfiles = [];
     let editingDescTemplateId = null;
+    let appliedDescTemplate = null;
     function listingPlainPreview(html) {
       const box = document.createElement("div");
       box.innerHTML = html || "";
       return String(box.textContent || "").replace(/\s+/g, " ").trim();
     }
     function setDescTemplateApplied(name, body) {
+      appliedDescTemplate = name ? { name: String(name), body: String(body || "") } : null;
       const el = $("descTemplateApplied");
       if (!el) return;
       if (name) {
@@ -11027,6 +11211,17 @@
         el.hidden = true;
         el.textContent = "";
       }
+    }
+    // A2：使用者套用範本後又自己改字時，標籤要反映「已修改」，不要讓人以為還是原範本。
+    function markDescTemplateEdited() {
+      if (!appliedDescTemplate) return;
+      const el = $("descTemplateApplied");
+      if (!el || el.hidden) return;
+      const current = String($("selfBody")?.value || "");
+      if (current === appliedDescTemplate.body) return;
+      const preview = listingPlainPreview(current);
+      const snippet = preview ? `（${preview.slice(0, 36)}${preview.length > 36 ? "…" : ""}）` : "";
+      el.textContent = `已修改說明範本「${appliedDescTemplate.name}」的內容${snippet}`;
     }
     function setContactTemplateApplied(item) {
       const el = $("contactTemplateApplied");
@@ -11063,10 +11258,12 @@
       if ($("selfContactName")) $("selfContactName").value = form.contact_name || "";
       if ($("selfTitle")) $("selfTitle").value = form.title || "";
       if ($("selfAddress")) $("selfAddress").value = form.street || "";
+      // A4：換了一則草稿就是換了地址，先把上一個地址的捷運結果清掉再重查。
+      scheduleMrtAccess();
       applySelectsToAddress();
       if ($("selfPhone")) $("selfPhone").value = form.phone || "";
       if ($("selfLine")) $("selfLine").value = form.line_url || "";
-      if ($("selfBody")) $("selfBody").value = form.body || "";
+      setSelfBody(form.body || "");
       setDescTemplateApplied(form.body ? "已套用目前刊登說明" : "", form.body || "");
       setContactTemplateApplied(form.contact_name || form.phone || form.line_url ? {
         label: form.contact_name || "",
@@ -11088,6 +11285,44 @@
       if (ed) ed.innerHTML = safeListingHtml(html || "");
       if ($("descTemplateBody")) $("descTemplateBody").value = html || "";
     }
+    // A2：刊登表單的物件說明。可見的 contenteditable 只是 #selfBody 的輸入介面，
+    // 草稿、提交與重新編輯一律讀 #selfBody，避免畫面與送出的內容不一致。
+    const SELF_BODY_PLAIN_MAX = 500;
+    const SELF_BODY_MIN = 8;
+    function listingBodyPlainClient(value) {
+      return String(value || "")
+        .replace(/<\s*br\s*\/?>/gi, "\n")
+        .replace(/<\/\s*p\s*>/gi, "\n")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+    function renderSelfBodyCount() {
+      const el = $("selfBodyCount");
+      if (!el) return;
+      const plain = listingBodyPlainClient($("selfBody")?.value || "");
+      const over = plain.length > SELF_BODY_PLAIN_MAX;
+      const short = plain.length > 0 && plain.length < SELF_BODY_MIN;
+      el.textContent = over
+        ? `說明太長：目前 ${plain.length} 個字，上限 ${SELF_BODY_PLAIN_MAX} 個字。`
+        : short
+          ? `目前 ${plain.length} 個字，至少還要 ${SELF_BODY_MIN - plain.length} 個字。`
+          : plain.length ? `目前 ${plain.length} 個字（上限 ${SELF_BODY_PLAIN_MAX} 個字）。` : "";
+      el.classList.toggle("is-warn", over || short);
+    }
+    function setSelfBody(html) {
+      const next = html == null ? "" : String(html);
+      if ($("selfBody")) $("selfBody").value = next;
+      const area = $("selfBodyEditor");
+      if (area) area.innerHTML = safeListingHtml(next);
+      renderSelfBodyCount();
+    }
+
     function syncDescBodyFromEditor() {
       const ed = $("descBodyEditor");
       const ta = $("descTemplateBody");
@@ -11178,7 +11413,7 @@
       if (!item) return;
       const current = $("selfBody")?.value || "";
       if (current.trim() && current.trim() !== String(item.body || "").trim() && !window.confirm("套用並取代目前內容？")) return;
-      if ($("selfBody")) $("selfBody").value = item.body;
+      setSelfBody(item.body);
       setDescTemplateApplied(item.name || "未命名", item.body);
       const msg = $("selfMsg");
       if (msg) msg.textContent = "已套用說明範本，尚未刊登。";
@@ -11787,7 +12022,7 @@
         if (msg) msg.textContent = editingId ? "已更新。" : "已新增。";
         await loadListingTools();
         if (data.id && $("descTemplatePick")) $("descTemplatePick").value = String(data.id);
-        if ($("selfBody")) $("selfBody").value = data.body || body;
+        setSelfBody(data.body || body);
         setDescTemplateApplied(data.name || name || "未命名", data.body || body);
       } catch (error) {
         if (msg) msg.textContent = error.message;
@@ -11849,7 +12084,7 @@
         if ($("descTemplatePick")?.value === String(delId)) {
           $("descTemplatePick").value = "";
           if (gone && $("selfBody") && $("selfBody").value === gone.body) {
-            $("selfBody").value = "";
+            setSelfBody("");
             setDescTemplateApplied("");
           }
         }
@@ -12064,6 +12299,100 @@
       if (ctx.errors && ctx.errors.length) lines.push("最近錯誤：\n" + ctx.errors.join("\n"));
       if ($("feedbackContextView")) $("feedbackContextView").textContent = lines.join("\n") || "（沒有可附加的資訊）";
     }
+    // ── C3：回饋附圖 ──
+    // 貼上與選檔共用同一份清單（合計最多 4 張）。前端檢查只是快速回饋，
+    // 權威判定在後端（真實解碼驗證），所以後端回的錯誤一律照顯示。
+    const FEEDBACK_IMAGE_MAX = 4;
+    const FEEDBACK_IMAGE_MAX_BYTES = 1000000;
+    const FEEDBACK_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+    let feedbackAttachments = [];
+    let feedbackImageBusy = false;
+
+    function feedbackImageMsg(text, ok = false) {
+      const el = $("feedbackImageMsg");
+      if (!el) return;
+      el.textContent = text || "";
+      el.className = ok ? "msg ok" : "msg err";
+    }
+    function renderFeedbackImageTray() {
+      const tray = $("feedbackImageTray");
+      if (tray) {
+        tray.hidden = !feedbackAttachments.length;
+        tray.innerHTML = feedbackAttachments.map((row, i) => `
+          <div class="feedback-image-chip">
+            <img src="${esc(row.thumb_url)}" alt="附圖 ${i + 1}" />
+            <button type="button" class="ghost" data-fb-image-del="${i}" aria-label="移除第 ${i + 1} 張附圖">✕</button>
+          </div>`).join("");
+      }
+      const count = $("feedbackImageCount");
+      if (count) count.textContent = `${feedbackAttachments.length}／${FEEDBACK_IMAGE_MAX} 張`;
+      const pick = $("feedbackImagePick");
+      if (pick) pick.disabled = feedbackImageBusy || feedbackAttachments.length >= FEEDBACK_IMAGE_MAX;
+    }
+    async function removeFeedbackImage(index) {
+      const row = feedbackAttachments[index];
+      if (!row) return;
+      // 先從畫面移除（可立即補圖），後端刪除失敗不影響已送出的回饋內容。
+      feedbackAttachments.splice(index, 1);
+      renderFeedbackImageTray();
+      try {
+        await fetch(`/api/feedback/attachments/${encodeURIComponent(row.id)}`, { method: "DELETE" });
+      } catch { /* 伺服器端 sweep 會處理 */ }
+    }
+    async function clearFeedbackImages({ silent = true } = {}) {
+      const rows = [...feedbackAttachments];
+      feedbackAttachments = [];
+      renderFeedbackImageTray();
+      if (!silent) feedbackImageMsg("");
+      await Promise.all(rows.map((row) => fetch(`/api/feedback/attachments/${encodeURIComponent(row.id)}`, { method: "DELETE" }).catch(() => {})));
+    }
+    async function addFeedbackImages(files) {
+      const list = [...(files || [])];
+      if (!list.length || feedbackImageBusy) return;
+      const room = FEEDBACK_IMAGE_MAX - feedbackAttachments.length;
+      if (room <= 0) {
+        feedbackImageMsg(`每則回饋最多 ${FEEDBACK_IMAGE_MAX} 張圖片，請先刪除再上傳。`);
+        return;
+      }
+      feedbackImageBusy = true;
+      const accepted = list.slice(0, room);
+      const skipped = [];
+      if (list.length > room) skipped.push(`超過 ${FEEDBACK_IMAGE_MAX} 張的部分已忽略 ${list.length - room} 張`);
+      for (const file of accepted) {
+        const type = String(file?.type || "").toLowerCase();
+        if (!FEEDBACK_IMAGE_TYPES.includes(type)) { skipped.push(`「${file.name || "貼上的圖片"}」不是 PNG／JPEG／WebP`); continue; }
+        if (Number(file.size) > FEEDBACK_IMAGE_MAX_BYTES) { skipped.push(`「${file.name || "貼上的圖片"}」超過 1MB`); continue; }
+        try {
+          const res = await fetch("/api/feedback/attachments", {
+            method: "POST",
+            headers: { "Content-Type": type || "application/octet-stream" },
+            body: file,
+          });
+          const data = await readApi(res);
+          if (!res.ok) {
+            // 伺服器說「已達上限」時會一併回傳目前還沒送出的附件（可能來自上一次沒送完的
+            // 工作階段）。把它們接回清單，使用者才看得到、刪得掉。
+            if (Array.isArray(data.attachments) && data.attachments.length) {
+              const known = new Set(feedbackAttachments.map((row) => row.id));
+              for (const row of data.attachments) {
+                if (!known.has(row.id)) feedbackAttachments.push({ id: row.id, thumb_url: row.thumb_url });
+              }
+              renderFeedbackImageTray();
+            }
+            throw new Error(data.error || "上傳失敗");
+          }
+          feedbackAttachments.push({ id: data.id, thumb_url: data.thumb_url });
+          renderFeedbackImageTray();
+        } catch (error) {
+          // 一張失敗就停手並保留已成功的；已寫好的內容與其他合格圖片都不動。
+          skipped.push(error.message || "上傳失敗");
+          break;
+        }
+      }
+      feedbackImageBusy = false;
+      renderFeedbackImageTray();
+      feedbackImageMsg(skipped.length ? skipped.join("；") : "已加入附圖。", !skipped.length);
+    }
     function openFeedbackDialog() {
       const box = $("feedbackDialog");
       if (!box) return;
@@ -12076,12 +12405,15 @@
       renderFeedbackContext();
       if ($("feedbackForm")) $("feedbackForm").reset();
       if ($("feedbackMsg")) { $("feedbackMsg").textContent = ""; $("feedbackMsg").className = "msg"; }
+      clearFeedbackImages();
       box.hidden = false;
       setTimeout(() => $("feedbackBody")?.focus(), 40);
     }
     function closeFeedbackDialog() {
       const box = $("feedbackDialog");
       if (box) box.hidden = true;
+      // 取消／關閉時把還沒送出的附件刪掉（best-effort；真的斷線就靠伺服器端 sweep）。
+      clearFeedbackImages();
     }
     $("feedbackBtn")?.addEventListener("click", openFeedbackDialog);
     $("feedbackFooterLink")?.addEventListener("click", (ev) => { ev.preventDefault(); openFeedbackDialog(); });
@@ -12112,6 +12444,36 @@
     })();
     $("feedbackClose")?.addEventListener("click", closeFeedbackDialog);
     document.querySelector("[data-close-feedback]")?.addEventListener("click", closeFeedbackDialog);
+    $("feedbackImagePick")?.addEventListener("click", () => $("feedbackImages")?.click());
+    $("feedbackImages")?.addEventListener("change", (ev) => {
+      const files = [...(ev.target.files || [])];
+      ev.target.value = ""; // 允許同一張圖重選
+      addFeedbackImages(files);
+    });
+    $("feedbackImageTray")?.addEventListener("click", (ev) => {
+      const idx = ev.target.closest("[data-fb-image-del]")?.dataset?.fbImageDel;
+      if (idx == null) return;
+      removeFeedbackImage(Number(idx));
+    });
+    // 貼上只作用在回饋表單：其他地方（例如說明欄）的一般文字貼上完全不受影響。
+    // 同一張圖可能同時以多個 item 出現，用 file 身分去重，避免重複加入。
+    $("feedbackDialog")?.addEventListener("paste", (ev) => {
+      const items = [...(ev.clipboardData?.items || [])].filter((it) => it.kind === "file" && String(it.type || "").startsWith("image/"));
+      if (!items.length) return;
+      const seen = new Set();
+      const files = [];
+      for (const item of items) {
+        const file = item.getAsFile?.();
+        if (!file) continue;
+        const sig = `${file.name}|${file.size}|${file.type}`;
+        if (seen.has(sig)) continue;
+        seen.add(sig);
+        files.push(file);
+      }
+      if (!files.length) return;
+      ev.preventDefault(); // 有圖片才攔；純文字貼上不動
+      addFeedbackImages(files);
+    });
     document.querySelectorAll("#feedbackKinds .chip").forEach((el) => {
       el.addEventListener("click", () => {
         feedbackKind = el.dataset.fbKind || "other";
@@ -12140,13 +12502,22 @@
             // 聯絡方式由後端從已驗證的會員身分取得（C1）：前端不送、也不顯示。
             website: ($("feedbackHp")?.value || "").trim(),
             context: buildFeedbackContext(),
+            // C3：只送「已經上傳成功的附件 id」；後端會在同一筆交易內驗證所有權並綁定。
+            attachments: feedbackAttachments.map((row) => row.id),
           }),
         });
         const data = await readApi(res);
         if (!res.ok) throw new Error(data.error || "送出失敗");
+        // 只有回饋與附件都成功保存後才清空表單：已綁定的附件不能再送出，
+        // 所以清單直接歸零（不再發 DELETE，那些已經屬於這則回饋）。
+        feedbackAttachments = [];
+        renderFeedbackImageTray();
+        feedbackImageMsg("");
+        if ($("feedbackBody")) $("feedbackBody").value = "";
         if (msg) { msg.textContent = "收到了，謝謝你的回饋！"; msg.className = "msg ok"; }
-        setTimeout(closeFeedbackDialog, 1200);
+        setTimeout(() => { const box = $("feedbackDialog"); if (box) box.hidden = true; }, 1200);
       } catch (error) {
+        // 失敗時保留已寫的內容與附件，讓使用者直接重試。
         if (msg) { msg.textContent = error.message || "送出失敗，請稍後再試"; msg.className = "msg err"; }
       } finally {
         if (btn) btn.disabled = false;

@@ -791,8 +791,16 @@ export async function createSelfListingAsync(userId, input = {}, options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
   if (!isPg(options)) {
     const { createSelfListing } = await import("./selfListings.js");
+    const { listMatchCandidates } = await import("./db.js");
     return createSelfListing(sqliteHandle(), uid, input, now, {
-      matchCandidates: options.matchCandidates, maturity: options.maturity, isolation: options.isolation,
+      // 🚨 `createSelfListing()` 是**同步**的，而呼叫端（server.js）傳進來的
+      // `options.matchCandidates` 是 async 的 PG 島嶼版本。直接往下傳，`bestMatch()` 會拿到
+      // 一個 Promise，於是每一次站內刊登都在 SQLite 模式回
+      // 「(candidates || []) is not iterable」（400）——使用者只看到一句天書，刊登完全不能用。
+      // 這裡改成同步版（同一組 SQL builder，只是走本機 handle）。
+      matchCandidates: (listing) => listMatchCandidates(listing?.post_id || 0, listing || null),
+      maturity: options.maturity,
+      isolation: options.isolation,
     });
   }
   try {

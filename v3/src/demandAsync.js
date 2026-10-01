@@ -124,6 +124,15 @@ import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
 // （含「同一人只能有一則 open」的 `idx_demand_one_open`，那是**部分**唯一索引）。
 export const DEMAND_TABLES = ["demand_posts", "demand_replies", "demand_reports"];
 
+// `ensurePgSchema()` 對**已經存在**的表只會送 `CREATE TABLE IF NOT EXISTS`（等於 no-op），
+// 所以「在既有表上新增欄位」一定要另外送 PG 的 `ADD COLUMN IF NOT EXISTS`（SQLite 沒有這個語法，
+// 同步版對應的是 demand.js `addWishColumns()` 的 try/catch ALTER）。
+// B1：許願房五個獨立的「租金已包含」條件。
+export const DEMAND_PG_ALTER_STATEMENTS = [
+  "ALTER TABLE demand_posts ADD COLUMN IF NOT EXISTS fee_includes TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE demand_posts ADD COLUMN IF NOT EXISTS fee_includes_at TEXT",
+];
+
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 
 // 統一成 `{ rows, rowCount }`（與 `crmOutboxAsync.js` 同一個形狀）：PG 的 `pg` 回 rowCount，
@@ -138,7 +147,11 @@ const schemaReady = new WeakMap();
 export async function ensureDemandStoreOnce(pgDriver) {
   if (!pgDriver) return;
   if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);
-  const ready = ensurePgSchema(pgDriver, sqliteHandle(), { tables: DEMAND_TABLES });
+  const ready = (async () => {
+    const mirrored = await ensurePgSchema(pgDriver, sqliteHandle(), { tables: DEMAND_TABLES });
+    for (const sql of DEMAND_PG_ALTER_STATEMENTS) await pgDriver.exec(sql);
+    return mirrored;
+  })();
   schemaReady.set(pgDriver, ready);
   try {
     await ready;

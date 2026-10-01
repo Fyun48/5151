@@ -50,3 +50,24 @@ test("historical listings still display deprecated labels (backward compatible)"
   // 顯示用 normalize 保留 legacy ids（不丟棄歷史）
   assert.deepEqual(normalizeSelfTraits(["cook", "elevator"]), ["cook", "elevator"]);
 });
+
+test("A3：共用條件目錄的名稱優先於靜態標籤（後台改名要同步到卡片與分享頁）", () => {
+  // 這一條是 A3 的根因：舊寫法把目錄標籤放在 || 後面，後台改名永遠被靜態表蓋掉。
+  assert.deepEqual(selfTraitLabels(["elevator"], { elevator: "華廈/公寓電梯" }), ["華廈/公寓電梯"]);
+  assert.deepEqual(selfTraitLabels(["elevator"], new Map([["elevator", "電梯華廈"]])), ["電梯華廈"]);
+  // 目錄沒有的 id（legacy）仍落回靜態標籤，歷史顯示不變
+  assert.deepEqual(selfTraitLabels(["cook", "elevator"], { elevator: "華廈/公寓電梯" }), ["可開伙", "華廈/公寓電梯"]);
+  // 沒有目錄時維持原樣
+  assert.deepEqual(selfTraitLabels(["elevator"]), ["電梯華廈／寓"]);
+  // 目錄給了空字串時不可把標籤吃掉（fallback 仍要能顯示）
+  assert.deepEqual(selfTraitLabels(["elevator"], { elevator: "" }), ["電梯華廈／寓"]);
+});
+
+test("A3：後台必須看得出來目錄草稿還沒發布", async () => {
+  const fs = await import("node:fs/promises");
+  const html = await fs.readFile(new URL("../public/admin.html", import.meta.url), "utf8");
+  assert.match(html, /草稿，未發布/);
+  assert.match(html, /尚未發布：確認並發布/);
+  assert.match(html, /listingCatalogPreviewTitle/);
+  assert.match(html, /「寫入草稿」只存草稿，前台不會變/);
+});

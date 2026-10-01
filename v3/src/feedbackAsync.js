@@ -38,6 +38,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { claimFeedbackAttachmentsAsync } from "./feedbackMediaAsync.js";
 import { ensurePgSchema } from "./pgSchema.js";
 
 export const FEEDBACK_TABLES = ["feedback", "feedback_outbox"];
@@ -220,6 +221,8 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
     const row = one((await exec(FEEDBACK_INSERT_SQL, [uid, kind, trimmedBody, contact, contextText, iso(now)])).rows);
     const rowFull = row || one((await exec(FEEDBACK_BY_ID_SQL, [Number(row?.id) || 0])).rows);
     const ctx = decorateRow({ ...rowFull, context: rowFull?.context ?? contextText }).context;
+    // C3：附件綁定。注入式 exec 沒有真的交易（測試／探針），照同步版的順序跑並在失敗時往上丟。
+    await claimFeedbackAttachmentsAsync(exec, uid, input?.attachments, Number(rowFull.id), now);
     await enqueueWithExec(exec, {
       feedbackId: Number(rowFull.id),
       data: {
@@ -250,6 +253,8 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
       const row = one((await tx(FEEDBACK_INSERT_SQL, [uid, kind, trimmedBody, contact, contextText, iso(now)])).rows);
       if (!row) throw new Error("feedback 寫入沒有回傳列");
       const ctx = decorateRow(row).context;
+      // C3：在同一個 PG 交易內 claim；數量不符就丟 409，整筆（含 feedback 列）rollback。
+      await claimFeedbackAttachmentsAsync(tx, uid, input?.attachments, Number(row.id), now);
       await enqueueWithExec(tx, {
         feedbackId: Number(row.id),
         data: {

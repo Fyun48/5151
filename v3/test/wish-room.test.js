@@ -151,6 +151,63 @@ test("member can create one active Wish Room and persist core fields", () => {
   db.close();
 });
 
+test("B1：五個租金包含條件分別儲存、可讀回，且舊合併旗標不展開", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com" });
+  // 只勾兩項
+  const post = createDemandPost(db, 1, sample({ fee_includes: ["management", "internet"] }));
+  assert.deepEqual(post.fee_includes, ["management", "internet"]);
+  assert.equal(post.fee_includes_state, "split");
+  assert.deepEqual(post.fee_includes_labels, ["租金含管理費", "租金含網路"]);
+  assert.equal(post.fee_includes_legacy, false);
+
+  // 明確全部不勾（{"items":[]}）與「沒編輯過」不同：狀態是 split，且條件是空的
+  const none = updateWishRoom(db, post.id, 1, sample({ fee_includes: [] }));
+  assert.deepEqual(none.fee_includes, []);
+  assert.equal(none.fee_includes_state, "split");
+
+  // 固定排序：使用者點選順序不影響儲存結果
+  const ordered = updateWishRoom(db, post.id, 1, sample({ fee_includes: ["internet", "utilities", "parking_scooter"] }));
+  assert.deepEqual(ordered.fee_includes, ["utilities", "parking_scooter", "internet"]);
+  db.close();
+});
+
+test("B1：舊資料只有一個合併旗標時標成 legacy，不推論成五項", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com" });
+  const post = createDemandPost(db, 1, sample({ includes_management: true }));
+  assert.deepEqual(post.fee_includes, []);
+  assert.equal(post.fee_includes_state, "legacy");
+  assert.equal(post.fee_includes_legacy, true);
+  // 舊旗標原值仍保留（沒有被清成 0），只是不生效
+  assert.equal(post.includes_management, true);
+
+  // 用新制重新儲存後，新制優先，舊旗標不會同時生效
+  const migrated = updateWishRoom(db, post.id, 1, sample({ includes_management: true, fee_includes: ["utilities"] }));
+  assert.deepEqual(migrated.fee_includes, ["utilities"]);
+  assert.equal(migrated.fee_includes_state, "split");
+  assert.equal(migrated.fee_includes_legacy, false);
+  assert.equal(migrated.includes_management, true);
+  assert.deepEqual(migrated.fee_includes_labels, ["租金含水電"]);
+
+  // 只送舊旗標（舊客戶端）不會動到已存的新制條件
+  const legacyClient = updateWishRoom(db, post.id, 1, sample({ includes_management: false }));
+  assert.deepEqual(legacyClient.fee_includes, ["utilities"]);
+  assert.equal(legacyClient.fee_includes_state, "split");
+  db.close();
+});
+
+test("B1：公開許願房視圖帶出五個條件的顯示資料", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com" });
+  const post = createDemandPost(db, 1, sample({ fee_includes: ["utilities", "parking_car"] }));
+  const view = publicWishRoomView(post);
+  assert.deepEqual(view.fee_includes, ["utilities", "parking_car"]);
+  assert.deepEqual(view.fee_includes_labels, ["租金含水電", "租金含停汽車位"]);
+  assert.equal(view.fee_includes_state, "split");
+  db.close();
+});
+
 test("same member cannot create a second active Wish Room; another member can", () => {
   const db = open();
   addUser(db, { id: 1, email: "a@example.com" });

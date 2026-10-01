@@ -5912,6 +5912,138 @@ region 4 section 1 → zip    → sid 0
 > 所以沒有資料安全缺口。**教訓**：部署腳本要 `set -e`／逐段檢查結論字串，
 > 閘門失敗就停，不要用 `>/dev/null` 把狀態吃掉。
 
+## 二之負七十、2026-10-01 第九十九批：Owner 工作單 A1～C3（有房刊登／許願房／意見回饋）
+
+**來源**：Owner 附件工作單 `5151_DS_Fixes_20261001.txt`（A1～A5、B1～B2、C1～C3）。
+分支 `fix/owner-workorder-20261001`，同一張 PR。**Production 維持 manual-only，本批未部署。**
+
+### 99.1 兩份唯讀調查（先查清楚再動手）
+
+兩個 subagent 只讀盤點，回報的關鍵事實（後續實作全部照這份基準，行號已對 `7701c29` 重驗）：
+
+1. **A3 的根因有兩個，只有一個是程式缺陷**
+   - 根因 1：後台畫面顯示的是**草稿**（`admin.html` 的 `catalogWorking() = draft || published`），
+     前台讀的是**已發布**目錄。實查正式庫 `settings.rentalCatalog` 的 `elevator.label` 仍是「電梯」，
+     而「華廈」二字在全部 30 筆 settings 列裡都找不到 ⇒ 那次改名從沒落地到已發布目錄。
+   - 根因 2（**真正的 bug**）：`v3/src/selfTraits.js` 的 `selfTraitLabels()` 寫成
+     `ALL_TRAITS.get(id) || extra.get(id)`，目錄標籤被放在 `||` 後面 ⇒ 就算發布了，
+     「我的刊登」卡片與公開分享頁的 chips 還是顯示靜態表。刊登表單走的是
+     `catalogAsSelfTraitGroups()`（正確），所以只有一半的前台會同步 —— 這正是「後台改了前台沒改」。
+2. **`includes_management` 今天 100% 只是顯示字串**：`evaluateMatch()` 的判定來源只有
+   district／budget／catalog 條件／layout／area／housing 六類，沒有一行碰費用；
+   `candidateSql()`、`matchesFilter()` 也都沒有。欄位名（management）與標籤（水電＋管理費）
+   互相矛盾 ⇒ **原意無法確定，不能自動拆成五項**。
+3. **Match Engine 只配對站內刊登**（`isListingMatchable()` 要求 `source === "self"`），
+   而站內刊登表單沒有費用欄位 ⇒ 新條件對所有可配對物件都會是 `unknown`。
+4. **v3 完全沒有附件表**（`grep -rni attachment v3/` = 0 命中）；`feedback_attachment`
+   只存在於另一個服務 `ops/src/opsDb.js`（FK 指 `ingested_feedback`，與 v3 的 `feedback` 無關）。
+5. **既有兩條上傳路徑都不能用在回饋附件**：`/media/lib/` 在 `auth.js publicPath()` 是**公開**路徑，
+   R2 bucket 也是公開網域，`putMemberMediaObjects()` 的 key 前綴寫死 `member-media/`。
+6. **A4 的服務選擇有解**：`router.project-osrm.org` 的公開示範站**只跑車用 profile**，
+   `walking` 這個字完全是裝飾（實測 `driving`／`walking`／`cycling`／`foot` 四個字串回傳
+   **位元組完全相同**的結果）。FOSSGIS 的 `routing.openstreetmap.de/routed-foot` 是真 foot profile。
+
+### 99.2 A 有房刊登
+
+| 項 | 做法 |
+|---|---|
+| A1 | 說明提示與送出訊息改成「請寫一些這屋子的故事與回憶（至少 N 個字）」，前後端同一條規則 |
+| A2 | 說明範本與輸入區**直接展開**，放在「刊登物件」按鈕上方；`#selfBody` 仍是唯一內容來源，新增可見的 `contenteditable` 當輸入介面，所有寫入都走 `setSelfBody()`；套用範本前用 `confirm` 保護已輸入文字；驗證失敗只提示、保留內容 |
+| A3 | `selfTraits.js` 目錄標籤優先；後台把「草稿未發布」畫出來（按鈕文字、逐列標記、預覽標題、抽屜提示）；分享頁 `max-age` 60 → 15 |
+| A4 | 見 99.4 |
+| A5 | 分享頁自己打 `/api/me` 取身分（三態：載入中／訪客／會員），公開房源內容**維持訪客視角**（後端 `viewerId: 0`、`public, max-age=15`）；另外修好分享頁把物件說明當純文字印出 `<p>` 的問題（同一份白名單 sanitizer） |
+
+**A2 的驗證方式**：`v3/test/listing-tools-ui.test.js` 原本有一條
+`assert.doesNotMatch(html, /id="selfBodyEditor"/)`（舊設計「說明只能由範本套用」的守衛），
+A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="true"`、在 `#selfSubmit` 之前、只有一個寫入入口 `setSelfBody`）。
+
+### 99.3 B 許願房
+
+- **B1 儲存**：新增 `demand_posts.fee_includes`（TEXT）＋`fee_includes_at`，形狀
+  `{"items":[...]}`。純函式島 `v3/src/feeIncludes.js`（key／標籤／`normalizeFeeIncludes`／
+  `parseFeeIncludes`）供 demand／rentalMatch／listingCost 共用。
+- **B1 相容（重點）**：**不拆、不推論**。`''` = 不曾用新制儲存；`{"items":[]}` = 明確全部未指定；
+  舊的 `includes_management = 1 且 fee_includes = ''` ⇒ `state = "legacy"`，顯示
+  「含水電／管理費（舊資料，未拆分）」，重新編輯時引導使用者確認。
+  **舊旗標保留原值不清空**，只讓讀取端在新制非空時不採計它 ⇒ 不會新舊同時生效，也留得住歷史。
+- **B1 配對**：`evaluateMatch()` 新增費用 gate —— 勾選的每一項都要同時滿足；
+  房源標示另計 ⇒ 硬衝突；**房源沒有資料 ⇒ 只進 `unmet_unknowns`，不算符合也不算衝突**
+  （與 catalog 條件既有的 `unknown` 語意一致，否則既有許願房會全部失去曝光）。
+  房源端判定 `listingCost.feeInclusionStates()` 沿用既有解析器，**泛用「車位／停車」不推定
+  汽車位或機車位**（兩個 key 都回 unknown），同一項同時出現已含與另計也回 unknown。
+- **B2 表單**：五個費用條件＋捷運距離需求集中在同一個連續選項區（共六項）；文字改成
+  「需要離捷運距離（可行徑路線 1 公里內）」；移除獨立的「捷運／車站」欄位
+  （`transit_note` 欄位與歷史顯示保留，新表單不再送，編輯時由 fallback 保住原值）。
+- **B2 配對**：`wish.mrt_walk` 用**與 A4 相同的步行定義**（≤ 1,000 公尺），
+  房源沒有已查證的步行距離 ⇒ `unmet_unknowns`，不可當成已符合。
+
+### 99.4 A4 步行捷運：真正的一公里
+
+- `v3/src/mrt.js` 的步行路線服務改成 **foot profile**（`MRT_FOOT_ROUTE_BASE` 可覆寫），
+  新增 `MRT_ACCESS_MAX_M = 1000`、`isMrtAccessWithin()`、`fetchMrtAccessWithin()`。
+- **直線距離只挑候選站**：直線是步行距離的下界，所以直線 > 1 公里的站不可能合格，
+  這樣可以少打外部服務，而且這個結論是**已查證的「沒有」**（不是未查證）。
+- 狀態機：`within`（已查證符合）／`none`（已查證沒有）／`unknown`（候選站有但路線服務沒回可用結果
+  ⇒ 待確認）／`unlocatable`（地址定位不到）／`error`（服務失敗，可重試，不擋刊登）。
+- 新端點 `GET /api/self-listings/mrt-access`（**必須註冊在 `/api/self-listings/:id` 之前**）。
+  查證成功會把結果寫進**同一份** `mrt_cache`，讓表單與內頁讀同一組數字。
+- 前端：debuounce 900ms、失焦立即查、地址一改就清舊結果、`mrtAccessSeq` 丟棄較早的回應、
+  「重新查詢」按鈕。地址不足以定位與服務失敗都保留表單內容。
+- **真實案例（實測，非 mock）**：
+  - 台北市士林區中正路 100 號 → 捷運士林站 **958 公尺**（1 公里內）⇒ 符合
+  - 25.0330,121.5650（101 旁）→ 步行 **330 公尺** ⇒ 符合
+  - 25.0720,121.5480（大直對岸）→ 直線 843 公尺但步行 **1,327 公尺** ⇒ **不符合**
+    （這筆就是「直線近、步行遠」的驗收案例）
+  - 同服務 `foot` 與 `car` 對同一組座標回不同距離（2,826.8 m vs 2,925.1 m）⇒ 證明真的用了 foot profile
+- ⚠️ **未做（列為後續）**：`mrt_cache` 沒有 TTL，切換 profile **之前**寫入的舊值（當時是車用 profile
+  算出來的）不會自動重算。快取是顯示用（1.5 公里門檻），且新查詢會在同一個 key 上覆寫；
+  要一次清乾淨的話，最小作法是**把 profile 名放進 cache key**（`mrt:v2:<lat>,<lng>`），
+  這樣舊 key 自然失效、也不必新增欄位或做 PG 遷移。
+
+### 99.5 C 意見回饋
+
+- **C1／C2**（前一段已提交）：聯絡方式取自已驗證會員的 email，前台移除聯絡欄位與長段說明。
+- **C3 附件**：新增 `v3/src/feedbackMedia.js`（同步）＋`feedbackMediaAsync.js`（PG 島嶼）＋
+  `feedback_attachment` 表（schema migration **version 6**）。
+  - **只寫本機** `DATA_DIR/feedback-media/`：**不推 R2、不掛 express.static、
+    `auth.js publicPath()` 不得出現任何 feedback-attachment 字串**；唯一入口是
+    `requireAdminApi` 的兩條 GET（縮圖／原圖，`Cache-Control: private, no-store`）。
+  - 驗證順序：空檔 → 大小（> 1,000,000 bytes ⇒ 413）→ magic bytes → **只允許 PNG／JPEG／WebP
+    （明確拒絕 AVIF，不沿用 `/api/media` 的允許清單）** → `normalizeImage()` 真的解碼。
+    sharp 不在時維持 503，**不降級**成只驗 magic bytes。
+  - 生命週期：先上傳（`feedback_id = 0`）→ 送出回饋時在**同一筆交易**內 claim（數量不符就
+    整筆 rollback）→ 取消／關閉由前端 best-effort DELETE → 24 小時孤兒由 sweep 清（開站 60 秒後
+    一次、之後每 6 小時）。
+  - 前端：`express.raw` 逐檔上傳（不引入 multipart 相依）、貼上與選檔共用同一份清單、
+    第 5 張／過大／格式不符都有明確訊息並保留已成功的、失敗時保留內容與附件可重試。
+  - 上限提示的補強：**已達上限時伺服器把「目前還沒送出的附件」一起回給前端**，
+    讓上一次沒送完就關掉瀏覽器的使用者看得到、刪得掉（否則會卡在「已達上限」卻看不到那幾張圖）。
+
+### 99.6 順手修掉的既有缺陷（不是工作單項目，但當場擋住了驗收）
+
+1. **SQLite 模式下每一筆站內刊登都 400**：`server.js` 傳給 `createSelfListingAsync()` 的
+   `matchCandidates` 是 **async** 的 PG 島嶼版本，而 SQLite 分支把它直接往下傳給**同步**的
+   `createSelfListing()` ⇒ `bestMatch()` 收到 Promise，回一句
+   `(candidates || []) is not iterable`。已改成在 SQLite 分支用同步的 `listMatchCandidates()`。
+2. **分享頁把物件說明當純文字印出來**：`esc(d.body)` 會讓畫面直接出現 `<p>` 這幾個字。
+   改成過一次與 `index.html` 相同的白名單 sanitizer 再放進 `innerHTML`。
+3. **`[hidden]` 輸給 `display:flex`**：`.auth .member { display:flex }` 的權重高於 UA 的
+   `[hidden]{display:none}`，於是**訪客也會看到「回找房頁面／登出」**（375px 訪客截圖上實際看到）。
+   已在 `listing.html` 加上 `[hidden] { display: none !important; }`。
+
+> 📌 第 3 點是**看截圖才發現的**：自動化斷言（`hidden` 屬性、`aria-live`）全綠，
+> 但畫面是錯的。視覺檢查不能只用 DOM 屬性代理。
+
+### 99.7 這一批的測試與尺規
+
+- 新增：`v3/test/feedback-media.test.js`（C3 核心）、`v3/test/public-share-page.test.js`（A5）、
+  `v3/test/mrt-walk-live.test.js`（A4 打**真實**外部服務）。
+- 擴充：`mrt.test.js`（A4 門檻／狀態機／前端狀態機／路由順序）、`rental-match.test.js`（B1／B2 配對）、
+  `wish-room.test.js`（B1 儲存與 legacy）、`self-traits-taxonomy.test.js`（A3 目錄優先＋後台可見性）、
+  `listing-tools-ui.test.js`（A2）、`wish-room-ui.test.js`（B2）、`feedback.test.js`（C3 UI）。
+- **尺規**：新增四條 C3 路由＋一條 A4 路由 ⇒ **288 → 293 條**，
+  `v3/test/route-data-map.test.js` 與本文件的「現況」表都已同步。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -5922,12 +6054,12 @@ region 4 section 1 → zip    → sid 0
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十七批）** |
+| 判定 | 起點 | **現在（2026-10-01 第九十九批：C3 回饋附圖、A4 步行捷運）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
 | MIXED | — | **0** |
 | 無直接DB | — | **20** |
-| PG | 22 | **268** |
+| PG | 22 | **273** |
 | **缺口（SQLite＋MIXED）** | — | **0** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的
