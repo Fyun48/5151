@@ -1058,13 +1058,11 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   // 第九十七批：每輪最多抓幾個行政區（其餘輪詢到下一輪）。實測 12 個行政區／89 個請求安全。
   const targetLimit = Math.max(1, Number(options.targetLimit ?? process.env.HP_TARGETS_PER_RUN ?? 12));
   const jobList = Array.isArray(jobs) ? jobs : [];
-  // 預算要**平均分給這一輪的每一個 job**，否則後面的 job 永遠分不到（前面的吃光）。
-  const perJob = Math.max(1, Math.floor(targetLimit / Math.max(1, jobList.length)));
-  let targetBudget = targetLimit;
-  let partial = false;
-
-  for (const job of jobList) {
-    if (sourcePaused) break;
+  // 先把每個 job 的目標算出來（純計算），才知道**這一輪有幾個 job 真的需要額度**：
+  // ⚠️ 2026-10-01 踩點：第一版用「全部 job 數」平均（`floor(上限 ÷ 6)`），但正式站一輪的 6 組條件裡
+  // 往往只有 1～2 組是 5168 能抓的 ⇒ 那一組只分到 2 個行政區，12 區的台北要跑 6 輪才掃完。
+  // 改成只用「有目標的 job 數」平均。
+  const planned = jobList.map((job) => {
     const regionId = Number(job.regionId) || 0;
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
     const allTargets = [];
@@ -1072,15 +1070,29 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       const sid = hpSidForDistrict(regionId, sectionId);
       if (sid && !allTargets.some((row) => row.sid === sid)) allTargets.push({ sid, sectionId });
     }
-    // 預算用完：這個 job 這一輪不抓（其餘行政區下一輪），也不可以偷偷多抓一個。
-    // 要推一個 partial 的批次上去：否則 watcher 會把「沒抓到的 job」記成失敗輪
-    //（那是第九十六批修過的同一類誤記）。
+    return { job, regionId, allTargets };
+  });
+  const applicableJobs = planned.filter((row) => row.allTargets.length > 0).length;
+  const perJob = Math.max(1, Math.floor(targetLimit / Math.max(1, applicableJobs)));
+  let targetBudget = targetLimit;
+  let partial = false;
+
+  for (const { job, regionId, allTargets } of planned) {
+    if (sourcePaused) break;
+    // ① 「這個縣市 5168 沒有對應 sid」⇒ 這一組覆蓋條件對它不適用（不是失敗）。
+    if (!allTargets.length) {
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `5168 · 地區 ${regionId}`, href: `${HP_SITE}/` }, total: 0, listings: [], errors: [], applicable: false });
+      continue;
+    }
+    // ② 額度用完：這個 job 這一輪不抓（其餘行政區下一輪），也不可以偷偷多抓一個。
+    //    要推一個 partial 的批次，否則 watcher 會把「沒抓到的 job」記成失敗輪
+    //   （那是第九十六批修過的同一類誤記）。
     if (targetBudget <= 0) {
       partial = true;
       batches.push({ searchUrl: job.searchUrl, parsed: { label: `5168 · 地區 ${regionId}`, href: `${HP_SITE}/` }, total: 0, listings: [], errors: [], applicable: true, partial: true });
       continue;
     }
-    // 這一輪只取「輪詢窗」裡的那一段（每個 job 平均分配到的額度）。
+    // ③ 這一輪只取「輪詢窗」裡的那一段（額度已平均分配給有目標的 job）。
     const targets = rotateSourceTargets(allTargets, {
       limit: Math.min(targetBudget, perJob),
       // ⚠️ 不可以用 `Number(options.now) || Date.now()`：`now: 0` 是合法值卻會被當成沒給，
@@ -1090,12 +1102,6 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
     });
     if (targets.length < allTargets.length) partial = true;
     targetBudget -= targets.length;
-    if (!targets.length) {
-      // 「這個縣市 5168 沒有對應 sid」⇒ 這一組覆蓋條件對它不適用（不是失敗）：
-      // 推一個 applicable:false 的批次，watcher 會把這一輪記成「不適用」而不是「失敗」。
-      batches.push({ searchUrl: job.searchUrl, parsed: { label: `5168 · 地區 ${regionId}`, href: `${HP_SITE}/` }, total: 0, listings: [], errors: [], applicable: false });
-      continue;
-    }
 
     const listings = [];
     const errors = [];

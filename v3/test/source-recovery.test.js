@@ -641,3 +641,26 @@ test("每輪上限要平均分給每個 job（後面的 job 不能被前面的�
   assert.equal(batches[2].partial, true);
   assert.equal(batches[2].listings.length, 0);
 });
+
+test("額度只分給「有目標的 job」（正式站一輪常常只有 1～2 組是 5168 能抓的）", async () => {
+  const hp = await import("../src/houseprice.js");
+  // 6 個 job，只有台北（region 1）有 5168 的 sid；其餘 5 個縣市不適用。
+  const jobs = [
+    { regionId: 1, sectionIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], priceMin: 0, priceMax: 0, searchUrl: "taipei" },
+    { regionId: 19, sectionIds: [295, 296, 297], priceMin: 0, priceMax: 0, searchUrl: "r19" },
+    { regionId: 17, sectionIds: [243, 244, 245], priceMin: 0, priceMax: 0, searchUrl: "r17" },
+    { regionId: 15, sectionIds: [206, 207, 208], priceMin: 0, priceMax: 0, searchUrl: "r15" },
+    { regionId: 13, sectionIds: [167, 168, 169], priceMin: 0, priceMax: 0, searchUrl: "r13" },
+    { regionId: 14, sectionIds: [185, 186, 187], priceMin: 0, priceMax: 0, searchUrl: "r14" },
+  ];
+  const sids = [];
+  const batches = await hp.fetchHpCoveringListings(jobs, {
+    pages: 1, gapMs: 0, detailLimit: 0, addressDetailLimit: 0, now: 0, targetLimit: 12,
+    getHtml: async (url) => { if (String(url).includes("/list/")) sids.push(String(url).match(/(\d+)_zip/)?.[1]); return ""; },
+  });
+  // 只有一個 job 需要額度 ⇒ 12 個行政區全部給它（台北一輪掃完），不會被其他 5 個不適用的 job 稀釋。
+  assert.equal(sids.length, 12, `只有一個適用的 job ⇒ 額度 12 全給它，實際 ${sids.length}`);
+  assert.equal(batches.length, 6, "六個 job 都要有批次（不適用的帶 applicable:false）");
+  assert.equal(batches.filter((b) => b.applicable === false).length, 5, "五個不適用的 job 要標 applicable:false");
+  assert.equal(batches[0].partial, false, "12 個目標剛好用完額度 ⇒ 不算 partial");
+});

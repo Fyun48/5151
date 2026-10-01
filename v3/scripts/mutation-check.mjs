@@ -4473,6 +4473,13 @@ const SRCRECOVERY2_MUTATIONS = [
     expect: "不可以在同一輪空等",
   },
   {
+    name: "額度用「全部 job 數」平均（不適用的 job 把額度稀釋掉，台北要跑 6 輪）",
+    file: "v3/src/houseprice.js",
+    from: "  const perJob = Math.max(1, Math.floor(targetLimit / Math.max(1, applicableJobs)));",
+    to: "  const perJob = Math.max(1, Math.floor(targetLimit / Math.max(1, planned.length)));",
+    expect: "額度只分給「有目標的 job」",
+  },
+  {
     name: "上限不分給每個 job（前面的 job 吃光額度，後面的永遠抓不到）",
     file: "v3/src/houseprice.js",
     from: "      limit: Math.min(targetBudget, perJob),",
