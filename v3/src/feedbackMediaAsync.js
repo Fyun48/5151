@@ -124,6 +124,73 @@ export async function countOpenFeedbackAttachmentsAsync(userId, options = {}) {
 }
 
 /**
+ * R4：在**同一個交易**內「序列化該使用者 → 數未送出附件 → 插入」。
+ *
+ * 為什麼不能只用一句 `INSERT … SELECT … WHERE (SELECT COUNT(*) …) < 4`：
+ * PG 的 Read Committed 之下，兩個並行交易可以各自看到「還沒有人插入」的快照，
+ * 於是兩邊都通過子查詢（官方 transaction-iso #XACT-READ-COMMITTED）。
+ * 所以先用 `pg_advisory_xact_lock(<使用者>)` 把**同一個使用者**的上傳排隊，
+ * 拿到鎖之後再 COUNT；鎖在交易結束時自動釋放。不同使用者不會互相阻塞。
+ *
+ * 回傳新 id，或 `0` 代表超過上限（呼叫端負責把這次寫出的檔案清掉）。
+ */
+export const FEEDBACK_ATTACHMENT_TX_SQL = {
+  begin: "BEGIN",
+  lock: "SELECT pg_advisory_xact_lock(?)",
+  count: "SELECT COUNT(*) AS n FROM feedback_attachment WHERE user_id=? AND feedback_id=0 AND deleted_at IS NULL",
+  insert: `INSERT INTO feedback_attachment(user_id, storage_key, thumb_key, mime, format, width, height, bytes, digest, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
+  commit: "COMMIT",
+  rollback: "ROLLBACK",
+};
+
+// advisory lock 的鍵：把使用者 id 放到一個固定命名空間，避免與其他功能的 lock 撞號。
+export const FEEDBACK_ATTACHMENT_LOCK_NAMESPACE = 5151001;
+
+export function feedbackAttachmentLockKey(uid) {
+  return FEEDBACK_ATTACHMENT_LOCK_NAMESPACE * 1000 + (Number(uid) || 0);
+}
+
+/**
+ * 在一個**真的交易**裡跑 `pg_advisory_xact_lock` → COUNT → INSERT。
+ *
+ * ⚠️ 真的 PG 路徑一定要走 `pgDriver.withTransaction()`：`pgDriver.query()` 是連線池，
+ * 兩次呼叫可能落在不同連線上，用語句送 `BEGIN`／`COMMIT` **不會**形成同一個交易，
+ * advisory lock 也就白鎖了。注入式 exec（離線測試／審閱探針）沒有連線池，
+ * 才用語句模擬同一個交易。
+ */
+async function runInQuotaTransaction(options, fn) {
+  if (options.exec) {
+    const exec = await pgExec(options);
+    await exec(FEEDBACK_ATTACHMENT_TX_SQL.begin, []);
+    try {
+      const out = await fn(exec);
+      await exec(FEEDBACK_ATTACHMENT_TX_SQL.commit, []);
+      return out;
+    } catch (error) {
+      try { await exec(FEEDBACK_ATTACHMENT_TX_SQL.rollback, []); } catch { /* 已經結束 */ }
+      throw error;
+    }
+  }
+  const pgDriver = options.pgDriver || (await sharedPgDriver());
+  await ensureFeedbackMediaStoreOnce(pgDriver);
+  return pgDriver.withTransaction(async (client) => {
+    const exec = async (sql, params = []) => rowsOf(await client.query(toPostgresSql(sql), params));
+    return fn(exec);
+  });
+}
+
+async function insertAttachmentWithinQuota(options, { uid, row }) {
+  return runInQuotaTransaction(options, async (exec) => {
+    await exec(FEEDBACK_ATTACHMENT_TX_SQL.lock, [feedbackAttachmentLockKey(uid)]);
+    const used = Number(firstRow(await exec(FEEDBACK_ATTACHMENT_TX_SQL.count, [Number(uid)]))?.n) || 0;
+    if (used >= FEEDBACK_ATTACHMENT_MAX) return 0;
+    const rows = rowsOf(await exec(FEEDBACK_ATTACHMENT_TX_SQL.insert, row));
+    return Number(firstRow(rows)?.id) || 0;
+  });
+}
+
+/**
  * 上傳。**刻意 fail-closed**：PG 寫入失敗不靜默回退本機（否則正式站會出現
  * 「PG 沒有、本機有」的孤兒檔），與 `saveMemberMediaAsync` 同一個政策。
  */
@@ -132,13 +199,10 @@ export async function saveFeedbackAttachmentAsync(userId, buffer, options = {}) 
   const exec = await pgExec(options);
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能上傳圖片", 401, "login_required");
-  const used = Number(firstRow(await exec(
-    "SELECT COUNT(*) AS n FROM feedback_attachment WHERE user_id=? AND feedback_id=0 AND deleted_at IS NULL",
-    [uid],
-  ))?.n) || 0;
-  if (used >= FEEDBACK_ATTACHMENT_MAX) {
-    throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片，請先刪除再上傳`, 409, "attachment_limit");
-  }
+  // ⚠️ R4（第二輪）：**不能在這裡先 COUNT**。COUNT 與 INSERT 之間有 `await` 解碼，而且 PG 的
+  // Read Committed 快照會讓不同交易同時看到相同的計數（官方 transaction-iso #XACT-READ-COMMITTED）
+  // ⇒ 五張並行會全部通過。配額改由下面的 `insertAttachmentWithinQuota()` 在同一個交易內
+  // 取該使用者的 advisory lock 後 COUNT + INSERT 保證。
   // 驗證（含真的解碼）與寫檔兩個 driver 共用；只有 SQL 由這裡以 PG 方言送出。
   const processed = await validateFeedbackImage(buffer, options);
   const key = randomBytes(16).toString("hex");
@@ -152,13 +216,12 @@ export async function saveFeedbackAttachmentAsync(userId, buffer, options = {}) 
     written.push(mainName);
     writeFileSync(path.join(dir, thumbName), processed.thumb.buffer);
     written.push(thumbName);
-    const rows = await exec(
-      `INSERT INTO feedback_attachment(user_id, storage_key, thumb_key, mime, format, width, height, bytes, digest, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`,
-      [uid, mainName, thumbName, processed.mime, processed.format,
+    const id = await insertAttachmentWithinQuota(options, {
+      uid,
+      row: [uid, mainName, thumbName, processed.mime, processed.format,
         processed.main.width, processed.main.height, processed.main.buffer.length, processed.digest, ts],
-    );
-    const id = Number(firstRow(rows)?.id) || 0;
+    });
+    if (!id) throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片，請先刪除再上傳`, 409, "attachment_limit");
     return publicAttachmentShape({
       id,
       bytes: processed.main.buffer.length,
@@ -176,14 +239,17 @@ export async function saveFeedbackAttachmentAsync(userId, buffer, options = {}) 
 
 export async function deleteFeedbackAttachmentAsync(userId, id, options = {}) {
   return withFallback(options, { write: true }, async (exec) => {
-    const rows = await exec(
-      "SELECT * FROM feedback_attachment WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL",
-      [Number(id), Number(userId)],
-    );
+    // R5（第二輪）：單句條件式 UPDATE … RETURNING。先 SELECT 再 `WHERE id=?` UPDATE 會與 claim
+    // 競態 —— SELECT 之後若另一筆交易 claim 成功，這裡照樣會把已綁定的列標成刪除並 unlink 實體檔。
+    const ts = (options.now instanceof Date ? options.now : new Date(options.now || Date.now())).toISOString();
+    const rows = rowsOf(await exec(
+      `UPDATE feedback_attachment SET deleted_at=?
+       WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL
+       RETURNING id, storage_key, thumb_key`,
+      [ts, Number(id), Number(userId)],
+    ));
     const row = firstRow(rows);
     if (!row) throw httpError("找不到這張圖片，或已經送出回饋", 404, "attachment_not_found");
-    const ts = (options.now instanceof Date ? options.now : new Date(options.now || Date.now())).toISOString();
-    await exec("UPDATE feedback_attachment SET deleted_at=? WHERE id=?", [ts, Number(row.id)]);
     removeFeedbackAttachmentFiles(row);
     return { ok: true, id: Number(row.id) };
   }, () => deleteFeedbackAttachmentSync(sqliteHandle(), userId, id, options));
@@ -204,7 +270,8 @@ export async function listFeedbackAttachmentsForAsync(feedbackIds, options = {})
     for (const row of rows) {
       const key = Number(row.feedback_id);
       if (!out.has(key)) out.set(key, []);
-      out.get(key).push(publicAttachmentShape(row));
+      // 後台列表讀的是**已送出**的附件 ⇒ 一定要 admin scope（owner 路由要求 feedback_id = 0）。
+      out.get(key).push(publicAttachmentShape(row, { scope: "admin" }));
     }
     return out;
   }, () => listFeedbackAttachmentsForSync(sqliteHandle(), ids));
@@ -217,7 +284,8 @@ export async function listOpenFeedbackAttachmentsAsync(userId, options = {}) {
       "SELECT * FROM feedback_attachment WHERE user_id=? AND feedback_id=0 AND deleted_at IS NULL ORDER BY id ASC",
       [Number(userId)],
     );
-    return rows.map((row) => publicAttachmentShape(row, { scope: "admin" }));
+    // 會員自己的**未送出**附件 ⇒ 一定要 owner scope（admin 路由會員會拿到 403）。
+    return rows.map((row) => publicAttachmentShape(row, { scope: "owner" }));
   }, () => listOpenFeedbackAttachmentsSync(sqliteHandle(), userId));
 }
 
@@ -253,6 +321,11 @@ export async function listFeedbackAttachmentsAsync(feedbackId, options = {}) {
 export async function claimFeedbackAttachmentsAsync(exec, userId, ids, feedbackId, now = new Date()) {
   const list = [...new Set((Array.isArray(ids) ? ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!list.length) return 0;
+  // R4（第二輪）：claim 自己也要擋上限（去重後仍只允許 4 張）。超過就丟錯，
+  // 讓呼叫端的回饋交易整筆 rollback（不會留下部分 claim）。
+  if (list.length > FEEDBACK_ATTACHMENT_MAX) {
+    throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片`, 400, "attachment_limit");
+  }
   const marks = list.map(() => "?").join(",");
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
   // 呼叫端傳進來的 exec 有兩種形狀（裸陣列 / `{rows,rowCount}`，feedbackAsync 的 tx 是後者），
@@ -282,8 +355,16 @@ export async function sweepOrphanFeedbackAttachmentsAsync(options = {}) {
     let removed = 0;
     for (const row of rows) {
       try {
-        await exec("UPDATE feedback_attachment SET deleted_at=? WHERE id=?", [new Date(ts).toISOString(), Number(row.id)]);
-        removeFeedbackAttachmentFiles(row);
+        // R5（第二輪）：條件式 UPDATE，而且只依 RETURNING 勝出的那一列刪實體檔
+        // （掃描與更新之間被 claim 走的列不可以被刪）。
+        const claimed = rowsOf(await exec(
+          `UPDATE feedback_attachment SET deleted_at=?
+           WHERE id=? AND feedback_id=0 AND deleted_at IS NULL
+           RETURNING id, storage_key, thumb_key`,
+          [new Date(ts).toISOString(), Number(row.id)],
+        ));
+        if (!claimed.length) continue;
+        removeFeedbackAttachmentFiles(firstRow(claimed));
         removed += 1;
       } catch { /* 單列失敗不影響其他列 */ }
     }

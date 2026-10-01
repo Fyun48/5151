@@ -296,8 +296,12 @@ test("R3：前台預覽用本機 blob、上傳中鎖住送出、換世代丟棄�
   // 上傳中鎖住送出
   assert.match(html, /if \(submit\) submit\.disabled = feedbackImageBusy;/);
   assert.match(html, /if \(feedbackImageBusy\) \{\s*\n\s*if \(msg\) \{ msg\.textContent = "圖片還在上傳/);
-  // 換世代：關閉／重開對話框之後，較早的回應要被丟棄
+  // 換世代：關閉／重開對話框之後，較早的回應要被丟棄。
+  // 行為面（A／B 交錯、409 混入、busy 被誤清）由 feedback-media-ui-generation.test.js 用
+  // 實際的頁面函式跑；這裡只釘住「有這個機制」的字面，避免頁面被改回舊行為卻沒人發現。
   assert.match(html, /let feedbackImageGeneration = 0;/);
-  assert.match(html, /if \(generation !== feedbackImageGeneration\) \{/);
+  assert.match(html, /const inGeneration = \(\) => generation === feedbackImageGeneration;/);
   assert.match(html, /feedbackImageGeneration \+= 1;/);
+  // 收尾（清 busy／訊息）必須在同一個世代內
+  assert.match(html, /if \(inGeneration\(\)\) \{\n\s*feedbackImageBusy = false;/);
 });

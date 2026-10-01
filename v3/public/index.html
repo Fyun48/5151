@@ -12423,6 +12423,8 @@
     async function clearFeedbackImages({ silent = true } = {}) {
       // R3：換世代 —— 這一輪之後才回來的上傳結果一律丟棄。
       feedbackImageGeneration += 1;
+      // 上一代的 busy 由這一代接手管理（舊的那一輪回來時不會再動它）。
+      feedbackImageBusy = false;
       const rows = [...feedbackAttachments];
       rows.forEach(releaseFeedbackPreview);
       feedbackAttachments = [];
@@ -12433,57 +12435,73 @@
     async function addFeedbackImages(files) {
       const list = [...(files || [])];
       if (!list.length || feedbackImageBusy) return;
+      // R3（第二輪）：這一輪上傳的**所有**狀態更新（成功、錯誤、busy、訊息、清單）都綁在同一個
+      // 世代上。舊版只保護成功結果，於是「A 還沒回來 → 關閉／重開 → B 開始 → A 回來」
+      // 會讓 A 把 B 的 busy 清成 false（B 還沒完成就能送出），A 的 409 也會把舊附件混進新對話框。
       const generation = feedbackImageGeneration;
+      const inGeneration = () => generation === feedbackImageGeneration;
       const room = FEEDBACK_IMAGE_MAX - feedbackAttachments.length;
       if (room <= 0) {
         feedbackImageMsg(`每則回饋最多 ${FEEDBACK_IMAGE_MAX} 張圖片，請先刪除再上傳。`);
         return;
       }
       feedbackImageBusy = true;
+      renderFeedbackImageTray();
       const accepted = list.slice(0, room);
       const skipped = [];
       if (list.length > room) skipped.push(`超過 ${FEEDBACK_IMAGE_MAX} 張的部分已忽略 ${list.length - room} 張`);
-      for (const file of accepted) {
-        const type = String(file?.type || "").toLowerCase();
-        if (!FEEDBACK_IMAGE_TYPES.includes(type)) { skipped.push(`「${file.name || "貼上的圖片"}」不是 PNG／JPEG／WebP`); continue; }
-        if (Number(file.size) > FEEDBACK_IMAGE_MAX_BYTES) { skipped.push(`「${file.name || "貼上的圖片"}」超過 1MB`); continue; }
-        try {
-          const res = await fetch("/api/feedback/attachments", {
-            method: "POST",
-            headers: { "Content-Type": type || "application/octet-stream" },
-            body: file,
-          });
-          const data = await readApi(res);
-          if (!res.ok) {
-            // 伺服器說「已達上限」時會一併回傳目前還沒送出的附件（可能來自上一次沒送完的
-            // 工作階段）。把它們接回清單，使用者才看得到、刪得掉。
-            if (Array.isArray(data.attachments) && data.attachments.length) {
-              const known = new Set(feedbackAttachments.map((row) => row.id));
-              for (const row of data.attachments) {
-                if (!known.has(row.id)) feedbackAttachments.push({ id: row.id, thumb_url: row.thumb_url, preview_url: "" });
+      try {
+        for (const file of accepted) {
+          if (!inGeneration()) return; // 對話框已關閉／重開 ⇒ 不再繼續（收尾交給 finally）
+          const type = String(file?.type || "").toLowerCase();
+          if (!FEEDBACK_IMAGE_TYPES.includes(type)) { skipped.push(`「${file.name || "貼上的圖片"}」不是 PNG／JPEG／WebP`); continue; }
+          if (Number(file.size) > FEEDBACK_IMAGE_MAX_BYTES) { skipped.push(`「${file.name || "貼上的圖片"}」超過 1MB`); continue; }
+          try {
+            const res = await fetch("/api/feedback/attachments", {
+              method: "POST",
+              headers: { "Content-Type": type || "application/octet-stream" },
+              body: file,
+            });
+            const data = await readApi(res);
+            if (!inGeneration()) {
+              // 已經換世代：成功的要刪掉，失敗的連提都不要提（那是上一個對話框的事）。
+              if (res.ok && data?.id) {
+                fetch(`/api/feedback/attachments/${encodeURIComponent(data.id)}`, { method: "DELETE" }).catch(() => {});
               }
-              renderFeedbackImageTray();
+              return;
             }
-            throw new Error(data.error || "上傳失敗");
-          }
-          // R3：對話框已經關閉／重開（世代換了）就把這一張丟掉，不要混進新的回饋。
-          if (generation !== feedbackImageGeneration) {
-            fetch(`/api/feedback/attachments/${encodeURIComponent(data.id)}`, { method: "DELETE" }).catch(() => {});
+            if (!res.ok) {
+              // 伺服器說「已達上限」時會一併回傳目前還沒送出的附件（可能來自上一次沒送完的
+              // 工作階段）。把它們接回清單，使用者才看得到、刪得掉。
+              if (Array.isArray(data.attachments) && data.attachments.length) {
+                const known = new Set(feedbackAttachments.map((row) => row.id));
+                for (const row of data.attachments) {
+                  if (!known.has(row.id)) feedbackAttachments.push({ id: row.id, thumb_url: row.thumb_url, preview_url: "" });
+                }
+                renderFeedbackImageTray();
+              }
+              throw new Error(data.error || "上傳失敗");
+            }
+            let previewUrl = "";
+            try { previewUrl = URL.createObjectURL(file); } catch { previewUrl = ""; }
+            feedbackAttachments.push({ id: data.id, thumb_url: data.thumb_url, preview_url: previewUrl });
+            renderFeedbackImageTray();
+          } catch (error) {
+            // 一張失敗就停手並保留已成功的；已寫好的內容與其他合格圖片都不動。
+            skipped.push(error.message || "上傳失敗");
             break;
           }
-          let previewUrl = "";
-          try { previewUrl = URL.createObjectURL(file); } catch { previewUrl = ""; }
-          feedbackAttachments.push({ id: data.id, thumb_url: data.thumb_url, preview_url: previewUrl });
+        }
+      } finally {
+        // **唯一**清 busy 的地方，而且只在同一個世代才收尾。
+        // 換世代時 busy 已經由新世代（`clearFeedbackImages()`／開啟對話框）接手，
+        // 舊的這一輪回來時絕對不能再動它 —— 否則會讓還在跑的 B 提前解鎖送出。
+        if (inGeneration()) {
+          feedbackImageBusy = false;
           renderFeedbackImageTray();
-        } catch (error) {
-          // 一張失敗就停手並保留已成功的；已寫好的內容與其他合格圖片都不動。
-          skipped.push(error.message || "上傳失敗");
-          break;
+          feedbackImageMsg(skipped.length ? skipped.join("；") : "已加入附圖。", !skipped.length);
         }
       }
-      feedbackImageBusy = false;
-      renderFeedbackImageTray();
-      feedbackImageMsg(skipped.length ? skipped.join("；") : "已加入附圖。", !skipped.length);
     }
     function openFeedbackDialog() {
       const box = $("feedbackDialog");

@@ -228,7 +228,12 @@ test("路由接線：建立路由用 PG 島嶼（而且真的有 import）", () 
   assert.ok(start > 0, "找得到建立路由");
   const body = server.slice(start, server.indexOf("\n});", start));
   // R2：路由在呼叫島嶼前會先做地理編碼（`{ ...body, ...geo }`），錨點要跟著更新。
-  assert.ok(body.includes("await createSelfListingAsync(session.userId, { ...body, ...geo }, {"), "要用島嶼");
+  // R3：會員自己送來的查證欄位一定要先剝掉（`stripServerVerifiedFields`），不可以原樣進島嶼。
+  assert.ok(
+    body.includes("await createSelfListingAsync(session.userId, { ...stripServerVerifiedFields(body), ...geo }, {"),
+    "要用島嶼，而且要先剝掉會員偽造的查證欄位",
+  );
+  assert.ok(!body.includes("{ ...body, ...geo }"), "不得把會員的原始 body 直接送進島嶼");
   assert.ok(body.includes("await assertOwnsMemberMediaUrlsAsync(session.userId, media)"), "素材所有權要用島嶼版");
   assert.ok(body.includes("await attributeShareAsync(req, session.userId, \"listing\")"), "分享歸因要用 async 版");
   for (const banned of ["createSelfListing(session.userId", "assertOwnsMemberMediaUrls(session.userId", "attributeShare(req,"]) {

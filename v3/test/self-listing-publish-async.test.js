@@ -299,7 +299,14 @@ test("路由接線：兩條公開路由都用 PG 島嶼（而且真的有 import
   };
   const selfPublish = bodyOf('app.post("/api/self-listings/:id/publish"');
   // R2：路由在呼叫島嶼前會先做地理編碼（`{ ...body, ...geo }`），錨點要跟著更新。
-  assert.ok(selfPublish.includes("await publishImportedDraftListingAsync(session.userId, req.params.id, { ...body, ...geo }, {"), "要用島嶼");
+  // R3：會員自己送來的查證欄位一定要先剝掉（`stripServerVerifiedFields`），不可以原樣進島嶼。
+  assert.ok(
+    selfPublish.includes(
+      "await publishImportedDraftListingAsync(session.userId, req.params.id, { ...stripServerVerifiedFields(body), ...geo }, {",
+    ),
+    "要用島嶼，而且要先剝掉會員偽造的查證欄位",
+  );
+  assert.ok(!selfPublish.includes("{ ...body, ...geo }"), "不得把會員的原始 body 直接送進島嶼");
   assert.ok(selfPublish.includes("await assertOwnsMemberMediaUrlsAsync(session.userId, media)"), "素材所有權要用島嶼版");
   const importPublish = bodyOf('app.post("/api/listing-imports/:id/publish"');
   assert.ok(importPublish.includes("await publishConfirmedImportAsync(session.userId, req.params.id, body, {"), "要用島嶼");

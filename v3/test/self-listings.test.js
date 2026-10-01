@@ -70,6 +70,8 @@ function open() {
       fee_includes TEXT NOT NULL DEFAULT '',
       self_mrt_station TEXT,
       self_mrt_walk_m REAL,
+      self_mrt_state TEXT,
+      self_mrt_nearest_m REAL,
       self_mrt_source TEXT,
       self_mrt_checked_at TEXT,
       first_seen_at TEXT NOT NULL,
@@ -528,6 +530,7 @@ test("R2：費用三態與座標／捷運查證會綁在房源上，重新編輯
     lat: 25.033,
     lng: 121.565,
     geo_source: "self",
+    mrt_state: "within",
     mrt_station: "台北101/世貿",
     mrt_walk_m: 330.4,
     mrt_source: "osrm-foot:v1",
@@ -538,6 +541,7 @@ test("R2：費用三態與座標／捷運查證會綁在房源上，重新編輯
   assert.deepEqual(JSON.parse(row.fee_includes), { utilities: "included", management: "extra" });
   assert.equal(row.lat, 25.033);
   assert.equal(row.geo_source, "self");
+  assert.equal(row.self_mrt_state, "within");
   assert.equal(row.self_mrt_station, "台北101/世貿");
   assert.equal(row.self_mrt_walk_m, 330.4);
   assert.equal(row.self_mrt_source, "osrm-foot:v1");
@@ -557,7 +561,7 @@ test("R2：編輯時沒提到費用就沿用舊值；地址變了但定位不到
   const post = createSelfListing(db, 1, sampleInput({
     fee_includes: { utilities: "included" },
     lat: 25.033, lng: 121.565, geo_source: "self",
-    mrt_station: "台北101/世貿", mrt_walk_m: 330, mrt_source: "osrm-foot:v1",
+    mrt_state: "within", mrt_station: "台北101/世貿", mrt_walk_m: 330, mrt_source: "osrm-foot:v1",
   }), new Date("2026-10-01T00:00:00.000Z"));
   // 這一則要先變成「待刊登草稿」才走得到 publish 路徑（與使用者的實際流程一致）。
   db.prepare("UPDATE listings SET self_status='draft' WHERE post_id=?").run(post.post_id);
@@ -582,6 +586,7 @@ test("R2：編輯時沒提到費用就沿用舊值；地址變了但定位不到
   assert.equal(row2.geo_source, "");
   assert.equal(row2.self_mrt_walk_m, null, "舊地址的步行查證不可以留著");
   assert.equal(row2.self_mrt_station, null);
+  assert.equal(row2.self_mrt_state, null, "查證狀態也要一起失效");
   // 費用是與地址無關的資料 ⇒ 仍然保留
   assert.deepEqual(JSON.parse(row2.fee_includes), { utilities: "included" });
   db.close();

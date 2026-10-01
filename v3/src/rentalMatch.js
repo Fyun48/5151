@@ -182,9 +182,12 @@ export function listingMatchSnapshot(row = {}, { catalog = defaultCatalog() } = 
     // `mrt_walk_m` 是未四捨五入的原始公尺（門檻判定用）；`mrt_walk_km` 只給顯示。
     // R2：站內刊登的查證結果直接存在房源列上（`self_mrt_*`）；其他來源走裝飾後的 `mrt_*`。
     // 兩者都是「已查證的步行路線」才會寫進來。
+    // R2：站內刊登的查證狀態（within／outside）優先；其他來源靠距離自己判。
+    mrt_state: String(row.self_mrt_state || ""),
     mrt_walk_m: nonNegativeNumberOrNull(row.self_mrt_walk_m ?? row.mrt_walk_m),
     // 公里只是顯示值：欄位沒有時由公尺換算（四捨五入到 0.1），
     // **判定一律看 mrt_walk_m**，不要用這個值回推。
+    mrt_nearest_m: nonNegativeNumberOrNull(row.self_mrt_nearest_m ?? row.mrt_nearest_m),
     mrt_walk_km: nonNegativeNumberOrNull(row.self_mrt_walk_km ?? row.mrt_walk_km)
       ?? (() => {
         const m = nonNegativeNumberOrNull(row.self_mrt_walk_m ?? row.mrt_walk_m);
@@ -471,24 +474,31 @@ export function evaluateMatch(listing, wish, {
   // （≤ 1,000 公尺）判定。房源沒有已查證的步行距離就只能是「未確認」，不能算符合。
   if (wish.mrt_walk) {
     const code = "mrt_walk";
+    // R2（第二輪）：站內刊登把查證結果**狀態化**存下來（within／outside／unknown）。
+    // 「已查證超過 1 公里」必須是硬衝突，不可以掉回未確認。
+    const persisted = String(listing.mrt_state || "");
     // 一律用**原始公尺**判定。只知道四捨五入後的公里時採保守規則：
-    // 顯示成 1.0 公里可能是 1,049 公尺 ⇒ 不能算符合（舊資料就是死在這一點）。
-    // ⚠️ 這裡**不能**用 `Number(...)` 直接轉：`Number(null)`／`Number("")` 都是 0，
-    //    會被當成「0 公尺 ⇒ 符合」。（同一個坑在 snapshot 也踩過一次。）
+    // 顯示成 1.0 公里可能是 1,049 公尺 ⇒ 不能算符合。
+    // ⚠️ 不可以用 `Number(...)` 直接轉：`Number(null)`／`Number("")` 都是 0，
+    //    會被當成「0 公尺 ⇒ 符合」（這個坑在本批踩過兩次）。
     const meters = nonNegativeNumberOrNull(listing.mrt_walk_m);
     const kmOnly = nonNegativeNumberOrNull(listing.mrt_walk_km);
     let verdict = "unknown";
-    if (meters !== null) verdict = meters <= MRT_ACCESS_MAX_M ? "within" : "outside";
-    else if (kmOnly !== null) {
+    if (persisted === "outside") {
+      verdict = "outside";
+    } else if (persisted === "within") {
+      verdict = meters !== null && meters <= MRT_ACCESS_MAX_M ? "within" : "unknown";
+    } else if (meters !== null) {
+      verdict = meters <= MRT_ACCESS_MAX_M ? "within" : "outside";
+    } else if (kmOnly !== null) {
       if (kmOnly < MRT_ACCESS_MAX_M / 1000) verdict = "within";
       else if (kmOnly > MRT_ACCESS_MAX_M / 1000) verdict = "outside";
-      else verdict = "unknown";
     }
     if (verdict === "within") {
       matched_conditions.push(code);
       explanation.push(explanationItem("matched", `步行到捷運約 ${Math.round(meters ?? kmOnly * 1000)} 公尺`, code));
     } else if (verdict === "outside") {
-      pushConflict(hard_conflicts, code, "步行到捷運超過 1 公里");
+      pushConflict(hard_conflicts, code, persisted === "outside" ? "步行到捷運超過 1 公里（已查證）" : "步行到捷運超過 1 公里");
     } else {
       unmet_unknowns.push(code);
       explanation.push(explanationItem("unknown", "步行到捷運的距離尚未查證", code));

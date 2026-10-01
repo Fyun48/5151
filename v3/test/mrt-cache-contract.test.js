@@ -55,11 +55,24 @@ test("R1：舊列（source 空／checked 0）不算已查證；新列才讀得�
     app.setCachedMrt(25.42, 121.82, { resolved: true, station: "士林", walk_km: 0.3 });
     const unverified = app.getCachedMrt(25.42, 121.82);
 
+    // 5) 缺值必須維持 NULL，不可以被寫成 0（Number(null) === 0）
+    //    「沒有距離」寫成 0 公尺，讀回來就變成「0 公尺 ⇒ 符合」。
+    //    （註：子腳本在樣板字串裡，這裡不能出現反引號。）
+    app.setCachedMrt(25.43, 121.83, {
+      resolved: true, station: "", walk_m: null, walk_km: null, searched_m: null, source: MRT_CACHE_CONTRACT,
+    });
+    const raw = db.prepare("SELECT station, walk_km, walk_min, ride_km, ride_min, walk_m, searched_m, checked, source FROM mrt_cache WHERE geo_key = ?")
+      .get(makeMrtKey(25.43, 121.83));
+    const noneRead = app.getCachedMrt(25.43, 121.83);
+
     console.log(JSON.stringify({
       legacyRead,
       fresh,
       zero,
       unverified,
+      rawNulls: { walk_km: raw?.walk_km ?? null, walk_m: raw?.walk_m ?? null, searched_m: raw?.searched_m ?? null, ride_km: raw?.ride_km ?? null, checked: raw?.checked ?? null },
+      noneWalkM: noneRead ? noneRead.walk_m : "no-row",
+      noneWalkKm: noneRead ? noneRead.walk_km : "no-row",
       contract: MRT_CACHE_CONTRACT,
     }));
   `);
@@ -72,6 +85,13 @@ test("R1：舊列（source 空／checked 0）不算已查證；新列才讀得�
   assert.equal(out.zero.walk_m, 0);
   assert.equal(out.zero.walk_km, 0);
   assert.equal(out.unverified, null, "沒有契約來源的寫入不可以被當成已查證");
+  // 缺值保持 NULL：欄位裡是 null，讀出來也是 null（不是 0）
+  assert.equal(out.rawNulls.walk_m, null, "walk_m 缺值要存成 NULL，不是 0");
+  assert.equal(out.rawNulls.walk_km, null, "walk_km 缺值要存成 NULL，不是 0");
+  assert.equal(out.rawNulls.searched_m, null, "searched_m 缺值要存成 NULL，不是 0");
+  assert.equal(out.rawNulls.ride_km, null, "ride_km 缺值要存成 NULL，不是 0");
+  assert.equal(out.noneWalkM, null, "讀回來的 walk_m 要是 null（不可以變成 0 公尺）");
+  assert.equal(out.noneWalkKm, null);
 });
 
 test("R1：背景掃描只把「已查證」的座標當成不必重算", () => {

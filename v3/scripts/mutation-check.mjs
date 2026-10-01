@@ -3547,7 +3547,7 @@ const PUBLISHSELF_MUTATIONS = [
   {
     name: "`POST /api/self-listings/:id/publish` 改回同步版",
     file: "v3/src/server.js",
-    from: "    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...body, ...geo }, {",
+    from: "    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...stripServerVerifiedFields(body), ...geo }, {",
     to: "    res.json(publishOwnedDraftFor(session.userId, req.params.id, { ...body, ...geo })); void (({",
     expect: "路由接線",
   },
@@ -3614,7 +3614,7 @@ const CREATESELF_MUTATIONS = [
   {
     name: "`POST /api/self-listings` 改回同步版",
     file: "v3/src/server.js",
-    from: "    const created = await createSelfListingAsync(session.userId, { ...body, ...geo }, {",
+    from: "    const created = await createSelfListingAsync(session.userId, { ...stripServerVerifiedFields(body), ...geo }, {",
     to: "    const created = createSelfListing(session.userId, { ...body, ...geo }); void (({",
     expect: "路由接線",
   },

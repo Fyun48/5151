@@ -217,5 +217,30 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     `server.js` 傳給 `createSelfListingAsync()` 的 `matchCandidates` 是 async 的 PG 島嶼版本，
     SQLite 分支直接往下傳給同步的 `createSelfListing()` ⇒ **每一筆站內刊登都 400**。
     島嶼的 SQLite 分支要傳「同步版」而不是把呼叫端的 async 函式原封不動帶下去。
-18. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+18. 🚨 **批次改檔的腳本中止時，不可以只看 grep 就當成改好了**（2026-10-01 第一百零一批實測）。
+    我寫了一個 python 腳本要改 `feedbackMediaAsync.js` 的 6 處，第 5 處錨點數量不符就丟出例外
+    ⇒ **整個腳本沒有寫檔**；我後來只用 `grep FEEDBACK_ATTACHMENT_MAX` 看到有命中
+    （那其實是 **import 行**）就回報「PG 也修好了」。審閱用注入 executor 跑 PG async 原始碼，
+    五張並行得到 5 筆成功，當場戳破。
+    **規則：批次改檔後要逐檔把改動處 `sed` 讀回來看，不能用「某個字串有出現」代替「這段邏輯改了」。**
+19. **`Number(null) === 0` 在本專案踩過三次**（2026-10-01）：`listingMatchSnapshot`、
+    `evaluateMatch`、`mrtRowToAccess`／`mrtCacheUpsert`。任何「可能缺值的數字」都要走
+    `nullableMeters()` 這類顯式檢查，`Number.isFinite(Number(x))` **擋不住 null**。
+20. **PG 的 `pgDriver.query()` 是連線池**：用語句送 `BEGIN`／`COMMIT` 不會形成同一個交易，
+    `pg_advisory_xact_lock` 也就白鎖。需要交易時一律用 `pgDriver.withTransaction(client => …)`。
+21. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
     ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。
+22. **改一行呼叫形式，會打到「不會編譯錯」的守衛**（2026-10-01 第一百零一批實測）：
+    R3 把兩條路由的 `{ ...body, ...geo }` 改成 `{ ...stripServerVerifiedFields(body), ...geo }`，
+    功能與單元測試都對，卻有 **4 個測試**因此紅：突變工具裡兩組錨點（`mutation-check.mjs`）
+    加上兩條路由接線的靜態字串斷言。它們全部不是「功能壞了」，而是**守衛過期**。
+    **規則：改動任何被字串斷言／突變錨點鎖住的呼叫形式時，順手 `grep` 一次舊字串**
+    （`grep -rn '{ \.\.\.body, \.\.\.geo }' v3/`），把守衛一起更新；更新時順便**加一條「禁止舊形式」的斷言**，
+    否則下次很容易改回去。
+23. **讀取路徑的 schema 升級要 best-effort，不能硬到把整條路徑拖垮**（2026-10-01 第一百零一批實測）：
+    R1 把 `ADD COLUMN IF NOT EXISTS` 搬到 `preloadDecorationProviderAsync()` 之後，
+    `commute-snapshot-async.test.js` 有 3 項紅 —— 那些離線夾具的注入式 `exec(sql, params)`
+    **只接受它認識的 SQL**，收到 DDL 直接丟錯，於是整個讀取路徑陪葬。
+    schema 升級是「盡量做」：用 `try/catch` 包起來、失敗不快取（下次再試），
+    真的升級不了時讓後面那句 SELECT 用 42703 明講缺哪個欄位。想驗「真的有升級」就寫**真 PG 的測試**
+    （見 `v3/test/mrt-cache-schema-live-pg.test.js`：先建舊形狀的表，再讓讀取路徑自己補欄位）。

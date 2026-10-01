@@ -55,7 +55,7 @@ test("R2：一筆真實站內刊登可以跑出費用的符合／不符合／未
 
     const mk = (uid, extra) => app.createSelfListing(uid, { ${BASE_LISTING} ...extra });
     const included = mk(101, { fee_includes: { utilities: "included" }, lat: 25.033, lng: 121.565, geo_source: "self",
-      mrt_station: "台北101/世貿", mrt_walk_m: 620, mrt_source: "osrm-foot:v1" });
+      mrt_state: "within", mrt_station: "台北101/世貿", mrt_walk_m: 620, mrt_source: "osrm-foot:v1" });
     const extraFee = mk(102, { fee_includes: { utilities: "extra" } });
     const unknown = mk(103, {});
 
@@ -103,16 +103,16 @@ test("R2：已查證超過 1 公里的房源在配對上是「不符合」，不
     db.prepare("INSERT INTO users(id, email, created_at) VALUES (109,'renter@example.com','2026-01-01T00:00:00.000Z')").run();
     // 1,049 公尺：顯示會四捨五入成 1.0 公里，但判定必須是不符合
     const far = app.createSelfListing(101, { ${BASE_LISTING} lat: 25.072, lng: 121.548, geo_source: "self",
-      mrt_station: "大直", mrt_walk_m: 1049, mrt_source: "osrm-foot:v1" });
+      mrt_state: "outside", mrt_station: "", mrt_walk_m: null, mrt_nearest_m: 1049, mrt_source: "osrm-foot:v1" });
     const wish = app.createDemand(109, { ${BASE_WISH} fee_includes: [] });
     const row = db.prepare("SELECT * FROM listings WHERE post_id=?").get(far.post_id);
     const w = wishMatchSnapshot(db.prepare("SELECT * FROM demand_posts WHERE id=?").get(wish.id));
     const snap = listingMatchSnapshot(row);
     const r = evaluateMatch(snap, w);
-    console.log(JSON.stringify({ walk_m: snap.mrt_walk_m, walk_km: snap.mrt_walk_km, eligible: r.eligible, hard: r.hard_conflicts.map((x) => x.code) }));
+    console.log(JSON.stringify({ walk_m: snap.mrt_walk_m, nearest_m: snap.mrt_nearest_m, state: snap.mrt_state, eligible: r.eligible, hard: r.hard_conflicts.map((x) => x.code) }));
   `);
-  assert.equal(out.walk_m, 1049, "房源端要保留未四捨五入的公尺");
-  assert.equal(out.walk_km, 1, "顯示值可以是四捨五入後的 1.0");
+  assert.equal(out.state, "outside", "查證狀態要持久化成 outside（不是掉回 unknown）");
+  assert.equal(out.nearest_m, 1049, "「最近但超過」也要保留未四捨五入的公尺");
   assert.equal(out.eligible, false, "1,049 公尺不可以算符合");
-  assert.ok(out.hard.includes("mrt_walk"));
+  assert.ok(out.hard.includes("mrt_walk"), "要產生硬衝突，不是未確認");
 });

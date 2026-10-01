@@ -48,6 +48,7 @@ import {
   splitPersonalSameHouse,
 } from "./userSameHouse.js";
 import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
+import { ensureMrtCacheContractForRead } from "./mrtCacheSchema.js";
 import { createWritePath } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -116,7 +117,7 @@ import {
 } from "./matchVotes.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
-import { MRT_CACHE_CONTRACT, isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
+import { MRT_CACHE_CONTRACT, isWalkableMrtDistance, makeMrtKey, nullableMeters } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
 import { adminMemberView } from "./adminMemberView.js";
@@ -3135,11 +3136,11 @@ export function preloadedDecorationProvider({
       if (!isVerifiedMrtRow(row)) return null;
       return {
         station: String(row.station || ""),
-        walk_m: Number(row.walk_m) >= 0 ? Number(row.walk_m) : null,
-        searched_m: Number(row.searched_m) || null,
+        walk_m: nullableMeters(row.walk_m),
+        searched_m: nullableMeters(row.searched_m),
         source: String(row.source || ""),
-        walk_km: Number(row.walk_km) || null,
-        walk_min: Number(row.walk_min) || null,
+        walk_km: nullableMeters(row.walk_km),
+        walk_min: nullableMeters(row.walk_min),
         ride_km: Number(row.ride_km) || null,
         ride_min: Number(row.ride_min) || null,
         resolved: true,
@@ -3200,6 +3201,17 @@ export async function preloadDecorationProviderAsync({
   requestContext = null,
 } = {}) {
   if (typeof exec !== "function") throw new Error("preloadDecorationProviderAsync requires exec");
+  // R1（第二輪）：裝飾路徑會 SELECT `mrt_cache` 的新欄位（source／checked／walk_m／searched_m），
+  // 所以**讀之前**要先確保既有 PG 表已升級 —— 升級原本只掛在寫入路徑，先用舊 schema 讀會 42703。
+  // 自己注入 loader 的呼叫端自己負責（`loaderIn` 有值就不碰）。
+  if (driver === "postgres" && !loaderIn) {
+    // **best-effort**：升級失敗不讓讀取整批掛掉（離線夾具的 exec 只接受它認識的 SQL，收到 DDL 會丟）。
+    // 真的升級不了時，下面那一句 SELECT 會用 42703 明講缺哪個欄位 —— 比在這裡吞掉好查。
+    // 失敗不快取（`ensureMrtCacheContractForRead` 內部的 WeakMap 會刪掉），下一次呼叫會再試。
+    try {
+      await ensureMrtCacheContractForRead(exec);
+    } catch { /* 見上：交給 SELECT 自己回報 */ }
+  }
   const list = Array.isArray(rows) ? rows : [];
   if (driver === "postgres" && !settings) throw new Error("PG decoration requires settings");
   const conf = settings || getSettings();
@@ -5998,16 +6010,16 @@ export function isVerifiedMrtRow(row) {
 
 export function mrtRowToAccess(row) {
   if (!isVerifiedMrtRow(row)) return null;
-  const walkM = Number(row.walk_m);
   return {
     station: String(row.station || ""),
-    // 原始公尺優先（未四捨五入）；舊列沒有 walk_m 時才落回公里換算。
-    walk_m: Number.isFinite(walkM) ? walkM : (Number(row.walk_km) >= 0 ? Number(row.walk_km) * 1000 : null),
-    walk_km: Number(row.walk_km) >= 0 ? Number(row.walk_km) : null,
-    walk_min: Number(row.walk_min) >= 0 ? Number(row.walk_min) : null,
-    ride_km: Number(row.ride_km) || null,
-    ride_min: Number(row.ride_min) || null,
-    searched_m: Number(row.searched_m) || null,
+    // 只有 `walk_m` 才是「已查證的原始公尺」。**不可以**用顯示用的 `walk_km` 回推
+    // （1.0 公里可能是 1,049 公尺，回推會把不符合變成符合）；缺值就是 null ⇒ 配對端視為未確認。
+    walk_m: nullableMeters(row.walk_m),
+    walk_km: nullableMeters(row.walk_km),
+    walk_min: nullableMeters(row.walk_min),
+    ride_km: nullableMeters(row.ride_km),
+    ride_min: nullableMeters(row.ride_min),
+    searched_m: nullableMeters(row.searched_m),
     source: String(row.source || ""),
     resolved: true,
   };
@@ -6047,24 +6059,24 @@ export function mrtCacheUpsert(lat, lng, access, { now = new Date().toISOString(
   const source = String(access.source || "");
   // 沒有帶來源的呼叫端（舊路徑）一律標成未查證，不會被當成 foot 結果讀回來。
   const verified = source === MRT_CACHE_CONTRACT;
-  const walkM = Number(access.walk_m);
-  const km = Number.isFinite(walkM)
-    ? Math.round((walkM / 1000) * 10) / 10
-    : (Number(access.walk_km) >= 0 ? Number(access.walk_km) : null);
+  // ⚠️ `Number(null) === 0`：直接用 `Number()` 會把「沒有距離」寫成 0 公尺，
+  // 讀回來就變成「0 公尺 ⇒ 符合」。缺值一律保持 null。
+  const walkM = nullableMeters(access.walk_m);
+  const km = walkM !== null ? Math.round((walkM / 1000) * 10) / 10 : nullableMeters(access.walk_km);
   return {
     sql: MRT_CACHE_UPSERT_SQL,
     params: [
       key,
       String(access.station || ""),
-      Number.isFinite(Number(km)) ? Number(km) : null,
-      Number(access.walk_min) >= 0 ? Number(access.walk_min) : null,
-      Number(access.ride_km) || null,
-      Number(access.ride_min) || null,
+      nullableMeters(km),
+      nullableMeters(access.walk_min),
+      nullableMeters(access.ride_km),
+      nullableMeters(access.ride_min),
       now,
       verified ? source : "",
       verified ? 1 : 0,
-      Number.isFinite(walkM) && walkM >= 0 ? walkM : null,
-      Number(access.searched_m) || null,
+      walkM,
+      nullableMeters(access.searched_m),
     ],
   };
 }

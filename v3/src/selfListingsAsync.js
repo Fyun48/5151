@@ -97,6 +97,7 @@ import {
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
 import { isMemberMediaUrl } from "./memberMedia.js";
 import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
+import { MRT_CACHE_CONTRACT } from "./mrt.js";
 import { matchCandidatesAsync } from "./crawlerReads.js";
 import { bestMatch } from "./match.js";
 import { isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
@@ -356,6 +357,9 @@ export const SELF_LISTING_PG_COLUMNS = [
   "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_walk_m DOUBLE PRECISION",
   "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_source TEXT",
   "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_checked_at TEXT",
+  // R2（第二輪）：查證狀態與「最近但超過」的距離。
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_state TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_nearest_m DOUBLE PRECISION",
 ];
 
 const selfListingSchemaReady = new WeakMap();
@@ -635,8 +639,13 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
   const now = options.now ? new Date(options.now) : new Date();
   if (!isPg(options)) {
     const { publishImportedDraftListing } = await import("./selfListings.js");
+    const { listMatchCandidates } = await import("./db.js");
+    // 🚨 與建立路徑同一個坑（2026-10-01 由 HTTP 端到端測試抓到）：`publishImportedDraftListing()` 是
+    // **同步**的，而呼叫端傳進來的 `options.matchCandidates` 是 async 的 PG 島嶼版本 ⇒
+    // `bestMatch()` 收到 Promise，發布時回「(candidates || []) is not iterable」。
+    // SQLite 分支要用同步版（同一組 SQL builder）。
     return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {
-      matchCandidates: options.matchCandidates,
+      matchCandidates: (listing) => listMatchCandidates(listing?.post_id || 0, listing || null),
     });
   }
   try {
@@ -713,6 +722,7 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
       // R2：地址換了就要讓舊座標／舊步行結果失效（與同步版同一條規則）。
       ...resolveSelfListingMeta(input, row, {
         addressChanged: String(row.address || "").trim() !== String(address || "").trim(),
+        mrtCacheContract: MRT_CACHE_CONTRACT,
       }),
     }));
     await setPublisherFaceAsync(run, row.post_id, uid);
@@ -941,7 +951,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
   await run(SELF_OPEN_UPDATE_SQL, selfOpenUpdateParams({
     uid: id, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
     // R2：與同步版共用同一個解析器（費用三態、地址定位、步行捷運查證）。
-    ...resolveSelfListingMeta(input, {}),
+    ...resolveSelfListingMeta(input, {}, { mrtCacheContract: MRT_CACHE_CONTRACT }),
   }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     await registerFixtureRowAsync(run, {

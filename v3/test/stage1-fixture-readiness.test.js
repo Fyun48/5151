@@ -127,6 +127,8 @@ function open() {
       fee_includes TEXT NOT NULL DEFAULT '',
       self_mrt_station TEXT,
       self_mrt_walk_m REAL,
+      self_mrt_state TEXT,
+      self_mrt_nearest_m REAL,
       self_mrt_source TEXT,
       self_mrt_checked_at TEXT,
       first_seen_at TEXT NOT NULL,

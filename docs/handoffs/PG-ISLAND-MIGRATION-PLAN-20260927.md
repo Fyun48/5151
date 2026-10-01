@@ -6149,6 +6149,67 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
 - ⚠️ **新增欄位一定要開新的 migration version**（見 100.2 的踩坑）：這是同一類錯誤的第二次
   （第一次是 `mrt_cache`，那次運氣好寫在 `addColumnsIfMissing()` 的模組初始化路徑上）。
 
+## 二之負七十二、2026-10-01 第一百零一批：第二輪複審的補正（PG 分支漏修）
+
+**來源**：`5151_PR611_Round2_Review_20261001.txt`（審閱 HEAD `682b18d`）。
+
+### 101.1 🚨 這一輪最重要的一件事：我的編輯腳本中止了，我卻以為改好了
+
+第一百批的 R4／R5 我寫了一個 python 腳本要改 `feedbackMediaAsync.js`，腳本裡有 6 個 `sub()`，
+**第 5 個的錨點數量不符而丟出 AssertionError ⇒ 整個腳本沒有寫檔**。
+我後續只用 `grep -n 'FEEDBACK_ATTACHMENT_MAX' feedbackMediaAsync.js` 就看到有命中（那其實是 **import 行**），
+於是回報「PG 也修好了」。審閱用注入 SQLite executor 跑 PG async 原始碼，五張並行得到
+`upload_count=5、claim_count=5、stored_count=5`，當場戳破。
+
+**教訓**：批次改檔的腳本失敗時要**重新確認每一個目標都真的落地**（逐檔 `sed` 讀回來看），
+不能用「某個字串有出現」代替「這一段邏輯改了」。這一條已寫進 §7 的踩坑清單。
+
+### 101.2 R4／R5：PG async 分支
+
+- 上傳配額：`saveFeedbackAttachmentAsync()` 不再先 COUNT。改成 `runInQuotaTransaction()`：
+  **真 PG 走 `pgDriver.withTransaction()`**（`pgDriver.query()` 是連線池，用語句送 `BEGIN`／`COMMIT`
+  不會形成同一個交易、advisory lock 也白鎖），交易內 `pg_advisory_xact_lock(使用者)` →
+  COUNT → INSERT。同一使用者的並行上傳會被序列化；不同使用者不互相阻塞。
+  超過上限回 `0` ⇒ 呼叫端刪掉這次寫出的檔案並回 409。
+- claim：去重後 > 4 ⇒ 400 `attachment_limit`，讓回饋交易整筆 rollback。
+- delete／sweep：改成帶齊條件的 `UPDATE … RETURNING`，只刪 RETURNING 勝出的那一列實體檔。
+
+### 101.3 R1：OSRM 原始公尺、缺值、升級順序
+
+- `osrmWalkKm()` 不再 `Math.round(meters)`：1,000.4 公尺曾被當成 1,000 ⇒ 判成符合。
+  公里只給顯示，判定一律用原始公尺。
+- `nullableMeters()`：`Number(null) === 0` 這個坑在本專案踩過三次（snapshot、`evaluateMatch`、
+  現在是 `mrtRowToAccess`／`mrtCacheUpsert`）。缺值一律 null，而且**不可以用顯示公里回推原始距離**。
+- 升級順序：`MRT_CACHE_PG_COLUMNS` 與升級函式搬到 `v3/src/mrtCacheSchema.js`；
+  **讀取路徑**（`preloadDecorationProviderAsync`）在建立 decoration loader 之前先升級
+  （以 exec 函式身分用 WeakMap 記憶）。升級是 **best-effort**（`try/catch`、失敗不快取）：
+  離線夾具的注入式 `exec` 只接受它認識的 SQL，硬要它跑 DDL 會讓整個讀取路徑陪葬
+  （`commute-snapshot-async` 3 項紅就是這樣來的）。真的升級不了時，讓後面那句 SELECT
+  用 42703 自己講缺哪個欄位。「真的有升級」由**真 PG** 的
+  `v3/test/mrt-cache-schema-live-pg.test.js`（先建舊形狀的表）守住。
+
+### 101.4 R2：查證狀態持久化與偽造防護
+
+- `listings` 加 `self_mrt_state`（within／outside）與 `self_mrt_nearest_m`
+  （**migration version 8**；PG 由 `SELF_LISTING_PG_COLUMNS` 補）。
+  「已查證超過 1 公里」以前會掉回 unknown，現在是 `outside` ⇒ 配對產生硬衝突。
+- `resolveSelfListingMeta()`：缺值保持 null；沿用舊結果時驗來源契約（`MRT_CACHE_CONTRACT`）。
+- HTTP 入口（建立／發布）先 `stripServerVerifiedFields()` 剝掉會員自帶的
+  `lat`／`lng`／`geo_source`／`mrt_*`，只認站方查證結果。
+
+### 101.5 順手抓到的第二個同類缺陷
+
+`publishImportedDraftListingAsync()` 的 SQLite 分支也把 **async** 的 `options.matchCandidates`
+傳給**同步**的 `publishImportedDraftListing()` ⇒ 發布時回「(candidates || []) is not iterable」。
+與第九十九批的建立路徑是同一個坑（那次只修了建立）。由新的 HTTP 端到端測試抓到。
+
+### 101.6 這一輪的測試與變異
+
+- 新增：`feedback-media-live-pg`（真 PG／不同連線）、`feedback-media-ui-generation`
+  （deferred fetch 實跑 A／B 交錯）、`self-listing-http-mrt`（真 HTTP 路由）、
+  `mrt-cache-schema-live-pg`（舊形狀 PG 表 + 讀取路徑升級）。
+- 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。

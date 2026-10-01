@@ -13,6 +13,7 @@ import {
   normalizeSelfTraitsInput,
   selfTraitLabels,
 } from "./selfTraits.js";
+import { MRT_CACHE_CONTRACT } from "./mrt.js";
 import { ensureProfileSchema } from "./profile.js";
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
 import {
@@ -387,26 +388,69 @@ export function resolveListingLocation(input = {}, previous = {}, { addressChang
  *   - 捷運：這次有查證結果就用新的；地址變了 ⇒ 一定清掉（舊結果屬於舊地址）；
  *           地址沒變 ⇒ 沿用 previous
  */
-export function resolveSelfListingMeta(input = {}, previous = {}, { addressChanged = false } = {}) {
+export const MRT_STATES = Object.freeze(["within", "outside", "unknown"]);
+
+/** 伺服器端查證結果的欄位名（HTTP 入口要**剝掉**會員自己帶的這一組，只認站方查證）。 */
+export const SERVER_MRT_FIELDS = Object.freeze([
+  "lat", "lng", "geo_source",
+  "mrt_state", "mrt_station", "mrt_walk_m", "mrt_nearest_m", "mrt_source", "mrt_checked_at",
+]);
+
+/** 把會員送來的伺服器查證欄位剝掉（只留站方自己查到的）。 */
+export function stripServerVerifiedFields(input = {}) {
+  const out = { ...input };
+  for (const key of SERVER_MRT_FIELDS) delete out[key];
+  return out;
+}
+
+function mrtStateOf(value) {
+  const state = String(value || "");
+  return MRT_STATES.includes(state) ? state : "";
+}
+
+/**
+ * 沿用舊的查證結果時要先驗契約：來源不是目前的契約字串（＝舊的車用 profile 或偽造值）
+ * 一律不沿用。`mrtCacheContract` 由呼叫端注入（避免 selfListings ↔ mrt 的循環相依）。
+ */
+function usablePreviousMrt(previous, contract) {
+  const state = mrtStateOf(previous?.self_mrt_state);
+  if (!state) return null;
+  const source = String(previous?.self_mrt_source || "");
+  if (!source || (contract && source !== contract)) return null;
+  return {
+    state,
+    station: String(previous.self_mrt_station || ""),
+    walk_m: nullableOrNull(previous.self_mrt_walk_m),
+    nearest_m: nullableOrNull(previous.self_mrt_nearest_m),
+    source,
+    checked_at: String(previous.self_mrt_checked_at || ""),
+  };
+}
+
+function nullableOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+export function resolveSelfListingMeta(input = {}, previous = {}, { addressChanged = false, mrtCacheContract = "" } = {}) {
   const location = resolveListingLocation(input, previous, { addressChanged });
   const feeIncludes = resolveListingFeeIncludes(input, previous);
-  const walkM = Number(input.mrt_walk_m);
-  const hasFresh = Number.isFinite(walkM) && walkM >= 0 && String(input.mrt_source || "");
+  const state = mrtStateOf(input.mrt_state);
+  const source = String(input.mrt_source || "");
   let mrt = null;
-  if (hasFresh) {
+  if (state && source) {
     mrt = {
+      state,
       station: String(input.mrt_station || ""),
-      walk_m: walkM,
-      source: String(input.mrt_source),
+      // ⚠️ 缺值一律保持 null —— `Number(null)` 是 0，會變成「0 公尺 ⇒ 符合」。
+      walk_m: nullableOrNull(input.mrt_walk_m),
+      nearest_m: nullableOrNull(input.mrt_nearest_m),
+      source,
       checked_at: String(input.mrt_checked_at || new Date().toISOString()),
     };
-  } else if (!addressChanged && Number.isFinite(Number(previous.self_mrt_walk_m)) && Number(previous.self_mrt_walk_m) >= 0) {
-    mrt = {
-      station: String(previous.self_mrt_station || ""),
-      walk_m: Number(previous.self_mrt_walk_m),
-      source: String(previous.self_mrt_source || ""),
-      checked_at: String(previous.self_mrt_checked_at || ""),
-    };
+  } else if (!addressChanged) {
+    mrt = usablePreviousMrt(previous, mrtCacheContract);
   }
   return { feeIncludes, lat: location.lat, lng: location.lng, geoSource: location.geo_source, mrt };
 }
@@ -430,6 +474,10 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_mrt_walk_m REAL",
     "ALTER TABLE listings ADD COLUMN self_mrt_source TEXT",
     "ALTER TABLE listings ADD COLUMN self_mrt_checked_at TEXT",
+    // R2（第二輪）：查證**狀態**要持久化。只存「符合的距離」會讓「已查證不符合」（none）掉回
+    // 未確認，配對就不會產生硬衝突。`nearest_m` 是「最近但超過」的那一筆，供顯示與除錯。
+    "ALTER TABLE listings ADD COLUMN self_mrt_state TEXT",
+    "ALTER TABLE listings ADD COLUMN self_mrt_nearest_m REAL",
     "ALTER TABLE listings ADD COLUMN fixture_namespace TEXT",
   ]) {
     try {
@@ -782,12 +830,12 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     fee_includes: parseListingFeeIncludes(row),
     fee_include_labels: listingFeeIncludeLabels(row),
     mrt_station: String(row.self_mrt_station || ""),
-    mrt_walk_m: Number.isFinite(Number(row.self_mrt_walk_m)) && Number(row.self_mrt_walk_m) >= 0
-      ? Number(row.self_mrt_walk_m)
-      : null,
+    mrt_state: mrtStateOf(row.self_mrt_state),
+    mrt_walk_m: nullableOrNull(row.self_mrt_walk_m),
+    mrt_nearest_m: nullableOrNull(row.self_mrt_nearest_m),
     mrt_walk_km: (() => {
-      const m = Number(row.self_mrt_walk_m);
-      return Number.isFinite(m) && m >= 0 ? Math.round((m / 1000) * 10) / 10 : null;
+      const m = nullableOrNull(row.self_mrt_walk_m);
+      return m === null ? null : Math.round((m / 1000) * 10) / 10;
     })(),
     mrt_checked_at: String(row.self_mrt_checked_at || ""),
     listing_values: (() => {
@@ -973,6 +1021,8 @@ export const SELF_OPEN_UPDATE_SQL = `UPDATE listings SET
       self_mrt_walk_m = ?,
       self_mrt_source = ?,
       self_mrt_checked_at = ?,
+      self_mrt_state = ?,
+      self_mrt_nearest_m = ?,
       contact_name = ?,
       contact_role = ?,
       mobile = ?,
@@ -997,9 +1047,12 @@ export function selfOpenUpdateParams({
     Number.isFinite(Number(lng)) && Number(lng) !== 0 ? Number(lng) : null,
     String(geoSource || ""),
     mrt?.station ? String(mrt.station) : null,
-    mrt && Number.isFinite(Number(mrt.walk_m)) ? Number(mrt.walk_m) : null,
+    // 缺值保持 null（`Number(null)` 是 0，會變成「0 公尺 ⇒ 符合」）。
+    nullableOrNull(mrt?.walk_m),
     mrt?.source ? String(mrt.source) : null,
     mrt?.checked_at ? String(mrt.checked_at) : null,
+    mrt?.state ? String(mrt.state) : null,
+    nullableOrNull(mrt?.nearest_m),
     contactName || roleName, roleName, phone, phone, lineUrl, postId,
   ];
 }
@@ -1095,7 +1148,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
   db.prepare(SELF_OPEN_UPDATE_SQL).run(...selfOpenUpdateParams({
     uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
     // R2：屋主填的費用三態、地址定位結果與捷運查證結果都綁在這一列上。
-    ...resolveSelfListingMeta(input, {}),
+    ...resolveSelfListingMeta(input, {}, { mrtCacheContract: MRT_CACHE_CONTRACT }),
   }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     registerFixtureRow(db, {
@@ -1366,6 +1419,7 @@ export const SELF_PUBLISH_UPDATE_SQL = `UPDATE listings SET
       self_traits=?, self_deposit=?, self_pledge_at=?,
       fee_includes=?, lat=?, lng=?, geo_source=?,
       self_mrt_station=?, self_mrt_walk_m=?, self_mrt_source=?, self_mrt_checked_at=?,
+      self_mrt_state=?, self_mrt_nearest_m=?,
       contact_name=?, contact_role=?, mobile=?, phone=?, line_url=?, contact_fetched=1,
       last_event='new', last_seen_at=?
     WHERE post_id=?`;
@@ -1402,9 +1456,12 @@ export function selfPublishUpdateParams({
     Number.isFinite(Number(lng)) && Number(lng) !== 0 ? Number(lng) : null,
     String(geoSource || ""),
     mrt?.station ? String(mrt.station) : null,
-    mrt && Number.isFinite(Number(mrt.walk_m)) ? Number(mrt.walk_m) : null,
+    // 缺值保持 null（`Number(null)` 是 0，會變成「0 公尺 ⇒ 符合」）。
+    nullableOrNull(mrt?.walk_m),
     mrt?.source ? String(mrt.source) : null,
     mrt?.checked_at ? String(mrt.checked_at) : null,
+    mrt?.state ? String(mrt.state) : null,
+    nullableOrNull(mrt?.nearest_m),
     contactName || roleName,
     roleName,
     phone,
@@ -1499,7 +1556,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     contactName,
     phone,
     lineUrl,
-    ...resolveSelfListingMeta(input, row, { addressChanged }),
+    ...resolveSelfListingMeta(input, row, { addressChanged, mrtCacheContract: MRT_CACHE_CONTRACT }),
   }));
   setPublisherFace(db, row.post_id, uid);
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(row.post_id);

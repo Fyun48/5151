@@ -118,4 +118,13 @@ export const SCHEMA_MIGRATIONS = [
       ensureSelfListingSchema(db);
     },
   },
+  {
+    // R2（第二輪）：捷運查證的**狀態**（within／outside）與「最近但超過」的距離。
+    // 只存「符合的距離」會讓「已查證超過 1 公里」掉回未確認 ⇒ 配對少了硬衝突。
+    version: 8,
+    name: "self_listing_mrt_state_schema",
+    up(db) {
+      ensureSelfListingSchema(db);
+    },
+  },
 ];

@@ -44,6 +44,17 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * 缺值安全的正數轉換：`null`／`undefined`／`""` 一律回 `null`（**不是 0**）。
+ * `Number(null) === 0` 而且 `Number.isFinite(0)` 是 true，直接用 `Number()` 會把
+ * 「沒有資料」變成「0 公尺」，再被門檻判定當成「符合」——這一類坑在本批踩過三次。
+ */
+export function nullableMeters(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 /** 顯示用：四捨五入到 0.1 公里。**0 是合法距離**（查詢點與站點出入口重合），不可被當成「沒有值」。 */
 function roundKm(km) {
   const n = Number(km);
@@ -183,7 +194,9 @@ async function osrmWalkKm(fromLat, fromLng, toLat, toLng, { retry = 1 } = {}) {
   // `0` 是合法的（查詢點與站點出入口幾乎重合）；舊寫法用 `<= 0` 會把這種情況丟掉，
   // 於是「就在捷運站正上方」的地址反而查不到站。只有負值／非數字才算失敗。
   if (!Number.isFinite(meters) || meters < 0) return null;
-  return { km: roundKm(meters / 1000), meters: Math.round(meters), source: MRT_ROUTE_SOURCE };
+  // ⚠️ `meters` 一定要保留**服務回傳的原始值（含小數）**：1000.4 公尺四捨五入成 1000 之後，
+  // 門檻 `<= 1000` 會把它判成符合。公里只給顯示，判定一律用這個原始值。
+  return { km: roundKm(meters / 1000), meters, source: MRT_ROUTE_SOURCE };
 }
 
 /**

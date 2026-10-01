@@ -275,3 +275,47 @@ test("R1：候選站被上限截斷時也不可以宣告「已查證沒有」", 
   }
   assert.equal(truncated.truncated, all12.length > 12);
 });
+
+test("R1（第二輪）：從 OSRM 回應入口驗原始公尺——1,000.4 公尺不算符合", async () => {
+  const { fetchMrtAccessWithin } = await import("../src/mrt.js");
+  const { nearbyWalkMrtStations } = await import("../src/mrt.js");
+  assert.ok(nearbyWalkMrtStations(25.0478, 121.5170, { maxStraightKm: 1, limit: 8 }).length >= 1, "這個點有候選站");
+
+  // 用**真實的 OSRM 回應形狀**驅動預設的 `osrmWalkKm()`（只把 HTTP 換成可控回應），
+  // 這樣驗到的就是「解析入口有沒有四捨五入」，而不是注入 routeWalk 的整數。
+  const original = globalThis.fetch;
+  const probe = async (distance) => {
+    globalThis.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => (distance === undefined
+        ? { code: "Ok", routes: [{ duration: 1 }] }        // 服務沒回距離
+        : { code: "Ok", routes: [{ distance }] }),
+    });
+    try {
+      return await fetchMrtAccessWithin(25.0478, 121.5170);
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  const zero = await probe(0);
+  assert.equal(zero.status, "within");
+  assert.equal(zero.walk_m, 0, "真正的 0 公尺要保留（不是 null、也不是被過濾掉）");
+  assert.equal(zero.walk_km, 0);
+
+  const exactly = await probe(1000);
+  assert.equal(exactly.status, "within", "剛好 1,000 公尺要符合");
+  assert.equal(exactly.walk_m, 1000);
+
+  for (const distance of [1000.1, 1000.4, 1001, 1049]) {
+    const out = await probe(distance);
+    assert.notEqual(out.status, "within", `${distance} 公尺不可以判成符合`);
+    assert.equal(out.resolved, true, `${distance} 公尺是「已查證」的答案`);
+    assert.equal(out.nearest_walk_m, distance, `${distance} 公尺要保留原始小數（不可四捨五入）`);
+  }
+
+  const missing = await probe(undefined);
+  assert.equal(missing.status, "unknown", "服務沒回距離 ⇒ 待確認");
+  assert.equal(missing.nearest_walk_m, null, "缺值不可以變成 0");
+});

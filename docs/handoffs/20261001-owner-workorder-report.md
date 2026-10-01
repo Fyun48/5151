@@ -21,7 +21,7 @@
 
 | 項 | 狀態 | 修改重點 | 驗收結果 |
 |---|---|---|---|
-| **A1** 說明提示文字 | ✅ 完成 | 提示與送出訊息改成「請寫一些這屋子的故事與回憶（至少 8 個字）」，前後端同一條規則（`SELF_BODY_MIN`） | 新文字出現在欄位提示與驗證訊息；8 字規則未變 |
+| **A1** 說明提示文字 | ✅ 完成 | 提示與送出訊息使用工作單指定的原文「請寫一些這屋子的故事與回憶」（**不附加**「（至少 8 個字）」）；8 字規則保留，改由欄位下方的即時字數提示說明。前後端各一份常數（`SELF_BODY_HINT`／`SELF_BODY_HINT_CLIENT`） | 欄位提示與驗證訊息都是指定原文；字數不足時由即時提示顯示「目前 N 個字，至少還要 M 個字」 |
 | **A2** 說明範本預設展開 | ✅ 完成 | 範本下拉＋說明輸入區移到「刊登物件」按鈕上方（`#selfBodyBlock`），開表單就看得到；`#selfBody` 仍是唯一內容來源，新增可見的 contenteditable 當輸入介面，所有寫入走 `setSelfBody()`；套用範本前 `confirm` 保護；失敗保留內容 | 桌機／手機截圖（`evidence/owner-workorder-20261001/a2-*`）；`listing-tools-ui` 測試釘住「可編輯、在送出鈕之前、只有一個寫入入口」 |
 | **A3** 目錄文字沒同步 | ✅ 完成（含根因，**兩個**） | ① `selfTraits.js` 的 `selfTraitLabels()` 把目錄標籤放在 `\|\|` 後面 ⇒ 就算發布了，卡片與分享頁 chips 仍顯示靜態表。② 更關鍵：標籤對照表被 `rental_catalog_v2` 旗標擋住 ⇒ 旗標沒開時，**連刊登表單都不會跟著目錄改名**。已把「顯示名稱」與「可寫入的 id」分開：`catalogTraitLabelMap()` 不受旗標影響、`overlayTraitLabels()` 只覆蓋 label 不動結構。後台另把「草稿未發布」畫出來（按鈕文字、逐列標記、預覽標題、抽屜說明） | **端到端實測**：後台把 `elevator` 改名成「華廈/公寓電梯」→ 發布 → 重新載入前台：刊登表單 chip、我的刊登卡片、公開分享頁 chips **全部**變成新名稱；24 個條件的 id 與勾選狀態完全不動（名單與改名前一致） |
 | **A4** 1 公里步行捷運 | ✅ 完成（**不是**原本的服務） | 見第 3 節。新增門檻／狀態機／端點／前端狀態機 | 真實案例：士林區中正路 100 號 → 捷運士林站 **958 公尺**；直線 843 m 但步行 **1,327 m** 的案例判成**不符合** |
@@ -218,6 +218,52 @@ commute 1.5s、cooperative），CI 上沒有出現。
 
 **定點變異測試**：這一輪合計 **22 個變異全部被殺（存活 0/22）**
 （10 個來自 A1～C3，12 個來自 R1～R6）。
+
+## 6c. 第三輪：第二輪複審的補正（R1～R5 的漏修，2026-10-01）
+
+審閱固定 HEAD `682b18d`，指出「R1～R5 尚未補齊」。**其中 R4／R5 是最嚴重的一項：上一輪的
+PG async 分支根本沒被改到**（我的編輯腳本在寫檔前就中止，我卻只憑一次 grep 就當成改好了）。
+以下是逐項補正（同一張 PR #611）。
+
+| 項 | 上一輪的實際狀況 | 這一輪做了什麼 |
+|---|---|---|
+| **R4（PG）** | `feedbackMediaAsync.saveFeedbackAttachmentAsync()` 仍是 `COUNT → await 解碼 → INSERT VALUES`；claim 沒有四張上限 | 上傳改成 `runInQuotaTransaction()`：**真 PG 走 `pgDriver.withTransaction()`**（`pgDriver.query()` 是連線池，用語句送 `BEGIN`／`COMMIT` 不會形成同一個交易），交易內先 `pg_advisory_xact_lock(使用者)` 再 COUNT → INSERT；`claim` 去重後 > 4 直接丟 400 `attachment_limit`（回饋交易整筆 rollback） |
+| **R5（PG）** | delete／sweep 仍是「先 SELECT，再 `WHERE id=?` UPDATE，然後 unlink」 | 兩者都改成**帶齊條件的 `UPDATE … RETURNING`**（`user_id`／`feedback_id = 0`／`deleted_at IS NULL`），只有 RETURNING 勝出的那一列才刪實體檔 |
+| **R3（PG scope）** | `listFeedbackAttachmentsForAsync()` 用 owner scope（後台已送出的附件 404）、`listOpenFeedbackAttachmentsAsync()` 用 admin scope（會員 403）—— **兩個剛好對調** | 明確改成 admin／owner，並在真 PG 上驗證 |
+| **R3（前台世代）** | 只保護「成功」那一條路徑：舊上傳回來會把新上傳的 busy 清掉、409 會把舊附件混進新對話框 | 全部狀態更新（成功／錯誤／busy／訊息／清單）都受同一個世代檢查；`busy` 只在 `finally` 裡、且**只在同一個世代**才清 |
+| **R1（精度）** | `osrmWalkKm()` 仍回 `meters: Math.round(meters)` ⇒ 1,000.4 公尺被當成 1,000 ⇒ 符合 | 保留服務回傳的原始公尺（含小數），公里只給顯示；測試改成**從 OSRM 回應入口**跑 0／1000／1000.1／1000.4／1001／1049／缺值 |
+| **R1（缺值）** | `db.js` 的 `mrtRowToAccess()`／`mrtCacheUpsert()` 仍有 `Number(null) === 0` ⇒ 缺值被存成 0 | 新增 `nullableMeters()`，缺值一律 null；**不再**用顯示公里回推原始距離 |
+| **R1（升級順序）** | PG 的 `ADD COLUMN` 只掛在寫入路徑，但裝飾讀取會 SELECT 新欄位 ⇒ 舊 schema 先讀會 42703 | 契約常數與升級搬到 `v3/src/mrtCacheSchema.js`；`preloadDecorationProviderAsync()`（**讀取路徑**）在建立 loader 前先升級（以 exec 函式身分用 WeakMap 記憶；失敗不快取，下一次會再試）。升級本身是 **best-effort**：失敗就讓後面那句 SELECT 用 42703 自己講缺哪個欄位，不會把整個讀取路徑吞掉（離線夾具的 exec 只接受它自己的 SQL，硬要它跑 DDL 會讓不相關的測試整批紅） |
+| **R2（狀態）** | 發布只把 `within` 寫進房源 ⇒ 「已查證超過 1 公里」在發布後掉回 unknown，配對沒有硬衝突 | 新增 `self_mrt_state`（within／outside）與 `self_mrt_nearest_m`（**migration version 8**）；`resolveSelfListingGeo()` 把 `none` 也寫成 `outside`（含「沒有候選站」）；matcher 讀持久化狀態 → outside 是硬衝突 |
+| **R2（缺值變 0）** | `resolveSelfListingMeta()` 把 `previous.self_mrt_walk_m = null` 轉成 0，同地址重發會變成「0 公尺 ⇒ 符合」 | 缺值保持 null；沿用舊結果時**驗來源契約**（非目前契約一律不沿用） |
+| **R2（偽造）** | `{...body, ...geo}` 在定位／路線失敗（geo 是空物件）時會讓會員自帶的 `mrt_walk_m`／`mrt_source` 活下來 | HTTP 入口先用 `stripServerVerifiedFields()` 剝掉整組伺服器查證欄位，只認站方查證結果 |
+| **A1（文件）** | §1 的 A1 列仍寫有括號版 | 已改成指定原文（程式在上一輪就已改成原文） |
+
+### 這一輪新增的測試（都是審閱指定的情境）
+
+| 檔案 | 驗什麼 |
+|---|---|
+| `v3/test/feedback-media-live-pg.test.js` | **真 PG、連線池（不同連線）**：五張並行只成功四張（第 5 張 409 且清掉檔案）、claim 後 delete 回 404 且列／檔案都在、sweep 只清孤兒、claim > 4 整筆失敗、owner／admin 兩種 scope |
+| `v3/test/feedback-media-ui-generation.test.js` | 抽出 `index.html` 的 C3 區塊，用 **deferred fetch** 實跑 A／B 交錯與 A 的 409；B 上傳中持續阻擋、新對話框不混入舊結果 |
+| `v3/test/self-listing-http-mrt.test.js` | **真的 HTTP 路由**：偽造欄位無效、within／outside 落地並影響配對、路線失敗維持未知、舊契約不沿用、改地址重新查證 |
+| `v3/test/mrt-cache-schema-live-pg.test.js` | **真的 PG，先建舊形狀的表**：讀取路徑（含 `preloadDecorationProviderAsync`）會先升級再 SELECT |
+| `v3/test/mrt.test.js`（擴充） | 從 OSRM 回應入口驗 0／1000／1000.1／1000.4／1001／1049／缺值 |
+| `v3/test/mrt-cache-contract.test.js`（擴充） | 缺值必須存成 NULL（不是 0），讀回來也是 null |
+
+**定點變異測試**：這一輪再補 15 個（PG 5、R3 前台 2、R2 HTTP 5、R1 3），**全部被殺（存活 0/15）**。
+
+### 合併前再抓到的三個問題（都已修掉）
+
+補正之後跑**全套**才發現的三個問題，都不是審閱指出的，但會讓「綠」變成假綠：
+
+| 問題 | 症狀 | 修法 |
+|---|---|---|
+| 讀取路徑的 schema 升級太硬 | `commute-snapshot-async.test.js` 3 項紅：離線夾具的 exec 一收到 DDL 字串就丟「夾具收到不是 SQL 的東西」，整個讀取路徑陪葬 | 升級改成 **best-effort**（`try/catch`，失敗不快取、下次再試）；真 PG 的行為照樣由 `mrt-cache-schema-live-pg.test.js` 2/2 守住 |
+| 突變錨點停在第二輪的形狀 | `mutation-anchors.test.js` 紅：`self-listing-create-async`／`self-listing-publish-async` 兩組找不到 `{ ...body, ...geo }`（R3 已改成 `stripServerVerifiedFields(body)`） | `v3/scripts/mutation-check.mjs` 兩處 `from` 更新成 R3 的形狀 |
+| 兩條路由接線測試的斷言同樣過期 | `self-listing-create-async.test.js`、`self-listing-publish-async.test.js` 各 1 項紅 | 斷言改成新形狀，並**再加一條禁止**：路由內不得再出現 `{ ...body, ...geo }`（會員偽造的查證欄位一定要先被剝掉） |
+
+> 📌 教訓：**改動一行呼叫形式，會同時打到突變錨點與靜態斷言這兩種「不會編譯錯」的守衛。**
+> 這一輪改了 3 處呼叫，就有 4 個測試因此紅 —— 它們全都不是被改壞的功能，而是守衛過期。
 
 ## 7. 需要 Owner 決定或動手的事
 

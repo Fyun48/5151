@@ -452,7 +452,7 @@ import { recentEventsAsync } from "./notifyQueueAsync.js";
 import { resetAllDataAsync, resetListingsAsync } from "./siteResetAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
-import { catalogTraitLabelMap, publicListingView } from "./selfListings.js";
+import { catalogTraitLabelMap, publicListingView, stripServerVerifiedFields } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -3094,17 +3094,21 @@ async function resolveSelfListingGeo(address) {
     const lng = Number(geo?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return {};
     const out = { lat, lng, geo_source: "self" };
-    // 步行捷運用同一條 1 公里的定義查證一次。服務忙碌／沒查完 ⇒ 不寫 mrt_*，維持未確認。
+    // 步行捷運用同一條 1 公里的定義查證一次。服務忙碌／沒查完 ⇒ **不寫狀態**，維持未確認。
     try {
       const access = await fetchMrtAccessWithin(lat, lng);
-      if (access.status === "within") {
-        out.mrt_station = access.station;
-        out.mrt_walk_m = access.walk_m;
+      if (access.resolved) {
+        // `within` 與 `none` 都是已查證的結果，**狀態也要存下來**：
+        // 只存「符合的距離」會讓「已查證超過 1 公里」掉回未確認，配對就不會產生硬衝突。
+        const state = access.status === "within" ? "within" : "outside";
+        out.mrt_state = state;
         out.mrt_source = MRT_CACHE_CONTRACT;
         out.mrt_checked_at = new Date().toISOString();
-      }
-      // `within` 與 `none` 都是已查證的結果，寫進同一份快取讓內頁顯示與配對共用。
-      if (access.resolved && (access.status === "within" || access.status === "none")) {
+        out.mrt_station = state === "within" ? String(access.station || "") : "";
+        out.mrt_walk_m = state === "within" ? access.walk_m : null;
+        // 「最近但超過」的那一筆（沒有候選站時是 null，仍然代表已查證不符合）。
+        out.mrt_nearest_m = access.walk_m ?? access.nearest_walk_m ?? null;
+        // 同一份快取，讓內頁顯示與配對共用。
         await setCachedMrtAsync(lat, lng, { ...access, source: MRT_CACHE_CONTRACT }).catch(() => {});
       }
     } catch { /* 外部服務失敗 ⇒ 維持未確認 */ }
@@ -3524,8 +3528,10 @@ app.post("/api/self-listings", async (req, res) => {
     // 同步版只寫本機 ⇒ **剛刊登的物件不在站上的清單裡**（第八十四批）。
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
     // R2：地址定位與步行捷運查證結果要綁在這則刊登上（外部服務失敗不擋刊登）。
+    // R2（第二輪）：只認**站方查證**的欄位。會員在 body 裡自己帶 lat／mrt_walk_m／mrt_source
+    // 一律剝掉（只檢查契約字串不足以防偽造 —— 那個字串是公開的）。
     const geo = await resolveSelfListingGeo(body.street || body.address);
-    const created = await createSelfListingAsync(session.userId, { ...body, ...geo }, {
+    const created = await createSelfListingAsync(session.userId, { ...stripServerVerifiedFields(body), ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     });
     await attributeShareAsync(req, session.userId, "listing");
@@ -3834,7 +3840,7 @@ app.post("/api/self-listings/:id/publish", async (req, res) => {
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
     // R2：地址定位與步行捷運查證結果綁在這則刊登上（外部服務失敗不擋刊登）。
     const geo = await resolveSelfListingGeo(body.street || body.address);
-    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...body, ...geo }, {
+    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...stripServerVerifiedFields(body), ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
