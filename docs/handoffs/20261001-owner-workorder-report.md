@@ -122,33 +122,32 @@
 | C1 不可偽造 | `POST /api/feedback` 帶 `contact`／`email` 都是 `attacker@evil.example` | 後台看到的聯絡方式是 **demo@example.com**（取自 session，前端傳什麼都不影響） |
 | 手機／桌機 | 375×812 與 1440×900 各跑一次「找房／有房刊登／許願房／意見回饋／分享頁」 | 五個畫面都沒有橫向溢出（`scrollWidth == innerWidth`）；「刊登物件」「公開許願房」「送出回饋」三個送出鈕都看得到、沒被遮住、可點、高 44px |
 
-- **`npm test`（本機）**：3562 項、5 紅，全部是既有基準線，與本批無關：
-  1. `PR A src manifest matches git tree`（工作區有未提交變更時必紅）
-  2. `cursor walks past the old 2000-row candidate cap`（既有 flake）
-  3. `commute list plus stats stay under 1.5s`（既有效能 flake）
-  4. `cooperative member processing preserves roles…`（既有 flake）
-  5. `list-unhang` 的既有 flake
-- **定點變異測試**：把 10 個新行為的修正逐條拿掉，**存活 0/10**
-  （A3 目錄優先、A4 門檻／foot profile、B1 另計衝突、B2 捷運配對、C3 大小邊界／claim 參數順序／
-  站方權限、A5 訪客狀態、B2 欄位移除）。
+- **`npm test`（本機，最終 HEAD `4718bff`、工作區乾淨）**：3594 項、**2 紅**，
+  兩項都在乾淨的 `origin/master`（`f485a89`）上**照樣紅**，與本批無關（裁定方式：把同兩支測試
+  丟到 `git worktree add --detach /tmp/baseline-wt origin/master` 的乾淨基線跑一次）：
+  1. `cursor walks past the old 2000-row candidate cap`（既有；子行程 30 秒逾時回 `null !== 0`）
+  2. `cooperative member processing preserves roles…`（既有）
+  另外 95 項是環境條件不足時本來就會 skip 的（例如沒有 `PG_LIVE_REPRO_URL`）。
+  前一輪看到的 `PR A src manifest`、`listListings benchmark`、`commute 1.5s` 這次都過
+  （manifest 只因工作區髒而紅，bench 對負載敏感）。
+- **定點變異測試**：把新行為的修正逐條拿掉，**存活 0/37**
+  （A1～C3 10 個、R1～R6 12 個、這一輪補的 PG 5／R3 前台 2／R2 HTTP 5／R1 3 個）。
 - **打真實外部服務的測試**：`v3/test/mrt-walk-live.test.js`（3 項）。
-- **尺規**：288 → **293** 條入口（C3 四條＋A4 一條），交接文件現況表已同步。
+- **尺規**：288 → **295** 條入口（C3 四條＋A4 一條＋回饋附件兩條；交接文件現況表已同步）。
 ### CI 結果（同一個 SHA）
 
-SHA `67897014a63c822d883c563c804fed21558a4319`（實作＋截圖，四項全綠）：
+**最終 HEAD `4718bff`（四項全綠）**：
 
 | 檢查 | 結果 | 連結 |
 |---|---|---|
-| GitGuardian Security Checks | ✅ pass | <https://dashboard.gitguardian.com> |
-| Review diff with the configured model | ✅ pass | [run](https://github.com/Fyun48/5151/actions/runs/36816898409) |
-| Run Tests | ✅ pass（2m56s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223898679) |
-| Run Tests (PostgreSQL integration) | ✅ pass（3m43s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223899126) |
+| GitGuardian Security Checks | ✅ pass（9s） | <https://dashboard.gitguardian.com> |
+| Review diff with the configured model | ✅ pass（4s） | [run](https://github.com/Fyun48/5151/actions/runs/36849094722/job/110326241036) |
+| Run Tests | ✅ pass（3m49s） | [run](https://github.com/Fyun48/5151/actions/runs/36849094696/job/110326241326) |
+| Run Tests (PostgreSQL integration) | ✅ pass（3m57s） | [run](https://github.com/Fyun48/5151/actions/runs/36849094696/job/110326241039) |
 
-**R1～R6（`66d6383`）也是四項全綠**：GitGuardian pass、Review diff pass、
-Run Tests pass（3m21s）、Run Tests (PostgreSQL integration) pass（3m45s）。
-之後每一次 commit（含本報告）在 PR #611 上都會重跑同一組檢查。
-`npm test` 在本機看到的紅都是既有的基準線／flake（PR-A manifest 因工作區髒、cursor-2000、
-commute 1.5s、cooperative），CI 上沒有出現。
+先前的 SHA `67897014a63c822d883c563c804fed21558a4319`（第九十九批實作＋截圖）
+與 `66d6383`（第一百批 R1～R6）也都是四項全綠。
+`npm test` 在本機看到的 2 紅是既有基準線（見上），CI 上沒有出現。
 
 ---
 
@@ -251,6 +250,20 @@ PG async 分支根本沒被改到**（我的編輯腳本在寫檔前就中止，
 | `v3/test/mrt-cache-contract.test.js`（擴充） | 缺值必須存成 NULL（不是 0），讀回來也是 null |
 
 **定點變異測試**：這一輪再補 15 個（PG 5、R3 前台 2、R2 HTTP 5、R1 3），**全部被殺（存活 0/15）**。
+六套電池（A1～C3 10 ＋ R1～R6 12 ＋ 這一輪 15）**合計 37 個變異、存活 0/37**。
+
+### 同一顆 SHA 的驗收（`4718bff`）
+
+| 項目 | 指令 | 結果 |
+|---|---|---|
+| 全套測試 | `npm test`（工作區乾淨） | 3594 項、3497 pass、**2 紅**（都在 `origin/master` `f485a89` 上照樣紅）、95 skip |
+| 真 PG 附件（R3／R4／R5） | `set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a; node --test v3/test/feedback-media-live-pg.test.js` | 4/4 pass（隔離庫 `repro`、連線池＝不同連線；五張並行只成功四張） |
+| 前台世代（R3） | `node --test v3/test/feedback-media-ui-generation.test.js` | 4/4 pass（deferred fetch 實跑 A／B 交錯與 409） |
+| HTTP 入口到配對（R2） | `node --test v3/test/self-listing-http-mrt.test.js` | pass（真 HTTP、假走路服務、種 `geo_cache`；偽造無效、within／outside／未知、重發、改地址） |
+| 舊 PG 表的讀取升級（R1） | `node --test v3/test/mrt-cache-schema-live-pg.test.js` | 2/2 pass（先建舊形狀的表） |
+| CI | PR #611 四項檢查 | 全綠（見 §5） |
+
+> ⚠️ 這一節只證明「程式與驗證完成」。**正式站沒有部署**（§6），R6 的共享掛載也要等部署才生效。
 
 ### 合併前再抓到的三個問題（都已修掉）
 

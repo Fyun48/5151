@@ -6208,7 +6208,11 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
 - 新增：`feedback-media-live-pg`（真 PG／不同連線）、`feedback-media-ui-generation`
   （deferred fetch 實跑 A／B 交錯）、`self-listing-http-mrt`（真 HTTP 路由）、
   `mrt-cache-schema-live-pg`（舊形狀 PG 表 + 讀取路徑升級）。
-- 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）。
+- 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）；
+  六套電池合計 **37 個變異、存活 0/37**。
+- 全套 `npm test`（HEAD `4718bff`、工作區乾淨）：3594 項、**2 紅**，兩項都在乾淨的
+  `origin/master`（`f485a89`）上照樣紅（cursor-2000、cooperative），與本批無關。
+  `PR A src manifest` 在 Commit 之後就過（它只在工作區髒時紅）。
 
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
