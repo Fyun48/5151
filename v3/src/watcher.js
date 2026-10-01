@@ -741,11 +741,14 @@ export async function runWatch(options = {}) {
   // `sourceRounds` 則是這一輪各來源的成敗，收尾時一次寫進 `crawlScheduleV1.sourceStreaks`。
   const sourceSuccess = [];
   const sourceRounds = [];
-  const noteSourceRound = (source, urls, sourceErrors, blocked = false, applicable = true) => {
+  const noteSourceRound = (source, urls, sourceErrors, blocked = false, applicable = true, partial = false) => {
     sourceRounds.push({
       source,
       covered: urls.size,
       total: jobs.length,
+      // 這一輪是不是「只抓了一部分行政區」（到達每輪上限，其餘下一輪）：
+      // 不算這一組已完成、也不算失敗（第九十七批的每輪上限）。
+      partial: partial === true,
       // 這一輪是不是「因為被擋而停工」（會換算成 blockedUntil 冷卻期）。
       blocked: blocked === true,
       cooldownMs: SOURCE_BLOCK_COOLDOWN_MS,
@@ -814,7 +817,8 @@ export async function runWatch(options = {}) {
       const applicableBatches = batches.filter((batch) => batch?.applicable !== false);
       if (!applicableBatches.length) sourceSuccess[sourceSuccess.length - 1].applicable = false;
       for (const batch of applicableBatches) {
-        if (!batch.errors?.length && batch.searchUrl) successful.add(batch.searchUrl);
+        // 到達每輪上限的批次（partial）不算「這一組已完成」——其餘行政區下一輪才抓。
+        if (!batch.errors?.length && batch.searchUrl && batch.partial !== true) successful.add(batch.searchUrl);
         for (const error of batch.errors || []) {
           const line = `${label} ${error.district || ""} 第 ${error.page || 1} 頁 [${error.code || "FETCH_FAILED"}]：${error.message}`;
           errors.push(line);
@@ -833,7 +837,8 @@ export async function runWatch(options = {}) {
     }
     // 這一批是不是「被擋到停工」：只要有任一批次回報 blocked，就當這一家這一輪被擋。
     const applicable = batches.some((batch) => batch?.applicable !== false);
-    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable);
+    const partial = batches.some((batch) => batch?.partial === true);
+    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable, partial);
   }
 
   if (wantHb && !cooling.has("hbhousing")) {
@@ -1145,6 +1150,7 @@ export async function runWatch(options = {}) {
       fails: Number(sourcePolicy.streaks?.[round.source]?.fails) || 0,
       tolerated: sourcePolicy.tolerated.includes(round.source),
       applicable: round.applicable !== false,
+      partial: round.partial === true,
       lastError: sourcePolicy.streaks?.[round.source]?.lastError || "",
     })),
     offline: offlineSweep,

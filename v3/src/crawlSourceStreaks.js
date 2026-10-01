@@ -16,6 +16,8 @@
 //      那種輪次不該被當成「已覆蓋」，寧可維持現狀並大聲告警。
 //   5. 被擋而停工的來源會記下 `blockedUntil`（冷卻期）：下一輪若還在冷卻就跳過這一家，
 //      不要每一輪開頭都去撞同一面牆（2026-09-30 第九十六批）。
+//   6. 到達「每輪行政區上限」的來源（`partial`）也不動狀態：這一組覆蓋條件這一輪還沒抓完，
+//      其餘行政區下一輪再抓（2026-10-01 第九十七批；Owner 指定「給上限用輪詢的方式」）。
 //
 // 這一支只有純函式（沒有 DB、沒有 driver），落地的讀寫在 `crawlScheduleAsync.js`
 // （`recordCrawlSourceRoundAsync`／`readCrawlSourceStreaksAsync`），設定鍵沿用 `crawlScheduleV1`。
@@ -84,11 +86,15 @@ export function applySourceRound(streaks, rounds, options = {}) {
   const toleratedNow = [];
   const blocked = [];
   const notApplicable = [];
+  const partial = [];
   for (const round of Array.isArray(rounds) ? rounds : []) {
     const id = String(round?.source || "");
     if (!id) continue;
     // 「這一輪這個來源沒有可抓的行政區」⇒ 不算成功、也不算失敗，狀態原封不動。
     if (round?.applicable === false) { notApplicable.push(id); continue; }
+    // 「這一輪只抓了一部分行政區」（到達每輪上限）⇒ 同樣不動狀態：
+    // 這不是來源壞掉，只是把剩下的輪詢到下一輪（第九十七批）。
+    if (round?.partial === true) { partial.push(id); continue; }
     const prev = next[id] || normalizeSourceStreak();
     if (isCoveredRound(round)) {
       // 恢復成功立刻歸零（照舊從嚴）；最後錯誤樣本留著當歷史，不影響判定。
@@ -111,7 +117,7 @@ export function applySourceRound(streaks, rounds, options = {}) {
         : prev.blockedUntil,
     };
   }
-  return { streaks: next, tolerated: toleratedCrawlSources(next, { threshold }), toleratedNow, recovered, failed, blocked, notApplicable };
+  return { streaks: next, tolerated: toleratedCrawlSources(next, { threshold }), toleratedNow, recovered, failed, blocked, notApplicable, partial };
 }
 
 /**
