@@ -57,6 +57,7 @@ import {
 } from "../src/stage1FixtureRegistry.js";
 import {
   FIXTURE_CLEANUP_FAILED,
+  FIXTURE_PHONE_RE,
   cleanupStage1Fixtures,
   listOrphanFixtureRows,
   listingFixtureInput,
@@ -892,13 +893,22 @@ test("P1-22 a production-shaped compact run id is not mistaken for a leaked phon
 });
 
 test("P1-22 the boundary-anchored phone detector still catches real phone numbers", () => {
-  const phoneRe = /(?<!\d)09\d{8}(?!\d)/;
+  // 直接測**正式程式碼**匯出的那一條（不是測試裡自己抄一份，抄的那份不會跟著改）。
+  const phoneRe = FIXTURE_PHONE_RE;
   // real, unformatted 09xxxxxxxx mobile numbers are still detected...
   assert.equal(phoneRe.test('"phone":"0912345678"'), true);
   assert.equal(phoneRe.test("0912-345-678"), false); // formatted: never matched before either
   // ...while compact timestamps / long digit runs are not
   assert.equal(phoneRe.test("20260918061756"), false);
   assert.equal(phoneRe.test("/DATA/predeploy-20260918-055613"), false);
+  // ...and neither is a 12-hex `opaqueId()` token hash that happens to contain 09 + 8 digits.
+  // 2026-10-01 CI（`a3b9821` 的 Run Tests）就是被這一種打到：
+  // "fixture evidence leaked phone near ..."token_hash":"e**********d""
+  assert.equal(phoneRe.test('"token_hash":"e0912345678d"'), false);
+  assert.equal(phoneRe.test('{"id_hash":"a0912345678","email_hash":"ff0912345678"}'), false);
+  // 但電話只要不是夾在十六進位字串裡，一樣要抓到
+  assert.equal(phoneRe.test('{"note":"請打 0912345678 找我"}'), true);
+  assert.equal(phoneRe.test("'0912345678'"), true);
 });
 
 test("#349 cleanup reclaims a namespace-bound row whose registry entry was booked cleaned first", () => {

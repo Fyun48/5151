@@ -244,3 +244,14 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     schema 升級是「盡量做」：用 `try/catch` 包起來、失敗不快取（下次再試），
     真的升級不了時讓後面那句 SELECT 用 42703 明講缺哪個欄位。想驗「真的有升級」就寫**真 PG 的測試**
     （見 `v3/test/mrt-cache-schema-live-pg.test.js`：先建舊形狀的表，再讓讀取路徑自己補欄位）。
+
+24. **「隨機」的測試紅燈：雜湊值也會長得像電話號碼**（2026-10-01 第一百零一批實測）。
+    CI 的 Run Tests 紅在 `stage1-fixture-readiness.test.js`，訊息是
+    `fixture evidence leaked phone near …"token_hash":"e**********d"` —— 但那次 commit 只有改文件。
+    原因：`opaqueId()` 是 sha256 的前 12 個十六進位字元，**光靠機率**就會出現
+    `e0912345678d`（中間剛好 10 位數字）這種形狀，舊的邊界只排除「前後是數字」。
+    實測 0.0091%／每個 hash、那個測試檔每次約 510 個 hash ⇒ **約 4.5% 的執行會隨機變紅**。
+    修法：邊界改成「前後不是十六進位字元」，並把偵測器**匯出**給測試直接用
+    （原本測試自己抄一份 regex，改壞了也不會紅）。
+    **規則：看到「偶發紅」不要只重跑 —— 先算出機率並把誤判來源找出來**；
+    重跑只是把紅燈藏起來，下一次會再打到別人。

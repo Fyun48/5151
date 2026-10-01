@@ -5982,7 +5982,21 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
+// Stage 1 fixture 證據的「電話外洩」偵測（2026-10-01 第一百零一批）。
+// 這一條的誤判會讓整個 fixture 準備失敗：`opaqueId()` 是 sha256 的前 12 個十六進位字元，
+// 光靠機率就會出現 `e0912345678d`（中間剛好 10 位數字），舊邊界會把它當成電話。
+const FIXTUREPHONE_MUTATIONS = [
+  {
+    name: "證據的電話偵測退回舊邊界（12 字元 token hash 會被誤判成電話）",
+    file: "v3/src/stage1FixtureOps.js",
+    from: "export const FIXTURE_PHONE_RE = /(?<![0-9a-fA-F])09\\d{8}(?![0-9a-fA-F])/;",
+    to: "export const FIXTURE_PHONE_RE = /(?<!\\d)09\\d{8}(?!\\d)/;",
+    expect: "P1-22 the boundary-anchored phone detector still catches real phone numbers",
+  },
+];
+
+const MUTATIONS = /stage1-fixture-readiness/.test(testFile) ? FIXTUREPHONE_MUTATIONS
+  : /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS
   : /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
   : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS

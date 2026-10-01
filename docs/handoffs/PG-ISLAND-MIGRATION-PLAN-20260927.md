@@ -6209,7 +6209,12 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
   （deferred fetch 實跑 A／B 交錯）、`self-listing-http-mrt`（真 HTTP 路由）、
   `mrt-cache-schema-live-pg`（舊形狀 PG 表 + 讀取路徑升級）。
 - 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）；
-  六套電池合計 **37 個變異、存活 0/37**。
+  六套電池 ＋ 工具內建那一條合計 **38 個變異、存活 0/38**。
+- 順手修掉的既有缺陷：Stage 1 fixture 的電話外洩偵測會把 12 字元 token hash
+  （`opaqueId()`＝sha256 前 12 碼）的隨機數字串誤判成手機號碼 —— CI 的 `a3b9821`
+  就是這樣紅的（實測 0.0091%／每個 hash ⇒ 該測試檔每次約 4.5% 會中）。
+  偵測器改成匯出常數 `FIXTURE_PHONE_RE`，邊界從「前後不是數字」改成「前後不是十六進位字元」，
+  測試改吃正式那一條，變異套組 `FIXTUREPHONE_MUTATIONS` 守住。
 - 全套 `npm test`（HEAD `4718bff`、工作區乾淨）：3594 項、**2 紅**，兩項都在乾淨的
   `origin/master`（`f485a89`）上照樣紅（cursor-2000、cooperative），與本批無關。
   `PR A src manifest` 在 Commit 之後就過（它只在工作區髒時紅）。
