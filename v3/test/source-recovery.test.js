@@ -233,7 +233,7 @@ test("5168：連續被擋達門檻兩次才停工，之前抓到的行政區與�
   assert.match(batch.errors[0].message, /https:\/\/rent\.houseprice\.tw\/list\//, "錯誤樣本一定要帶出事的網址");
 });
 
-test("5168：達門檻先冷卻重試，不會一次被擋就放棄整輪（第九十六批 B）", async () => {
+test("5168：達門檻不放棄整輪（同一輪剩下的部分就是重試），且不需要空等（第九十六批 B）", async () => {
   const jobs = [{ regionId: 1, sectionIds: [8, 10, 12, 5], searchUrl: "scope" }];
   const listCalls = [];
   const [batch] = await fetchHpCoveringListings(jobs, {
@@ -514,4 +514,26 @@ test("不適用：這一輪沒有可抓行政區的來源不算失敗、也不�
   // 有錯誤的失敗輪仍然要照舊累積（不能被這條放寬）。
   const failed = applySourceRound({ houseprice: { fails: 2 } }, [{ source: "houseprice", covered: 0, total: 6, error: "403" }], { at });
   assert.equal(failed.streaks.houseprice.fails, 3);
+});
+
+test("整輪被放棄時，落地階段要真的停下來（第九十六批追加；原本會把上萬筆寫完才結束）", () => {
+  const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
+  // 批次開頭檢查一次：否則預算用盡後整批（上萬筆）仍會寫完，下一輪又開始 ⇒ 兩輪重疊。
+  assert.match(src, /throwIfCrawlCancelled\(\);\n    const isSearchBaseline = listingCountForSearch\(batch\.searchUrl\) === 0;/,
+    "落地迴圈的批次開頭要有 throwIfCrawlCancelled()");
+  // 同一批之內每 20 筆再檢查一次（用既有的 upserts 計數）。
+  assert.match(src, /if \(upserts % 20 === 0\) throwIfCrawlCancelled\(\);/,
+    "落地的房源迴圈要定期檢查取消");
+  // 逐批完成記錄仍然要在（被放棄的輪次要留下已完成的覆蓋條件）。
+  assert.match(src, /await completeCoveringPlan\(\{ successfulJobs: \[job\], memberRequirements: \[\], at: nowIso\(\) \}\);/);
+});
+
+test("被擋時不可以在同一輪空等（第九十六批踩點：90 秒 × 五個來源會把收集階段拖過預算）", () => {
+  for (const file of ["../src/houseprice.js", "../src/hbhousing.js", "../src/sinyi.js"]) {
+    const src = readFileSync(new URL(file, import.meta.url), "utf8");
+    // 同一輪的「重試」就是這一輪剩下的部分；跨輪才需要冷卻（blockedUntil）。
+    assert.doesNotMatch(src, /setTimeout\(resolve, cooldownMs\)/,
+      `${file} 不該在逐頁 fail-soft 裡空等冷卻時間`);
+    assert.match(src, /blocked: sourcePaused/, `${file} 仍要把「被擋到停工」往上回報`);
+  }
 });
