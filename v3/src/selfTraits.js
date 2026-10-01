@@ -120,7 +120,11 @@ export function selfTraitLabels(ids, extraLabels = {}) {
   const seen = new Set();
   for (const item of raw) {
     const id = String(item || "").trim();
-    const label = ALL_TRAITS.get(id) || extra.get(id);
+    // 共用條件目錄（後台可改名）優先，靜態表只當 fallback（A3）。
+    // 舊寫法 `ALL_TRAITS.get(id) || extra.get(id)` 會讓目錄改名永遠被靜態標籤蓋掉：
+    // 「我的刊登」卡片與公開分享頁 chips 走這條，刊登表單走 catalogAsSelfTraitGroups，
+    // 所以後台改名只有一半的前台會同步。legacy id（cook／pet／tax）不在目錄裡，仍落回靜態表。
+    const label = extra.get(id) || ALL_TRAITS.get(id);
     if (label && !seen.has(id)) { seen.add(id); out.push(label); }
   }
   return out.slice(0, TRAIT_CAP);

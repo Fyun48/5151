@@ -41,5 +41,7 @@ services:
       - ${WEB_A_DATA_DIR:-/opt/5151-shadow/web-a/data}:/data
       - /mnt/5151-media/member-media:/data/member-media
       - /mnt/5151-media/self-photos:/data/self-photos
+      # R6：私有媒體（含回饋附件）走同一份共享儲存，A/B 兩台才看到同一批檔案。
+      - /mnt/5151-media/feedback-media:/data/feedback-media
     command: ["node", "src/server.js"]
 

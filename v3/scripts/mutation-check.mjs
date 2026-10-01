@@ -3547,8 +3547,8 @@ const PUBLISHSELF_MUTATIONS = [
   {
     name: "`POST /api/self-listings/:id/publish` 改回同步版",
     file: "v3/src/server.js",
-    from: "    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, body, {",
-    to: "    res.json(publishOwnedDraftFor(session.userId, req.params.id, body)); void (({",
+    from: "    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...stripServerVerifiedFields(body), ...geo }, {",
+    to: "    res.json(publishOwnedDraftFor(session.userId, req.params.id, { ...body, ...geo })); void (({",
     expect: "路由接線",
   },
   {
@@ -3614,8 +3614,8 @@ const CREATESELF_MUTATIONS = [
   {
     name: "`POST /api/self-listings` 改回同步版",
     file: "v3/src/server.js",
-    from: "    const created = await createSelfListingAsync(session.userId, body, {",
-    to: "    const created = createSelfListing(session.userId, body); void (({",
+    from: "    const created = await createSelfListingAsync(session.userId, { ...stripServerVerifiedFields(body), ...geo }, {",
+    to: "    const created = createSelfListing(session.userId, { ...body, ...geo }); void (({",
     expect: "路由接線",
   },
 ];
@@ -5982,7 +5982,43 @@ const ONLY = onlyArg ? onlyArg.slice("--only=".length) : "";
 
 // 被中斷時一定要把原始碼還原——第一版沒有這段，SIGTERM 之後原始碼停在「已變異」的狀態，
 // 依測試檔挑變異集。預設是 reject-match；稽核可視性用另一組。
-const MUTATIONS = /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
+// 訪客搜尋 parity 的「請求路徑零 SQLite I/O」量測（2026-10-01 第一百零一批）。
+// 啟動暖機每 500 毫秒會做一次 `db.exec(CREATE TABLE IF NOT EXISTS listing_search_projection)`；
+// 量測期間若沒暫停它，就會被記成違規 I/O ⇒ 隨機紅燈（CI 實際發生過）。
+const SEARCHPARITY_MUTATIONS = [
+  {
+    name: "暖機迴圈的暫停失效（量測期間背景 DDL 會被記成違規 I/O）",
+    file: "v3/src/db.js",
+    from: [
+      "export function pausePublicListingsProjectionBackfill() {",
+      "  const wasArmed = publicProjectionBackfillTimer !== null;",
+      "  publicProjectionBackfillPaused = true;",
+    ].join("\n"),
+    to: [
+      "export function pausePublicListingsProjectionBackfill() {",
+      "  const wasArmed = false;",
+      "  publicProjectionBackfillPaused = false;",
+    ].join("\n"),
+    expect: "暖機迴圈：暫停期間不得再發出背景 DDL",
+  },
+];
+
+// Stage 1 fixture 證據的「電話外洩」偵測（2026-10-01 第一百零一批）。
+// 這一條的誤判會讓整個 fixture 準備失敗：`opaqueId()` 是 sha256 的前 12 個十六進位字元，
+// 光靠機率就會出現 `e0912345678d`（中間剛好 10 位數字），舊邊界會把它當成電話。
+const FIXTUREPHONE_MUTATIONS = [
+  {
+    name: "證據的電話偵測退回舊邊界（12 字元 token hash 會被誤判成電話）",
+    file: "v3/src/stage1FixtureOps.js",
+    from: "export const FIXTURE_PHONE_RE = /(?<![0-9a-fA-F])09\\d{8}(?![0-9a-fA-F])/;",
+    to: "export const FIXTURE_PHONE_RE = /(?<!\\d)09\\d{8}(?!\\d)/;",
+    expect: "P1-22 the boundary-anchored phone detector still catches real phone numbers",
+  },
+];
+
+const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATIONS
+  : /stage1-fixture-readiness/.test(testFile) ? FIXTUREPHONE_MUTATIONS
+  : /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS
   : /site-command-apply-async/.test(testFile) ? SITECMD_MUTATIONS
   : /feedback-async/.test(testFile) ? FEEDBACKASYNC_MUTATIONS

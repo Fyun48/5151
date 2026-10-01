@@ -25,6 +25,7 @@ import {
   selfListingMeta,
   selfSourceLabel,
 } from "../src/selfListings.js";
+import { SELF_TRAIT_GROUPS, selfTraitLabels } from "../src/selfTraits.js";
 import { lookupDistrict } from "../src/regions.js";
 import { defaultCatalog, deleteOrDisableCondition, upsertCategory, upsertCondition } from "../src/rentalCatalog.js";
 import { setRentalMarketplaceFlags } from "../src/demand.js";
@@ -63,6 +64,16 @@ function open() {
       cover TEXT,
       tags TEXT,
       refresh_time TEXT,
+      lat REAL,
+      lng REAL,
+      geo_source TEXT,
+      fee_includes TEXT NOT NULL DEFAULT '',
+      self_mrt_station TEXT,
+      self_mrt_walk_m REAL,
+      self_mrt_state TEXT,
+      self_mrt_nearest_m REAL,
+      self_mrt_source TEXT,
+      self_mrt_checked_at TEXT,
       first_seen_at TEXT NOT NULL,
       last_seen_at TEXT NOT NULL,
       last_event TEXT NOT NULL DEFAULT 'new',
@@ -460,3 +471,123 @@ test("disabled category new listing input is dropped; historical fridge is kept"
   db.close();
 });
 
+
+test("A3：後台改名後，前台顯示名稱要跟著目錄走（即使 v2 旗標沒開）", async () => {
+  const { defaultCatalog, upsertCondition } = await import("../src/rentalCatalog.js");
+  const { catalogTraitLabelMap, overlayTraitLabels, setSelfListingCatalog } = await import("../src/selfListings.js");
+  const renamed = upsertCondition(defaultCatalog(), { id: "elevator", label: "華廈/公寓電梯" });
+
+  // 1) 標籤表不受 v2 旗標影響：旗標關著也要拿得到目錄上的名稱
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(renamed, { rental_catalog_v2: { enabled: false } });
+  const labels = catalogTraitLabelMap(renamed);
+  assert.equal(labels.elevator, "華廈/公寓電梯");
+
+  // 2) 刊登表單：結構走靜態表時，顯示名稱仍被覆蓋；**id 與其他欄位完全不動**
+  const metaOff = selfListingMeta({ catalog: null, catalogLabels: labels });
+  const offItem = metaOff.traits.flatMap((g) => g.items).find((i) => i.id === "elevator");
+  assert.equal(offItem.label, "華廈/公寓電梯");
+  const staticItem = SELF_TRAIT_GROUPS.flatMap((g) => g.items).find((i) => i.id === "elevator");
+  assert.equal(offItem.input, staticItem.input);
+  assert.notEqual(staticItem.label, offItem.label, "靜態表本身不可以被就地改寫");
+  // 通則：目錄有的 id ⇒ 用目錄的名稱；目錄沒有的 id ⇒ 保持靜態名稱（歷史／其他條件不受影響）
+  const staticFlat = SELF_TRAIT_GROUPS.flatMap((g) => g.items);
+  const overlaidFlat = metaOff.traits.flatMap((g) => g.items);
+  let fromCatalog = 0;
+  for (const item of staticFlat) {
+    const got = overlaidFlat.find((i) => i.id === item.id)?.label;
+    if (labels[item.id]) { assert.equal(got, labels[item.id], `${item.id} 應採用目錄名稱`); fromCatalog += 1; }
+    else { assert.equal(got, item.label, `${item.id} 目錄沒有，應保持靜態名稱`); }
+  }
+  assert.ok(fromCatalog > 10, "應該有多數條件對得上目錄");
+  // 目錄整份缺失時要安全落回靜態名稱（不可以用空目錄把標籤清成 undefined）
+  assert.deepEqual(catalogTraitLabelMap({ categories: [], conditions: [] }), {});
+  assert.deepEqual(catalogTraitLabelMap(null), {});
+  const emptyOverlay = overlayTraitLabels(SELF_TRAIT_GROUPS, {});
+  assert.equal(emptyOverlay.flatMap((g) => g.items).find((i) => i.id === "elevator").label, staticItem.label);
+
+  // 3) 我的刊登卡片／公開分享頁的標籤也吃同一份目錄
+  assert.deepEqual(selfTraitLabels(["elevator"], labels), ["華廈/公寓電梯"]);
+
+  // 4) overlay 不會改到原陣列（純函式）
+  const groups = [{ id: "building", label: "建物", items: [{ id: "elevator", label: "電梯" }] }];
+  const overlaid = overlayTraitLabels(groups, { elevator: "華廈/公寓電梯" });
+  assert.equal(overlaid[0].items[0].label, "華廈/公寓電梯");
+  assert.equal(groups[0].items[0].label, "電梯");
+  assert.deepEqual(overlayTraitLabels(groups, {}), groups);
+
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+});
+
+test("R2：費用三態與座標／捷運查證會綁在房源上，重新編輯可以還原", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+  const post = createSelfListing(db, 1, sampleInput({
+    fee_includes: { utilities: "included", management: "extra", internet: "unknown" },
+    lat: 25.033,
+    lng: 121.565,
+    geo_source: "self",
+    mrt_state: "within",
+    mrt_station: "台北101/世貿",
+    mrt_walk_m: 330.4,
+    mrt_source: "osrm-foot:v1",
+    mrt_checked_at: "2026-10-01T00:00:00.000Z",
+  }), new Date("2026-10-01T00:00:00.000Z"));
+  const row = db.prepare("SELECT * FROM listings WHERE post_id=?").get(post.post_id);
+  // 明確填的兩項寫入；「未確認」不會被寫成一個值
+  assert.deepEqual(JSON.parse(row.fee_includes), { utilities: "included", management: "extra" });
+  assert.equal(row.lat, 25.033);
+  assert.equal(row.geo_source, "self");
+  assert.equal(row.self_mrt_state, "within");
+  assert.equal(row.self_mrt_station, "台北101/世貿");
+  assert.equal(row.self_mrt_walk_m, 330.4);
+  assert.equal(row.self_mrt_source, "osrm-foot:v1");
+  // 讀回來可以還原（重新編輯）
+  const read = getSelfListing(db, post.post_id, { viewerId: 1 });
+  assert.deepEqual(read.fee_includes, { utilities: "included", management: "extra" });
+  assert.deepEqual(read.fee_include_labels, ["租金含水電"]);
+  assert.equal(read.mrt_walk_m, 330.4);
+  db.close();
+});
+
+test("R2：編輯時沒提到費用就沿用舊值；地址變了但定位不到 ⇒ 清掉舊座標與舊查證", () => {
+  const db = open();
+  addUser(db, { id: 1, email: "a@example.com", createdAt: OLD });
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+  const post = createSelfListing(db, 1, sampleInput({
+    fee_includes: { utilities: "included" },
+    lat: 25.033, lng: 121.565, geo_source: "self",
+    mrt_state: "within", mrt_station: "台北101/世貿", mrt_walk_m: 330, mrt_source: "osrm-foot:v1",
+  }), new Date("2026-10-01T00:00:00.000Z"));
+  // 這一則要先變成「待刊登草稿」才走得到 publish 路徑（與使用者的實際流程一致）。
+  db.prepare("UPDATE listings SET self_status='draft' WHERE post_id=?").run(post.post_id);
+
+  // 1) 發布草稿時沒帶 fee_includes／座標 ⇒ 全部沿用
+  publishImportedDraftListing(db, 1, post.post_id, sampleInput({
+    rent: 30000, ping: 20, accept_pledge: true,
+  }), new Date("2026-10-01T01:00:00.000Z"));
+  const row1 = db.prepare("SELECT * FROM listings WHERE post_id=?").get(post.post_id);
+  assert.deepEqual(JSON.parse(row1.fee_includes), { utilities: "included" });
+  assert.equal(row1.lat, 25.033);
+  assert.equal(row1.self_mrt_walk_m, 330);
+
+  // 2) 地址換了而且沒有新的定位結果 ⇒ 舊座標與舊查證都要失效
+  db.prepare("UPDATE listings SET self_status='draft' WHERE post_id=?").run(post.post_id);
+  publishImportedDraftListing(db, 1, post.post_id, sampleInput({
+    district: "1-9", rent: 30000, ping: 20, address: "台北市信義區松高路 11 號", accept_pledge: true,
+  }), new Date("2026-10-01T02:00:00.000Z"));
+  const row2 = db.prepare("SELECT * FROM listings WHERE post_id=?").get(post.post_id);
+  assert.equal(row2.lat, null, "舊座標必須失效");
+  assert.equal(row2.lng, null);
+  assert.equal(row2.geo_source, "");
+  assert.equal(row2.self_mrt_walk_m, null, "舊地址的步行查證不可以留著");
+  assert.equal(row2.self_mrt_station, null);
+  assert.equal(row2.self_mrt_state, null, "查證狀態也要一起失效");
+  // 費用是與地址無關的資料 ⇒ 仍然保留
+  assert.deepEqual(JSON.parse(row2.fee_includes), { utilities: "included" });
+  db.close();
+});

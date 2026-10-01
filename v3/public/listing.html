@@ -7,10 +7,14 @@
   <link rel="stylesheet" href="/tokens.css" />
   <style>
     * { box-sizing: border-box; }
+    /* `[hidden]` 一定要贏過元件的 display：`.auth .member` 設了 `display:flex`，
+       權重比 UA 的 `[hidden]{display:none}` 高，於是訪客也會看到會員區的連結
+       （實際在 375px 的訪客截圖上看到「回找房頁面／登出」）。 */
+    [hidden] { display: none !important; }
     body { margin: 0; font-family: var(--font-sans, system-ui, sans-serif); color: var(--ink, #1f1b16); background: var(--bg, #f7f4ef); }
     .wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
-    header.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; }
-    .brand { font-weight: 800; letter-spacing: 0.02em; }
+    header.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; flex-wrap: wrap; }
+    .brand { font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
     .brand a { color: inherit; text-decoration: none; }
     h1 { font-size: 20px; margin: 8px 0 4px; }
     .price { font-size: 22px; font-weight: 800; color: var(--accent-deep, #a6532b); }
@@ -27,6 +31,10 @@
     .cta { position: sticky; bottom: 0; margin-top: 16px; background: var(--accent-mist, #f3ece3); border: 1px solid var(--line, #e7ded2); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .cta a.btn { background: var(--accent, #c9773f); color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
     .muted { color: var(--muted, #6b6258); font-size: 13px; }
+    .auth { display: flex; align-items: center; gap: 10px; min-height: 20px; text-align: right; }
+    .auth .member { display: flex; align-items: center; gap: 10px; }
+    .auth a { text-decoration: none; }
+    .auth a:hover { text-decoration: underline; }
     /* lightbox */
     .lb { position: fixed; inset: 0; background: rgba(20,16,12,0.92); display: none; z-index: 100; }
     .lb.open { display: flex; align-items: center; justify-content: center; }
@@ -43,7 +51,16 @@
   <div class="wrap">
     <header class="top">
       <div class="brand"><a href="/">吉比租房物件追蹤</a></div>
-      <a class="muted" href="/login.html">登入 / 註冊</a>
+      <!-- 身分未確認前只顯示載入中，不要先畫成訪客（A5）。三種狀態互斥，由 session 初始化決定。 -->
+      <div class="auth" id="authSlot" aria-live="polite">
+        <span class="muted" id="authLoading">身分確認中…</span>
+        <a class="muted" id="authLogin" href="/login.html" hidden>登入 / 註冊</a>
+        <span class="member" id="authMember" hidden>
+          <span class="muted" id="authName"></span>
+          <a class="muted" href="/">回找房頁面</a>
+          <a class="muted" href="/logout">登出</a>
+        </span>
+      </div>
     </header>
     <main id="main"><p class="err" id="loading">載入中…</p></main>
   </div>
@@ -59,10 +76,51 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    // 物件說明存的是受限的 HTML（後端 sanitizeListingBodyHtml 已經過一次白名單）。
+    // 這裡再過一次同樣的白名單才放進 innerHTML：只留 b/strong/i/em/u/br/p/span/div 與
+    // 五個安全 style 屬性，其他標籤與事件屬性一律拿掉。
+    function safeListingHtml(value) {
+      const allowed = new Set(["b", "strong", "i", "em", "u", "br", "p", "span", "div"]);
+      let text = String(value || "").replace(/\0/g, "");
+      if (!text) return "";
+      text = text
+        .replace(/<\s*script[\s\S]*?>[\s\S]*?<\s*\/\s*script\s*>/gi, "")
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)[\s\S]*?>[\s\S]*?<\/\s*\1\s*>/gi, "")
+        .replace(/<\s*(a|iframe|object|embed|link|meta|style|form|input|button|textarea|svg|img|math)\b[^>]*>/gi, "")
+        .replace(/\s(?:on\w+|href|src|srcset|xlink:href|formaction|action)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+        .replace(/javascript\s*:/gi, "");
+      return text.replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (match, tag, attrs) => {
+        const name = String(tag || "").toLowerCase();
+        if (!allowed.has(name)) return "";
+        if (name === "br") return "<br>";
+        if (match.startsWith("</")) return `</${name}>`;
+        const styleMatch = String(attrs || "").match(/style\s*=\s*["']([^"']*)["']/i);
+        const rawStyle = styleMatch ? String(styleMatch[1] || "") : "";
+        const style = rawStyle.split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+          const idx = part.indexOf(":");
+          if (idx < 0) return "";
+          const key = part.slice(0, idx).trim().toLowerCase();
+          const val = part.slice(idx + 1).trim();
+          if (key === "color" && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(val)) return `color:${val}`;
+          if (key === "font-size" && /^\d{1,2}(?:\.\d+)?px$/i.test(val)) return `font-size:${val}`;
+          if (key === "font-weight" && /^(normal|bold|[1-9]00)$/i.test(val)) return `font-weight:${val}`;
+          if (key === "font-style" && /^(normal|italic)$/i.test(val)) return `font-style:${val.toLowerCase()}`;
+          if (key === "text-decoration" && /^(none|underline)$/i.test(val)) return `text-decoration:${val.toLowerCase()}`;
+          return "";
+        }).filter(Boolean).join(";");
+        return style ? `<${name} style="${style}">` : `<${name}>`;
+      });
+    }
     const idMatch = location.pathname.match(/\/l\/(\d+)/);
     const listingId = idMatch ? idMatch[1] : "";
     let photos = [];
     let lbIndex = 0;
+    // 身分狀態：先 loading，再依 /api/me 的結果切成 guest 或 member。
+    // 公開房源內容一律走訪客視角（後端 viewerId 固定 0），私人登入狀態另外取得，
+    // 兩者不共用快取，也不把 session 塞進網址。
+    let sessionState = "loading";
+    let viewer = null;
+    let lastData = null;
 
     function openLightbox(i) {
       if (!photos.length) return;
@@ -92,7 +150,51 @@
       touchX = null;
     }, { passive: true });
 
+    function renderCta() {
+      const slot = $("shareCta");
+      if (!slot) return;
+      if (sessionState === "loading") {
+        slot.innerHTML = `<span class="muted">身分確認中…</span>`;
+        return;
+      }
+      if (sessionState === "member") {
+        slot.innerHTML = `<span class="muted">你已登入，可用特別關注、通知與更多找房功能。</span>
+          <a class="btn" href="/">回找房頁面</a>`;
+        return;
+      }
+      slot.innerHTML = `<span class="muted">註冊會員可使用特別關注、通知與更多找房功能。</span>
+        <a class="btn" href="/login.html">免費註冊</a>`;
+    }
+
+    function applySession() {
+      const loading = $("authLoading");
+      const guest = $("authLogin");
+      const member = $("authMember");
+      if (loading) loading.hidden = sessionState !== "loading";
+      if (guest) guest.hidden = sessionState !== "guest";
+      if (member) member.hidden = sessionState !== "member";
+      if (sessionState === "member" && $("authName")) {
+        $("authName").textContent = String(viewer?.display_name || viewer?.nickname || viewer?.email || "已登入會員");
+      }
+      renderCta();
+    }
+
+    // 身分確認失敗一律退回訪客（可讀、可登入），不要卡在載入中。
+    async function loadSession() {
+      try {
+        const res = await fetch("/api/me", { cache: "no-store", credentials: "same-origin" });
+        const data = res.ok ? await res.json() : null;
+        viewer = data?.ok ? data : null;
+        sessionState = viewer ? "member" : "guest";
+      } catch {
+        viewer = null;
+        sessionState = "guest";
+      }
+      applySession();
+    }
+
     function render(d) {
+      lastData = d;
       photos = Array.isArray(d.photos) && d.photos.length ? d.photos : (d.cover ? [d.cover] : []);
       const cover = photos[0] || "";
       const thumbs = photos.map((u, i) => `<button type="button" data-i="${i}" aria-label="放大第 ${i + 1} 張照片"><img src="${esc(u)}" alt="物件照片 ${i + 1}" loading="lazy" /></button>`).join("");
@@ -109,12 +211,10 @@
         <p class="meta">${[d.kind_name, d.layout, d.area_name, d.floor_display || d.floor_name].filter(Boolean).map(esc).join("・")}</p>
         ${photos.length > 1 ? `<div class="card"><div class="gallery" id="gallery">${thumbs}</div></div>` : ""}
         ${chips ? `<div class="card"><div class="chips">${chips}</div></div>` : ""}
-        ${d.body ? `<div class="card"><div class="body">${esc(d.body)}</div></div>` : ""}
+        ${d.body ? `<div class="card"><div class="body">${safeListingHtml(d.body)}</div></div>` : ""}
         ${contactBits.length ? `<div class="card contact">${contactBits.join("<br />")}</div>` : ""}
-        <div class="cta">
-          <span class="muted">註冊會員可使用特別關注、通知與更多找房功能。</span>
-          <a class="btn" href="/login.html">免費註冊</a>
-        </div>`;
+        <div class="cta" id="shareCta"></div>`;
+      renderCta();
       $("coverImg")?.addEventListener("click", () => openLightbox(0));
       $("gallery")?.addEventListener("click", (e) => {
         const b = e.target.closest("button[data-i]");
@@ -134,6 +234,7 @@
       }
     }
     load();
+    loadSession();
   </script>
 </body>
 </html>

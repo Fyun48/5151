@@ -259,6 +259,27 @@ test('live PG: anonymous search preserves guest filters and never reads private 
 });
 
 
+test('暖機迴圈：暫停期間不得再發出背景 DDL（量測「零 SQLite I/O」的前提）', async () => {
+  // 這一條是那個隨機紅燈的守衛：暖機每 500 毫秒會 `db.exec` 一次
+  // `CREATE TABLE IF NOT EXISTS listing_search_projection`，只要插進量測區間就會被記成違規 I/O。
+  const wasArmed = app.pausePublicListingsProjectionBackfill();
+  assert.equal(app.publicListingsProjectionBackfillPaused(), true, '暫停旗標要真的設起來');
+  const seen = [];
+  const originalExec = db.exec;
+  db.exec = function patchedExec(sql, ...rest) {
+    seen.push(String(sql).slice(0, 80));
+    return originalExec.call(db, sql, ...rest);
+  };
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 900)); // 原本每 500 毫秒一步 ⇒ 至少會撞到一次
+    assert.deepEqual(seen, [], '暫停期間不得有背景 DDL');
+  } finally {
+    db.exec = originalExec;
+    app.resumePublicListingsProjectionBackfill(wasArmed);
+  }
+  assert.equal(app.publicListingsProjectionBackfillPaused(), false, '恢復後旗標要清掉');
+});
+
 test('cooperative member processing preserves roles, all sort modes and statistics across chunk boundaries', async () => {
   const template = db.prepare('SELECT * FROM listings ORDER BY post_id LIMIT 1').get();
   const raw = Array.from({length:1057},(_,i)=>({...template,post_id:BASE+i+1,

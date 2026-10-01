@@ -61,9 +61,19 @@ const route = (key) => {
   return r;
 };
 
-test("分析器仍然涵蓋全部 288 條入口（不能因為改壞而少抓）", () => {
-  assert.equal(matched, 288, `應解析到 288 列，實際 ${matched}`);
-  assert.match(out, /共 \*\*288\*\* 條入口/);
+test("分析器仍然涵蓋全部 295 條入口（不能因為改壞而少抓）", () => {
+  // 288 → 292：第九十九批（C3 回饋附圖）新增四條
+  //   POST   /api/feedback/attachments
+  //   DELETE /api/feedback/attachments/:id
+  //   GET    /api/feedback-attachments/:id/thumb
+  //   GET    /api/feedback-attachments/:id
+  // 292 → 293：同批的 A4 步行捷運查詢
+  //   GET    /api/self-listings/mrt-access
+  // 293 → 295：第一百批（R3）會員自己的未送出附件預覽（與 admin 路由分開）
+  //   GET    /api/feedback/attachments/:id/thumb
+  //   GET    /api/feedback/attachments/:id
+  assert.equal(matched, 295, `應解析到 295 列，實際 ${matched}`);
+  assert.match(out, /共 \*\*295\*\* 條入口/);
 });
 
 test("/api/health 必須是「無直接DB」——它只讀行程內計數器，不碰 DB", () => {

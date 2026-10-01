@@ -232,6 +232,7 @@ const CANDIDATE_COLUMNS = `
   p.ping_min, p.must_have, p.nice_to_have, p.avoid, p.condition_choices,
   p.status, p.lifecycle, p.public_token, p.updated_at, p.published_at, p.created_at,
   p.last_confirmed_at, p.last_active_at, p.move_in_date, p.lease_duration, p.includes_management, p.mrt_walk,
+  p.fee_includes,
   p.fixture_namespace
 `;
 

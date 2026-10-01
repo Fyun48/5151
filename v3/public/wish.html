@@ -53,6 +53,14 @@
       if (!row.rent_max) return "房租上限不限";
       return `房租上限 ${money(row.rent_max)}／月`;
     }
+    function wishFeeIncludesText(row) {
+      const labels = Array.isArray(row?.fee_includes_labels) ? row.fee_includes_labels : [];
+      if (labels.length) return ` · ${labels.join("、")}`;
+      if (row?.fee_includes_state === "legacy" || row?.fee_includes_legacy === true || row?.includes_management) {
+        return " · 含水電／管理費（舊資料，未拆分）";
+      }
+      return "";
+    }
 
     async function load() {
       const main = $("main");
@@ -77,12 +85,12 @@
         main.innerHTML = `
           <p class="muted">${esc(row.headline || "租屋需求")}</p>
           <h1>${esc(areas)}</h1>
-          <p class="price">${esc(budget(row))}${row.includes_management ? " · 含水電管理費" : ""}</p>
+          <p class="price">${esc(budget(row))}${esc(wishFeeIncludesText(row))}</p>
           <p class="meta">${esc(row.housing_label || "不限類型")}${row.layout_label ? ` · ${esc(row.layout_label)}` : ""}${row.ping_min ? ` · ${esc(row.ping_min)} 坪以上` : ""}</p>
           <p class="meta">${row.move_in_date ? `預計 ${esc(row.move_in_date)} 入住` : "入住時間面議"}${row.lease_label ? ` · ${esc(row.lease_label)}` : ""}</p>
           <div class="card">
             ${row.transit_note ? `<p class="meta">捷運／車站：${esc(row.transit_note)}</p>` : ""}
-            ${row.mrt_walk ? `<p class="meta">需要可步行捷運（1 公里內）</p>` : ""}
+            ${row.mrt_walk ? `<p class="meta">需要離捷運距離（可行徑路線 1 公里內）</p>` : ""}
             ${row.body ? `<p class="body">${esc(row.body)}</p>` : ""}
           </div>
           ${row.must_have_labels?.length ? `<h2>${esc(row.label_want || "必須有")}</h2><div class="chips">${chips(row.must_have_labels)}</div>` : ""}

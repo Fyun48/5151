@@ -15,7 +15,7 @@ import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { importStore } from "../src/pgSchema.js";
 import { ensureDataRevisionTable } from "../src/dataRevision.js";
 import { evaluateHpPrep } from "../src/listingPrep.js";
-import { makeMrtKey } from "../src/mrt.js";
+import { MRT_CACHE_CONTRACT, makeMrtKey } from "../src/mrt.js";
 import { ensureListingPrepSchema, upsertListingPrep } from "../src/listingEnrichQueue.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -170,13 +170,36 @@ test("the field writes go through the driver-aware entry point", async () => {
   await writes.persistHpListingFieldsAsync(HP_PG, next, { ...options, locationChanged: true });
   assert.deepEqual(sqliteFields(app, HP_PG), sqliteFields(app, HP_SQLITE), "persistHpListingFields (sqlite)");
 
-  await writes.setCachedMrtAsync(25.31, 121.71, { resolved: true, station: "士林", walk_km: 0.4 }, options);
-  app.setCachedMrt(25.31, 121.71, { resolved: true, station: "士林", walk_km: 0.4 });
+  // R1：mrt_cache 多了來源／版本／查證狀態／原始公尺。**沒有帶契約來源的寫入一律標成未查證**
+  // （checked = 0、source = ''），讀取端就不會把它當成已查證的步行結果。
+  const verified = { resolved: true, station: "士林", walk_km: 0.4, walk_m: 412.5, searched_m: 1000, source: MRT_CACHE_CONTRACT };
+  await writes.setCachedMrtAsync(25.31, 121.71, verified, options);
+  app.setCachedMrt(25.31, 121.71, verified);
   assert.deepEqual(
     sqliteCacheRow(app, "mrt_cache", "geo_key", makeMrtKey(25.31, 121.71)),
-    { geo_key: makeMrtKey(25.31, 121.71), station: "士林", walk_km: 0.4, walk_min: null, ride_km: null, ride_min: null },
+    {
+      geo_key: makeMrtKey(25.31, 121.71),
+      station: "士林",
+      walk_km: 0.4,
+      walk_min: null,
+      ride_km: null,
+      ride_min: null,
+      source: MRT_CACHE_CONTRACT,
+      checked: 1,
+      // walk_m 是原始公尺（未四捨五入）：門檻判定用它，walk_km 只給顯示。
+      walk_m: 412.5,
+      searched_m: 1000,
+    },
     "setCachedMrt (sqlite)",
   );
+  // 未帶契約來源的舊式呼叫：寫進去也不會被當成已查證。
+  await writes.setCachedMrtAsync(25.32, 121.72, { resolved: true, station: "士林", walk_km: 0.4 }, options);
+  app.setCachedMrt(25.32, 121.72, { resolved: true, station: "士林", walk_km: 0.4 });
+  const unverifiedRow = sqliteCacheRow(app, "mrt_cache", "geo_key", makeMrtKey(25.32, 121.72));
+  assert.equal(unverifiedRow.checked, 0);
+  assert.equal(unverifiedRow.source, "");
+  assert.equal(app.getCachedMrt(25.32, 121.72), null, "未查證的列不可以當成已查證的步行結果");
+  assert.ok(app.getCachedMrt(25.31, 121.71), "有契約來源的列才是已查證");
 
   await writes.setCommunityCacheAsync({ id: 771, name: "甲社區", address: "台北市士林區", lat: 25.1, lng: 121.5 }, options);
   app.setCommunityCache({ id: 771, name: "甲社區", address: "台北市士林區", lat: 25.1, lng: 121.5 });
