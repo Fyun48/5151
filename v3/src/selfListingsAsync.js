@@ -629,7 +629,7 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
     if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
     const address = composeSelfAddress(district, input.street || input.address);
     const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
-    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
     const kind = kindId(input.kind || input.housing_type);
     const role = roleId(input.role);
     const layout = layoutText(input);
@@ -854,7 +854,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
 
   const address = composeSelfAddress(district, input.street || input.address);
   const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
-  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);

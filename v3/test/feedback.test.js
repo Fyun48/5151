@@ -153,8 +153,14 @@ test("index.html exposes feedback entry, modal and context capture", () => {
   assert.match(html, /"\/api\/feedback"/);
   // honeypot field present and visually hidden
   assert.match(html, /id="feedbackHp"/);
-  assert.match(html, /id="feedbackLegal"/);
-  assert.match(html, /\/api\/feedback\/meta/);
+  // C1（2026-10-01 工作單）：前台不再有聯絡方式欄位，也不送 contact 給後端
+  //（聯絡方式一律由後端從已驗證的會員身分取得）。
+  assert.doesNotMatch(html, /id="feedbackContact"/, "前台不得再有聯絡方式欄位");
+  assert.doesNotMatch(html, /contact:\s*\(\$\("feedbackContact"\)/, "前端不得再送 contact");
+  // C2：整段長文說明不再顯示（元素與載入器都移除；`feedbackMeta().legal` 仍保留給稽核與測試）
+  assert.doesNotMatch(html, /id="feedbackLegal"/, "前台不得再顯示長段回饋說明");
+  assert.doesNotMatch(html, /loadFeedbackLegal/, "長文的載入器要一起移除");
+  assert.match(html, /\/api\/feedback/);
 });
 
 test("admin.html exposes feedback inbox", () => {

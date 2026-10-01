@@ -102,6 +102,23 @@ export async function ensureFeedbackStoreOnce(pgDriver) {
   }
 }
 
+// C1：會員 email（唯讀；注入式 exec／PG／SQLite 三條路都走同一個查詢）。
+export const FEEDBACK_MEMBER_EMAIL_SQL = "SELECT email FROM users WHERE id = ?";
+
+async function memberEmailAsync(userId, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return "";
+  try {
+    const exec = await execFor(options);
+    // ⚠️ `execFor()` 已經回傳 `{ rows, rowCount }`（自己再包一層會拿到物件、`[0]` 永遠是 undefined）。
+    const { rows } = normalizeResult(await exec(FEEDBACK_MEMBER_EMAIL_SQL, [uid]));
+    return String(rows[0]?.email || "");
+  } catch {
+    // 讀不到會員 email 時留空（與同步版的 userInfo() 同一個容忍度）：不讓回饋因此送不出去。
+    return "";
+  }
+}
+
 async function execFor(options) {
   if (options.exec) {
     const injected = options.exec;
@@ -190,7 +207,9 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
   const body = String(input.body || "").trim();
   if (body.length < FEEDBACK_BODY_MIN) throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);
   const trimmedBody = body.slice(0, FEEDBACK_BODY_MAX);
-  const contact = String(input.contact || "").trim().slice(0, FEEDBACK_CONTACT_MAX);
+  // C1（2026-10-01 工作單）：與同步版同一條規則——聯絡方式取自「已驗證會員的 email」，
+  // 不採用前端傳來的值（避免改請求偽造他人聯絡方式）。讀不到就留空，不捏造。
+  const contact = await memberEmailAsync(uid, options).then((email) => email.slice(0, FEEDBACK_CONTACT_MAX));
   let contextText = JSON.stringify(normalizeFeedbackContext(input.context));
   if (contextText.length > FEEDBACK_CONTEXT_MAX) contextText = "{}";
 

@@ -808,7 +808,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 
   const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
   const plainBody = listingBodyPlain(body);
-  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
 
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
@@ -1195,7 +1195,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const address = composeSelfAddress(district, input.street || input.address);
   const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
   const plainBody = listingBodyPlain(body);
-  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);

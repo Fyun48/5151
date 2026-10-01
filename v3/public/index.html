@@ -4325,14 +4325,11 @@
         <p class="hint" id="feedbackKindHint" style="margin:8px 0 0">想要什麼、希望怎麼更好用</p>
         <label for="feedbackBody" style="margin-top:12px">想說的話</label>
         <textarea id="feedbackBody" name="body" maxlength="2000" style="min-height:120px" placeholder="例如：手機上篩選面板的 X 蓋到標題／希望可以依走路到捷運的時間排序"></textarea>
-        <label for="feedbackContact" style="margin-top:10px">聯絡方式（可空白）</label>
-        <input id="feedbackContact" name="contact" maxlength="200" placeholder="想收到回覆再留 Email，預設用你的帳號" />
         <input type="text" id="feedbackHp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0" />
         <details class="feedback-context" id="feedbackContextBox" style="margin-top:12px">
           <summary>系統會一起送出的資訊（點開看）</summary>
           <pre id="feedbackContextView" style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;font-size:12px"></pre>
         </details>
-        <p class="hint" id="feedbackLegal" style="margin-top:12px"></p>
         <div class="row" style="margin-top:14px">
           <button type="submit" class="primary" id="feedbackSubmit">送出回饋</button>
         </div>
@@ -12067,20 +12064,6 @@
       if (ctx.errors && ctx.errors.length) lines.push("最近錯誤：\n" + ctx.errors.join("\n"));
       if ($("feedbackContextView")) $("feedbackContextView").textContent = lines.join("\n") || "（沒有可附加的資訊）";
     }
-    let feedbackLegalCache = "";
-    async function loadFeedbackLegal() {
-      if ($("feedbackLegal") && feedbackLegalCache) $("feedbackLegal").textContent = feedbackLegalCache;
-      if (feedbackLegalCache) return feedbackLegalCache;
-      try {
-        const res = await fetch("/api/feedback/meta", { cache: "no-store" });
-        const data = await res.json();
-        feedbackLegalCache = data.legal || "";
-      } catch {
-        feedbackLegalCache = "";
-      }
-      if ($("feedbackLegal")) $("feedbackLegal").textContent = feedbackLegalCache;
-      return feedbackLegalCache;
-    }
     function openFeedbackDialog() {
       const box = $("feedbackDialog");
       if (!box) return;
@@ -12093,7 +12076,6 @@
       renderFeedbackContext();
       if ($("feedbackForm")) $("feedbackForm").reset();
       if ($("feedbackMsg")) { $("feedbackMsg").textContent = ""; $("feedbackMsg").className = "msg"; }
-      loadFeedbackLegal();
       box.hidden = false;
       setTimeout(() => $("feedbackBody")?.focus(), 40);
     }
@@ -12155,7 +12137,7 @@
           body: JSON.stringify({
             kind: feedbackKind,
             body,
-            contact: ($("feedbackContact")?.value || "").trim(),
+            // 聯絡方式由後端從已驗證的會員身分取得（C1）：前端不送、也不顯示。
             website: ($("feedbackHp")?.value || "").trim(),
             context: buildFeedbackContext(),
           }),

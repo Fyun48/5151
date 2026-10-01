@@ -157,7 +157,10 @@ export function createFeedback(db, userId, input = {}, now = new Date()) {
     throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);
   }
   const trimmedBody = body.slice(0, FEEDBACK_BODY_MAX);
-  const contact = String(input.contact || "").trim().slice(0, FEEDBACK_CONTACT_MAX);
+  // C1（2026-10-01 工作單）：聯絡方式一律用「已驗證會員的 email」。
+  // 不採用前端傳來的 `input.contact`：那可以被改請求偽造成別人的聯絡方式；
+  // 會員沒有 email 時留空（不捏造），前台也不再顯示或要求填寫。
+  const contact = userInfo(db, uid).email.slice(0, FEEDBACK_CONTACT_MAX);
   const context = normalizeFeedbackContext(input.context);
   let contextText = JSON.stringify(context);
   if (contextText.length > FEEDBACK_CONTEXT_MAX) contextText = "{}";
