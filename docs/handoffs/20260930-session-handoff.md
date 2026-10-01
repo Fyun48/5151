@@ -24,9 +24,9 @@
 - **PG 島嶼遷移：路由缺口 0**。尺規 `PG 268／無直接DB 20／MIXED 0／SQLite 0`。
 - 第 61～96 批全部合併；**第 85～96 批已部署**（92／93 兩批於 2026-09-30 08:17Z 與 09:35Z 上線，
   Owner 當次核准）。
-  - 目前正式站 digest：`sha256:f04eabefdc80f9d79cc1279178fb6b5ba6d2067efa1785eefcfa433d79d4f44e`
-    （source `495c479`，第九十六批之二）
-  - 上一個 digest：`sha256:3dcbdcc8…`（第九十六批）
+  - 目前正式站 digest：`sha256:d2ba53ce1f4f8b2562e96406c00759d885896414d14ebaf148ca0b1274f1ebcd`
+    （第九十七批之二）
+  - 上一個 digest：`sha256:b04af5ab…`（第九十七批）→ 再上一個 `sha256:f04eabef…`（第九十六批之二）
   - 上一個 digest（rollback 參考）：`sha256:287008eda3a0c0b6bf5d7d7585f516a1239f4b2ea4f909e22b239ca2c334e24f`（第九十一批）
 - ✅ **2026-09-30 09:54Z 追蹤：凍結解除**。第九十二批＋第九十三批上線後，
   `crawlScheduleV1.completed` 由空轉 **2 筆**、`settings.lastCoveringAt` 由 `2026-09-27T04:08Z`
@@ -37,6 +37,10 @@
   補上逐頁 try/catch（被擋就暫停這一家、已抓到的批次照樣回報、錯誤樣本帶出事的網址），
   並確保逐頁 catch 不吞掉整輪取消。見主文件 §94。Owner 指定「第一線就要 fail-soft」已寫進
   repo 的 `AGENTS.md`。
+- 🚨 **部署紀律（2026-10-01 實測踩到）**：跑三條 workflow 時**一定要逐段檢查結論**——
+  我有一行指令用 `gh run watch … >/dev/null` 把狀態吃掉，predeploy **失敗卻照樣部署**。
+  那次失敗是 standby `pg_dump` 的 hot-standby 衝突（`canceling statement due to conflict with recovery`，
+  偶發、與程式無關），重跑即過；但閘門失敗就該停。**不要再用 `>/dev/null` 吞結論。**
 - ⚠️ **第九十六批之二（2026-10-01 00:23Z 部署）**：修「輪次 70 分鐘沒收尾、兩輪重疊」——
   第九十六批的冷卻寫成同一輪空等 90 秒把收集階段拖過預算，加上落地階段不理會整輪取消。
   **教訓：不要在輪次中間 await 冷卻；落地階段一定要檢查取消**（主文件 §97.6）。

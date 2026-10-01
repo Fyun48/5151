@@ -5883,6 +5883,35 @@ region 4 section 1 → zip    → sid 0
 - 踩點：`now: 0` 被 `Number(options.now) || Date.now()` 當成「沒給」⇒ 輪詢窗偷偷用真實時間、
   測試變 flaky（實測同一條測試連跑兩次一紅一綠）。改成 `options.now === undefined ? … : Number(...)`。
 
+### 98.5 第九十七批之二（額度分配修正）＋一次**流程失誤**的紀錄
+
+**額度分配修正**：第九十七批部署後在沙盒實測發現 `perJob = floor(上限 ÷ **全部** job 數)` 不公平——
+正式站一輪的 6 組條件常常只有 1～2 組是 5168 能抓的，那一組只分到 2 個行政區（實測 sid 只有 `7,8`），
+12 區的台北要跑 6 輪。改成只按「**有目標的** job 數」平均：只有一個適用時 12 個全給它（一輪掃完）；
+兩個適用時各 6 個。判斷順序也改成「① 不適用 → ② 額度用完 → ③ 取輪詢窗」
+（原本先扣額度再判斷，會把剛取到的 targets 丟掉：實測額度 4 卻打 0 頁）。
+測試 30 項全綠、變異 31 條全殺。
+
+**部署身分**：
+- 第九十七批：build [36805568274](https://github.com/Fyun48/5151/actions/runs/36805568274)、
+  predeploy [36805666044](https://github.com/Fyun48/5151/actions/runs/36805666044)、
+  deploy [36805816583](https://github.com/Fyun48/5151/actions/runs/36805816583)，
+  digest `sha256:b04af5ab…`（rollback `sha256:f04eabef…`）。
+- 第九十七批之二：build [36807157380](https://github.com/Fyun48/5151/actions/runs/36807157380)、
+  deploy [36807429995](https://github.com/Fyun48/5151/actions/runs/36807429995)，
+  digest `sha256:d2ba53ce…`。
+
+> 🚨 **流程失誤（我自己犯的，寫下來給下一個 session 看）**：第九十七批之二的 predeploy
+> （[36807275871](https://github.com/Fyun48/5151/actions/runs/36807275871)）**失敗**，
+> 但我的一行指令沒有檢查 exit code（`gh run watch … >/dev/null` 吃掉了狀態）就照樣部署了。
+> **失敗原因與程式無關**：predeploy 對 **standby（`5151-postgres-A`）** 做 `pg_dump` 時
+> `route_cache` 被 `canceling statement due to conflict with recovery` 取消
+> （hot standby 的 WAL 重放與長查詢衝突，偶發）。**補救**：立刻重跑 predeploy
+> （[36807622827](https://github.com/Fyun48/5151/actions/runs/36807622827)）→ **success**，
+> 備份 `predeploy-20261001-024954`；部署前也已經有一份 02:24 的成功備份，
+> 所以沒有資料安全缺口。**教訓**：部署腳本要 `set -e`／逐段檢查結論字串，
+> 閘門失敗就停，不要用 `>/dev/null` 把狀態吃掉。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
