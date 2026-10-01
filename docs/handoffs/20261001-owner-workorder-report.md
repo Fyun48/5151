@@ -215,6 +215,30 @@
 > 📌 教訓：**新增欄位一定要開新的 migration version**。只改 `ensureXxxSchema()` 不會生效 ——
 > migration runner 只跑沒跑過的版本（本機實測回 `no such column: fee_includes`）。
 
+### §6b 的三處更新（第三輪之後，請以這裡為準）
+
+1. **R4／R5 這一列當時只涵蓋 SQLite。** 上面寫的「單句條件式 INSERT」「帶齊條件的
+   `UPDATE … RETURNING`」都只改到 `v3/src/feedbackMedia.js`（同步／SQLite）；
+   **PG async 分支（`feedbackMediaAsync.js`）當時完全沒被改到**（我的批次腳本中止後我只看 grep
+   就回報完成）。已於 **§6c** 補正，並附**真 PG、不同連線**的並行與交錯測試。
+2. **`mrt_cache` 的 PG 升級位置改了**：不再只掛「第一次寫入前」，**讀取路徑**
+   （`preloadDecorationProviderAsync`）也會先升級（`v3/src/mrtCacheSchema.js`，
+   best-effort、失敗不快取）。驗收見 §6c 的 `mrt-cache-schema-live-pg.test.js`。
+3. **schema 多一版**：第三輪為了把「已查證超過 1 公里」持久化，新增
+   `listings.self_mrt_state`（within／outside）與 `self_mrt_nearest_m` ＝ **migration version 8**
+   （§6b 的表格寫到 version 7 為止）。
+
+### 最新 HEAD／同 SHA CI／驗收證據
+
+| 項目 | 值 |
+|---|---|
+| 程式碼最終 SHA | **`1653b96`**（R1～R5 補正 ＋ 電話偵測誤判修正） |
+| 回報最終 SHA | `8f8ad1f`（之後只有 docs-only commit） |
+| 同 SHA CI | `1653b96` 與 `8f8ad1f` 都是**四項全綠**（含 Run Tests (PostgreSQL integration)） |
+| 本機全套 | 3594 項、3497 pass、2 紅（兩項在乾淨的 `origin/master` `f485a89` 上照樣紅）、95 skip |
+| 驗收證據 | §5 的 CI 表、§6c 的「同一顆 SHA 的驗收」與新增測試清單、`evidence/owner-workorder-20261001/` |
+| 變異測試 | 合計 **38 個、存活 0/38**（六套電池 ＋ `mutation-check.mjs` 內建的 `FIXTUREPHONE_MUTATIONS`） |
+
 ### 修正後的驗證（審閱要求涵蓋的情境）
 
 | 審閱要求的情境 | 怎麼驗 | 結果 |
