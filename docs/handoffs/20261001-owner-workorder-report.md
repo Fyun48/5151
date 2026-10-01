@@ -139,8 +139,8 @@
 - **尺規**：288 → **295** 條入口（C3 四條＋A4 一條＋回饋附件兩條；交接文件現況表已同步）。
 ### CI 結果（同一個 SHA）
 
-**最終 HEAD `1653b96`（四項全綠）**。`4718bff`（R1～R5 補正）與 `6391def`、`a3b9821`
-（後兩者是 docs-only）也都是四項全綠，其中 `a3b9821` 第一次紅在下面那個隨機誤判、修正後綠：
+**最終 HEAD `e4ae3a1`（四項全綠）**。`4718bff`（R1～R5 補正）、`1653b96`（電話偵測修正）
+也都是四項全綠，`6391def`／`a3b9821`／`69a2ee8` 是 docs-only：
 
 | 檢查 | 結果 | 連結 |
 |---|---|---|
@@ -153,7 +153,7 @@
 與 `66d6383`（第一百批 R1～R6）也都是四項全綠。
 `npm test` 在本機看到的 2 紅是既有基準線（見上），CI 上沒有出現。
 
-> 📌 程式碼的最終 SHA 是 `1653b96`；之後只會有 docs-only 的 commit，它們在 PR #611 上
+> 📌 程式碼的最終 SHA 是 **`e4ae3a1`**；之後只會有 docs-only 的 commit，它們在 PR #611 上
 > 都會重跑同一組檢查（清單以 PR 的 checks 為準）。
 >
 > ⚠️ **CI 在這一批紅過兩次，兩次都不是功能壞掉，但都要講清楚（不能只說「CI 全綠」）**：
@@ -237,9 +237,9 @@
 
 | 項目 | 值 |
 |---|---|
-| 程式碼最終 SHA | **`1653b96`**（R1～R5 補正 ＋ 電話偵測誤判修正） |
-| 回報最終 SHA | `8f8ad1f`（之後只有 docs-only commit） |
-| 同 SHA CI | `1653b96` 與 `8f8ad1f` 都是**四項全綠**（含 Run Tests (PostgreSQL integration)） |
+| 程式碼最終 SHA | **`e4ae3a1`**（R1～R5 補正 ＋ 電話偵測誤判修正 ＋ 暖機暫停修正） |
+| 回報最終 SHA | 本檔最後一次 docs-only commit（見 PR #611 的 checks；內容不影響程式） |
+| 同 SHA CI | `e4ae3a1` 四項全綠（含 Run Tests (PostgreSQL integration)）；`4718bff`、`1653b96` 也全綠 |
 | 本機全套 | 3595 項、3498 pass、2 紅（`PR A` 那項是工作區未提交；`cursor-2000` 在乾淨的 `origin/master` `f485a89` 上照樣紅）、95 skip |
 | 驗收證據 | §5 的 CI 表、§6c 的「同一顆 SHA 的驗收」與新增測試清單、`evidence/owner-workorder-20261001/` |
 | 變異測試 | 合計 **39 個、存活 0/39**（六套電池 ＋ `mutation-check.mjs` 內建的 `FIXTUREPHONE_MUTATIONS`、`SEARCHPARITY_MUTATIONS`） |
