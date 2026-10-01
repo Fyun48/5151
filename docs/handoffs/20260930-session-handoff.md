@@ -255,3 +255,14 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     （原本測試自己抄一份 regex，改壞了也不會紅）。
     **規則：看到「偶發紅」不要只重跑 —— 先算出機率並把誤判來源找出來**；
     重跑只是把紅燈藏起來，下一次會再打到別人。
+
+25. **背景工作會把「零 I/O」的測試弄成隨機紅燈**（2026-10-01 第一百零一批實測）。
+    `listing-search-parity.test.js` 的 `cooperative member processing…` 偶爾會多錄到
+    `db.exec(CREATE TABLE IF NOT EXISTS listing_search_projection)`：db.js 啟動後的 projection
+    暖機迴圈**每 500 毫秒**跑一步，每步第一步就是 `ensureListingSearchProjection(db)`（DDL）。
+    暖機不是請求路徑，但只要插進 `withoutSqliteIO()` 的量測區間就會被記成違規。
+    修法：暖機加上 `pausePublicListingsProjectionBackfill()`／`resume…()`，
+    **量測期間暫停、量完恢復**（正式站行為不變），並加守衛測試與變異套組。
+    本機實測：沒暫停 3/3 紅、加了暫停 4/4 綠。
+    **規則：凡是「不准碰 X」的斷言，都要先問「有沒有背景迴圈也會碰 X」**；
+    有的話就在量測區間暫停它，而不是放寬斷言。

@@ -570,34 +570,70 @@ export function refreshPublicListingsProjectionReady() {
   }
   return publicProjectionReady;
 }
-if (resolveDbDriver() !== "postgres") setTimeout(() => {
-  let idleSteps = 0;
-  const step = () => {
-    let progress = { added: 0 };
-    try {
-      progress = backfillListingSearchProjectionStep(db);
-    } catch {
-      /* fail-open：補建失敗只代表可能少顯示舊列，不能讓啟動或請求掛掉 */
-    }
-    const ready = refreshPublicListingsProjectionReady();
-    if (ready) {
-      console.log("[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first");
+// 背景暖機迴圈（可暫停）。`withoutSqliteIO()` 這類「請求路徑不得碰 SQLite」的量測要能暫時停掉它：
+// 每一步都會先 `ensureListingSearchProjection(db)`（＝一次 `db.exec` 的 DDL），剛好插進量測區間
+// 就會讓測試隨機變紅（2026-10-01 CI 的 `cooperative member processing…` 就是這樣紅的）。
+let publicProjectionBackfillTimer = null;
+let publicProjectionBackfillIdleSteps = 0;
+let publicProjectionBackfillFinished = false;
+let publicProjectionBackfillPaused = false;
+
+function publicProjectionBackfillStep() {
+  publicProjectionBackfillTimer = null;
+  if (publicProjectionBackfillPaused || publicProjectionBackfillFinished) return;
+  let progress = { added: 0 };
+  try {
+    progress = backfillListingSearchProjectionStep(db);
+  } catch {
+    /* fail-open：補建失敗只代表可能少顯示舊列，不能讓啟動或請求掛掉 */
+  }
+  const ready = refreshPublicListingsProjectionReady();
+  if (ready) {
+    console.log("[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first");
+    publicProjectionBackfillFinished = true;
+    return;
+  }
+  if (progress.added > 0) {
+    publicProjectionBackfillIdleSteps = 0;
+    console.log(`[search] projection 補建 ${progress.added} 列，仍與 listings 不一致，繼續補`);
+  } else {
+    publicProjectionBackfillIdleSteps += 1;
+    if (publicProjectionBackfillIdleSteps >= 20) {
+      console.warn("[search] projection 補建停滯：訪客搜尋維持在 Node 路徑（慢但完整）");
+      publicProjectionBackfillFinished = true;
       return;
     }
-    if (progress.added > 0) {
-      idleSteps = 0;
-      console.log(`[search] projection 補建 ${progress.added} 列，仍與 listings 不一致，繼續補`);
-    } else {
-      idleSteps += 1;
-      if (idleSteps >= 20) {
-        console.warn("[search] projection 補建停滯：訪客搜尋維持在 Node 路徑（慢但完整）");
-        return;
-      }
-    }
-    setTimeout(step, 500);
-  };
-  step();
-}, 1500);
+  }
+  publicProjectionBackfillTimer = setTimeout(publicProjectionBackfillStep, 500);
+}
+
+/**
+ * 暫停／恢復啟動時的 projection 暖機（**測試用**；正式站行為不變）。
+ *
+ * 暖機是背景工作、不屬於請求路徑，但它每一步都會 `db.exec` 一次 DDL；量測「請求路徑零 SQLite I/O」
+ * 時若剛好撞上，就會錄到那一次 exec。暫停後量完再恢復，才不會把背景工作誤判成違規。
+ */
+export function pausePublicListingsProjectionBackfill() {
+  const wasArmed = publicProjectionBackfillTimer !== null;
+  publicProjectionBackfillPaused = true;
+  if (publicProjectionBackfillTimer) {
+    clearTimeout(publicProjectionBackfillTimer);
+    publicProjectionBackfillTimer = null;
+  }
+  return wasArmed;
+}
+
+export function publicListingsProjectionBackfillPaused() {
+  return publicProjectionBackfillPaused;
+}
+
+export function resumePublicListingsProjectionBackfill(wasArmed = true) {
+  publicProjectionBackfillPaused = false;
+  if (wasArmed && !publicProjectionBackfillFinished && publicProjectionBackfillTimer === null) {
+    publicProjectionBackfillTimer = setTimeout(publicProjectionBackfillStep, 500);
+  }
+}
+if (resolveDbDriver() !== "postgres") publicProjectionBackfillTimer = setTimeout(publicProjectionBackfillStep, 1500);
 
 addColumnsIfMissing(db, "listings", [
   ["search_key", "TEXT NOT NULL DEFAULT ''"],

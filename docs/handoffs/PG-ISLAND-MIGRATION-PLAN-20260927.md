@@ -6210,6 +6210,11 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
   `mrt-cache-schema-live-pg`（舊形狀 PG 表 + 讀取路徑升級）。
 - 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）；
   六套電池 ＋ 工具內建那一條合計 **38 個變異、存活 0/38**。
+- 順手修掉的既有缺陷（二）：訪客搜尋的「請求路徑零 SQLite I/O」量測會撞到啟動暖機 ——
+  projection 暖機每 500 毫秒做一次 `db.exec` 的 DDL，插進量測區間就被記成違規 I/O
+  （CI 的 `cooperative member processing…` 隨機紅燈）。暖機改成可暫停
+  （`pausePublicListingsProjectionBackfill()`／`resume…()`），`withoutSqliteIO()` 量測期間暫停；
+  正式站行為不變。本機：沒暫停 3/3 紅、加了 4/4 綠。
 - 順手修掉的既有缺陷：Stage 1 fixture 的電話外洩偵測會把 12 字元 token hash
   （`opaqueId()`＝sha256 前 12 碼）的隨機數字串誤判成手機號碼 —— CI 的 `a3b9821`
   就是這樣紅的（實測 0.0091%／每個 hash ⇒ 該測試檔每次約 4.5% 會中）。

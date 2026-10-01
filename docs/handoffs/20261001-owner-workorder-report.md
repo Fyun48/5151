@@ -122,17 +122,19 @@
 | C1 不可偽造 | `POST /api/feedback` 帶 `contact`／`email` 都是 `attacker@evil.example` | 後台看到的聯絡方式是 **demo@example.com**（取自 session，前端傳什麼都不影響） |
 | 手機／桌機 | 375×812 與 1440×900 各跑一次「找房／有房刊登／許願房／意見回饋／分享頁」 | 五個畫面都沒有橫向溢出（`scrollWidth == innerWidth`）；「刊登物件」「公開許願房」「送出回饋」三個送出鈕都看得到、沒被遮住、可點、高 44px |
 
-- **`npm test`（本機，最終 HEAD `1653b96`、工作區乾淨）**：3594 項、**2 紅**，
+- **`npm test`（本機，工作區有未提交變更）**：3595 項、3498 pass、**2 紅**，
   兩項都在乾淨的 `origin/master`（`f485a89`）上**照樣紅**，與本批無關（裁定方式：把同兩支測試
   丟到 `git worktree add --detach /tmp/baseline-wt origin/master` 的乾淨基線跑一次）：
   1. `cursor walks past the old 2000-row candidate cap`（既有；子行程 30 秒逾時回 `null !== 0`）
   2. `cooperative member processing preserves roles…`（既有）
-  另外 95 項是環境條件不足時本來就會 skip 的（例如沒有 `PG_LIVE_REPRO_URL`）。
+  另外 95 項是環境條件不足時本來就會 skip 的（例如沒有 `PG_LIVE_REPRO_URL`）；
+  `PR A src manifest` 那一項只在工作區有未提交變更時紅，commit 之後就過。
+  同一份程式在 CI 上（乾淨 checkout）是綠的，見下面的 CI 表。
   前一輪看到的 `PR A src manifest`、`listListings benchmark`、`commute 1.5s` 這次都過
   （manifest 只因工作區髒而紅，bench 對負載敏感）。
-- **定點變異測試**：把新行為的修正逐條拿掉，**存活 0/38**
+- **定點變異測試**：把新行為的修正逐條拿掉，**存活 0/39**
   （A1～C3 10 個、R1～R6 12 個、這一輪補的 PG 5／R3 前台 2／R2 HTTP 5／R1 3 個、
-  順手修的電話偵測 1 個）。
+  順手修的電話偵測 1 個與暖機暫停 1 個）。
 - **打真實外部服務的測試**：`v3/test/mrt-walk-live.test.js`（3 項）。
 - **尺規**：288 → **295** 條入口（C3 四條＋A4 一條＋回饋附件兩條；交接文件現況表已同步）。
 ### CI 結果（同一個 SHA）
@@ -164,6 +166,9 @@
 >    沒有任何輸出，本機連跑 3 次都過）。`gh run rerun --failed` 之後同一顆 SHA 四項全綠 ⇒ 判定為
 >    runner 的隨機 flake。**這一種紅燈我不會用「重跑就好了」帶過：重跑只證明它不穩定，
 >    所以我把兩支測試的失敗條件與本機基準線都列出來，讓審閱可以自己判斷。**
+> 3. **`69a2ee8`（也只有改文件）的 Run Tests**：紅在 `cursor walks past…`（同上）與
+>    `cooperative member processing…`。第二項**不是**單純 flake —— 追下去是
+>    「背景暖機 vs 零 SQLite I/O 量測」的競態（見 §7 第 4 項），**已修 ＋ 加守衛**。
 
 ---
 
@@ -235,9 +240,9 @@
 | 程式碼最終 SHA | **`1653b96`**（R1～R5 補正 ＋ 電話偵測誤判修正） |
 | 回報最終 SHA | `8f8ad1f`（之後只有 docs-only commit） |
 | 同 SHA CI | `1653b96` 與 `8f8ad1f` 都是**四項全綠**（含 Run Tests (PostgreSQL integration)） |
-| 本機全套 | 3594 項、3497 pass、2 紅（兩項在乾淨的 `origin/master` `f485a89` 上照樣紅）、95 skip |
+| 本機全套 | 3595 項、3498 pass、2 紅（`PR A` 那項是工作區未提交；`cursor-2000` 在乾淨的 `origin/master` `f485a89` 上照樣紅）、95 skip |
 | 驗收證據 | §5 的 CI 表、§6c 的「同一顆 SHA 的驗收」與新增測試清單、`evidence/owner-workorder-20261001/` |
-| 變異測試 | 合計 **38 個、存活 0/38**（六套電池 ＋ `mutation-check.mjs` 內建的 `FIXTUREPHONE_MUTATIONS`） |
+| 變異測試 | 合計 **39 個、存活 0/39**（六套電池 ＋ `mutation-check.mjs` 內建的 `FIXTUREPHONE_MUTATIONS`、`SEARCHPARITY_MUTATIONS`） |
 
 ### 修正後的驗證（審閱要求涵蓋的情境）
 
@@ -291,7 +296,7 @@ PG async 分支根本沒被改到**（我的編輯腳本在寫檔前就中止，
 
 **定點變異測試**：這一輪再補 15 個（PG 5、R3 前台 2、R2 HTTP 5、R1 3），**全部被殺（存活 0/15）**；
 再加上順手修的電話偵測 1 個（已寫進 `mutation-check.mjs` 的新套組 `FIXTUREPHONE_MUTATIONS`）。
-六套電池 ＋ 工具內建那一條**合計 38 個變異、存活 0/38**。
+六套電池 ＋ 工具內建那兩條**合計 39 個變異、存活 0/39**。
 
 ### 同一顆 SHA 的驗收（`1653b96`；`4718bff` 的程式內容相同，只差電話偵測那一條）
 
@@ -350,7 +355,17 @@ PG async 分支根本沒被改到**（我的編輯腳本在寫檔前就中止，
    改成過一次與首頁相同的白名單 sanitizer 再放進 `innerHTML`。
 3. **`[hidden]` 輸給 `display:flex`**：訪客在 375px 會看到會員區的「回找房頁面／登出」。
    這是**看截圖才發現的** —— 自動化斷言（`hidden` 屬性、`aria-live`）全綠，畫面卻是錯的。
-4. **Stage 1 fixture 的「電話外洩」偵測會誤判 12 字元 token hash**（是在 CI 上真的遇到的）：
+4. **「請求路徑零 SQLite I/O」的測試會撞到啟動暖機**（`a3b9821`／`69a2ee8` 的 CI 紅燈之一）：
+   `listing-search-parity.test.js` 的 `cooperative member processing…` 偶爾會多錄到兩次
+   `db.exec(CREATE TABLE IF NOT EXISTS listing_search_projection)`。原因是 db.js 啟動後的
+   projection 暖機迴圈**每 500 毫秒**跑一步，而每一步的第一步就是
+   `ensureListingSearchProjection(db)`（一次 DDL）。暖機是**背景工作、不是請求路徑**，
+   但只要插進 `withoutSqliteIO()` 的量測區間就會被記成違規。
+   修法：暖機改成可暫停（`pausePublicListingsProjectionBackfill()`／`resume…()`），
+   `withoutSqliteIO()` 量測期間暫停、量完恢復（**正式站行為完全不變**），
+   並加一條守衛測試（暫停期間不得出現背景 DDL）＋變異套組 `SEARCHPARITY_MUTATIONS`。
+   本機實測：沒有暫停時 **3/3 次紅**、加上暫停後 **4/4 次綠**。
+5. **Stage 1 fixture 的「電話外洩」偵測會誤判 12 字元 token hash**（是在 CI 上真的遇到的）：
    `a3b9821` 的 Run Tests 紅在 `cleanup failure keeps non-fixture rows…`，訊息是
    `fixture evidence leaked phone near …"token_hash":"e**********d"`。
    `opaqueId()` 是 sha256 的前 12 個十六進位字元，**光靠機率**就會出現 `e0912345678d`
