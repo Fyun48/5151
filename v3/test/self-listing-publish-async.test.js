@@ -298,7 +298,8 @@ test("路由接線：兩條公開路由都用 PG 島嶼（而且真的有 import
     return server.slice(start, server.indexOf("\n});", start));
   };
   const selfPublish = bodyOf('app.post("/api/self-listings/:id/publish"');
-  assert.ok(selfPublish.includes("await publishImportedDraftListingAsync(session.userId, req.params.id, body, {"), "要用島嶼");
+  // R2：路由在呼叫島嶼前會先做地理編碼（`{ ...body, ...geo }`），錨點要跟著更新。
+  assert.ok(selfPublish.includes("await publishImportedDraftListingAsync(session.userId, req.params.id, { ...body, ...geo }, {"), "要用島嶼");
   assert.ok(selfPublish.includes("await assertOwnsMemberMediaUrlsAsync(session.userId, media)"), "素材所有權要用島嶼版");
   const importPublish = bodyOf('app.post("/api/listing-imports/:id/publish"');
   assert.ok(importPublish.includes("await publishConfirmedImportAsync(session.userId, req.params.id, body, {"), "要用島嶼");

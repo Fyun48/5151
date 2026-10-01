@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const mrtUrl = JSON.stringify(new URL("../src/mrt.js", import.meta.url).href);
 
-function runIsolated(script, timeout = 40_000) {
+function runIsolated(script, timeout = 60_000) {
   // 子程序會打外部服務；沒有 timeout 時一卡住 spawnSync 會永久阻塞（同 commute-route-live）。
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
     encoding: "utf8",
@@ -27,23 +27,39 @@ function runIsolated(script, timeout = 40_000) {
   return JSON.parse(line);
 }
 
-test("A4（live）：真實步行路線——101 旁符合、大直對岸直線近但步行超過 1 公里不符合", { timeout: 90_000 }, () => {
+test("A4（live）：真實步行路線——101 旁符合、大直對岸直線近但步行超過 1 公里不符合", { timeout: 120_000 }, () => {
   const out = runIsolated(`
     const { fetchMrtAccessWithin } = await import(${mrtUrl});
-    const near = await fetchMrtAccessWithin(25.0330, 121.5650);
-    await new Promise((r) => setTimeout(r, 1200));
-    const across = await fetchMrtAccessWithin(25.0720, 121.5480);
+    // 公開服務偶爾回 5xx／網路錯誤 ⇒ 該次會是「待確認」。重試幾次直到拿到**確定**的答案，
+    // 這樣「至少要有一個真實成功案例」才是真的在驗服務，而不是在驗對方的運氣。
+    const settle = async (lat, lng) => {
+      let last = null;
+      for (let i = 0; i < 4; i += 1) {
+        last = await fetchMrtAccessWithin(lat, lng);
+        if (last.resolved) return last;
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      return last;
+    };
+    const near = await settle(25.0330, 121.5650);
+    await new Promise((r) => setTimeout(r, 1500));
+    const across = await settle(25.0720, 121.5480);
     console.log(JSON.stringify({ near, across }));
-  `);
+  `, 110_000);
   // 1) 真實成功案例：查得到站名與步行距離，而且判定為「1 公里內」
-  assert.equal(out.near.status, "within", `101 旁應該符合，實際 ${JSON.stringify(out.near)}`);
+  assert.equal(out.near.status, "within", `101 旁應該符合（重試 4 次後仍非確定答案），實際 ${JSON.stringify(out.near)}`);
   assert.ok(out.near.station, "要回站名");
   assert.ok(out.near.walk_m > 0 && out.near.walk_m <= 1000, `步行距離應在 1 公里內，實際 ${out.near.walk_m}`);
   assert.equal(out.near.source, "osrm-foot");
 
-  // 2) 直線近但步行遠：這裡直線 843 m（< 1000）但步行 1,327 m ⇒ 必須判成不符合
-  assert.equal(out.across.status, "none", `大直對岸應判成不符合，實際 ${JSON.stringify(out.across)}`);
-  assert.ok(out.across.walk_m > 1000, `步行距離應超過 1 公里，實際 ${out.across.walk_m}`);
+  // 2) 直線近但步行遠：這裡直線 843 m（< 1000）但步行 1,327 m ⇒ **絕對不可以判成符合**。
+  //    候選站多、公開服務偶爾回 429／部分失敗時，判定會是 `unknown`（待確認，並附上最近的
+  //    已確認距離）—— 那是 R1 要求的正確行為，不是失敗。這裡驗的是那個不變式：
+  //    「不管查完沒查完，都不可以說它符合，而且已確認的最近距離一定超過 1 公里」。
+  assert.notEqual(out.across.status, "within", `大直對岸不可以判成符合：${JSON.stringify(out.across)}`);
+  assert.ok(["none", "unknown"].includes(out.across.status), `狀態只能是 none／unknown：${out.across.status}`);
+  const nearest = out.across.walk_m ?? out.across.nearest_walk_m;
+  assert.ok(Number(nearest) > 1000, `已確認的最近步行距離應超過 1 公里，實際 ${nearest}`);
 });
 
 test("A4（live）：同一組座標的 walking 與 driving 必須不同（證明真的用了 foot profile）", { timeout: 60_000 }, async () => {

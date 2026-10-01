@@ -15,5 +15,6 @@
 | `a3-admin-draft-desktop.png` | A3 | 後台目錄：改名後**還沒發布**時，逐列標「（草稿，未發布）」、按鈕變「尚未發布：確認並發布」 |
 | `a3-frontend-synced-desktop.png` | A3 | 按發布後重新載入前台：「我的刊登」卡片顯示新的目錄名稱「華廈/公寓電梯、門衛／管理」 |
 | `c3-admin-feedback-desktop.png` | C3／C1 | 後台回饋清單看得到附件縮圖；「聯絡」是會員 email（前台沒有這個欄位） |
+| `r2-listing-fee-tristate-desktop.png` / `r2-listing-fee-tristate-mobile.png` | R2 | 房東端的「租金已包含」五列三態（已含／另計／未確認）；手機 375px 沒有橫向溢出、每個選項高 44px |
 
 > ⚠️ 這些截圖是在**本機**跑的，不是正式站。Production 未部署（manual-only）。

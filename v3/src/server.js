@@ -440,7 +440,7 @@ import {
   updateDescriptionTemplateAsync,
 } from "./listingToolsAsync.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
-import { fetchMrtAccessWithin } from "./mrt.js";
+import { MRT_CACHE_CONTRACT, fetchMrtAccessWithin } from "./mrt.js";
 import { setCachedMrtAsync } from "./crawlerWrites.js";
 // geo_cache（跨節點共用的地理編碼快取）的 PG 島嶼入口。
 import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
@@ -532,6 +532,7 @@ import {
   countOpenFeedbackAttachmentsAsync,
   deleteFeedbackAttachmentAsync,
   getFeedbackAttachmentAsync,
+  getOpenFeedbackAttachmentAsync,
   listFeedbackAttachmentsForAsync,
   listOpenFeedbackAttachmentsAsync,
   listFeedbackAttachmentsAsync,
@@ -3077,6 +3078,42 @@ app.get("/api/self-listings", async (req, res) => {
   }
 });
 
+/**
+ * R2：把「地址 → 座標 → 步行捷運查證」綁到即將寫入的房源上。
+ *
+ * 這是**發布路徑**用的版本：失敗一律 fail-soft（回一個空物件），刊登不會因此卡住；
+ * 沒有查證結果時配對看到的就是「未確認」，而不是被推定成符合。
+ * 回傳的欄位直接餵給 `resolveSelfListingMeta()`。
+ */
+async function resolveSelfListingGeo(address) {
+  const text = String(address || "").trim();
+  if (text.length < 4) return {};
+  try {
+    const geo = await geocodeAddress(text, geoLookupAsync(), { strict: false, maxAttempts: 1, allowAdmin: false });
+    const lat = Number(geo?.lat);
+    const lng = Number(geo?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return {};
+    const out = { lat, lng, geo_source: "self" };
+    // 步行捷運用同一條 1 公里的定義查證一次。服務忙碌／沒查完 ⇒ 不寫 mrt_*，維持未確認。
+    try {
+      const access = await fetchMrtAccessWithin(lat, lng);
+      if (access.status === "within") {
+        out.mrt_station = access.station;
+        out.mrt_walk_m = access.walk_m;
+        out.mrt_source = MRT_CACHE_CONTRACT;
+        out.mrt_checked_at = new Date().toISOString();
+      }
+      // `within` 與 `none` 都是已查證的結果，寫進同一份快取讓內頁顯示與配對共用。
+      if (access.resolved && (access.status === "within" || access.status === "none")) {
+        await setCachedMrtAsync(lat, lng, { ...access, source: MRT_CACHE_CONTRACT }).catch(() => {});
+      }
+    } catch { /* 外部服務失敗 ⇒ 維持未確認 */ }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 // ── A4：刊登表單的「1 公里內可步行捷運」查詢 ──
 // 一定要註冊在 `/api/self-listings/:id` 之前，否則 `mrt-access` 會被當成一個 id。
 //
@@ -3111,20 +3148,41 @@ app.get("/api/self-listings/mrt-access", async (req, res) => {
     // A4：把查證過的結果寫進**同一份** `mrt_cache`（內頁裝飾與背景補齊都讀它）。
     // 這樣「表單看到的數字」與「內頁顯示的數字」是同一份資料，不會各算一套而互相矛盾。
     // 快取寫入失敗不影響這次查詢結果（它只是快取）。
-    if (access.resolved) {
-      try { await setCachedMrtAsync(lat, lng, access); } catch { /* 快取非必要 */ }
+    // 只有「已查證」的結果才寫快取；`unknown`（部分候選失敗／被截斷）不寫，
+    // 免得把待確認寫成一份看起來像已查證的資料。
+    if (access.resolved && (access.status === "within" || access.status === "none")) {
+      try { await setCachedMrtAsync(lat, lng, { ...access, source: MRT_CACHE_CONTRACT }); } catch { /* 快取非必要 */ }
     }
-    const base = { address, status: access.status, station: access.station || "", walk_m: access.walk_m ?? null, walk_km: access.walk_km ?? null, walk_min: access.walk_min ?? null };
+    const base = {
+      address,
+      status: access.status,
+      station: access.station || "",
+      // walk_m 是未四捨五入的原始公尺；walk_km 只給顯示。
+      walk_m: access.walk_m ?? null,
+      walk_km: access.walk_km ?? null,
+      walk_min: access.walk_min ?? null,
+      nearest_walk_m: access.nearest_walk_m ?? null,
+      nearest_walk_km: access.nearest_walk_km ?? null,
+      searched_m: access.searched_m ?? null,
+    };
     if (access.status === "within") {
-      res.json({ ...base, verified: true, message: `捷運${String(access.station).replace(/站$/, "")}站，步行路線約 ${access.walk_m} 公尺（1 公里內）。` });
+      res.json({ ...base, verified: true, message: `捷運${String(access.station).replace(/站$/, "")}站，步行路線約 ${Math.round(access.walk_m)} 公尺（1 公里內）。` });
       return;
     }
     if (access.status === "none") {
       res.json({ ...base, verified: true, message: "已查證：1 公里內沒有可步行到達的捷運站。" });
       return;
     }
-    // unknown：路線服務沒有給出可用結果。**不能**當成「符合」，也不能當成「確定沒有」。
-    res.json({ ...base, verified: false, retryable: true, message: "步行路線還沒查證完成，這不是「符合」也不是「確定沒有」，請稍後重試。" });
+    // unknown：還有候選站沒查完／服務沒有給出可用結果。**不能**當成「符合」，也不能當成「確定沒有」。
+    const nearest = Number(access.nearest_walk_m);
+    res.json({
+      ...base,
+      verified: false,
+      retryable: true,
+      message: Number.isFinite(nearest)
+        ? `最近的候選站步行約 ${Math.round(nearest)} 公尺，但還有站點沒查完，所以這不是「符合」也不是「確定沒有」，請稍後重試。`
+        : "步行路線還沒查證完成，這不是「符合」也不是「確定沒有」，請稍後重試。",
+    });
   } catch (error) {
     // 外部服務失敗要讓表單還能用：回一個可重試的狀態，不要 500 把整頁打斷。
     console.error("[api] 步行捷運查詢失敗：", error?.message || error);
@@ -3465,7 +3523,9 @@ app.post("/api/self-listings", async (req, res) => {
     // 可刊登條件、草稿列、夾具 registry、頭像／條件值與配對候選全部走 PG 島嶼：
     // 同步版只寫本機 ⇒ **剛刊登的物件不在站上的清單裡**（第八十四批）。
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
-    const created = await createSelfListingAsync(session.userId, body, {
+    // R2：地址定位與步行捷運查證結果要綁在這則刊登上（外部服務失敗不擋刊登）。
+    const geo = await resolveSelfListingGeo(body.street || body.address);
+    const created = await createSelfListingAsync(session.userId, { ...body, ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     });
     await attributeShareAsync(req, session.userId, "listing");
@@ -3617,6 +3677,27 @@ app.post("/api/feedback/attachments",
     } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
   });
 
+// R3：**本人、且還沒送出**的附件縮圖／原圖。會員在回饋對話框裡的預覽走這一條。
+// 已送出的附件不在此列（`feedback_id = 0` 是條件之一），仍然只有管理員讀得到。
+app.get("/api/feedback/attachments/:id/thumb", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const row = await getOpenFeedbackAttachmentAsync(session.userId, req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res, { thumb: true });
+  } catch { res.status(404).end(); }
+});
+app.get("/api/feedback/attachments/:id", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const row = await getOpenFeedbackAttachmentAsync(session.userId, req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res);
+  } catch { res.status(404).end(); }
+});
+
 app.delete("/api/feedback/attachments/:id", async (req, res) => {
   try {
     const session = readSession(req);
@@ -3751,7 +3832,9 @@ app.post("/api/self-listings/:id/publish", async (req, res) => {
     // 草稿、可刊登條件（停權／註冊滿 24 小時／同時上限）、素材所有權與配對候選全部走 PG 島嶼：
     // 同步版只寫本機 ⇒ 公開動作看起來成功、刊登卻不在站上的清單裡（第八十三批）。
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
-    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, body, {
+    // R2：地址定位與步行捷運查證結果綁在這則刊登上（外部服務失敗不擋刊登）。
+    const geo = await resolveSelfListingGeo(body.street || body.address);
+    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...body, ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }

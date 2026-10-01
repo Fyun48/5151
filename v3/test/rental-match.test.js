@@ -501,33 +501,45 @@ test("B2／A4：捷運距離需求用同一條步行定義（≤ 1 公里），�
   const catalog = defaultCatalog();
   const need = wish({ mrt_walk: true });
   // 已查證且在 1 公里內 ⇒ 符合
-  const ok = evaluateMatch(listing({ mrt_walk_km: 0.62 }), need, { catalog, now });
+  const ok = evaluateMatch(listing({ mrt_walk_m: 620 }), need, { catalog, now });
   assert.equal(ok.eligible, true);
   assert.ok(ok.matched_conditions.includes("mrt_walk"));
-  // 剛好 1 公里（含）也符合
-  assert.ok(evaluateMatch(listing({ mrt_walk_km: 1 }), need, { catalog, now }).matched_conditions.includes("mrt_walk"));
-  // 超過 1 公里 ⇒ 硬衝突（1.001 就不行）
-  const over = evaluateMatch(listing({ mrt_walk_km: 1.001 }), need, { catalog, now });
+  // 剛好 1,000 公尺（含）也符合；1,001 就不行
+  assert.ok(evaluateMatch(listing({ mrt_walk_m: 1000 }), need, { catalog, now }).matched_conditions.includes("mrt_walk"));
+  const over = evaluateMatch(listing({ mrt_walk_m: 1001 }), need, { catalog, now });
   assert.equal(over.eligible, false);
   assert.ok(over.hard_conflicts.some((row) => row.code === "mrt_walk"));
+  // R1 的迴歸案例：真距離 1,049 公尺 ⇒ 顯示會四捨五入成 1.0 公里，但**判定必須用原始公尺**
+  const rounded1049 = evaluateMatch(listing({ mrt_walk_m: 1049, mrt_walk_km: 1 }), need, { catalog, now });
+  assert.equal(rounded1049.eligible, false, "1,049 公尺不可以因為顯示成 1.0 公里就變成符合");
+  assert.ok(rounded1049.hard_conflicts.some((row) => row.code === "mrt_walk"));
+  // 0 公尺（查詢點與站點出入口重合）是合法的「符合」
+  assert.ok(evaluateMatch(listing({ mrt_walk_m: 0, mrt_walk_km: 0 }), need, { catalog, now }).matched_conditions.includes("mrt_walk"));
   // 沒有已查證的步行距離 ⇒ 未確認（不算符合、也不算衝突）
-  const unknown = evaluateMatch(listing({ mrt_walk_km: null }), need, { catalog, now });
+  const unknown = evaluateMatch(listing({ mrt_walk_m: null, mrt_walk_km: null }), need, { catalog, now });
   assert.equal(unknown.eligible, true);
   assert.ok(unknown.unmet_unknowns.includes("mrt_walk"));
   assert.ok(!unknown.matched_conditions.includes("mrt_walk"));
+  // 只有四捨五入後的公里時要保守：1.0 可能是 1,049 公尺 ⇒ 未確認，不能算符合
+  const kmOnly = evaluateMatch(listing({ mrt_walk_m: null, mrt_walk_km: 1 }), need, { catalog, now });
+  assert.ok(kmOnly.unmet_unknowns.includes("mrt_walk"));
+  assert.ok(!kmOnly.matched_conditions.includes("mrt_walk"));
+  assert.ok(evaluateMatch(listing({ mrt_walk_m: null, mrt_walk_km: 0.9 }), need, { catalog, now }).matched_conditions.includes("mrt_walk"));
+  assert.equal(evaluateMatch(listing({ mrt_walk_m: null, mrt_walk_km: 1.2 }), need, { catalog, now }).eligible, false);
   // 沒勾這個需求時完全不受影響
-  const notNeeded = evaluateMatch(listing({ mrt_walk_km: null }), wish(), { catalog, now });
+  const notNeeded = evaluateMatch(listing({ mrt_walk_m: null }), wish(), { catalog, now });
   assert.equal(notNeeded.eligible, true);
   assert.ok(!notNeeded.unmet_unknowns.includes("mrt_walk"));
 });
 
-test("A4：房源快照只採已查證的步行距離（正數才有效）", () => {
+test("A4：房源快照只採已查證的步行距離（0 是合法值）", () => {
   const base = { post_id: 9, source: "self", self_status: "open", price_num: 20000, district: "1-8", listing_values: {} };
-  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: 0.8 }).mrt_walk_km, 0.8);
-  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: 0 }).mrt_walk_km, null);
-  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: -1 }).mrt_walk_km, null);
-  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: "abc" }).mrt_walk_km, null);
-  assert.equal(listingMatchSnapshot({ ...base }).mrt_walk_km, null);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_m: 800, mrt_walk_km: 0.8 }).mrt_walk_m, 800);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_m: 0 }).mrt_walk_m, 0);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_km: 0 }).mrt_walk_km, 0);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_m: -1 }).mrt_walk_m, null);
+  assert.equal(listingMatchSnapshot({ ...base, mrt_walk_m: "abc" }).mrt_walk_m, null);
+  assert.equal(listingMatchSnapshot({ ...base }).mrt_walk_m, null);
   assert.equal(wishMatchSnapshot({ id: 1, mrt_walk: 1 }).mrt_walk, true);
   assert.equal(wishMatchSnapshot({ id: 1 }).mrt_walk, false);
 });

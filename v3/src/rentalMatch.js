@@ -144,6 +144,16 @@ export function wishRooms(layout) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/**
+ * `null`／`""` 不可以被 `Number()` 轉成 0 —— 那會讓「沒有資料」變成「0 公尺 ⇒ 符合」。
+ * （`Number(null) === 0`，`Number("") === 0`，兩者都通過 `Number.isFinite`。）
+ */
+function nonNegativeNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 export function listingMatchSnapshot(row = {}, { catalog = defaultCatalog() } = {}) {
   const fields = listingFormFields(row);
   const district = String(fields.district || "").trim();
@@ -167,11 +177,19 @@ export function listingMatchSnapshot(row = {}, { catalog = defaultCatalog() } = 
     layout_text: String(row.layout || fields.layout || ""),
     listing_values,
     source: String(row.source || "self"),
-    // B2／A4：步行到捷運的距離（公里）。只有**已查證的步行路線**結果才算；
-    // 直線距離或沒有資料一律 null ⇒ 配對時是「未確認」，不可當成已符合。
-    mrt_walk_km: Number.isFinite(Number(row.mrt_walk_km)) && Number(row.mrt_walk_km) > 0
-      ? Number(row.mrt_walk_km)
-      : null,
+    // B2／A4：步行到捷運的距離。只有**已查證的步行路線**結果才算；直線距離或沒有資料一律 null
+    // ⇒ 配對時是「未確認」，不可當成已符合。
+    // `mrt_walk_m` 是未四捨五入的原始公尺（門檻判定用）；`mrt_walk_km` 只給顯示。
+    // R2：站內刊登的查證結果直接存在房源列上（`self_mrt_*`）；其他來源走裝飾後的 `mrt_*`。
+    // 兩者都是「已查證的步行路線」才會寫進來。
+    mrt_walk_m: nonNegativeNumberOrNull(row.self_mrt_walk_m ?? row.mrt_walk_m),
+    // 公里只是顯示值：欄位沒有時由公尺換算（四捨五入到 0.1），
+    // **判定一律看 mrt_walk_m**，不要用這個值回推。
+    mrt_walk_km: nonNegativeNumberOrNull(row.self_mrt_walk_km ?? row.mrt_walk_km)
+      ?? (() => {
+        const m = nonNegativeNumberOrNull(row.self_mrt_walk_m ?? row.mrt_walk_m);
+        return m === null ? null : Math.round((m / 1000) * 10) / 10;
+      })(),
     // B1：費用條件只在站內刊登（source === "self"）可配對；其他來源沒有可靠資料 ⇒ 全部 unknown。
     fee_state: String(row.source || "self") === "self"
       ? feeInclusionStates({
@@ -452,16 +470,28 @@ export function evaluateMatch(listing, wish, {
   // B2／A4：許願房勾了「需要離捷運距離（可行徑路線 1 公里內）」時，用**同一條步行路線定義**
   // （≤ 1,000 公尺）判定。房源沒有已查證的步行距離就只能是「未確認」，不能算符合。
   if (wish.mrt_walk) {
-    const km = Number(listing.mrt_walk_km);
     const code = "mrt_walk";
-    if (!Number.isFinite(km) || km <= 0) {
+    // 一律用**原始公尺**判定。只知道四捨五入後的公里時採保守規則：
+    // 顯示成 1.0 公里可能是 1,049 公尺 ⇒ 不能算符合（舊資料就是死在這一點）。
+    // ⚠️ 這裡**不能**用 `Number(...)` 直接轉：`Number(null)`／`Number("")` 都是 0，
+    //    會被當成「0 公尺 ⇒ 符合」。（同一個坑在 snapshot 也踩過一次。）
+    const meters = nonNegativeNumberOrNull(listing.mrt_walk_m);
+    const kmOnly = nonNegativeNumberOrNull(listing.mrt_walk_km);
+    let verdict = "unknown";
+    if (meters !== null) verdict = meters <= MRT_ACCESS_MAX_M ? "within" : "outside";
+    else if (kmOnly !== null) {
+      if (kmOnly < MRT_ACCESS_MAX_M / 1000) verdict = "within";
+      else if (kmOnly > MRT_ACCESS_MAX_M / 1000) verdict = "outside";
+      else verdict = "unknown";
+    }
+    if (verdict === "within") {
+      matched_conditions.push(code);
+      explanation.push(explanationItem("matched", `步行到捷運約 ${Math.round(meters ?? kmOnly * 1000)} 公尺`, code));
+    } else if (verdict === "outside") {
+      pushConflict(hard_conflicts, code, "步行到捷運超過 1 公里");
+    } else {
       unmet_unknowns.push(code);
       explanation.push(explanationItem("unknown", "步行到捷運的距離尚未查證", code));
-    } else if (km * 1000 <= MRT_ACCESS_MAX_M) {
-      matched_conditions.push(code);
-      explanation.push(explanationItem("matched", `步行到捷運約 ${Math.round(km * 1000)} 公尺`, code));
-    } else {
-      pushConflict(hard_conflicts, code, "步行到捷運超過 1 公里");
     }
   }
 

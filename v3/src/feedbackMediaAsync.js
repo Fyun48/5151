@@ -25,6 +25,7 @@ import {
   deleteFeedbackAttachment as deleteFeedbackAttachmentSync,
   feedbackMediaDir,
   getFeedbackAttachment as getFeedbackAttachmentSync,
+  getOpenFeedbackAttachment as getOpenFeedbackAttachmentSync,
   listFeedbackAttachments as listFeedbackAttachmentsSync,
   listFeedbackAttachmentsFor as listFeedbackAttachmentsForSync,
   listOpenFeedbackAttachments as listOpenFeedbackAttachmentsSync,
@@ -216,8 +217,19 @@ export async function listOpenFeedbackAttachmentsAsync(userId, options = {}) {
       "SELECT * FROM feedback_attachment WHERE user_id=? AND feedback_id=0 AND deleted_at IS NULL ORDER BY id ASC",
       [Number(userId)],
     );
-    return rows.map(publicAttachmentShape);
+    return rows.map((row) => publicAttachmentShape(row, { scope: "admin" }));
   }, () => listOpenFeedbackAttachmentsSync(sqliteHandle(), userId));
+}
+
+/** 同步版 getOpenFeedbackAttachment() 的 driver-aware 版本（R3 的會員預覽）。 */
+export async function getOpenFeedbackAttachmentAsync(userId, id, options = {}) {
+  return withFallback(options, {}, async (exec) => {
+    const rows = await exec(
+      "SELECT * FROM feedback_attachment WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL",
+      [Number(id), Number(userId)],
+    );
+    return firstRow(rows) || null;
+  }, () => getOpenFeedbackAttachmentSync(sqliteHandle(), userId, id));
 }
 
 export async function getFeedbackAttachmentAsync(id, options = {}) {
@@ -233,7 +245,7 @@ export async function listFeedbackAttachmentsAsync(feedbackId, options = {}) {
       "SELECT * FROM feedback_attachment WHERE feedback_id=? AND deleted_at IS NULL ORDER BY id ASC",
       [Number(feedbackId)],
     );
-    return rows.map(publicAttachmentShape);
+    return rows.map((row) => publicAttachmentShape(row, { scope: "admin" }));
   }, () => listFeedbackAttachmentsSync(sqliteHandle(), feedbackId));
 }
 

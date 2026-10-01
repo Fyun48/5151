@@ -41,6 +41,8 @@ services:
       - ${WEB_B_DATA_DIR:-~/5151-shadow/web-b/data}:/data
       - /volume1/5151-media/member-media:/data/member-media
       - /volume1/5151-media/self-photos:/data/self-photos
+      # R6：私有媒體（含回饋附件）走同一份共享儲存（本機就是來源）。
+      - /volume1/5151-media/feedback-media:/data/feedback-media
     command: ["node", "src/server.js"]
 
   # worker 用 profile 關起來（2026-09-23：正式站的 worker 已在跑同一批工作，多一個會搶 job）。
@@ -76,5 +78,7 @@ services:
       - ${WEB_B_DATA_DIR:-~/5151-shadow/web-b/data}:/data
       - /volume1/5151-media/member-media:/data/member-media
       - /volume1/5151-media/self-photos:/data/self-photos
+      # R6：私有媒體（含回饋附件）走同一份共享儲存（本機就是來源）。
+      - /volume1/5151-media/feedback-media:/data/feedback-media
     command: ["node", "src/server.js"]
 

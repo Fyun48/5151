@@ -211,6 +211,12 @@ export const SELF_TITLE_MIN = 5;
 export const SELF_BODY_MAX = 500;
 export const SELF_BAN_DAYS = 14;
 export const SELF_BODY_MIN = 8;
+/**
+ * A1：工作單指定的**提示與錯誤訊息**統一用這一句（原文，不加「（至少 N 個字）」）。
+ * 8 字規則仍然照舊執行 —— 字數規則由欄位下方的即時字數提示說明
+ * （「目前 N 個字，至少還要 M 個字」），訊息本身照工作單指定的字串。
+ */
+export const SELF_BODY_HINT = "請寫一些這屋子的故事與回憶";
 export const SELF_CONTACT_MAX = 80;
 export const SELF_PHOTO_URL_MAX = 500;
 export const SELF_REPORT_HIDE_AFTER = 2;
@@ -285,6 +291,126 @@ export function selfListingMeta(options = {}) {
   };
 }
 
+/** R2：房東端可以填「租金已包含」的項目（與許願房的五個條件同一組 key）。 */
+export const SELF_FEE_INCLUDE_KEYS = Object.freeze(["utilities", "management", "parking_car", "parking_scooter", "internet"]);
+export const SELF_FEE_INCLUDE_STATES = Object.freeze(["included", "extra", "unknown"]);
+
+function normalizeFeeIncludeState(value) {
+  if (value === true || value === 1 || value === "included" || value === "present" || value === "1") return "included";
+  if (value === false || value === 0 || value === "extra" || value === "absent" || value === "0") return "extra";
+  return "unknown";
+}
+
+/**
+ * 正規化屋主填的費用三態。
+ * - 只留白名單的 key；沒提到的 key 不存在（＝未確認）
+ * - 輸入完全沒帶 `fee_includes` 時沿用 previous（編輯其他欄位不會清掉已填的費用）
+ * - 明確填 "unknown" 會蓋掉 previous（屋主可以把它改回未確認）
+ */
+export function resolveListingFeeIncludes(input = {}, previous = {}) {
+  const incoming = input.fee_includes;
+  if (incoming === undefined || incoming === null) return String(previous.fee_includes || "");
+  let bag = incoming;
+  if (typeof bag === "string") {
+    const text = bag.trim();
+    if (!text) return "";
+    try { bag = JSON.parse(text); } catch { return ""; }
+  }
+  if (!bag || typeof bag !== "object" || Array.isArray(bag)) return "";
+  const out = {};
+  for (const key of SELF_FEE_INCLUDE_KEYS) {
+    if (!(key in bag)) continue;
+    const state = normalizeFeeIncludeState(bag[key]);
+    if (state === "unknown") continue; // 未確認＝等同沒有填，不必存
+    out[key] = state;
+  }
+  return JSON.stringify(out);
+}
+
+export function parseListingFeeIncludes(row = {}) {
+  const raw = row?.fee_includes;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(String(raw || ""));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 給前端顯示用的標籤（房東端填的三態）。 */
+export const SELF_FEE_INCLUDE_LABELS = Object.freeze({
+  utilities: "水電",
+  management: "管理費",
+  parking_car: "停汽車位",
+  parking_scooter: "停機車位",
+  internet: "網路",
+});
+
+export function listingFeeIncludeLabels(row = {}) {
+  const parsed = parseListingFeeIncludes(row);
+  return SELF_FEE_INCLUDE_KEYS
+    .filter((key) => parsed[key] === "included")
+    .map((key) => `租金含${SELF_FEE_INCLUDE_LABELS[key]}`);
+}
+
+/**
+ * R2：地址定位與步行捷運查證結果要綁在房源上。
+ * - 有傳座標（伺服器端已地理編碼）⇒ 寫入 lat/lng/geo_source
+ * - 地址變了卻定位不到 ⇒ **清掉舊座標與舊查證結果**（不可以留著上一個地址的結果）
+ * - 沒有查證結果時欄位留空 ⇒ 配對看到的是「未確認」
+ */
+export function resolveListingLocation(input = {}, previous = {}, { addressChanged = false } = {}) {
+  const lat = Number(input.lat);
+  const lng = Number(input.lng);
+  const hasCoords = Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
+  if (hasCoords) {
+    return { lat, lng, geo_source: String(input.geo_source || "self"), clear: false };
+  }
+  if (addressChanged) return { lat: null, lng: null, geo_source: "", clear: true };
+  return {
+    lat: Number.isFinite(Number(previous.lat)) ? Number(previous.lat) : null,
+    lng: Number.isFinite(Number(previous.lng)) ? Number(previous.lng) : null,
+    geo_source: String(previous.geo_source || ""),
+    clear: false,
+  };
+}
+
+/**
+ * R2：把「這次寫入要落地的費用三態／座標／捷運查證結果」算成一份固定形狀。
+ * 三個寫入路徑（建立、草稿發布、匯入發布）與兩個 driver 都用這一份，避免漂移。
+ *
+ * 規則：
+ *   - 費用：輸入沒帶就沿用 previous（編輯其他欄位不會清掉已填的值）
+ *   - 座標：這次有定位到就用新的；**地址變了卻定位不到 ⇒ 清空舊座標**；
+ *           地址沒變又沒重新定位 ⇒ 沿用 previous
+ *   - 捷運：這次有查證結果就用新的；地址變了 ⇒ 一定清掉（舊結果屬於舊地址）；
+ *           地址沒變 ⇒ 沿用 previous
+ */
+export function resolveSelfListingMeta(input = {}, previous = {}, { addressChanged = false } = {}) {
+  const location = resolveListingLocation(input, previous, { addressChanged });
+  const feeIncludes = resolveListingFeeIncludes(input, previous);
+  const walkM = Number(input.mrt_walk_m);
+  const hasFresh = Number.isFinite(walkM) && walkM >= 0 && String(input.mrt_source || "");
+  let mrt = null;
+  if (hasFresh) {
+    mrt = {
+      station: String(input.mrt_station || ""),
+      walk_m: walkM,
+      source: String(input.mrt_source),
+      checked_at: String(input.mrt_checked_at || new Date().toISOString()),
+    };
+  } else if (!addressChanged && Number.isFinite(Number(previous.self_mrt_walk_m)) && Number(previous.self_mrt_walk_m) >= 0) {
+    mrt = {
+      station: String(previous.self_mrt_station || ""),
+      walk_m: Number(previous.self_mrt_walk_m),
+      source: String(previous.self_mrt_source || ""),
+      checked_at: String(previous.self_mrt_checked_at || ""),
+    };
+  }
+  return { feeIncludes, lat: location.lat, lng: location.lng, geoSource: location.geo_source, mrt };
+}
+
 export function ensureSelfListingSchema(db) {
   for (const sql of [
     "ALTER TABLE listings ADD COLUMN listed_by_user_id INTEGER",
@@ -296,6 +422,14 @@ export function ensureSelfListingSchema(db) {
     "ALTER TABLE listings ADD COLUMN self_pledge_at TEXT",
     "ALTER TABLE listings ADD COLUMN self_deposit TEXT",
     "ALTER TABLE listings ADD COLUMN listing_condition_values TEXT",
+    // R2：五項「租金已包含」的房東端三態（"included"／"extra"／"unknown"）。
+    // 空字串＝屋主沒有填過（未確認），不可以推論成「已含」或「另計」。
+    "ALTER TABLE listings ADD COLUMN fee_includes TEXT NOT NULL DEFAULT ''",
+    // R2：已查證的步行捷運結果直接綁在房源列上，內頁顯示與配對讀同一份資料。
+    "ALTER TABLE listings ADD COLUMN self_mrt_station TEXT",
+    "ALTER TABLE listings ADD COLUMN self_mrt_walk_m REAL",
+    "ALTER TABLE listings ADD COLUMN self_mrt_source TEXT",
+    "ALTER TABLE listings ADD COLUMN self_mrt_checked_at TEXT",
     "ALTER TABLE listings ADD COLUMN fixture_namespace TEXT",
   ]) {
     try {
@@ -644,6 +778,18 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
         return [];
       }
     })(),
+    // R2：屋主填的費用三態（重新編輯要原樣還原）與已查證的步行捷運結果。
+    fee_includes: parseListingFeeIncludes(row),
+    fee_include_labels: listingFeeIncludeLabels(row),
+    mrt_station: String(row.self_mrt_station || ""),
+    mrt_walk_m: Number.isFinite(Number(row.self_mrt_walk_m)) && Number(row.self_mrt_walk_m) >= 0
+      ? Number(row.self_mrt_walk_m)
+      : null,
+    mrt_walk_km: (() => {
+      const m = Number(row.self_mrt_walk_m);
+      return Number.isFinite(m) && m >= 0 ? Math.round((m / 1000) * 10) / 10 : null;
+    })(),
+    mrt_checked_at: String(row.self_mrt_checked_at || ""),
     listing_values: (() => {
       const stored = parseListingValues(row);
       if (stored && Object.keys(stored).length) return stored;
@@ -689,6 +835,9 @@ export function publicListingView(listing, id) {
     body: listing?.body || "",
     traits: Array.isArray(listing?.traits) ? listing.traits : [],
     trait_labels: Array.isArray(listing?.trait_labels) ? listing.trait_labels : [],
+    // R2：租金已包含哪些費用（屋主自己填的三態）。沒有填的項目不會出現在這裡。
+    fee_includes: listing?.fee_includes && typeof listing.fee_includes === "object" ? listing.fee_includes : {},
+    fee_include_labels: Array.isArray(listing?.fee_include_labels) ? listing.fee_include_labels : [],
     deposit: listing?.deposit || "",
     contact_name: listing?.contact_name || "",
     contact_role: listing?.contact_role || "",
@@ -816,6 +965,14 @@ export const SELF_OPEN_UPDATE_SQL = `UPDATE listings SET
       self_traits = ?,
       self_deposit = ?,
       self_pledge_at = ?,
+      fee_includes = ?,
+      lat = ?,
+      lng = ?,
+      geo_source = ?,
+      self_mrt_station = ?,
+      self_mrt_walk_m = ?,
+      self_mrt_source = ?,
+      self_mrt_checked_at = ?,
       contact_name = ?,
       contact_role = ?,
       mobile = ?,
@@ -824,10 +981,26 @@ export const SELF_OPEN_UPDATE_SQL = `UPDATE listings SET
       contact_fetched = 1
     WHERE post_id = ?`;
 
-export function selfOpenUpdateParams({ uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl }) {
+export function selfOpenUpdateParams({
+  uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+  feeIncludes = "", lat = null, lng = null, geoSource = "", mrt = null,
+}) {
   return [
     `self:${uid}:${postId}`, uid, expires, body, JSON.stringify(storedPhotos), JSON.stringify(traitIds),
-    deposit, created, contactName || roleName, roleName, phone, phone, lineUrl, postId,
+    deposit, created,
+    // R2：費用三態與座標／捷運查證結果。
+    // `geo_source` 用 CASE：傳 null 代表「這次不動」（沒重新定位），傳空字串代表「清掉舊來源」。
+    // R2：費用三態與座標／捷運查證結果一律**明確寫入**（含用 null／空字串清空）；
+    // 要保留舊值時由 `resolveSelfListingMeta()` 把舊值原樣帶進來，SQL 不做隱式保留。
+    String(feeIncludes || ""),
+    Number.isFinite(Number(lat)) && Number(lat) !== 0 ? Number(lat) : null,
+    Number.isFinite(Number(lng)) && Number(lng) !== 0 ? Number(lng) : null,
+    String(geoSource || ""),
+    mrt?.station ? String(mrt.station) : null,
+    mrt && Number.isFinite(Number(mrt.walk_m)) ? Number(mrt.walk_m) : null,
+    mrt?.source ? String(mrt.source) : null,
+    mrt?.checked_at ? String(mrt.checked_at) : null,
+    contactName || roleName, roleName, phone, phone, lineUrl, postId,
   ];
 }
 
@@ -864,7 +1037,7 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 
   const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
   const plainBody = listingBodyPlain(body);
-  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
 
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
@@ -921,6 +1094,8 @@ function insertOpenSelfListing(db, uid, input = {}, now = new Date(), { matchCan
 
   db.prepare(SELF_OPEN_UPDATE_SQL).run(...selfOpenUpdateParams({
     uid, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+    // R2：屋主填的費用三態、地址定位結果與捷運查證結果都綁在這一列上。
+    ...resolveSelfListingMeta(input, {}),
   }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     registerFixtureRow(db, {
@@ -1189,6 +1364,8 @@ export const SELF_PUBLISH_UPDATE_SQL = `UPDATE listings SET
       cover=?, tags=?,
       self_status='open', self_expires_at=?, self_body=?, self_photos=?,
       self_traits=?, self_deposit=?, self_pledge_at=?,
+      fee_includes=?, lat=?, lng=?, geo_source=?,
+      self_mrt_station=?, self_mrt_walk_m=?, self_mrt_source=?, self_mrt_checked_at=?,
       contact_name=?, contact_role=?, mobile=?, phone=?, line_url=?, contact_fetched=1,
       last_event='new', last_seen_at=?
     WHERE post_id=?`;
@@ -1196,6 +1373,7 @@ export const SELF_PUBLISH_UPDATE_SQL = `UPDATE listings SET
 export function selfPublishUpdateParams({
   postId, region, section, title, rent, address, areaName, layout, floorName, kindName, roleName,
   cover, tags, expires, body, photos, traitIds, deposit, created, contactName, phone, lineUrl,
+  feeIncludes = "", lat = null, lng = null, geoSource = "", mrt = null,
 }) {
   return [
     selfSourceKey({ regionId: region, sectionId: section, address, floorName, areaName, layout }),
@@ -1218,6 +1396,15 @@ export function selfPublishUpdateParams({
     JSON.stringify(traitIds || []),
     deposit,
     created,
+    // R2：屋主填的費用三態、地址定位與步行捷運查證結果（發布時一起落地）。
+    String(feeIncludes || ""),
+    Number.isFinite(Number(lat)) && Number(lat) !== 0 ? Number(lat) : null,
+    Number.isFinite(Number(lng)) && Number(lng) !== 0 ? Number(lng) : null,
+    String(geoSource || ""),
+    mrt?.station ? String(mrt.station) : null,
+    mrt && Number.isFinite(Number(mrt.walk_m)) ? Number(mrt.walk_m) : null,
+    mrt?.source ? String(mrt.source) : null,
+    mrt?.checked_at ? String(mrt.checked_at) : null,
     contactName || roleName,
     roleName,
     phone,
@@ -1251,7 +1438,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const address = composeSelfAddress(district, input.street || input.address);
   const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
   const plainBody = listingBodyPlain(body);
-  if (plainBody.length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+  if (plainBody.length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);
@@ -1279,6 +1466,8 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
   const title = requireListingTitle(input.title != null ? input.title : row.title);
   const created = iso(now);
   const expires = new Date(nowMs(now) + SELF_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // R2：地址換了就要讓舊的座標與步行捷運結果失效（不可以留著上一個地址的查證結果）。
+  const addressChanged = String(row.address || "").trim() !== String(address || "").trim();
   const sourceKey = selfSourceKey({
     regionId: district.region,
     sectionId: district.id,
@@ -1310,6 +1499,7 @@ export function publishImportedDraftListing(db, userId, postId, input = {}, now 
     contactName,
     phone,
     lineUrl,
+    ...resolveSelfListingMeta(input, row, { addressChanged }),
   }));
   setPublisherFace(db, row.post_id, uid);
   const listing = db.prepare("SELECT * FROM listings WHERE post_id = ?").get(row.post_id);

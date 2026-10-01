@@ -15,7 +15,7 @@ import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { importStore } from "../src/pgSchema.js";
 import { ensureDataRevisionTable } from "../src/dataRevision.js";
 import { DEMO_COMMUTE_MODE, DEMO_WORK_LAT, DEMO_WORK_LNG } from "../src/demo.js";
-import { makeMrtKey } from "../src/mrt.js";
+import { MRT_CACHE_CONTRACT, makeMrtKey } from "../src/mrt.js";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-crawler-reads-"));
@@ -168,9 +168,12 @@ async function loadFixture() {
   db.prepare("UPDATE listings SET address = ? WHERE post_id = ?").run("台北市士林區測試路 7 號", ENRICH_PRECISE);
   // MRT: a second coordinate key, with the first one already cached.
   db.prepare("UPDATE listings SET lat = 25.22, lng = 121.62 WHERE post_id = ?").run(MRT_SECOND_KEY);
+  // R1：只有 checked = 1 且 source = 目前契約的列才算「已查證的步行結果」，
+  // 沒標記的列會被當成需要重算（舊的車用 profile 值就是靠這個失效的）。
   db.prepare(
-    "INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(makeMrtKey(25.11, 121.52), "士林", 0.4, 6, 2.1, 9, stamp);
+    `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at,
+       source, checked, walk_m, searched_m) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(makeMrtKey(25.11, 121.52), "士林", 0.4, 6, 2.1, 9, stamp, MRT_CACHE_CONTRACT, 1, 400, 1000);
   // Route: one listing blocked by a failed route job, one that is already fully cached.
   app.upsertRouteJob({
     post_id: 920001,

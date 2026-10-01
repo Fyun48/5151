@@ -70,7 +70,9 @@ function createFixtureDb() {
     CREATE TABLE listing_prep (post_id INTEGER PRIMARY KEY, display_ready INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE listings (${LISTING_COLUMNS.map(columnDdl).join(", ")});
     CREATE TABLE user_match_votes (user_id INTEGER NOT NULL, post_id INTEGER NOT NULL, peer_id INTEGER NOT NULL, vote TEXT NOT NULL);
-    CREATE TABLE mrt_cache (geo_key TEXT PRIMARY KEY, station TEXT, walk_km REAL, walk_min REAL, ride_km REAL, ride_min REAL);
+    -- R1：mrt_cache 多了來源／演算法版本／查證狀態／原始公尺；裝飾路徑會一起讀出來判斷契約。
+    CREATE TABLE mrt_cache (geo_key TEXT PRIMARY KEY, station TEXT, walk_km REAL, walk_min REAL, ride_km REAL, ride_min REAL,
+      source TEXT, checked INTEGER NOT NULL DEFAULT 0, walk_m REAL, searched_m REAL);
     CREATE TABLE route_cache (route_key TEXT PRIMARY KEY, distances TEXT, min_km REAL, min_m REAL, rush_am_min INTEGER, rush_pm_min INTEGER, rush_updated_at TEXT);
     CREATE TABLE route_jobs (job_key TEXT PRIMARY KEY, post_id INTEGER, direction TEXT, kind TEXT, job_state TEXT, attempts INTEGER);
   `);

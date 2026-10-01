@@ -27,6 +27,11 @@
   新增 `feedback_attachment` 表（migration version 6）與 `demand_posts.fee_includes`／`fee_includes_at`
   （PG 用 `DEMAND_PG_ALTER_STATEMENTS` 的 `ADD COLUMN IF NOT EXISTS` 補）。
   Production 維持 manual-only，**未經 Owner 核准不得部署**。
+- 🔶 **第一百批（2026-10-01，同一張 PR #611，尚未部署）**：Owner 審閱文件的 R1～R6 修正。
+  摘要見主文件 §100。**又動了 schema**：`mrt_cache` 加四個契約欄位、
+  `listings` 加 `fee_includes` 與 `self_mrt_*`（**migration version 7**；PG 用
+  `SELF_LISTING_PG_COLUMNS`／`MRT_CACHE_PG_COLUMNS` 的 `ADD COLUMN IF NOT EXISTS` 補）。
+  R6 的共享儲存掛載已寫進 repo 與**兩台主機的正本 compose**，但**要一次部署才會生效**。
 - 第 61～96 批全部合併；**第 85～96 批已部署**（92／93 兩批於 2026-09-30 08:17Z 與 09:35Z 上線，
   Owner 當次核准）。
   - 目前正式站 digest：`sha256:d2ba53ce1f4f8b2562e96406c00759d885896414d14ebaf148ca0b1274f1ebcd`
@@ -107,12 +112,9 @@
 4. `migrate-v3-data-volume.yml` 搬的是已作廢的 SQLite 目錄；`predeploy` 仍要求 `v3.db` 存在。
 5. 主機 `/opt/5151-scripts/` 有 repo 沒有的腳本（`projection-monitor`，PR #498 未合併）⇒ 可稽核性。
 6. 爬蟲長輪次：40 分鐘仍跑不完（落地 1.5 秒/筆）⇒ 未來要批次寫入／並行化。
-7. **`mrt_cache` 的舊值沒有失效機制**（第九十九批記錄）：A4 把步行路線從「公開示範站的車用 profile」
-   換成真的 foot profile，但切換前寫入的快取值不會自動重算。最小作法是把 profile 名放進 cache key
-   （`mrt:v2:<lat>,<lng>`），舊 key 自然失效、不必新增欄位或做 PG 遷移。
-8. **站內刊登沒有費用與座標資料**：`feeInclusionStates()` 會讀 `extra_fees`／`price_contain_text`，
-   但站內刊登表單沒有這些欄位，`listings.lat/lng` 也沒寫 ⇒ 新加的費用與捷運配對條件對所有可配對
-   物件都會是「未確認」。要真的配對得到，得在刊登表單補三態費用欄位與定位（屬下一批）。
+7. ~~`mrt_cache` 的舊值沒有失效機制~~ → **第一百批 R1 已修**：加 `source`／`checked` 契約欄位，
+   舊列一律不採計、按需重算。**但容器若沒重建，`feedback-media` 的共享掛載不會生效**（見 R6）。
+8. ~~站內刊登沒有費用與座標資料~~ → **第一百批 R2 已補**（房東端三態＋發布時定位＋步行查證）。
 
 ## 5. 常用指令（照抄）
 

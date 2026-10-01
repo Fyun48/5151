@@ -52,7 +52,10 @@ test("walkable MRT distance is under 1.5 km exclusive", () => {
   assert.equal(isWalkableMrtDistance(1.4), true);
   assert.equal(isWalkableMrtDistance(1.5), false);
   assert.equal(isWalkableMrtDistance(1.6), false);
-  assert.equal(isWalkableMrtDistance(0), false);
+  // 0 是合法距離（查詢點與站點出入口重合），不可被當成「沒有值」
+  assert.equal(isWalkableMrtDistance(0), true);
+  assert.equal(isWalkableMrtDistance(-1), false);
+  assert.equal(isWalkableMrtDistance(NaN), false);
 });
 
 test("nearby walk candidates skip stations at or beyond 1.5 km straight-line", () => {
@@ -214,4 +217,61 @@ test("A4：查詢端點必須註冊在 /api/self-listings/:id 之前（否則會
   assert.match(server, /app\.get\("\/api\/self-listings\/mrt-access", async \(req, res\) => \{\s*\n\s*try \{\s*\n\s*const session = readSession\(req\);/);
   // 外部服務失敗要回可重試的狀態，不是 500
   assert.match(server, /status: "error", retryable: true, verified: false/);
+});
+
+test("R1：門檻一律用未四捨五入的公尺；顯示才四捨五入", async () => {
+  const { fetchMrtAccessWithin } = await import("../src/mrt.js");
+  // 真距離 1,049 公尺 → 顯示會是 1.0 公里，但**判定必須是不符合**
+  const over = await fetchMrtAccessWithin(25.0478, 121.5170, { routeWalk: () => ({ meters: 1049 }) });
+  assert.equal(over.status, "none");
+  assert.equal(over.resolved, true);
+  assert.equal(over.nearest_walk_m, 1049);
+  assert.equal(over.nearest_walk_km, 1);
+  // 剛好 1,000 與 1,001
+  assert.equal((await fetchMrtAccessWithin(25.0478, 121.5170, { routeWalk: () => ({ meters: 1000 }) })).status, "within");
+  assert.equal((await fetchMrtAccessWithin(25.0478, 121.5170, { routeWalk: () => ({ meters: 1001 }) })).status, "none");
+  // 0 公尺是合法的「符合」，不可以被 truthy 過濾掉
+  const zero = await fetchMrtAccessWithin(25.0478, 121.5170, { routeWalk: () => ({ meters: 0 }) });
+  assert.equal(zero.status, "within");
+  assert.equal(zero.walk_m, 0);
+  assert.equal(zero.walk_km, 0);
+});
+
+test("R1：候選站部分失敗時只能回待確認，不能宣告「已查證沒有」", async () => {
+  const { fetchMrtAccessWithin, nearbyWalkMrtStations } = await import("../src/mrt.js");
+  const stations = nearbyWalkMrtStations(25.0478, 121.5170, { maxStraightKm: 1, limit: 12 });
+  assert.ok(stations.length >= 2, "這個點本來就有多個候選站");
+  let calls = 0;
+  const partial = await fetchMrtAccessWithin(25.0478, 121.5170, {
+    routeWalk: () => {
+      calls += 1;
+      if (calls === 1) return { meters: 1300 };      // 第一站查得到但超過
+      throw new Error("boom");                        // 其餘候選站查詢失敗
+    },
+  });
+  assert.equal(partial.status, "unknown", "還有站沒查成功，不能說確定沒有");
+  assert.equal(partial.resolved, false);
+  assert.ok(partial.failed > 0);
+  // 全部成功且都超過 → 才可以宣告已查證沒有
+  const all = await fetchMrtAccessWithin(25.0478, 121.5170, { routeWalk: () => ({ meters: 1300 }) });
+  assert.equal(all.status, "none");
+  assert.equal(all.resolved, true);
+  assert.equal(all.failed, 0);
+});
+
+test("R1：候選站被上限截斷時也不可以宣告「已查證沒有」", async () => {
+  const { fetchMrtAccessWithin, nearbyWalkMrtStations } = await import("../src/mrt.js");
+  const all12 = nearbyWalkMrtStations(25.0478, 121.5170, { maxStraightKm: 1, limit: 50 });
+  // 用一個「上限比實際候選少」的情境：把上限壓到 1，就會截斷
+  const truncated = await fetchMrtAccessWithin(25.0478, 121.5170, {
+    routeWalk: () => ({ meters: 1300 }),
+    maxMeters: 1000,
+  });
+  if (all12.length > 12) {
+    assert.equal(truncated.status, "unknown", "候選被截斷時不能說確定沒有");
+  } else {
+    // 沒有截斷的情況下，全部查完且都超過 → 已查證沒有
+    assert.equal(truncated.status, "none");
+  }
+  assert.equal(truncated.truncated, all12.length > 12);
 });

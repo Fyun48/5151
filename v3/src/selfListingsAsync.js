@@ -34,6 +34,7 @@ import {
   normalizePhotoUrl,
   selfOpenInsertParams,
   selfOpenUpdateParams,
+  resolveSelfListingMeta,
   selfSearchKey,
   selfSourceKey,
   OPEN_SELF_COUNT_SQL,
@@ -83,6 +84,7 @@ import {
   getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
   SELF_BODY_MAX,
+  SELF_BODY_HINT,
   SELF_BODY_MIN,
   SELF_TITLE_MAX,
   getSelfListing as getSelfListingSync,
@@ -345,6 +347,33 @@ async function runWith(options, { write = false }, runPostgres, runSqlite) {
 }
 
 // 注入式 exec 有兩種慣例（裸陣列／`{rows}`）⇒ 在邊界正規化成 `{rows}`。
+// R2：`listings` 多了費用三態與捷運查證欄位。`ensurePgSchema()` 只在 cutover 時鏡射整張表，
+// **既有的 PG 表補不了欄位** ⇒ 第一次寫入前用 PG 的 ADD COLUMN IF NOT EXISTS 補一次
+// （沿用 listingToolsAsync／crawlerWrites 的做法，失敗不快取）。
+export const SELF_LISTING_PG_COLUMNS = [
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fee_includes TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_station TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_walk_m DOUBLE PRECISION",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_source TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_checked_at TEXT",
+];
+
+const selfListingSchemaReady = new WeakMap();
+export async function ensureSelfListingColumnsOnce(pgDriver) {
+  if (!pgDriver) return;
+  if (selfListingSchemaReady.has(pgDriver)) return selfListingSchemaReady.get(pgDriver);
+  const ready = (async () => {
+    for (const sql of SELF_LISTING_PG_COLUMNS) await pgDriver.exec(sql);
+  })();
+  selfListingSchemaReady.set(pgDriver, ready);
+  try {
+    await ready;
+  } catch (error) {
+    selfListingSchemaReady.delete(pgDriver);
+    throw error;
+  }
+}
+
 async function runnerFor(options = {}) {
   if (options.exec) {
     const injected = options.exec;
@@ -354,6 +383,7 @@ async function runnerFor(options = {}) {
     };
   }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
+  await ensureSelfListingColumnsOnce(pgDriver);
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
 }
 
@@ -629,7 +659,7 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
     if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
     const address = composeSelfAddress(district, input.street || input.address);
     const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
-    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
     const kind = kindId(input.kind || input.housing_type);
     const role = roleId(input.role);
     const layout = layoutText(input);
@@ -680,6 +710,10 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
       contactName,
       phone,
       lineUrl,
+      // R2：地址換了就要讓舊座標／舊步行結果失效（與同步版同一條規則）。
+      ...resolveSelfListingMeta(input, row, {
+        addressChanged: String(row.address || "").trim() !== String(address || "").trim(),
+      }),
     }));
     await setPublisherFaceAsync(run, row.post_id, uid);
     // 配對候選：PG 版走 `crawlerReads.matchCandidatesAsync()`（同一組 builder）。
@@ -862,7 +896,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
 
   const address = composeSelfAddress(district, input.street || input.address);
   const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
-  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);
@@ -906,6 +940,8 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
   }));
   await run(SELF_OPEN_UPDATE_SQL, selfOpenUpdateParams({
     uid: id, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+    // R2：與同步版共用同一個解析器（費用三態、地址定位、步行捷運查證）。
+    ...resolveSelfListingMeta(input, {}),
   }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     await registerFixtureRowAsync(run, {

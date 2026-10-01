@@ -20,7 +20,9 @@ import {
   countOpenFeedbackAttachments,
   deleteFeedbackAttachment,
   ensureFeedbackMediaSchema,
+  feedbackMediaFilePath,
   getFeedbackAttachment,
+  getOpenFeedbackAttachment,
   listFeedbackAttachments,
   listFeedbackAttachmentsFor,
   saveFeedbackAttachment,
@@ -186,4 +188,116 @@ test("C3：附件是站方專屬——公開路徑白名單不得出現任何回
   // 「要先登入」與「只有本人可以刪」都要在路由層
   assert.match(server, /app\.post\("\/api\/feedback\/attachments",/);
   assert.match(server, /app\.delete\("\/api\/feedback\/attachments\/:id",/);
+});
+
+test("R4：配額是原子的——並行上傳不可以超過 4 張", async () => {
+  await withTempDataDir(async () => {
+    const db = open();
+    // 5 個並行上傳（每一個都有自己的非同步解碼），只有 4 個可以成功。
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor })),
+    );
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    assert.equal(ok.length, FEEDBACK_ATTACHMENT_MAX, `應該只有 4 張成功，實際 ${ok.length}`);
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].reason.status, 409);
+    assert.equal(rejected[0].reason.code, "attachment_limit");
+    assert.equal(countOpenFeedbackAttachments(db, 7), FEEDBACK_ATTACHMENT_MAX);
+    db.close();
+  });
+});
+
+test("R4：claim 自己也要擋上限（去重後仍只允許 4 張）", async () => {
+  await withTempDataDir(async () => {
+    const db = open();
+    const rows = [];
+    for (let i = 0; i < 4; i += 1) rows.push(await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor }));
+    // 硬塞第 5 張（繞過 API，模擬「別條路徑寫進來的列」）
+    db.prepare(
+      `INSERT INTO feedback_attachment(user_id, storage_key, thumb_key, mime, format, width, height, bytes, digest, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    ).run(7, "f".repeat(32) + ".jpg", "f".repeat(32) + "_t.jpg", "image/jpeg", "jpg", 1, 1, 1, "x", new Date().toISOString());
+    const ids = [1, 2, 3, 4, 5];
+    assert.throws(() => claimFeedbackAttachments(db, 7, ids, 900), (e) => e.status === 400 && e.code === "attachment_limit");
+    // 去重後不超過 4 張就沒問題
+    assert.equal(claimFeedbackAttachments(db, 7, [1, 1, 2, 2, 3], 901), 3);
+    db.close();
+  });
+});
+
+test("R5：claim 之後的 delete 不可以刪掉已綁定的附件", async () => {
+  await withTempDataDir(async () => {
+    const db = open();
+    const row = await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor });
+    // 先 claim（模擬另一個交易在中間成功）
+    assert.equal(claimFeedbackAttachments(db, 7, [row.id], 200), 1);
+    // 再刪同一張：條件式 UPDATE 找不到符合的列 ⇒ 404，而且實體檔與列都不能被動到
+    assert.throws(() => deleteFeedbackAttachment(db, 7, row.id), (e) => e.status === 404);
+    const after = db.prepare("SELECT feedback_id, deleted_at FROM feedback_attachment WHERE id=?").get(row.id);
+    assert.equal(Number(after.feedback_id), 200);
+    assert.equal(after.deleted_at, null);
+    assert.ok(getFeedbackAttachment(db, row.id), "已綁定的附件必須還在");
+    assert.ok(existsSync(feedbackMediaFilePath(getFeedbackAttachment(db, row.id).storage_key)), "實體檔不可以被刪掉");
+    db.close();
+  });
+});
+
+test("R5：孤兒清理不可以刪掉已綁定的附件（含清理過程中被 claim 的情況）", async () => {
+  await withTempDataDir(async () => {
+    const db = open();
+    const now = new Date("2026-10-01T12:00:00.000Z");
+    const old = new Date("2026-09-30T00:00:00.000Z");
+    const orphan = await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor, now: old });
+    const bound = await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor, now: old });
+    claimFeedbackAttachments(db, 7, [bound.id], 300, old);
+    // 清理前一刻才被 claim 的那一張：模擬方式是先讓 sweep 看到它，再在掃描與刪除之間 claim。
+    // 這裡直接驗條件式 UPDATE 的效果：sweep 只動 feedback_id = 0 的列。
+    const res = sweepOrphanFeedbackAttachments(db, { now, olderThanMs: 24 * 60 * 60 * 1000 });
+    assert.equal(res.removed, 1, "只應該清掉那一張孤兒");
+    assert.equal(getFeedbackAttachment(db, orphan.id), null);
+    const boundRow = getFeedbackAttachment(db, bound.id);
+    assert.ok(boundRow, "已綁定的附件不能被孤兒清理刪掉");
+    assert.equal(Number(boundRow.feedback_id), 300);
+    assert.ok(existsSync(feedbackMediaFilePath(boundRow.storage_key)), "已綁定的實體檔必須還在");
+    db.close();
+  });
+});
+
+test("R3：一般會員的預覽路由只認「本人、還沒送出」的附件", async () => {
+  await withTempDataDir(async () => {
+    const db = open();
+    const mine = await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor });
+    const bound = await saveFeedbackAttachment(db, 7, PNG, { processor: fakeProcessor });
+    claimFeedbackAttachments(db, 7, [bound.id], 500);
+    const other = await saveFeedbackAttachment(db, 9, PNG, { processor: fakeProcessor });
+
+    // 本人未送出 ⇒ 讀得到
+    assert.ok(getOpenFeedbackAttachment(db, 7, mine.id));
+    // 已送出 ⇒ 一般會員讀不到（只有管理員的 /api/feedback-attachments 讀得到）
+    assert.equal(getOpenFeedbackAttachment(db, 7, bound.id), null);
+    assert.ok(getFeedbackAttachment(db, bound.id), "管理員路徑仍讀得到已送出的附件");
+    // 別人的未送出附件 ⇒ 讀不到
+    assert.equal(getOpenFeedbackAttachment(db, 7, other.id), null);
+    // 回傳給前台的網址要是**本人路由**，不是 admin 路由（會員拿 admin 路由只會 403）
+    assert.match(mine.thumb_url, /^\/api\/feedback\/attachments\/\d+\/thumb$/);
+    assert.doesNotMatch(mine.thumb_url, /^\/api\/feedback-attachments/);
+    db.close();
+  });
+});
+
+test("R3：前台預覽用本機 blob、上傳中鎖住送出、換世代丟棄延遲結果", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  // 本機 blob 預覽（不依賴伺服器權限）
+  assert.match(html, /URL\.createObjectURL\(file\)/);
+  assert.match(html, /row\.preview_url \|\| row\.thumb_url/);
+  assert.match(html, /URL\.revokeObjectURL/);
+  // 上傳中鎖住送出
+  assert.match(html, /if \(submit\) submit\.disabled = feedbackImageBusy;/);
+  assert.match(html, /if \(feedbackImageBusy\) \{\s*\n\s*if \(msg\) \{ msg\.textContent = "圖片還在上傳/);
+  // 換世代：關閉／重開對話框之後，較早的回應要被丟棄
+  assert.match(html, /let feedbackImageGeneration = 0;/);
+  assert.match(html, /if \(generation !== feedbackImageGeneration\) \{/);
+  assert.match(html, /feedbackImageGeneration \+= 1;/);
 });

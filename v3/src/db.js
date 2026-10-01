@@ -116,7 +116,7 @@ import {
 } from "./matchVotes.js";
 import { commuteWorkJobs, hasWorkPoint, needsListingGeo, normalizeCommuteMode } from "./geo.js";
 import { demoCommutePatch } from "./demo.js";
-import { isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
+import { MRT_CACHE_CONTRACT, isWalkableMrtDistance, makeMrtKey } from "./mrt.js";
 import { applySettingPatch, hydrateSettings, parseSettingRows, snapshotSettings, planIntervalMinutes, resolveSaveAsProfileAction, profileNameOrDraft, MEMBER_MAX_PROFILES, ADMIN_MAX_PROFILES, clampIntervalMinutes, memberShouldContributeCrawl, memberFetchCollision, memberHasCrawlScope } from "./settingsState.js";
 import { defaultLegalCopy, normalizeLegalCopy, publicLegalCopy } from "./legalCopy.js";
 import { adminMemberView } from "./adminMemberView.js";
@@ -635,6 +635,14 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
 `);
+// R1：mrt_cache 的「來源／演算法版本／查證狀態／原始公尺」契約。
+// 沒有這四欄（或 source 不是目前契約）的列都**不算已查證的步行結果**，會按需重算。
+addColumnsIfMissing(db, "mrt_cache", [
+  ["source", "TEXT"],
+  ["checked", "INTEGER NOT NULL DEFAULT 0"],
+  ["walk_m", "REAL"],
+  ["searched_m", "REAL"],
+]);
 addColumnsIfMissing(db, "route_cache", [
   ["rush_am_min", "REAL"],
   ["rush_pm_min", "REAL"],
@@ -3123,9 +3131,13 @@ export function preloadedDecorationProvider({
       const key = makeMrtKey(lat, lng);
       if (String(key).includes("NaN")) return null;
       const row = mrtCache.get(String(key));
-      if (!row) return null;
+      // PG 裝飾路徑也要同一條契約：未查證／舊來源的列不算已查證。
+      if (!isVerifiedMrtRow(row)) return null;
       return {
         station: String(row.station || ""),
+        walk_m: Number(row.walk_m) >= 0 ? Number(row.walk_m) : null,
+        searched_m: Number(row.searched_m) || null,
+        source: String(row.source || ""),
         walk_km: Number(row.walk_km) || null,
         walk_min: Number(row.walk_min) || null,
         ride_km: Number(row.ride_km) || null,
@@ -5975,50 +5987,84 @@ export function getCachedRoute(fromLat, fromLng, toLat, toLng, mode = "scooter",
   return parsed;
 }
 
-export function getCachedMrt(lat, lng) {
-  const key = makeMrtKey(lat, lng);
-  if (!key.includes("NaN")) {
-    const row = db.prepare("SELECT station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE geo_key = ?").get(key);
-    if (row) {
-      return {
-        station: String(row.station || ""),
-        walk_km: Number(row.walk_km) || null,
-        walk_min: Number(row.walk_min) || null,
-        ride_km: Number(row.ride_km) || null,
-        ride_min: Number(row.ride_min) || null,
-        resolved: true,
-      };
-    }
-  }
-  return null;
+export const MRT_CACHE_COLUMNS = "geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m";
+
+/** 一列快取是否為「已查證的步行結果」：必須 checked = 1 且來源＋版本等於目前契約。 */
+export function isVerifiedMrtRow(row) {
+  if (!row) return false;
+  if (Number(row.checked) !== 1) return false;
+  return String(row.source || "") === MRT_CACHE_CONTRACT;
 }
 
-export const MRT_CACHE_UPSERT_SQL = `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+export function mrtRowToAccess(row) {
+  if (!isVerifiedMrtRow(row)) return null;
+  const walkM = Number(row.walk_m);
+  return {
+    station: String(row.station || ""),
+    // 原始公尺優先（未四捨五入）；舊列沒有 walk_m 時才落回公里換算。
+    walk_m: Number.isFinite(walkM) ? walkM : (Number(row.walk_km) >= 0 ? Number(row.walk_km) * 1000 : null),
+    walk_km: Number(row.walk_km) >= 0 ? Number(row.walk_km) : null,
+    walk_min: Number(row.walk_min) >= 0 ? Number(row.walk_min) : null,
+    ride_km: Number(row.ride_km) || null,
+    ride_min: Number(row.ride_min) || null,
+    searched_m: Number(row.searched_m) || null,
+    source: String(row.source || ""),
+    resolved: true,
+  };
+}
+
+export function getCachedMrt(lat, lng) {
+  const key = makeMrtKey(lat, lng);
+  if (key.includes("NaN")) return null;
+  const row = db.prepare(`SELECT ${MRT_CACHE_COLUMNS} FROM mrt_cache WHERE geo_key = ?`).get(key);
+  // ⚠️ 沒查證過、或來源不是目前契約的列一律當成「沒有快取」⇒ 會重算，
+  //    不會把舊的車用 profile 值當成已查證的步行結果。
+  return mrtRowToAccess(row);
+}
+
+export const MRT_CACHE_UPSERT_SQL = `INSERT INTO mrt_cache(geo_key, station, walk_km, walk_min, ride_km, ride_min, updated_at, source, checked, walk_m, searched_m)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(geo_key) DO UPDATE SET
        station = excluded.station,
        walk_km = excluded.walk_km,
        walk_min = excluded.walk_min,
        ride_km = excluded.ride_km,
        ride_min = excluded.ride_min,
-       updated_at = excluded.updated_at`;
+       updated_at = excluded.updated_at,
+       source = excluded.source,
+       checked = excluded.checked,
+       walk_m = excluded.walk_m,
+       searched_m = excluded.searched_m`;
 
 // The MRT cache row setCachedMrt() writes, as a statement the caller can run on either driver
 // (`null` = nothing to store, which is also what the synchronous function returns early on).
 export function mrtCacheUpsert(lat, lng, access, { now = new Date().toISOString() } = {}) {
+  // 只有「已查證」的結果可以進快取。`resolved === false`（待確認）或忙碌一律不寫，
+  // 免得把「未查證」寫成一份看起來像已查證的資料。
   if (!access || access.pending || access.resolved === false) return null;
   const key = makeMrtKey(lat, lng);
   if (key.includes("NaN")) return null;
+  const source = String(access.source || "");
+  // 沒有帶來源的呼叫端（舊路徑）一律標成未查證，不會被當成 foot 結果讀回來。
+  const verified = source === MRT_CACHE_CONTRACT;
+  const walkM = Number(access.walk_m);
+  const km = Number.isFinite(walkM)
+    ? Math.round((walkM / 1000) * 10) / 10
+    : (Number(access.walk_km) >= 0 ? Number(access.walk_km) : null);
   return {
     sql: MRT_CACHE_UPSERT_SQL,
     params: [
       key,
       String(access.station || ""),
-      Number(access.walk_km) || null,
-      Number(access.walk_min) || null,
+      Number.isFinite(Number(km)) ? Number(km) : null,
+      Number(access.walk_min) >= 0 ? Number(access.walk_min) : null,
       Number(access.ride_km) || null,
       Number(access.ride_min) || null,
       now,
+      verified ? source : "",
+      verified ? 1 : 0,
+      Number.isFinite(walkM) && walkM >= 0 ? walkM : null,
+      Number(access.searched_m) || null,
     ],
   };
 }
@@ -6045,7 +6091,11 @@ export function mrtScanQuery() {
 }
 
 export function mrtCacheKeysQuery() {
-  return { sql: "SELECT geo_key FROM mrt_cache", params: [] };
+  // 只把「已查證且符合目前契約」的 key 當成已有快取；其餘的列會被排進重算。
+  return {
+    sql: "SELECT geo_key FROM mrt_cache WHERE checked = 1 AND source = ?",
+    params: [MRT_CACHE_CONTRACT],
+  };
 }
 
 export function pickMrtRows(rows, { limit = 20, hasMrt = () => false } = {}) {
@@ -6087,11 +6137,15 @@ function mrtFields(row, settings, provider) {
     return { mrt_station: "", mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
   }
   if (!cached.station || !isWalkableMrtDistance(cached.walk_km)) {
-    return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null };
+    return { mrt_station: null, mrt_walk_km: null, mrt_walk_min: null, mrt_ride_km: null, mrt_ride_min: null, mrt_walk_m: null };
   }
   return {
     mrt_station: cached.station,
     mrt_walk_km: cached.walk_km,
+    // R1：原始公尺（未四捨五入）一起帶出去，讓配對與門檻用同一個值判定，
+    // 不再發生「顯示四捨五入成 1.0 公里 ⇒ 配對以為剛好符合」。
+    mrt_walk_m: Number.isFinite(Number(cached.walk_m)) ? Number(cached.walk_m) : null,
+    mrt_searched_m: Number(cached.searched_m) || null,
     mrt_walk_min: null,
     mrt_ride_km: null,
     mrt_ride_min: null,

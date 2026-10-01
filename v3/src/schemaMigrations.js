@@ -106,4 +106,16 @@ export const SCHEMA_MIGRATIONS = [
       ensureFeedbackMediaSchema(db);
     },
   },
+  {
+    // R2：站內刊登的費用三態（`fee_includes`）與步行捷運查證（`self_mrt_*`）。
+    // ⚠️ 一定要「新增一個版本」而不是只改 `ensureSelfListingSchema()`：migration runner
+    // 只跑沒跑過的版本，既有的資料庫不會重跑 version 3，欄位就永遠不會被加上去
+    // （本機實測：刊登時回 `no such column: fee_includes`）。`ensureSelfListingSchema()` 內是
+    // 幂等的 try/catch ALTER，重跑安全。
+    version: 7,
+    name: "self_listing_fee_mrt_schema",
+    up(db) {
+      ensureSelfListingSchema(db);
+    },
+  },
 ];

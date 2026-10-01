@@ -1,4 +1,4 @@
-# 5151 媒體共享儲存（member-media／self-photos）
+# 5151 媒體共享儲存（member-media／self-photos／feedback-media）
 
 2026-09-24 上線。目標：讓 web-A／web-B／正式站三個節點看到**同一份**會員媒體檔案，
 關掉 web 層 HA 的最後一個破口（上傳在 A、從 B 讀會 404）。
@@ -7,7 +7,7 @@
 
 ```
 Synology（syn-nas 192.168.0.220）
-  /volume1/5151-media/{member-media,self-photos}      ← 唯一實體來源（NFS export）
+  /volume1/5151-media/{member-media,self-photos,feedback-media}   ← 唯一實體來源（NFS export）
       │
       ├─ web-B（同機，直接 bind 本機路徑）
       │
@@ -17,8 +17,13 @@ Synology（syn-nas 192.168.0.220）
                   └─ 5151-web-A           bind 同上
 ```
 
-程式不需要改：`memberMedia.js`／`selfPhotos.js` 都是 `path.join(DATA_DIR, "member-media"|"self-photos")`，
+程式不需要改：`memberMedia.js`／`selfPhotos.js`／`feedbackMedia.js` 都是
+`path.join(DATA_DIR, "member-media"|"self-photos"|"feedback-media")`，
 所以只要把共享目錄**疊在 `/data` 的子目錄上**即可。
+
+> 📌 2026-10-01 補上 `feedback-media`（意見回饋附圖）：它跟會員媒體一樣是**私有**資產
+> （只有 `requireAdminApi` 讀得到），所以走同一份共享儲存。少了這一條，A 台上傳的附件
+> 從 B 台讀會 404，而且跨節點 sweep 會刪掉 metadata 卻留下另一台的孤兒檔。
 
 ## 三份 compose 的變更（各加兩行）
 

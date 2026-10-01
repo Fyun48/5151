@@ -150,10 +150,43 @@ export async function persistHpListingFieldsAsync(postId, next, options = {}) {
 }
 
 // db.js setCachedMrt(): the MRT access cache (decoration reads it per row).
+//
+// R1：`mrt_cache` 多了「來源／演算法版本／查證狀態／原始公尺」四欄。`ensurePgSchema()` 只在
+// cutover 時鏡射整張表，**既有 PG 表補不了欄位** ⇒ 第一次寫入前用 PG 的
+// `ADD COLUMN IF NOT EXISTS` 補一次（沿用 listingToolsAsync 的做法，失敗不快取）。
+export const MRT_CACHE_PG_COLUMNS = [
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT",
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT 0",
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION",
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION",
+];
+
+const mrtSchemaReady = new WeakMap();
+export async function ensureMrtCacheContractOnce(pgDriver, { exec } = {}) {
+  // 注入式 exec（測試／探針）由夾具自己建好欄位，這裡不插話。
+  if (!pgDriver) return;
+  if (mrtSchemaReady.has(pgDriver)) return mrtSchemaReady.get(pgDriver);
+  const ready = (async () => {
+    for (const sql of MRT_CACHE_PG_COLUMNS) await pgDriver.exec(sql);
+  })();
+  mrtSchemaReady.set(pgDriver, ready);
+  try {
+    await ready;
+  } catch (error) {
+    mrtSchemaReady.delete(pgDriver);
+    throw error;
+  }
+}
+
 export function setCachedMrtAsync(lat, lng, access, options = {}) {
   return write(
     options,
-    (exec) => setCachedMrtRepo(exec, { deps: options.deps || listingFieldsBuildContext(), lat, lng, access }),
+    async (exec) => {
+      if (!options.exec) {
+        await ensureMrtCacheContractOnce(options.pgDriver || (await sharedPgDriver()));
+      }
+      return setCachedMrtRepo(exec, { deps: options.deps || listingFieldsBuildContext(), lat, lng, access });
+    },
     () => setCachedMrtSync(lat, lng, access),
   );
 }

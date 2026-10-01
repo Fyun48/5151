@@ -114,6 +114,15 @@ export async function validateFeedbackImage(buffer, { processor = normalizeImage
   return processed;
 }
 
+/**
+ * 條件式 INSERT：只有「這個人目前未送出的附件數 < 上限」時才寫得進去。
+ * 這一句就是配額的**唯一權威**（前台是否循序上傳不影響正確性）。
+ * 回傳 `changes === 1` 才代表成功，`0` 代表超過上限。
+ */
+export const FEEDBACK_ATTACHMENT_INSERT_SQL = `INSERT INTO feedback_attachment(user_id, storage_key, thumb_key, mime, format, width, height, bytes, digest, created_at)
+  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  WHERE (SELECT COUNT(*) FROM feedback_attachment WHERE user_id = ? AND feedback_id = 0 AND deleted_at IS NULL) < ?`;
+
 export function countOpenFeedbackAttachments(db, userId) {
   const row = db.prepare(
     "SELECT COUNT(*) AS n FROM feedback_attachment WHERE user_id=? AND feedback_id=0 AND deleted_at IS NULL",
@@ -121,18 +130,26 @@ export function countOpenFeedbackAttachments(db, userId) {
   return Number(row?.n) || 0;
 }
 
-/** 對外的附件形狀（同步版與 PG 島嶼共用同一份，避免兩邊漂移）。 */
-export function publicAttachmentShape(row) {
+/**
+ * 對外的附件形狀（同步版與 PG 島嶼共用同一份，避免兩邊漂移）。
+ *
+ * R3：**兩種讀取權限要分開**。
+ *   - `owner`（預設）：`/api/feedback/attachments/:id/thumb` —— 只給「本人、且還沒送出」的附件，
+ *     一般會員在對話框裡預覽縮圖就是走這一條（原本指向 admin 路由，會員只會拿到 403）。
+ *   - `admin`：`/api/feedback-attachments/:id/thumb` —— 站方看已送出的附件，`requireAdminApi`。
+ */
+export function publicAttachmentShape(row, { scope = "owner" } = {}) {
   if (!row) return null;
   const id = Number(row.id);
+  const prefix = scope === "admin" ? "/api/feedback-attachments" : "/api/feedback/attachments";
   return {
     id,
     bytes: Number(row.bytes) || 0,
     width: Number(row.width) || 0,
     height: Number(row.height) || 0,
     mime: String(row.mime || "image/jpeg"),
-    thumb_url: `/api/feedback-attachments/${id}/thumb`,
-    url: `/api/feedback-attachments/${id}`,
+    thumb_url: `${prefix}/${id}/thumb`,
+    url: `${prefix}/${id}`,
   };
 }
 
@@ -143,9 +160,6 @@ export async function saveFeedbackAttachment(db, userId, buffer, {
 } = {}) {
   const uid = Number(userId) || 0;
   if (!uid) throw httpError("請先登入才能上傳圖片", 401, "login_required");
-  if (countOpenFeedbackAttachments(db, uid) >= FEEDBACK_ATTACHMENT_MAX) {
-    throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片，請先刪除再上傳`, 409, "attachment_limit");
-  }
   const processed = await validateFeedbackImage(buffer, { processor });
   const key = randomBytes(16).toString("hex");
   const mainName = `${key}.jpg`;
@@ -158,13 +172,17 @@ export async function saveFeedbackAttachment(db, userId, buffer, {
     written.push(mainName);
     writeFileSync(path.join(dir, thumbName), processed.thumb.buffer);
     written.push(thumbName);
-    const res = db.prepare(
-      `INSERT INTO feedback_attachment(user_id, storage_key, thumb_key, mime, format, width, height, bytes, digest, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    ).run(
+    // R4：配額必須**原子**。`COUNT → await 解碼 → INSERT` 中間有 await，五個並行上傳會全部
+    // 通過檢查。改成單句的條件式 INSERT（`INSERT … SELECT … WHERE (SELECT COUNT(*) …) < 上限`），
+    // 由資料庫自己保證「同一個使用者最多 4 張未送出附件」。
+    const res = db.prepare(FEEDBACK_ATTACHMENT_INSERT_SQL).run(
       uid, mainName, thumbName, processed.mime, processed.format,
       processed.main.width, processed.main.height, processed.main.buffer.length, processed.digest, ts,
+      uid, FEEDBACK_ATTACHMENT_MAX,
     );
+    if (Number(res.changes) !== 1) {
+      throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片，請先刪除再上傳`, 409, "attachment_limit");
+    }
     return publicAttachmentShape(db.prepare("SELECT * FROM feedback_attachment WHERE id=?").get(Number(res.lastInsertRowid)));
   } catch (err) {
     for (const name of written) {
@@ -186,7 +204,7 @@ export function listFeedbackAttachmentsFor(db, feedbackIds) {
   for (const row of rows) {
     const key = Number(row.feedback_id);
     if (!out.has(key)) out.set(key, []);
-    out.get(key).push(publicAttachmentShape(row));
+    out.get(key).push(publicAttachmentShape(row, { scope: "admin" }));
   }
   return out;
 }
@@ -198,6 +216,13 @@ export function listOpenFeedbackAttachments(db, userId) {
   ).all(Number(userId)).map(publicAttachmentShape);
 }
 
+/** 本人、尚未送出（`feedback_id = 0`）、未刪除的附件。R3 的會員預覽只認這一種。 */
+export function getOpenFeedbackAttachment(db, userId, id) {
+  return db.prepare(
+    "SELECT * FROM feedback_attachment WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL",
+  ).get(Number(id), Number(userId)) || null;
+}
+
 export function getFeedbackAttachment(db, id) {
   return db.prepare("SELECT * FROM feedback_attachment WHERE id=? AND deleted_at IS NULL").get(Number(id)) || null;
 }
@@ -205,7 +230,7 @@ export function getFeedbackAttachment(db, id) {
 export function listFeedbackAttachments(db, feedbackId) {
   return db.prepare(
     "SELECT * FROM feedback_attachment WHERE feedback_id=? AND deleted_at IS NULL ORDER BY id ASC",
-  ).all(Number(feedbackId)).map(publicAttachmentShape);
+  ).all(Number(feedbackId)).map((row) => publicAttachmentShape(row, { scope: "admin" }));
 }
 
 /**
@@ -216,6 +241,10 @@ export function listFeedbackAttachments(db, feedbackId) {
 export function claimFeedbackAttachments(db, userId, ids, feedbackId, now = new Date()) {
   const list = [...new Set((Array.isArray(ids) ? ids : []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!list.length) return 0;
+  // R4：claim 也要自己擋上限（不能只靠上傳端的配額；去重後仍然只允許 4 張）。
+  if (list.length > FEEDBACK_ATTACHMENT_MAX) {
+    throw httpError(`每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片`, 400, "attachment_limit");
+  }
   const marks = list.map(() => "?").join(",");
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
   const res = db.prepare(
@@ -231,14 +260,21 @@ export function claimFeedbackAttachments(db, userId, ids, feedbackId, now = new 
   return list.length;
 }
 
-/** 刪除單張（只有本人、且還沒綁到回饋上時可以刪）。 */
+/**
+ * 刪除單張（只有本人、且還沒綁到回饋上時可以刪）。
+ *
+ * R5：**不可先 SELECT 再無條件 UPDATE**。兩個動作之間若有另一個交易 claim 成功，
+ * 這一邊還是會把已綁定的列標成刪除並把實體檔 unlink 掉。
+ * 改成單句「帶齊所有條件」的 UPDATE … RETURNING：只有真的搶到刪除資格的那一列才會被刪檔。
+ */
+export const FEEDBACK_ATTACHMENT_DELETE_SQL = `UPDATE feedback_attachment SET deleted_at=?
+  WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL
+  RETURNING id, storage_key, thumb_key`;
+
 export function deleteFeedbackAttachment(db, userId, id, { now = new Date() } = {}) {
-  const row = db.prepare(
-    "SELECT * FROM feedback_attachment WHERE id=? AND user_id=? AND feedback_id=0 AND deleted_at IS NULL",
-  ).get(Number(id), Number(userId));
-  if (!row) throw httpError("找不到這張圖片，或已經送出回饋", 404, "attachment_not_found");
   const ts = (now instanceof Date ? now : new Date(now)).toISOString();
-  db.prepare("UPDATE feedback_attachment SET deleted_at=? WHERE id=?").run(ts, Number(row.id));
+  const row = db.prepare(FEEDBACK_ATTACHMENT_DELETE_SQL).get(ts, Number(id), Number(userId));
+  if (!row) throw httpError("找不到這張圖片，或已經送出回饋", 404, "attachment_not_found");
   removeFeedbackAttachmentFiles(row);
   return { ok: true, id: Number(row.id) };
 }
@@ -284,7 +320,14 @@ export function sweepOrphanFeedbackAttachments(db, { olderThanMs = FEEDBACK_ATTA
   let removed = 0;
   for (const row of rows) {
     try {
-      db.prepare("UPDATE feedback_attachment SET deleted_at=? WHERE id=?").run(new Date(ts).toISOString(), Number(row.id));
+      // R5：清理也要條件式（`feedback_id = 0` 再確認一次）。SELECT 與 UPDATE 之間若被 claim
+      // 走了，這裡就不會動它 —— 已送出的附件永遠不該被孤兒清理刪掉。
+      const claimed = db.prepare(
+        "SELECT id FROM feedback_attachment WHERE id=? AND feedback_id=0 AND deleted_at IS NULL",
+      ).get(Number(row.id));
+      if (!claimed) continue;
+      db.prepare("UPDATE feedback_attachment SET deleted_at=? WHERE id=? AND feedback_id=0 AND deleted_at IS NULL")
+        .run(new Date(ts).toISOString(), Number(row.id));
       removeFeedbackAttachmentFiles(row);
       removed += 1;
     } catch { /* 單列失敗不影響其他列 */ }

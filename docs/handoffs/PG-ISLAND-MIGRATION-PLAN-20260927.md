@@ -6064,6 +6064,91 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
 - **尺規**：新增四條 C3 路由＋一條 A4 路由 ⇒ **288 → 293 條**，
   `v3/test/route-data-map.test.js` 與本文件的「現況」表都已同步。
 
+## 二之負七十一、2026-10-01 第一百批：PR #611 審閱修正（R1～R6）
+
+**來源**：Owner 審閱文件 `5151_PR611_Review_and_DS_Followup_20261001.txt`（審閱 HEAD `1b93cd9`）。
+維持同一張 PR #611。**Production 未部署。**
+
+### 100.1 R1｜A4 的四個正確性缺口
+
+1. **快取沒有來源／版本契約**：`mrt_cache` 現在有 `source`／`checked`／`walk_m`／`searched_m`
+   四欄，`MRT_CACHE_CONTRACT = "osrm-foot:v1"` 是**來源＋演算法版本**的契約字串。
+   `getCachedMrt()` 只採計 `checked = 1 且 source = 契約` 的列，其餘一律當成「沒有快取」⇒ 重算。
+   舊的車用 profile 值就是靠這一條失效的（不必做全站回填，按需重算）。
+   **PG 也要補欄位**：`ensurePgSchema()` 只在 cutover 鏡射整張表，既有 PG 表補不了欄位
+   ⇒ `crawlerWrites.setCachedMrtAsync()` 第一次寫入前送 `ADD COLUMN IF NOT EXISTS`
+   （`MRT_CACHE_PG_COLUMNS`）。背景掃描 `mrtCacheKeysQuery()` 也改成只回已查證的 key。
+2. **門檻要用未四捨五入的公尺**：`fetchMrtAccessWithin()` 的 `walk_m` 現在是原始公尺
+   （不再 `Math.round` 後才判定），`walk_km` 只給顯示。配對端 `evaluateMatch()` 也改成讀
+   `mrt_walk_m`；只有公里可用時採保守規則（**1.0 公里＝未確認**，因為可能是 1,049 公尺）。
+   ⚠️ 這裡踩到兩次 `Number(null) === 0`：snapshot 與 `evaluateMatch` 都曾把「沒有資料」
+   轉成 0 公尺 ⇒ 直接符合。已用 `nonNegativeNumberOrNull()` 收斂。
+3. **候選站部分失敗／被上限截斷時不得宣告「已查證沒有」**：只有「所有必要候選都查完、
+   沒有失敗、也沒有被上限截斷」才回 `none`（`resolved: true`）；否則回 `unknown`（待確認）並附上
+   `nearest_walk_m` 供前端顯示。候選上限由 5 提到 8，並加上「查到符合就提早結束」
+   （最常見的情況只打一次外部服務）。
+4. **0 公尺是合法距離**：`roundKm()`／`minutesFromKm()`／`isWalkableMrtDistance()` 都改成 `>= 0`，
+   不再用 `> 0` 把「查詢點與站點出入口重合」過濾掉。
+
+### 100.2 R2｜站內刊登的費用三態與座標關聯
+
+- `listings` 新增 `fee_includes`（JSON 三態）與 `self_mrt_station`／`self_mrt_walk_m`／
+  `self_mrt_source`／`self_mrt_checked_at`。**migration version 7**（`self_listing_fee_mrt_schema`）。
+  ⚠️ 只改 `ensureSelfListingSchema()` 沒有用：migration runner 只跑沒跑過的版本，既有資料庫不會
+  重跑 version 3（本機實測回 `no such column: fee_includes`）。PG 由
+  `SELF_LISTING_PG_COLUMNS` 的 `ADD COLUMN IF NOT EXISTS` 補。
+- 三個寫入路徑（建立／草稿發布／匯入發布）× 兩個 driver 共用
+  `resolveSelfListingMeta(input, previous, { addressChanged })`：
+  費用沒提到就沿用；**地址變了卻定位不到 ⇒ 清掉舊座標與舊查證**；地址沒變則沿用。
+- 發布路徑（`POST /api/self-listings`、`POST /api/self-listings/:id/publish`）先做
+  `resolveSelfListingGeo()`：地理編碼 → `fetchMrtAccessWithin()` → 把結果寫進**同一份 `mrt_cache`**
+  與房源列。**全程 fail-soft**，外部服務失敗不擋刊登（配對看到的就是「未確認」）。
+- 費用推論的過度概括也修了（`listingCost.js`）：改成以「費用**組成項目**」判定
+  —— `utilities` 要同時看到水與電（「只有水費已含」⇒ unknown）、`internet` 不再接受
+  「第四台／有線電視」（那是不同的東西）。`水電` 也補進 `FEE_KIND`（很多來源只寫「水電費 500 另計」）。
+
+### 100.3 R3～R5｜回饋附圖的三個使用流程缺口
+
+| 缺口 | 修法 |
+|---|---|
+| R3 一般會員的縮圖 403 | `publicAttachmentShape(row, { scope })` 分兩種：`owner`（`/api/feedback/attachments/:id/thumb`，只給**本人且尚未送出**）與 `admin`（`/api/feedback-attachments/…`）。前台另外優先用**本機 blob** 預覽，並在換世代／刪除時 `revokeObjectURL()` |
+| R3 上傳中提交／延遲完成的圖混進新回饋 | 送出鈕在上傳中 disabled，提交前再擋一次；每次開啟對話框 `feedbackImageGeneration += 1`，上傳回來時世代不符就丟棄並刪掉那一張 |
+| R4 四張上限可被並行請求繞過 | 配額改成**單句條件式 INSERT**（`… SELECT … WHERE (SELECT COUNT(*) …) < 4`），不再 `COUNT → await 解碼 → INSERT`；`claim` 自己也擋 `> 4` |
+| R5 claim 與刪除／清理競態 | 刪除與孤兒清理都改成**帶齊條件的 UPDATE … RETURNING**（`user_id`／`feedback_id = 0`／`deleted_at IS NULL`），只有真的搶到資格的那一列才會被 unlink |
+
+### 100.4 R6｜兩個 web 節點的附件可用性
+
+**證據**（2026-10-01 實查）：
+
+| 節點 | `DATA_DIR` 本體 | 私有媒體 |
+|---|---|---|
+| web-A（CasaOS 192.168.0.140） | `/opt/5151-shadow/web-a/data`（**節點本機**） | `/mnt/5151-media/...`＝**NFS**（`192.168.0.220:/volume1/5151-media`，vers=3, soft） |
+| web-B（Synology 192.168.0.220） | `~/5151-shadow/web-b/data`（**節點本機**） | `/volume1/5151-media/...`（本機 volume，NFS 來源） |
+
+`member-media`／`self-photos` 早在 2026-09-24 就用這份共享儲存疊上去了（`deploy/shadow-ha/media-share/`），
+**`feedback-media` 漏了** ⇒ A 台上傳、B 台 404，跨節點 sweep 也會刪 metadata 卻留下另一台的孤兒檔。
+修法是把 `feedback-media` 加進同一份共享儲存（程式只認 `DATA_DIR/feedback-media`，不必改程式）：
+
+- repo：`docker-compose.yml`、`deploy/shadow-ha/web/web-a|web-b/docker-compose.yml`（web-B 的 **worker** service 也要）
+- 主機正本：`/opt/5151-shadow/web-a/docker-compose.yml`、`~/5151-shadow/web-b/docker-compose.yml`
+  已同步更新（各自備份 `.bak-20261001`），`docker compose config` 驗證通過
+- 共享目錄 `/volume1/5151-media/feedback-media` 已建立；A 端 NFS 可讀寫（實測 touch/rm）
+- ⚠️ **容器尚未重建**：bind mount 要 `docker compose up -d` 才會生效，那是一次部署
+  ⇒ 依 Owner 規則等當次批准，**沒有**自行重啟
+- 新增守衛測試 `v3/test/media-share-mounts.test.js`：三份 compose 都要有三個目錄、
+  web-B 的兩個 service 都要有、mount-guard 腳本的兩個迴圈都要涵蓋 `feedback-media`
+
+### 100.5 A1 與其他
+
+- A1：提示與送出訊息改回工作單指定的原文「請寫一些這屋子的故事與回憶」（不再附加「（至少 8 個字）」）；
+  8 字規則保留，改由欄位下方的即時字數提示說明。前端與後端各一份常數（`SELF_BODY_HINT` /
+  `SELF_BODY_HINT_CLIENT`），測試釘住不得再附加字數。
+- 順手修掉一個**既有的跨月假紅**：`admin-settings-async.test.js` 把 maps 用量寫死在 `2026-09`，
+  而 `summarizeMapsUsage()` 用的是**太平洋時區**的「今天」⇒ 太平洋跨月的那一刻本機紅、CI 綠。
+  改成跟著實作同一個 `pacificYmd()` 擺資料。
+- ⚠️ **新增欄位一定要開新的 migration version**（見 100.2 的踩坑）：這是同一類錯誤的第二次
+  （第一次是 `mrt_cache`，那次運氣好寫在 `addColumnsIfMissing()` 的模組初始化路徑上）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -6074,12 +6159,12 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-10-01 第九十九批：C3 回饋附圖、A4 步行捷運）** |
+| 判定 | 起點 | **現在（2026-10-01 第一百批：審閱修正 R1～R6）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
 | MIXED | — | **0** |
 | 無直接DB | — | **20** |
-| PG | 22 | **273** |
+| PG | 22 | **275** |
 | **缺口（SQLite＋MIXED）** | — | **0** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的

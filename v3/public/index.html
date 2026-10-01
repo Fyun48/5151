@@ -1763,6 +1763,18 @@
     .wish-need:has(input:checked) { background: var(--accent-mist); border-color: var(--accent); color: var(--accent-deep); font-weight: 700; }
     .wish-need input { margin: 0; }
     .hint.is-warn { color: var(--danger, #b3261e); }
+    /* R2：房源端的「租金已包含」三態。 */
+    .self-fee-block { margin: 12px 0 0; }
+    .self-fee-rows { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 0; }
+    .self-fee-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .self-fee-row > span { font-size: var(--text-sm); }
+    .self-fee-choice { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+    .self-fee-choice label {
+      display: inline-flex; align-items: center; gap: 4px; min-height: 40px; padding: 4px 10px;
+      border: 1px solid var(--line); border-radius: 999px; background: var(--paper); cursor: pointer;
+      font-size: var(--text-xs);
+    }
+    .self-fee-choice label:has(input:checked) { background: var(--accent-mist); border-color: var(--accent); color: var(--accent-deep); font-weight: 700; }
     /* A4：可步行捷運的查詢狀態。五種狀態顏色與文案都不同，不讓人把「未查證」看成「符合」。 */
     .mrt-access { margin: 8px 0 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .mrt-access-line { margin: 0; font-size: var(--text-xs); color: var(--muted); line-height: 1.5; }
@@ -4012,13 +4024,22 @@
         <p class="hint">已選到此物件的照片（可拖不需要的按 × 移除；順序即顯示順序，第一張為封面）：</p>
         <div class="self-photo-tray" id="selfPhotoPreview" hidden></div>
         <div id="selfTraitGroups"></div>
+        <!-- R2：租金已包含哪些費用（三態）。這是**許願房配對的房源端資料**：
+             「已含」＝符合、「另計」＝不符合、「未確認」＝不推定。
+             房東的「未確認」與租客的「未勾選（未指定）」是兩件不同的事。 -->
+        <div class="self-fee-block" id="selfFeeBlock">
+          <label id="selfFeeLabel">租金已包含（房東填寫；未確認＝不推定，不影響刊登）</label>
+          <p class="hint">租金含水電／管理費／車位／網路，各有三個選項。留「未確認」就不會拿來配對。</p>
+          <div class="self-fee-rows" id="selfFeeRows" role="group" aria-labelledby="selfFeeLabel"></div>
+        </div>
         <p class="hint" id="selfTraitNudge" hidden>電梯大樓的話，中庭與陽台常常是租客想先知道的。有的話點一下就好。</p>
         <!-- A2：說明範本與說明輸入區直接展開，緊鄰「刊登物件」按鈕，不再收在刊登幫手裡。
              範本與手寫共用同一個 #selfBody（可見的 contenteditable 只是它的輸入介面），
              草稿、提交與重新編輯都讀同一份內容。 -->
         <div class="self-body-block" id="selfBodyBlock">
           <label for="selfBodyEditor">物件說明</label>
-          <p class="hint" id="descTemplateHint">可以選範本再修改，也可以直接自己寫。請寫一些這屋子的故事與回憶（至少 8 個字）。</p>
+          <!-- A1：工作單指定的提示字串（不加「至少 N 個字」）；8 字規則由下方的即時字數提示說明。 -->
+          <p class="hint" id="descTemplateHint">可以選範本再修改，也可以直接自己寫。請寫一些這屋子的故事與回憶。</p>
           <div class="listing-tools-row">
             <label class="visually-hidden" for="descTemplatePick">說明範本</label>
             <select id="descTemplatePick"><option value="">選擇說明範本</option></select>
@@ -9268,6 +9289,47 @@
         if ([...distSel.options].some((opt) => opt.value === value)) distSel.value = value;
       }
     }
+    // ── R2：房源端的「租金已包含」三態 ──
+    const SELF_FEE_INCLUDE_KEYS = ["utilities", "management", "parking_car", "parking_scooter", "internet"];
+    const SELF_FEE_INCLUDE_LABELS = {
+      utilities: "租金含水電",
+      management: "租金含管理費",
+      parking_car: "租金含停汽車位",
+      parking_scooter: "租金含停機車位",
+      internet: "租金含網路",
+    };
+    function paintSelfFeeRows() {
+      const box = $("selfFeeRows");
+      if (!box || box.dataset.painted === "1") return;
+      box.innerHTML = SELF_FEE_INCLUDE_KEYS.map((key) => `
+        <div class="self-fee-row">
+          <span>${esc(SELF_FEE_INCLUDE_LABELS[key])}</span>
+          <span class="self-fee-choice" role="radiogroup" aria-label="${esc(SELF_FEE_INCLUDE_LABELS[key])}">
+            <label><input type="radio" name="selfFee_${key}" value="included" data-fee-state="${key}" /> 已含</label>
+            <label><input type="radio" name="selfFee_${key}" value="extra" data-fee-state="${key}" /> 另計</label>
+            <label><input type="radio" name="selfFee_${key}" value="unknown" data-fee-state="${key}" checked /> 未確認</label>
+          </span>
+        </div>`).join("");
+      box.dataset.painted = "1";
+    }
+    function collectedSelfFeeIncludes() {
+      const out = {};
+      for (const key of SELF_FEE_INCLUDE_KEYS) {
+        const picked = document.querySelector(`#selfFeeRows input[name="selfFee_${key}"]:checked`);
+        const value = String(picked?.value || "unknown");
+        if (value === "included" || value === "extra") out[key] = value;
+      }
+      return out;
+    }
+    function applySelfFeeIncludes(row = {}) {
+      paintSelfFeeRows();
+      const saved = row && typeof row.fee_includes === "object" && row.fee_includes ? row.fee_includes : {};
+      for (const key of SELF_FEE_INCLUDE_KEYS) {
+        const value = saved[key] === "included" || saved[key] === "extra" ? saved[key] : "unknown";
+        const el = document.querySelector(`#selfFeeRows input[name="selfFee_${key}"][value="${value}"]`);
+        if (el) el.checked = true;
+      }
+    }
     function syncSelfAddressPrefix() {
       applySelectsToAddress();
     }
@@ -11101,7 +11163,7 @@
         const body = String($("selfBody")?.value || "").trim();
         const bodyPlain = listingBodyPlainClient(body);
         if (bodyPlain.length < SELF_BODY_MIN) {
-          fail(`請寫一些這屋子的故事與回憶（至少 ${SELF_BODY_MIN} 個字）`);
+          fail(SELF_BODY_HINT_CLIENT);
           $("selfBodyBlock")?.scrollIntoView({ behavior: "smooth", block: "start" });
           $("selfBodyEditor")?.focus();
           return;
@@ -11132,6 +11194,8 @@
           title,
           body,
           traits: collectedSelfTraits(),
+          // R2：房東端的費用三態（許願房配對的房源端資料來源）。
+          fee_includes: collectedSelfFeeIncludes(),
           listing_values: collectedListingValues(),
           deposit: $("selfDeposit")?.value || "",
           accept_pledge: $("selfPledge")?.checked === true,
@@ -11278,6 +11342,7 @@
       });
       selfPhotoDraft = [...(form.photos || [])];
       renderSelfPhotoDraftAndGrid();
+      applySelfFeeIncludes(form);
       if ($("selfPledge")) $("selfPledge").checked = false;
     }
     function syncDescBodyEditor(html) {
@@ -11289,6 +11354,8 @@
     // 草稿、提交與重新編輯一律讀 #selfBody，避免畫面與送出的內容不一致。
     const SELF_BODY_PLAIN_MAX = 500;
     const SELF_BODY_MIN = 8;
+    // A1：與後端 `SELF_BODY_HINT` 同一句（工作單指定的原文）。
+    const SELF_BODY_HINT_CLIENT = "請寫一些這屋子的故事與回憶";
     function listingBodyPlainClient(value) {
       return String(value || "")
         .replace(/<\s*br\s*\/?>/gi, "\n")
@@ -12307,6 +12374,9 @@
     const FEEDBACK_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
     let feedbackAttachments = [];
     let feedbackImageBusy = false;
+    // R3：每一次「開啟對話框」算一個世代。上傳是非同步的，若使用者在等待期間關閉或重開
+    // 對話框，較晚回來的那一張**不可以**被塞進新的回饋裡（舊版會發生）。
+    let feedbackImageGeneration = 0;
 
     function feedbackImageMsg(text, ok = false) {
       const el = $("feedbackImageMsg");
@@ -12318,9 +12388,11 @@
       const tray = $("feedbackImageTray");
       if (tray) {
         tray.hidden = !feedbackAttachments.length;
+        // R3：預覽優先用**本機 blob**（`preview_url`），沒有才落回伺服器的本人縮圖路由。
+        // 兩者都不是公開網址：blob 只存在這個分頁，縮圖路由要求登入＋本人＋尚未送出。
         tray.innerHTML = feedbackAttachments.map((row, i) => `
           <div class="feedback-image-chip">
-            <img src="${esc(row.thumb_url)}" alt="附圖 ${i + 1}" />
+            <img src="${esc(row.preview_url || row.thumb_url)}" alt="附圖 ${i + 1}" />
             <button type="button" class="ghost" data-fb-image-del="${i}" aria-label="移除第 ${i + 1} 張附圖">✕</button>
           </div>`).join("");
       }
@@ -12328,10 +12400,19 @@
       if (count) count.textContent = `${feedbackAttachments.length}／${FEEDBACK_IMAGE_MAX} 張`;
       const pick = $("feedbackImagePick");
       if (pick) pick.disabled = feedbackImageBusy || feedbackAttachments.length >= FEEDBACK_IMAGE_MAX;
+      // R3：上傳中就鎖住送出，避免「圖片還沒到、回饋先送出去」。
+      const submit = $("feedbackSubmit");
+      if (submit) submit.disabled = feedbackImageBusy;
+    }
+    function releaseFeedbackPreview(row) {
+      if (row?.preview_url && String(row.preview_url).startsWith("blob:")) {
+        try { URL.revokeObjectURL(row.preview_url); } catch { /* 已經釋放 */ }
+      }
     }
     async function removeFeedbackImage(index) {
       const row = feedbackAttachments[index];
       if (!row) return;
+      releaseFeedbackPreview(row);
       // 先從畫面移除（可立即補圖），後端刪除失敗不影響已送出的回饋內容。
       feedbackAttachments.splice(index, 1);
       renderFeedbackImageTray();
@@ -12340,7 +12421,10 @@
       } catch { /* 伺服器端 sweep 會處理 */ }
     }
     async function clearFeedbackImages({ silent = true } = {}) {
+      // R3：換世代 —— 這一輪之後才回來的上傳結果一律丟棄。
+      feedbackImageGeneration += 1;
       const rows = [...feedbackAttachments];
+      rows.forEach(releaseFeedbackPreview);
       feedbackAttachments = [];
       renderFeedbackImageTray();
       if (!silent) feedbackImageMsg("");
@@ -12349,6 +12433,7 @@
     async function addFeedbackImages(files) {
       const list = [...(files || [])];
       if (!list.length || feedbackImageBusy) return;
+      const generation = feedbackImageGeneration;
       const room = FEEDBACK_IMAGE_MAX - feedbackAttachments.length;
       if (room <= 0) {
         feedbackImageMsg(`每則回饋最多 ${FEEDBACK_IMAGE_MAX} 張圖片，請先刪除再上傳。`);
@@ -12375,13 +12460,20 @@
             if (Array.isArray(data.attachments) && data.attachments.length) {
               const known = new Set(feedbackAttachments.map((row) => row.id));
               for (const row of data.attachments) {
-                if (!known.has(row.id)) feedbackAttachments.push({ id: row.id, thumb_url: row.thumb_url });
+                if (!known.has(row.id)) feedbackAttachments.push({ id: row.id, thumb_url: row.thumb_url, preview_url: "" });
               }
               renderFeedbackImageTray();
             }
             throw new Error(data.error || "上傳失敗");
           }
-          feedbackAttachments.push({ id: data.id, thumb_url: data.thumb_url });
+          // R3：對話框已經關閉／重開（世代換了）就把這一張丟掉，不要混進新的回饋。
+          if (generation !== feedbackImageGeneration) {
+            fetch(`/api/feedback/attachments/${encodeURIComponent(data.id)}`, { method: "DELETE" }).catch(() => {});
+            break;
+          }
+          let previewUrl = "";
+          try { previewUrl = URL.createObjectURL(file); } catch { previewUrl = ""; }
+          feedbackAttachments.push({ id: data.id, thumb_url: data.thumb_url, preview_url: previewUrl });
           renderFeedbackImageTray();
         } catch (error) {
           // 一張失敗就停手並保留已成功的；已寫好的內容與其他合格圖片都不動。
@@ -12400,6 +12492,9 @@
         alert("登入後才能送出回饋喔。訪客看到的示範資料無法回報。");
         return;
       }
+      // R3：每次開啟都是新的世代（上一次延遲完成的上傳不會被算進來）。
+      feedbackImageGeneration += 1;
+      feedbackImageBusy = false;
       feedbackKind = "idea";
       paintFeedbackKinds();
       renderFeedbackContext();
@@ -12485,6 +12580,11 @@
       ev.preventDefault();
       const msg = $("feedbackMsg");
       const btn = $("feedbackSubmit");
+      // R3：上傳中一律先擋（送出鈕也會是 disabled，這裡是第二層保險）。
+      if (feedbackImageBusy) {
+        if (msg) { msg.textContent = "圖片還在上傳，請稍等一秒再送出。"; msg.className = "msg err"; }
+        return;
+      }
       const body = ($("feedbackBody")?.value || "").trim();
       if (body.length < 4) {
         if (msg) { msg.textContent = "請多寫一點（至少 4 個字）"; msg.className = "msg err"; }
@@ -12510,7 +12610,9 @@
         if (!res.ok) throw new Error(data.error || "送出失敗");
         // 只有回饋與附件都成功保存後才清空表單：已綁定的附件不能再送出，
         // 所以清單直接歸零（不再發 DELETE，那些已經屬於這則回饋）。
+        feedbackAttachments.forEach(releaseFeedbackPreview);
         feedbackAttachments = [];
+        feedbackImageGeneration += 1;
         renderFeedbackImageTray();
         feedbackImageMsg("");
         if ($("feedbackBody")) $("feedbackBody").value = "";
@@ -13890,6 +13992,7 @@
       fillDemandDistricts();
       fillSelfDistricts();
       paintSelfTraits();
+      paintSelfFeeRows();
       loadMineSelfListings().catch(() => {});
       loadDemandExposure().catch(() => {});
       openSelfFromQuery().catch(() => {});

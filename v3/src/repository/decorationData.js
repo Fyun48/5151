@@ -286,7 +286,12 @@ export async function loadMrtCacheEntries(exec, keys, driver = "sqlite") {
   const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
   if (!list.length) return map;
   const filter = textKeyFilter("geo_key", list, driver);
-  const rows = await exec(`SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min FROM mrt_cache WHERE ${filter.sql}`, filter.params);
+  // R1：來源／查證狀態／原始公尺一起讀，讓裝飾路徑能判斷「這是不是目前契約的已查證步行結果」。
+  const rows = await exec(
+    `SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m
+       FROM mrt_cache WHERE ${filter.sql}`,
+    filter.params,
+  );
   for (const row of rows || []) {
     map.set(String(row.geo_key), normalizeRow(row, ["walk_km", "walk_min", "ride_km", "ride_min"]));
   }

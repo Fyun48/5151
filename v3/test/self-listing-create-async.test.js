@@ -227,7 +227,8 @@ test("路由接線：建立路由用 PG 島嶼（而且真的有 import）", () 
   const start = server.indexOf('app.post("/api/self-listings",');
   assert.ok(start > 0, "找得到建立路由");
   const body = server.slice(start, server.indexOf("\n});", start));
-  assert.ok(body.includes("await createSelfListingAsync(session.userId, body, {"), "要用島嶼");
+  // R2：路由在呼叫島嶼前會先做地理編碼（`{ ...body, ...geo }`），錨點要跟著更新。
+  assert.ok(body.includes("await createSelfListingAsync(session.userId, { ...body, ...geo }, {"), "要用島嶼");
   assert.ok(body.includes("await assertOwnsMemberMediaUrlsAsync(session.userId, media)"), "素材所有權要用島嶼版");
   assert.ok(body.includes("await attributeShareAsync(req, session.userId, \"listing\")"), "分享歸因要用 async 版");
   for (const banned of ["createSelfListing(session.userId", "assertOwnsMemberMediaUrls(session.userId", "attributeShare(req,"]) {
