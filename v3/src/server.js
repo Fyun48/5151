@@ -452,7 +452,7 @@ import { recentEventsAsync } from "./notifyQueueAsync.js";
 import { resetAllDataAsync, resetListingsAsync } from "./siteResetAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
-import { publicListingView } from "./selfListings.js";
+import { catalogTraitLabelMap, publicListingView } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -3062,9 +3062,12 @@ app.get("/api/self-listings", async (req, res) => {
     // 自己的刊登、配對摘要、方案額度與 marketplace 開關全部走 PG 島嶼：同步版會讀到
     // **這台節點**的刊登與會員（別的節點建立的完全看不到），配對候選也只算本機的許願房（第八十批）。
     const flags = await getRentalMarketplaceFlagsAsync();
-    const catalog = isRentalCatalogV2Enabled(flags) ? await getRentalCatalogAsync() : null;
+    const v2 = isRentalCatalogV2Enabled(flags);
+    // A3：已發布的共用條件目錄一律要讀 —— `catalog` 決定表單**結構**（只有 v2 開時才由目錄決定），
+    // `catalogLabels` 決定**顯示名稱**（任何情況都要套用，後台改名才會同步到前台）。
+    const catalog = await getRentalCatalogAsync();
     res.json({
-      ...selfListingMeta(catalog ? { catalog } : {}),
+      ...selfListingMeta({ catalog: v2 ? catalog : null, catalogLabels: v2 ? {} : catalogTraitLabelMap(catalog) }),
       tools: await listingToolsInfoAsync(session.userId),
       owner_matching: await rentalMatchOwnerMetaAsync(),
       listings: await listMineSelfListingsAsync(session.userId),

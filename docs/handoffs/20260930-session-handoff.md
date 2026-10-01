@@ -205,9 +205,15 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     `aria-live`、DOM 斷言全部通過，但 `.auth .member { display:flex }` 的權重高於 UA 的
     `[hidden]{display:none}`，於是**訪客也看到會員區的「回找房頁面／登出」**——是看 375px 截圖才發現的。
     **每一批都要真的看一次手機截圖**，不要只用 DOM 屬性代理視覺。
-16. **`(candidates || []) is not iterable` 這一類錯誤＝把 async 函式傳進同步路徑**（第九十九批實測）：
+16. **單元測試綠 ≠ 功能有通：要照驗收情境真的走一次**（2026-10-01 第九十九批實測）。
+    A3 第一次只改了 `selfTraits.js` 的 `||` 優先序，測試全綠；但把後台真的改名並發布之後，
+    前台**還是顯示舊名稱** —— 因為標籤對照表另外被 `rental_catalog_v2` 旗標擋住。
+    是「照工作單的驗收步驟實際操作一次」才發現的。**驗收條件寫「後台改名後前台重新載入要看到」，
+    就要真的改名、真的發布、真的重新載入，不能只驗那一行函式。**
+    修法原則：**顯示名稱與可寫入的 id 要分開**（label 不受 feature flag 影響、id 才受）。
+17. **`(candidates || []) is not iterable` 這一類錯誤＝把 async 函式傳進同步路徑**（第九十九批實測）：
     `server.js` 傳給 `createSelfListingAsync()` 的 `matchCandidates` 是 async 的 PG 島嶼版本，
     SQLite 分支直接往下傳給同步的 `createSelfListing()` ⇒ **每一筆站內刊登都 400**。
     島嶼的 SQLite 分支要傳「同步版」而不是把呼叫端的 async 函式原封不動帶下去。
-17. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+18. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
     ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。

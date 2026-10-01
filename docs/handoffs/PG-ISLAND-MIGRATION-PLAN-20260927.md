@@ -5949,7 +5949,7 @@ region 4 section 1 → zip    → sid 0
 |---|---|
 | A1 | 說明提示與送出訊息改成「請寫一些這屋子的故事與回憶（至少 N 個字）」，前後端同一條規則 |
 | A2 | 說明範本與輸入區**直接展開**，放在「刊登物件」按鈕上方；`#selfBody` 仍是唯一內容來源，新增可見的 `contenteditable` 當輸入介面，所有寫入都走 `setSelfBody()`；套用範本前用 `confirm` 保護已輸入文字；驗證失敗只提示、保留內容 |
-| A3 | `selfTraits.js` 目錄標籤優先；後台把「草稿未發布」畫出來（按鈕文字、逐列標記、預覽標題、抽屜提示）；分享頁 `max-age` 60 → 15 |
+| A3 | **兩個根因**：① `selfTraits.js` 目錄標籤被放在 `\|\|` 後面；② 標籤對照表被 `rental_catalog_v2` 旗標擋住（旗標沒開時連刊登表單都不跟著改名）。修法是把「顯示名稱」與「可寫入 id」分開：`catalogTraitLabelMap()` 不受旗標影響、`overlayTraitLabels()` 只覆蓋 label。另把後台「草稿未發布」畫出來（按鈕文字、逐列標記、預覽標題、抽屜提示）；分享頁 `max-age` 60 → 15 |
 | A4 | 見 99.4 |
 | A5 | 分享頁自己打 `/api/me` 取身分（三態：載入中／訪客／會員），公開房源內容**維持訪客視角**（後端 `viewerId: 0`、`public, max-age=15`）；另外修好分享頁把物件說明當純文字印出 `<p>` 的問題（同一份白名單 sanitizer） |
 
@@ -6033,6 +6033,26 @@ A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="tru
 
 > 📌 第 3 點是**看截圖才發現的**：自動化斷言（`hidden` 屬性、`aria-live`）全綠，
 > 但畫面是錯的。視覺檢查不能只用 DOM 屬性代理。
+
+### 99.6b A3 的完整修法（第一次只修了一半，靠端到端驗收才發現）
+
+第一次只改了 `selfTraits.js` 的 `||` 優先序，單元測試也綠。但把後台真的改名並發布之後，
+**前台仍然顯示舊名稱** —— 因為 `catalogTraitExtras().labels` 與 `selfListingMeta()` 的目錄來源
+都被 `isRentalCatalogV2Enabled(flags)` 擋住；本機（與任何沒開 v2 的安裝）旗標是關的，
+所以標籤根本沒被套用。
+
+修法（工作單要求的「顯示名稱與穩定的條件 ID／key 必須分開處理」）：
+
+- `catalogTraitLabelMap(catalog)`：只回 id → label，**不看旗標**。
+- `overlayTraitLabels(groups, labels)`：只換 `label`，結構與 id 完全不動（純函式，不改原陣列）。
+- `selfListingMeta({ catalog, catalogLabels })`：`catalog` 決定**結構**（仍綁 v2 旗標），
+  `catalogLabels` 決定**顯示名稱**（一律套用）。
+- `decorateSelfListing()` 的 `trait_labels` 改用 `catalogTraitLabelMap()`。
+- `GET /api/self-listings` 一律讀已發布目錄（v2 開時當結構來源，關時只當標籤來源）。
+
+驗收：後台改名 → 發布 → 重新載入，刊登表單 chip／我的刊登卡片／分享頁 chips 全部同步，
+且 24 個條件的 id 與已勾選項不變。**這一條是「單元測試綠但功能沒通」的實例，
+寫進 §7 的踩坑清單。**
 
 ### 99.7 這一批的測試與尺規
 

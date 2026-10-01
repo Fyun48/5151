@@ -87,6 +87,57 @@ export function catalogTraitExtras({ includeInactive = false } = {}) {
   return { ids, labels };
 }
 
+/**
+ * A3：**顯示名稱**用的對照表。刻意**不**受 `rental_catalog_v2` 旗標影響。
+ *
+ * 為什麼要跟 `catalogTraitExtras()` 分開：
+ *   - `catalogTraitExtras().ids` 決定「哪些 trait id 可以寫入」⇒ 必須繼續綁旗標，
+ *     旗標一關就不該突然接受目錄才有的 id。
+ *   - **標籤只是顯示**。工作單要求「顯示名稱與穩定的條件 ID／key 必須分開處理」，
+ *     所以後台改完名稱並發布後，前台（刊登表單、我的刊登卡片、公開分享頁）
+ *     都應該顯示新名稱，不必重新部署、也不該因為旗標沒開就卡在舊的靜態名稱。
+ *
+ * ⚠️ 這裡只回傳 id → label，不動任何結構；呼叫端只拿它覆蓋顯示字串。
+ */
+const traitLabelMapCache = new WeakMap();
+
+export function catalogTraitLabelMap(catalog = listingCatalog) {
+  if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return {};
+  // 逐列呼叫（`decorateSelfListing`）時不該每次重新展開整份目錄：用 WeakMap 依目錄物件記憶，
+  // 目錄換新（hydrate／publish）時舊的快取自然失效。
+  const cached = traitLabelMapCache.get(catalog);
+  if (cached) return cached;
+  const labels = {};
+  try {
+    for (const group of catalogAsSelfTraitGroups(catalog, { includeInactive: true })) {
+      for (const item of group.items) {
+        if (!item?.id || !item?.label) continue;
+        labels[item.id] = item.label;
+        if (item.canonical_id) labels[item.canonical_id] = item.label;
+        if (item.listing_negative) labels[item.listing_negative] = item.label;
+        if (item.listing_legacy) labels[item.listing_legacy] = item.label;
+      }
+    }
+  } catch {
+    return {};
+  }
+  traitLabelMapCache.set(catalog, labels);
+  return labels;
+}
+
+/** 把目錄的顯示名稱覆蓋到一組 trait 群組上（結構與 id 完全不動）。 */
+export function overlayTraitLabels(groups, labels = {}) {
+  const map = labels instanceof Map ? labels : new Map(Object.entries(labels || {}));
+  if (!map.size || !Array.isArray(groups)) return groups;
+  return groups.map((group) => ({
+    ...group,
+    items: (group.items || []).map((item) => {
+      const next = map.get(item?.id);
+      return next && next !== item.label ? { ...item, label: next } : item;
+    }),
+  }));
+}
+
 function parseListingValues(row) {
   try {
     const raw = row?.listing_condition_values;
@@ -208,13 +259,17 @@ export function selfSourceLabel(source) {
 }
 
 export function selfListingMeta(options = {}) {
+  // A3：`options.catalog` 決定**結構**（只有 v2 旗標開的時候才由目錄決定）；
+  // `options.catalogLabels` 決定**顯示名稱**，任何情況都要套用。
+  const baseTraits = options.catalog ? catalogAsSelfTraitGroups(options.catalog) : SELF_TRAIT_GROUPS;
+  const traits = overlayTraitLabels(baseTraits, options.catalogLabels || {});
   return {
     legal: `${SELF_LEGAL} ${SELF_AUDIT}`,
     max_open: SELF_MAX_OPEN,
     ttl_days: SELF_TTL_DAYS,
     kinds: SELF_KINDS,
     roles: SELF_ROLES,
-    traits: options.catalog ? catalogAsSelfTraitGroups(options.catalog) : SELF_TRAIT_GROUPS,
+    traits,
     deposits: SELF_DEPOSIT_OPTIONS,
     templates: SELF_BODY_TEMPLATES,
     body_max: SELF_BODY_MAX,
@@ -583,7 +638,8 @@ export function decorateSelfListing(row, { viewerId = 0 } = {}) {
     })(),
     trait_labels: (() => {
       try {
-        return selfTraitLabels(JSON.parse(row.self_traits || "[]"), catalogTraitExtras({ includeInactive: true }).labels);
+        // A3：標籤一律跟著已發布的共用條件目錄走（不受 v2 旗標影響）。
+        return selfTraitLabels(JSON.parse(row.self_traits || "[]"), catalogTraitLabelMap());
       } catch {
         return [];
       }

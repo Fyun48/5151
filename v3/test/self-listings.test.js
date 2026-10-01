@@ -25,6 +25,7 @@ import {
   selfListingMeta,
   selfSourceLabel,
 } from "../src/selfListings.js";
+import { SELF_TRAIT_GROUPS, selfTraitLabels } from "../src/selfTraits.js";
 import { lookupDistrict } from "../src/regions.js";
 import { defaultCatalog, deleteOrDisableCondition, upsertCategory, upsertCondition } from "../src/rentalCatalog.js";
 import { setRentalMarketplaceFlags } from "../src/demand.js";
@@ -460,3 +461,51 @@ test("disabled category new listing input is dropped; historical fridge is kept"
   db.close();
 });
 
+
+test("A3：後台改名後，前台顯示名稱要跟著目錄走（即使 v2 旗標沒開）", async () => {
+  const { defaultCatalog, upsertCondition } = await import("../src/rentalCatalog.js");
+  const { catalogTraitLabelMap, overlayTraitLabels, setSelfListingCatalog } = await import("../src/selfListings.js");
+  const renamed = upsertCondition(defaultCatalog(), { id: "elevator", label: "華廈/公寓電梯" });
+
+  // 1) 標籤表不受 v2 旗標影響：旗標關著也要拿得到目錄上的名稱
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(renamed, { rental_catalog_v2: { enabled: false } });
+  const labels = catalogTraitLabelMap(renamed);
+  assert.equal(labels.elevator, "華廈/公寓電梯");
+
+  // 2) 刊登表單：結構走靜態表時，顯示名稱仍被覆蓋；**id 與其他欄位完全不動**
+  const metaOff = selfListingMeta({ catalog: null, catalogLabels: labels });
+  const offItem = metaOff.traits.flatMap((g) => g.items).find((i) => i.id === "elevator");
+  assert.equal(offItem.label, "華廈/公寓電梯");
+  const staticItem = SELF_TRAIT_GROUPS.flatMap((g) => g.items).find((i) => i.id === "elevator");
+  assert.equal(offItem.input, staticItem.input);
+  assert.notEqual(staticItem.label, offItem.label, "靜態表本身不可以被就地改寫");
+  // 通則：目錄有的 id ⇒ 用目錄的名稱；目錄沒有的 id ⇒ 保持靜態名稱（歷史／其他條件不受影響）
+  const staticFlat = SELF_TRAIT_GROUPS.flatMap((g) => g.items);
+  const overlaidFlat = metaOff.traits.flatMap((g) => g.items);
+  let fromCatalog = 0;
+  for (const item of staticFlat) {
+    const got = overlaidFlat.find((i) => i.id === item.id)?.label;
+    if (labels[item.id]) { assert.equal(got, labels[item.id], `${item.id} 應採用目錄名稱`); fromCatalog += 1; }
+    else { assert.equal(got, item.label, `${item.id} 目錄沒有，應保持靜態名稱`); }
+  }
+  assert.ok(fromCatalog > 10, "應該有多數條件對得上目錄");
+  // 目錄整份缺失時要安全落回靜態名稱（不可以用空目錄把標籤清成 undefined）
+  assert.deepEqual(catalogTraitLabelMap({ categories: [], conditions: [] }), {});
+  assert.deepEqual(catalogTraitLabelMap(null), {});
+  const emptyOverlay = overlayTraitLabels(SELF_TRAIT_GROUPS, {});
+  assert.equal(emptyOverlay.flatMap((g) => g.items).find((i) => i.id === "elevator").label, staticItem.label);
+
+  // 3) 我的刊登卡片／公開分享頁的標籤也吃同一份目錄
+  assert.deepEqual(selfTraitLabels(["elevator"], labels), ["華廈/公寓電梯"]);
+
+  // 4) overlay 不會改到原陣列（純函式）
+  const groups = [{ id: "building", label: "建物", items: [{ id: "elevator", label: "電梯" }] }];
+  const overlaid = overlayTraitLabels(groups, { elevator: "華廈/公寓電梯" });
+  assert.equal(overlaid[0].items[0].label, "華廈/公寓電梯");
+  assert.equal(groups[0].items[0].label, "電梯");
+  assert.deepEqual(overlayTraitLabels(groups, {}), groups);
+
+  setRentalMarketplaceFlags({});
+  setSelfListingCatalog(null, { rental_catalog_v2: { enabled: false } });
+});

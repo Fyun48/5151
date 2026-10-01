@@ -12,6 +12,8 @@
 | `a5-share-guest-mobile.png` | A5 | 訪客開同一頁：只有「登入 / 註冊」與「免費註冊」，且看不到會員區連結 |
 | `b1-b2-wish-desktop.png` / `b1-b2-wish-mobile.png` | B1／B2 | 五個租金包含條件＋捷運距離需求共六項，集中在同一個連續選項區 |
 | `c3-feedback-images-desktop.png` / `c3-feedback-images-mobile.png` | C3 | 回饋表單的附圖區：張數提示、選檔鈕、貼上提示、縮圖與刪除 |
+| `a3-admin-draft-desktop.png` | A3 | 後台目錄：改名後**還沒發布**時，逐列標「（草稿，未發布）」、按鈕變「尚未發布：確認並發布」 |
+| `a3-frontend-synced-desktop.png` | A3 | 按發布後重新載入前台：「我的刊登」卡片顯示新的目錄名稱「華廈/公寓電梯、門衛／管理」 |
 | `c3-admin-feedback-desktop.png` | C3／C1 | 後台回饋清單看得到附件縮圖；「聯絡」是會員 email（前台沒有這個欄位） |
 
 > ⚠️ 這些截圖是在**本機**跑的，不是正式站。Production 未部署（manual-only）。
