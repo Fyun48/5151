@@ -123,6 +123,10 @@ test("manual transaction dedupes provider ids and dashboard uses net amounts", (
     amount: 150,
     fee: 8,
     anonymous: true,
+    // ⚠️ 一定要指定 `received_at`：儀表板是用 `received_at` 篩選期間（下面 now = 2026-09-15），
+    // 而 `createManualTransaction()` 預設用「現在」當 received_at ⇒ 只要執行時間跨到 10 月，
+    // 這筆就落在 9 月的窗口外、`totals.count` 變 0（2026-10-01 00:4x 實際紅過一次）。
+    received_at: "2026-09-10T00:00:00.000Z",
   });
   assert.throws(() => createManualTransaction(db, {
     provider: "buy_me_a_coffee",
