@@ -10,6 +10,7 @@ import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE } from "./probeOutcomes.js"
 import { feeFieldsFromBlob } from "./listingCost.js";
 import { zipForDistrict } from "./hbhousing.js";
 import { lookupDistrict } from "./regions.js";
+import { rotateSourceTargets } from "./crawlPolicy.js";
 import { SOURCE_BLOCK_COOLDOWN_MS, noteSourceBlock, sourceHttpError } from "./crawlWatchdog.js";
 
 export const HP_SOURCE = "houseprice";
@@ -1054,15 +1055,41 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
   // 也會讓同一個行政區的同一筆錯誤在輪次結果裡出現兩次（看起來像「只被擋一次」）。
   const pageCache = new Map();
 
-  for (const job of jobs || []) {
+  // 第九十七批：每輪最多抓幾個行政區（其餘輪詢到下一輪）。實測 12 個行政區／89 個請求安全。
+  const targetLimit = Math.max(1, Number(options.targetLimit ?? process.env.HP_TARGETS_PER_RUN ?? 12));
+  const jobList = Array.isArray(jobs) ? jobs : [];
+  // 預算要**平均分給這一輪的每一個 job**，否則後面的 job 永遠分不到（前面的吃光）。
+  const perJob = Math.max(1, Math.floor(targetLimit / Math.max(1, jobList.length)));
+  let targetBudget = targetLimit;
+  let partial = false;
+
+  for (const job of jobList) {
     if (sourcePaused) break;
     const regionId = Number(job.regionId) || 0;
     const sectionIds = [...new Set((job.sectionIds || []).map(Number).filter((id) => id > 0))];
-    const targets = [];
+    const allTargets = [];
     for (const sectionId of sectionIds) {
       const sid = hpSidForDistrict(regionId, sectionId);
-      if (sid && !targets.some((row) => row.sid === sid)) targets.push({ sid, sectionId });
+      if (sid && !allTargets.some((row) => row.sid === sid)) allTargets.push({ sid, sectionId });
     }
+    // 預算用完：這個 job 這一輪不抓（其餘行政區下一輪），也不可以偷偷多抓一個。
+    // 要推一個 partial 的批次上去：否則 watcher 會把「沒抓到的 job」記成失敗輪
+    //（那是第九十六批修過的同一類誤記）。
+    if (targetBudget <= 0) {
+      partial = true;
+      batches.push({ searchUrl: job.searchUrl, parsed: { label: `5168 · 地區 ${regionId}`, href: `${HP_SITE}/` }, total: 0, listings: [], errors: [], applicable: true, partial: true });
+      continue;
+    }
+    // 這一輪只取「輪詢窗」裡的那一段（每個 job 平均分配到的額度）。
+    const targets = rotateSourceTargets(allTargets, {
+      limit: Math.min(targetBudget, perJob),
+      // ⚠️ 不可以用 `Number(options.now) || Date.now()`：`now: 0` 是合法值卻會被當成沒給，
+      // 於是測試（與任何指定 now=0 的呼叫）會偷偷用真實時間 ⇒ 輪詢窗飄移、測試變 flaky。
+      now: options.now === undefined ? Date.now() : Number(options.now),
+      intervalMs: Number(options.rotateIntervalMs) || undefined,
+    });
+    if (targets.length < allTargets.length) partial = true;
+    targetBudget -= targets.length;
     if (!targets.length) {
       // 「這個縣市 5168 沒有對應 sid」⇒ 這一組覆蓋條件對它不適用（不是失敗）：
       // 推一個 applicable:false 的批次，watcher 會把這一輪記成「不適用」而不是「失敗」。
@@ -1173,6 +1200,9 @@ export async function fetchHpCoveringListings(jobs, options = {}) {
       errors,
       // 這一輪是不是「因為被擋而停工」（watcher 會據此記下冷卻期，下一輪跳過這一家）。
       blocked: sourcePaused,
+      // 這一輪是不是「只抓了一部分行政區」（到達每輪上限）：
+      // 這一輪不可以被當成「這一組覆蓋條件已完成」，但也不算失敗（不是來源壞掉）。
+      partial,
     });
   }
 

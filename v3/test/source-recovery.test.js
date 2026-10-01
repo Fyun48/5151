@@ -487,7 +487,7 @@ test("watcher：還在冷卻期的來源這一輪要跳過，並在輪次結果�
   assert.match(src, /blocked: blocked === true,/);
   // 這一條刻意盯「用純函式而不是行內運算式」：2026-09-30 沙盒第一輪就是因為行內用到
   // try 區塊內的 `batches` 而 `ReferenceError`（文字斷言看不到作用域，整合測試才看得到）。
-  assert.match(src, /noteSourceRound\(source, successful, sourceErrors, sourceRoundBlocked\(batches\), applicable\);/);
+  assert.match(src, /noteSourceRound\(source, successful, sourceErrors, sourceRoundBlocked\(batches\), applicable, partial\);/);
   assert.match(src, /let batches = \[\];\n    try \{\n      batches = await run\(\);/);
 });
 
@@ -536,4 +536,108 @@ test("被擋時不可以在同一輪空等（第九十六批踩點：90 秒 × �
       `${file} 不該在逐頁 fail-soft 裡空等冷卻時間`);
     assert.match(src, /blocked: sourcePaused/, `${file} 仍要把「被擋到停工」往上回報`);
   }
+});
+
+test("每輪行政區上限＋輪詢（第九十七批）：一輪只抓上限個行政區，其餘下一輪再抓", async () => {
+  const hp = await import("../src/houseprice.js");
+  const { rotateSourceTargets } = await import("../src/crawlPolicy.js");
+  // 純函式：上限 3、12 個行政區 ⇒ 每輪取 3 個，而且窗口會隨時間推進（輪詢）。
+  const targets = Array.from({ length: 12 }, (_, i) => ({ sid: i + 1, sectionId: i + 1 }));
+  const step = 20 * 60 * 1000;
+  const first = rotateSourceTargets(targets, { limit: 3, now: 0, intervalMs: step }).map((t) => t.sid);
+  const next = rotateSourceTargets(targets, { limit: 3, now: step, intervalMs: step }).map((t) => t.sid);
+  assert.equal(first.length, 3);
+  assert.equal(next.length, 3);
+  assert.notDeepEqual(first, next, "下一個時間窗要換一批（輪詢，不是每輪都抓前三個）");
+  assert.deepEqual(rotateSourceTargets(targets, { limit: 99, now: 0, intervalMs: step }).length, 12, "上限大於總數時全部回傳");
+
+  // 功能：台北市 12 個行政區、上限 4 ⇒ 只打 4 頁（每區 1 頁），且標記 partial。
+  const jobs = [{ regionId: 1, sectionIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], priceMin: 0, priceMax: 0, searchUrl: "scope" }];
+  const listCalls = [];
+  const [batch] = await hp.fetchHpCoveringListings(jobs, {
+    pages: 1, gapMs: 0, detailGapMs: 0, detailLimit: 0, addressDetailLimit: 0,
+    targetLimit: 4, now: 0,
+    getHtml: async (url) => {
+      if (!String(url).includes("/list/")) return fixture("houseprice-list.html");
+      listCalls.push(String(url));
+      return fixture("houseprice-list.html");
+    },
+  });
+  assert.equal(listCalls.length, 4, `上限 4 ⇒ 只該打 4 頁，實際 ${listCalls.length}`);
+  assert.equal(batch.partial, true, "沒抓完的輪次要標記 partial（不算這一組完成、也不算失敗）");
+  assert.ok(batch.listings.length > 0, "抓到的部分還是要回報");
+
+  // 上限夠大時不標 partial（一輪抓完）。
+  const full = await hp.fetchHpCoveringListings([{ regionId: 1, sectionIds: [3], priceMin: 0, priceMax: 0, searchUrl: "s" }], {
+    pages: 1, gapMs: 0, detailLimit: 0, addressDetailLimit: 0, targetLimit: 12,
+    getHtml: async () => fixture("houseprice-list.html"),
+  });
+  assert.equal(full[0].partial, false);
+});
+
+test("partial 的輪次不算失敗也不算恢復（狀態原封不動）", async () => {
+  const { applySourceRound } = await import("../src/crawlSourceStreaks.js");
+  const at = "2026-10-01T01:00:00.000Z";
+  const round = applySourceRound({ houseprice: { fails: 4 } }, [
+    { source: "houseprice", covered: 0, total: 6, applicable: true, partial: true },
+  ], { at });
+  assert.equal(round.streaks.houseprice.fails, 4, "到達每輪上限不是失敗");
+  assert.deepEqual(round.partial, ["houseprice"]);
+  assert.deepEqual(round.failed, []);
+  assert.deepEqual(round.recovered, []);
+  // watcher 也要標記 partial（否則這一組會被誤記成已完成）。
+  const watcherSrc = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
+  assert.match(watcherSrc, /batch\.partial !== true\) successful\.add\(batch\.searchUrl\)/);
+  assert.match(watcherSrc, /const partial = batches\.some\(\(batch\) => batch\?\.partial === true\);/);
+});
+
+test("每輪上限要平均分給每個 job（後面的 job 不能被前面的吃光）＋輪詢要推進", async () => {
+  const hp = await import("../src/houseprice.js");
+  const jobs = [
+    { regionId: 1, sectionIds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], priceMin: 0, priceMax: 0, searchUrl: "a" },
+    { regionId: 3, sectionIds: [20, 21, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38], priceMin: 0, priceMax: 0, searchUrl: "b" },
+  ];
+  const run = async (now) => {
+    const sids = [];
+    const batches = await hp.fetchHpCoveringListings(jobs, {
+      pages: 1, gapMs: 0, detailLimit: 0, addressDetailLimit: 0, targetLimit: 12, now,
+      getHtml: async (url) => { if (String(url).includes("/list/")) sids.push(String(url).match(/(\d+)_zip/)?.[1]); return ""; },
+    });
+    return { sids: sids.join(","), partial: batches.map((b) => b.partial) };
+  };
+  const first = await run(0);
+  const next = await run(20 * 60 * 1000);
+  const firstSids = first.sids ? first.sids.split(",") : [];
+  const nextSids = next.sids ? next.sids.split(",") : [];
+  // 期望值從資料推導（不要硬編）：每個 job 的 distinct sid 數 → 每個 job 分到 perJob = floor(12/2) = 6。
+  const sidsOf = (regionId, sections) => [...new Set(sections.map((s) => hp.hpSidForDistrict(regionId, s)).filter(Boolean))];
+  const all1 = sidsOf(1, jobs[0].sectionIds);
+  const all2 = sidsOf(3, jobs[1].sectionIds);
+  const perJob = Math.floor(12 / 2);
+  const expected = Math.min(perJob, all1.length) + Math.min(perJob, all2.length);
+  assert.equal(firstSids.length, expected, `上限 12、兩個 job 各分 6 ⇒ 應為 ${expected} 個行政區，實際 ${firstSids.length}`);
+  // 兩個 job 都要有批次（額度用完的那個要推 partial 批次，不能被當成失敗）。
+  assert.equal(first.partial.length, 2);
+  assert.deepEqual(first.partial, [true, true]);
+  // 台北 12 個目標 > 每 job 額度 6 ⇒ 只有它的視窗需要輪詢推進。
+  assert.notDeepEqual(firstSids.slice(0, 6), nextSids.slice(0, 6), "台北的視窗要往後推進");
+  // 新北只有 5 個目標 < 額度 ⇒ 每一輪都全部抓到（不需要輪詢）。
+  assert.equal(all2.length <= perJob, true);
+  assert.deepEqual(nextSids.slice(6).sort(), all2.map(String).sort(), "目標數少於額度的 job 每輪都要全部抓到");
+
+  // 極端情形：job 數比額度還多 ⇒ 額度用完的那個 job 要推一個 partial 批次（不能被當成失敗輪）。
+  const many = [
+    { regionId: 1, sectionIds: [3], priceMin: 0, priceMax: 0, searchUrl: "j1" },
+    { regionId: 1, sectionIds: [5], priceMin: 0, priceMax: 0, searchUrl: "j2" },
+    { regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "j3" },
+  ];
+  const fetched = [];
+  const batches = await hp.fetchHpCoveringListings(many, {
+    pages: 1, gapMs: 0, detailLimit: 0, addressDetailLimit: 0, targetLimit: 2, now: 0,
+    getHtml: async (url) => { if (String(url).includes("/list/")) fetched.push(url); return ""; },
+  });
+  assert.equal(fetched.length, 2, `額度 2 ⇒ 只打 2 個行政區，實際 ${fetched.length}`);
+  assert.equal(batches.length, 3, "三個 job 都要有批次（第三個是額度用完的 partial 批次）");
+  assert.equal(batches[2].partial, true);
+  assert.equal(batches[2].listings.length, 0);
 });

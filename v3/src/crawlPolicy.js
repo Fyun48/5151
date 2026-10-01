@@ -30,3 +30,21 @@ export function rotateCoveringJobs(jobs = [], {
   return slice.length === cap ? slice : [...slice, ...list.slice(0, cap - slice.length)];
 }
 
+
+/**
+ * 來源每輪的行政區上限（2026-10-01 第九十七批，Owner 指定「給上限用輪詢的方式」）。
+ *
+ * 為什麼：5168（houseprice）只有台北／新北有 sid，而一輪可能同時派到台北(12 區)＋新北(29 區)
+ * ⇒ 一輪最多 41 個行政區、兩百多個列表請求。實測（正式站容器）12 個行政區、89 個請求是安全的
+ * （全部 200、取回 1,427 筆）；41 個行政區那種爆量才是把自己推進對方封鎖窗口的形狀。
+ * 所以每一輪只抓「上限」個行政區，其餘**輪詢**到下一輪（時間窗推進，掃完一輪再從頭）。
+ *
+ * 演算法刻意與 `rotateCoveringJobs()` 共用同一份（同一個時間窗步進），不要另寫一套輪替。
+ */
+export function rotateSourceTargets(targets = [], {
+  limit = 12,
+  now = Date.now(),
+  intervalMs = SYSTEM_CRAWL_INTERVAL_MINUTES * 60 * 1000,
+} = {}) {
+  return rotateCoveringJobs(targets, { limit, now, intervalMs });
+}
