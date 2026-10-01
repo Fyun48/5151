@@ -7,7 +7,8 @@
   - A1／C1／C2：`7701c29…`
   - **實作本體（A2～A5、B1／B2、C3）：`232a6a7479dee78d6960f3825862f10ff278215a`**
   - A3 的完整修法（顯示名稱不再被 `rental_catalog_v2` 旗標擋住）：`0b1585b…`
-  - 截圖證據：`67897014a63c822d883c563c804fed21558a4319`（四項 CI 全綠）
+  - 截圖證據：`67897014a63c822d883c563c804fed21558a4319`
+  - **審閱修正 R1～R6：`66d6383…`（這一版四項 CI 全綠）**
   - 以上都是**改程式**的 SHA。本報告與後續文件更新會產生新的 commit，
     所以「PR 目前 head 的 SHA 與它的 CI」一律看
     <https://github.com/Fyun48/5151/pull/611> 的 head 與 checks
@@ -143,8 +144,11 @@ SHA `67897014a63c822d883c563c804fed21558a4319`（實作＋截圖，四項全綠�
 | Run Tests | ✅ pass（2m56s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223898679) |
 | Run Tests (PostgreSQL integration) | ✅ pass（3m43s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223899126) |
 
-四項全綠；之後每一次 commit（含本報告）在 PR #611 上也都是四項全綠。
-`npm test` 在本機看到的那 5 紅都是既有的基準線／flake，CI 上沒有出現。
+**R1～R6（`66d6383`）也是四項全綠**：GitGuardian pass、Review diff pass、
+Run Tests pass（3m21s）、Run Tests (PostgreSQL integration) pass（3m45s）。
+之後每一次 commit（含本報告）在 PR #611 上都會重跑同一組檢查。
+`npm test` 在本機看到的紅都是既有的基準線／flake（PR-A manifest 因工作區髒、cursor-2000、
+commute 1.5s、cooperative），CI 上沒有出現。
 
 ---
 
@@ -157,6 +161,63 @@ SHA `67897014a63c822d883c563c804fed21558a4319`（實作＋截圖，四項全綠�
 | **部署狀態** | ⛔ **未部署**。Production 維持 manual-only；`build → predeploy → deploy` 三條 workflow 都**沒有**被觸發。**「程式修好」不等於「正式站已修好」。** |
 
 ---
+
+## 6b. 第二輪：PR 審閱修正（R1～R6，2026-10-01）
+
+審閱文件指出「A4、B1/B2 與 C3 尚未完成使用流程」。逐項處理如下，**同一張 PR #611**。
+
+| 項 | 狀態 | 修改重點 |
+|---|---|---|
+| **R1** A4 舊快取與精度／狀態 | ✅ | `mrt_cache` 加 `source`／`checked`／`walk_m`／`searched_m`，契約字串 `osrm-foot:v1`；舊列一律不採計、按需重算（PG 用 `ADD COLUMN IF NOT EXISTS`）。門檻一律用**未四捨五入的公尺**，公里只給顯示。候選站**部分失敗或被上限截斷 ⇒ 回待確認**，不可宣告「已查證沒有」。0 公尺是合法距離 |
+| **R2** B1/B2 站內刊登資料來源 | ✅ | `listings` 加費用三態與 `self_mrt_*`（**migration version 7**）；三個寫入路徑共用 `resolveSelfListingMeta()`（地址變了 ⇒ 舊座標與舊查證失效）；發布路徑做地理編碼＋步行查證並寫進同一份 `mrt_cache`（fail-soft）；費用推論改成逐項判定（只有水費已含 ≠ 含水電；第四台 ≠ 網路） |
+| **R3** 一般會員預覽／上傳中提交 | ✅ | 附件網址分 `owner`／`admin` 兩種 scope（會員讀自己的未送出附件不再 403）；前台優先用**本機 blob**；上傳中鎖住送出；每次開啟對話框換世代，延遲完成的上傳會被丟棄 |
+| **R4** 四張上限被並行繞過 | ✅ | 配額改成**單句條件式 INSERT**（DB 保證），`claim` 自己也擋 > 4 |
+| **R5** claim 與刪除／清理競態 | ✅ | 刪除與孤兒清理改成**帶齊條件的 UPDATE … RETURNING**，只有搶到資格的那一列才 unlink |
+| **R6** 兩節點附件可用性 | ✅ 程式／設定完成，**待部署生效** | 見下 |
+| **A1** 提示文字 | ✅ | 改回工作單指定的原文，不再附加「（至少 8 個字）」；8 字規則保留（即時字數提示） |
+
+### R6 的證據與現況
+
+| 節點 | `DATA_DIR` 本體 | 私有媒體 |
+|---|---|---|
+| web-A（CasaOS 192.168.0.140） | `/opt/5151-shadow/web-a/data`（**節點本機**） | `/mnt/5151-media/…`＝**NFS**（`192.168.0.220:/volume1/5151-media`） |
+| web-B（Synology 192.168.0.220） | `~/5151-shadow/web-b/data`（**節點本機**） | `/volume1/5151-media/…`（本機 volume，NFS 來源） |
+
+`member-media`／`self-photos` 早就是用這份共享儲存疊上去的（`deploy/shadow-ha/media-share/`），
+**`feedback-media` 漏了**。已補：三份 repo compose、**兩台主機的正本 compose**（各自備份
+`.bak-20261001`，`docker compose config` 通過）、共享目錄已建立且 A 端 NFS 可讀寫。
+
+> ⚠️ **容器尚未重建**。bind mount 要 `docker compose up -d` 才會生效，那是一次部署 ⇒
+> 依規則等 Owner 當次批准。**在那之前，回饋附件仍然是節點本機檔案（跨節點會 404）。**
+
+### 這輪新增／變更的 schema
+
+| 變更 | SQLite | PG |
+|---|---|---|
+| `mrt_cache` 加 `source`／`checked`／`walk_m`／`searched_m` | `db.js` 的 `addColumnsIfMissing`（模組初始化，無條件） | `MRT_CACHE_PG_COLUMNS`（`crawlerWrites` 第一次寫入前） |
+| `listings` 加 `fee_includes`／`self_mrt_*` | **migration version 7**（`schemaMigrations.js`）| `SELF_LISTING_PG_COLUMNS`（`selfListingsAsync.runnerFor`） |
+
+> 📌 教訓：**新增欄位一定要開新的 migration version**。只改 `ensureXxxSchema()` 不會生效 ——
+> migration runner 只跑沒跑過的版本（本機實測回 `no such column: fee_includes`）。
+
+### 修正後的驗證（審閱要求涵蓋的情境）
+
+| 審閱要求的情境 | 怎麼驗 | 結果 |
+|---|---|---|
+| 舊快取不採計 | `v3/test/mrt-cache-contract.test.js`（真的 db.js）：一列舊格式（無 source／checked=0）、一列新格式 | 舊列回 null（會重算）、新列讀得到且 `walk_m` 原樣保留 |
+| 1,000／1,001 公尺 | `v3/test/mrt.test.js` | 1,000 ⇒ `within`；1,001 ⇒ `none` |
+| 1,049 公尺（顯示 1.0 公里） | `mrt.test.js` ＋ `rental-match.test.js` | 表單 `none`、配對硬衝突（**不再因為顯示成 1.0 就符合**） |
+| 0 公尺 | 同上 | `within`，`walk_m = 0`、`walk_km = 0` |
+| 候選部分失敗 | `mrt.test.js`：第一站 1,300 公尺、其餘拋錯 | 回 `unknown` ＋ `nearest_walk_m`，不是「已查證沒有」 |
+| 候選被上限截斷 | 同上 | 截斷時也不回 `none` |
+| 一般會員預覽 | `feedback-media.test.js` ＋ 前台字串斷言 | 本人未送出 ⇒ 讀得到；已送出／別人的 ⇒ 讀不到 |
+| 五張並行拒絕 | `feedback-media.test.js`：`Promise.allSettled` 五個並行上傳 | 只有 4 個成功，第 5 個 409 `attachment_limit` |
+| claim 與清理競態 | `feedback-media.test.js` | 刪除回 404 且列與實體檔都還在；sweep 只清孤兒 |
+| 一筆房源建立後完成費用與捷運配對 | `listing-fee-mrt-match.test.js`（真寫入 API＋真 snapshot）＋**真實 UI 端到端** | 已含 ⇒ 符合；另計 ⇒ 硬衝突（該筆 0 筆配對）；沒填 ⇒ 未確認；`mrt_walk` 958 公尺 ⇒ 符合 |
+| 跨節點附件 | 兩節點 volume 實查 ＋ compose `config` 驗證 ＋ `media-share-mounts.test.js` | 見上；**容器尚未重建**（要一次部署） |
+
+**定點變異測試**：這一輪合計 **22 個變異全部被殺（存活 0/22）**
+（10 個來自 A1～C3，12 個來自 R1～R6）。
 
 ## 7. 需要 Owner 決定或動手的事
 
