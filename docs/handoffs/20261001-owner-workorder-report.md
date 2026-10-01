@@ -3,9 +3,11 @@
 - **工作單**：`5151_DS_Fixes_20261001.txt`（A1～A5、B1～B2、C1～C3）
 - **PR**：<https://github.com/Fyun48/5151/pull/611>
 - **分支**：`fix/owner-workorder-20261001`
-- **完整 commit SHA**：`67897014a63c822d883c563c804fed21558a4319`
-  （前一個：`232a6a7479dee78d6960f3825862f10ff278215a` 實作本體、
-  `7701c29…` A1／C1／C2）
+- **完整 commit SHA**：`710563a661f2d5bf096f4667f025cb1c838f1a5c`（PR #611 的 head，
+  含本報告與截圖；CI 四項全綠見下）
+  - 實作本體：`232a6a7479dee78d6960f3825862f10ff278215a`（A2～A5、B1／B2、C3）
+  - 截圖證據：`67897014a63c822d883c563c804fed21558a4319`
+  - A1／C1／C2：`7701c29…`
 - **部署狀態**：**未部署**。Production 維持 manual-only，等 Owner 另外明確批准。
 
 ---
@@ -112,16 +114,17 @@
 - **尺規**：288 → **293** 條入口（C3 四條＋A4 一條），交接文件現況表已同步。
 ### CI 結果（同一個 SHA）
 
-SHA `67897014a63c822d883c563c804fed21558a4319`（PR #611 的 head）：
+SHA `710563a661f2d5bf096f4667f025cb1c838f1a5c`（PR #611 的 head）：
 
 | 檢查 | 結果 | 連結 |
 |---|---|---|
 | GitGuardian Security Checks | ✅ pass | <https://dashboard.gitguardian.com> |
-| Review diff with the configured model | ✅ pass | [run](https://github.com/Fyun48/5151/actions/runs/36816898409) |
-| Run Tests | ✅ pass（2m56s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223898679) |
-| Run Tests (PostgreSQL integration) | ✅ pass（3m43s） | [run](https://github.com/Fyun48/5151/actions/runs/36816898385/job/110223899126) |
+| Review diff with the configured model | ✅ pass | [run](https://github.com/Fyun48/5151/actions/runs/36817244509) |
+| Run Tests | ✅ pass（3m58s） | [run](https://github.com/Fyun48/5151/actions/runs/36817244552/job/110224881341) |
+| Run Tests (PostgreSQL integration) | ✅ pass（3m46s） | [run](https://github.com/Fyun48/5151/actions/runs/36817244552/job/110224881558) |
 
-四項全綠。`npm test` 在本機看到的那 5 紅都是既有的基準線／flake，CI 上沒有出現。
+四項全綠。前一個 SHA `6789701…`（功能本體＋截圖）也是四項全綠。
+`npm test` 在本機看到的那 5 紅都是既有的基準線／flake，CI 上沒有出現。
 
 ---
 
