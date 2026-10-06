@@ -277,13 +277,22 @@ jobs:
           tkey="$(mktemp)"
           printf '%s\n' "$TORI_SSH_KEY" > "$tkey"
           chmod 600 "$tkey"
-          scp -o StrictHostKeyChecking=accept-new -P "$TORI_PORT" -i "$tkey" \
-            "$TORI_USER@$TORI_HOST:/var/services/homes/tori/backups/5151/pg-predeploy-evidence.json" ./pg-predeploy-evidence.json
+          # OpenSSH >= 9 的 scp 走 SFTP 子系統，而 ssh-tori bridge 的 SFTP 不通（subsystem request
+          # failed on channel 0）；exec channel 是通的，所以改用 ssh 跑 cat 把證據檔拉回。
+          ssh -o StrictHostKeyChecking=accept-new -p "$TORI_PORT" -i "$tkey" \
+            "$TORI_USER@$TORI_HOST" 'cat /var/services/homes/tori/backups/5151/pg-predeploy-evidence.json' > ./pg-predeploy-evidence.json
           rm -f "$tkey"
+          test -s ./pg-predeploy-evidence.json || { echo "::error::pg-predeploy-evidence.json is empty after ssh cat pull"; exit 1; }
           python3 - <<'PY'
           import json, re
           nas = json.load(open("nas-predeploy-evidence.json"))
-          pg = json.load(open("pg-predeploy-evidence.json"))
+          pg_raw = open("pg-predeploy-evidence.json").read()
+          first_line = next((line for line in pg_raw.splitlines() if line.strip()), "")
+          if not first_line.lstrip().startswith("{"):
+              print("::error::pg-predeploy-evidence.json does not look like JSON; first 3 lines:")
+              print("\n".join(pg_raw.splitlines()[:3]))
+              raise SystemExit("pg-predeploy-evidence.json is not JSON (unexpected ssh cat output)")
+          pg = json.loads(pg_raw)
           backup_id = nas.get("backup_dir") or ""
           # PG 時代：可回版的業務資料是 PG dump，以它的 sha256 作為備份身份（rollback 用的
           # BACKUP_HASH）；v3.db 的 sha256 只在 PG dump 缺失時當 fallback。
