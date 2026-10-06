@@ -508,7 +508,7 @@ import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rent
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { startCrmDeliveryLoop } from "./crmDelivery.js";
 import { opsDeliveryDb } from "./db.js";
-import { crmOutboxOps } from "./crmOutboxAsync.js";
+import { startCrmDeliveryLoopAsync } from "./crmOutboxAsync.js";
 // Ops 遞送（worker 與後台控制）的 PG 島嶼：PG 模式下 worker 必須送 **PG** 的佇列，
 // 否則 `POST /api/feedback` 寫進 PG 的事件永遠不會被送出（靜默失效）。
 import {
@@ -5100,7 +5100,12 @@ function startWorkerLoops() {
     startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
     startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
   }
-  startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)), ops: crmOutboxOps() });
+  // CRM 遞送 loop：PG 模式要送 PG 的 crm_outbox（同步版讀寫本機 ⇒ 送出的永遠是本機那一份）。
+  if (resolveDbDriver() === "postgres") {
+    startCrmDeliveryLoopAsync(process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  } else {
+    startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
 }
 
 // PG 模式的許願房生命週期 tick 入口（旗標先從 PG 收斂）。
