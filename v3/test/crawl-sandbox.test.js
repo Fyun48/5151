@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (rel) => readFileSync(path.join(ROOT, rel), "utf8");
 
-const { parseSandboxArgs, checkSandboxTarget, buildRoundReport, formatRoundReport } =
+const { parseSandboxArgs, checkSandboxTarget, isSchedulerEnabled, buildRoundReport, formatRoundReport } =
   await import("../scripts/crawl-sandbox.mjs");
 
 const SANDBOX_URL = "postgres://user:pw@192.168.0.220:15434/crawl_sandbox";
@@ -28,6 +28,13 @@ test("命令列：--once 跑一輪、--rounds N 跑 N 輪、預設常駐（0）"
   assert.equal(parseSandboxArgs(["--rounds", "0"]).rounds, 1, "0 輪沒有意義，至少要一輪");
   assert.equal(parseSandboxArgs(["--rounds", "abc"]).rounds, 1);
   assert.equal(parseSandboxArgs(["--once", "--json"]).json, true);
+});
+
+test("排程器開關：預設啟用；CRAWL_SANDBOX_SCHEDULER=0 停用；只有 0 才是停用", () => {
+  assert.equal(isSchedulerEnabled({}), true, "沒設就預設啟用（排程照跑）");
+  assert.equal(isSchedulerEnabled({ CRAWL_SANDBOX_SCHEDULER: "1" }), true);
+  assert.equal(isSchedulerEnabled({ CRAWL_SANDBOX_SCHEDULER: "0" }), false, "0 = 停用內部排程");
+  assert.equal(isSchedulerEnabled({ CRAWL_SANDBOX_SCHEDULER: "" }), true, "空字串視為未設定，維持預設啟用");
 });
 
 test("安全閥：沙盒只認「postgres ＋ 允許清單內的資料庫」", () => {
@@ -117,6 +124,8 @@ test("接線：compose 不發佈埠、用同一顆映像、掛載 repo 的 src�
   assert.match(compose, /restart: unless-stopped/);
   assert.doesNotMatch(compose, /^\s+ports:/m, "沙盒不得發佈任何埠（不服務請求、也不在 tunnel ingress）");
   assert.match(compose, /DB_DRIVER: postgres/);
+  // 手動跑輪時要能停掉內部排程（CRAWL_SANDBOX_SCHEDULER=0），避免與手動輪撞車。
+  assert.match(compose, /CRAWL_SANDBOX_SCHEDULER: \$\{CRAWL_SANDBOX_SCHEDULER:-1\}/);
   assert.match(compose, /\.\/v3\/src:\/app\/src:ro/);
   assert.match(compose, /\.\/v3\/scripts:\/app\/scripts:ro/);
   assert.match(compose, /command: \["node", "scripts\/crawl-sandbox\.mjs"\]/);
@@ -132,6 +141,9 @@ test("接線：compose 不發佈埠、用同一顆映像、掛載 repo 的 src�
   const sync = read("v3/scripts/crawl-sandbox-sync.sh");
   assert.match(sync, /scp -q -r "\$REPO_ROOT\/v3\/src\/\."/, "同步腳本要把 v3/src 送上沙盒");
   assert.match(sync, /scp -q -r "\$REPO_ROOT\/v3\/scripts\/\."/, "同步腳本要把 v3/scripts 送上沙盒");
+  // SANDBOX_ROUNDS>0 時要先停排程、跑完再恢復，才不會把手動輪跟內部排程混在一起。
+  assert.match(sync, /CRAWL_SANDBOX_SCHEDULER=0/, "手動跑輪要先停排程");
+  assert.match(sync, /trap restore_scheduler EXIT/, "無論成敗都要恢復排程");
   const setup = read("v3/scripts/crawl-sandbox-setup.sh");
   assert.match(setup, /SANDBOX_PG_URL/, "沙盒庫連線字串只能來自 secrets");
   assert.match(setup, /pg-integration-setup\.mjs/, "schema 要用既有的鏡射腳本，不要自己寫一份");

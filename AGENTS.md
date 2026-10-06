@@ -81,6 +81,9 @@ ssh casa-nas "docker exec 5151-crawl-sandbox tail -3 /data/crawl-sandbox.jsonl" 
   每來源 covered/total、`completed` 與 `covers_max_last_run_at` 有沒有前進）。沒有報告不算測過。
 - 沙盒只寫隔離庫（程式啟動時會用 `assertPgTargetAllowed()` 再檢查一次）；
   它**不會**自動跟著部署更新——同步時機由人決定，這樣才能測「還沒上線的候選版本」。
+- `SANDBOX_ROUNDS>0` 時同步腳本會自動**先停內部排程（`CRAWL_SANDBOX_SCHEDULER=0`）→ 跑 N 輪 →
+  自動恢復排程**，所以手動測試輪不會再與容器內部排程在 owner lock 上撞車（不會再混入
+  `skipped=owner_busy`／`timed_out` 的噪音）。若真要手動停排程，`CRAWL_SANDBOX_SCHEDULER=0` 重建容器即可。
 
 ## Pull requests 與部署（Owner 覆寫，2026-09-10 起強制）
 
