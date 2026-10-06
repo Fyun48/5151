@@ -1,0 +1,12 @@
+[Unit]
+Description=5151 projection integrity monitor timer (read-only, every 15 min)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=5151-projection-monitor.service
+
+[Install]
+WantedBy=timers.target
