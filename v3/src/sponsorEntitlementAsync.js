@@ -29,7 +29,7 @@ function iso(value) {
 async function entitlementExec(options = {}) {
   const driver = resolveDbDriver(options);
   if (driver === "postgres") {
-    const pgDriver = options.pgDriver || sharedPgDriver();
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
     await ensurePgSchema(pgDriver, sqliteHandle(), { tables: SPONSOR_ENTITLEMENT_TABLES });
     const exec = async (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
     return { exec, pg: true };
