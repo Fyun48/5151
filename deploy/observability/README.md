@@ -17,7 +17,7 @@
 |---|---|---|
 | `5151-crawl-staleness-monitor.timer` | 每 5 分鐘 | crawler 即時性：`listings.last_seen_at` 是否停滯 |
 | `5151-pg-backup.timer` | 每天 20:30 UTC | PostgreSQL 排程備份（取自 standby） |
-| `5151-projection-monitor.timer` | 每 15 分鐘 | 唯讀投影完整性（見 PR #498，尚未合併進 master） |
+| `5151-projection-monitor.timer` | 每 15 分鐘 | 唯讀投影完整性：`listing_search_projection` 的 orphan／dup／nulls |
 | `5151-media-mount-guard.timer` | — | 媒體掛載守衛 |
 
 一行停用任一項：`sudo systemctl disable --now <timer>`
@@ -103,3 +103,54 @@
 ```
 
 耗時 27.7 秒。
+
+## 四、投影完整性監控（唯讀，2026-09-24 起）
+
+### 為什麼需要
+
+搜尋主要靠 `listing_search_projection` 這張**衍生投影表**。主表 `listings` 寫入成功但投影沒跟上，
+訪客搜尋就會少看到房源；反向（投影有、主表沒有）或同 `post_id` 重複、`post_id` 為 NULL，
+都是結構壞了的徵兆。這個檢查在「看到人之前」先抓到結構異常。
+
+### 檢查內容（單一 `REPEATABLE READ READ ONLY` 交易，只有 SELECT）
+
+| 指標 | 意義 | 告警？ |
+|---|---|---|
+| `missing`／`missing_visible` | 主表有、投影沒有的列數（含／不含 hidden、offline） | 否，只看趨勢（回填期間本來就 > 0） |
+| `orphan` | 投影有、主表沒有的列數 | **是**（≠ 0 即告警） |
+| `dup` | 投影內同 `post_id` 重複的群數 | **是**（≠ 0 即告警） |
+| `nulls` | 投影內 `post_id` 為 NULL 的列數 | **是**（≠ 0 即告警） |
+
+`ok=1` 由查核腳本自己算（orphan／dup／nulls 皆 0 且無錯誤）→ 監控端只信任這個欄位，
+避免字串順序造成誤報。`ok=0` 時以非 0 結束 → journal 記錄 `PROJECTION_MONITOR_ALERT`。
+
+### 檔案
+
+- `projection-monitor.sh`（host 端 wrapper，裝到 `/opt/5151-scripts/`）
+- `projection-check.mjs`（實際查核，每次執行 `docker cp` 進容器後執行；內容以 repo 為準）
+- `5151-projection-monitor.service`／`.timer`（裝到 `/etc/systemd/system/`）
+
+> 2026-10-06 現況：正式站 PG 路由缺口已歸零（`missing=0`、`listings == projection`）。
+> 此監控的價值已從「追回填進度」轉為「永久守住結構不變壞」（orphan／dup／nulls）。
+
+### 安裝／停用（casa；需要 root）
+
+```sh
+scp deploy/observability/projection-monitor.sh root@casa-nas:/opt/5151-scripts/
+scp deploy/observability/projection-check.mjs root@casa-nas:/opt/5151-scripts/
+scp deploy/observability/5151-projection-monitor.service deploy/observability/5151-projection-monitor.timer root@casa-nas:/etc/systemd/system/
+ssh root@casa-nas 'chmod +x /opt/5151-scripts/projection-monitor.sh
+  systemctl daemon-reload
+  systemctl enable --now 5151-projection-monitor.timer
+  systemctl start 5151-projection-monitor.service
+  cat /var/log/5151/projection-monitor.log
+  systemctl list-timers 5151-projection-monitor.timer --no-pager'
+```
+
+停用：`ssh root@casa-nas 'systemctl disable --now 5151-projection-monitor.timer'`
+
+### 首次執行實測（2026-10-06，正式站 PG 已切）
+
+```
+2026-10-06T01:15:01Z missing=0 missing_visible=0 orphan=0 dup=0 nulls=0 listings=167490 projection=167490 ok=1
+```
