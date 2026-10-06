@@ -238,13 +238,17 @@ jobs:
           import json, re
           nas = json.load(open("nas-predeploy-evidence.json"))
           backup_id = nas.get("backup_dir") or ""
-          backup_hash = nas.get("backup_sha256") or ""
+          # PG 時代：可回版的業務資料是 PG dump，以它的 sha256 作為備份身份（rollback 用的
+          # BACKUP_HASH）；v3.db 的 sha256 只在 PG dump 缺失時當 fallback。
+          backup_hash = nas.get("pg_backup_sha256") or nas.get("backup_sha256") or ""
           if not backup_id or not backup_hash:
               raise SystemExit("predeploy NAS evidence missing backup identity")
           if not backup_hash.startswith("sha256:"):
               backup_hash = "sha256:" + backup_hash
-          if nas.get("integrity_check") != "ok" or nas.get("ok") is not True:
-              raise SystemExit("predeploy NAS integrity_check is not ok")
+          if nas.get("pg_backup_ok") is not True:
+              raise SystemExit("predeploy NAS PostgreSQL backup is not ok")
+          if nas.get("ok") is not True:
+              raise SystemExit("predeploy NAS evidence is not ok")
           digest = None
           digest_re = re.compile(r"sha256:[a-f0-9]{64}")
           for raw in (nas.get("repo_digests"), nas.get("image_ref")):
