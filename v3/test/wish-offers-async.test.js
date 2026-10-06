@@ -379,6 +379,37 @@ test("檢舉：驗證、寫入與稽核事件兩邊一致", async () => {
 // **上限邏輯本身仍由同步版的既有測試守護**；PG 版用的是同一組常數與同一句 COUNT。
 // 要補的時候注意：`seedSix` 這類種子要在 `copyRows()` 之前灌，且兩個路徑用不同 offer_id。
 
+test("檢舉每日上限：同步版與 PG 版一致（同一組常數與 COUNT）", async () => {
+  const [db, mem, exec] = resetWorld();
+  const { offer } = seedPairWithOffer(db);
+  const now = new Date("2026-09-28T12:00:00.000Z");
+  const cap = offers.OFFER_REPORT_DAILY_CAP;
+  // ⚠️ 種子必須在 `copyRows()` **之前**灌進磁碟（resetWorld 已清掉 wish_offer_reports），
+  // 且每筆用不同 offer_id 避開 `UNIQUE(offer_id, reporter_user_id)`。
+  for (let i = 0; i < cap; i += 1) {
+    db.prepare(
+      `INSERT INTO wish_offer_reports(public_token, offer_id, reporter_user_id, reported_user_id, listing_id, reason, detail, status, created_at)
+       VALUES (?, ?, 1, 2, 2, 'spam', '', 'open', ?)`,
+    ).run(`cap-${i}`, 900000 + i, "2026-09-28T00:00:00.000Z");
+  }
+  copyRows(db, mem);
+  const offerRow = transitions.getWishOffer(db, 1, offer.public_token);
+
+  let syncErr = null;
+  try { transitions.reportWishOffer(db, 1, offer.public_token, { reason: "spam" }, { now }); } catch (e) { syncErr = e; }
+  let asyncErr = null;
+  try { await offerAsync.reportOfferAsync(1, offerRow, { reason: "spam", now }, { ...PG, exec, strict: true }); } catch (e) { asyncErr = e; }
+  assert.ok(syncErr, "同步版：到達每日上限必須拒絕");
+  assert.ok(asyncErr, "PG 版：到達每日上限必須拒絕");
+  assert.equal(asyncErr.code, syncErr.code, "錯誤碼必須相同");
+  assert.equal(asyncErr.code, "RATE_LIMITED");
+  assert.equal(asyncErr.status, syncErr.status, "status 必須相同（應為 429）");
+  assert.equal(asyncErr.retry_after, syncErr.retry_after, "retry_after 必須相同");
+  // 第 7 筆被擋下 ⇒ 兩個 store 都不會多寫一列
+  assert.equal(exec.raw.prepare("SELECT COUNT(*) AS n FROM wish_offer_reports").get().n, cap, "PG 不得寫入第 7 筆");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM wish_offer_reports").get().n, cap, "磁碟不得寫入第 7 筆");
+});
+
 test("檢舉：只有房客能檢舉（屋主／第三人 ⇒ 404），兩邊一致", async () => {
   const [db, mem, exec] = resetWorld();
   const { offer } = seedPairWithOffer(db);

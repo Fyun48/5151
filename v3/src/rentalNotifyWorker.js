@@ -24,11 +24,21 @@ export function startRentalNotifyLoop(runTick, {
   const tick = () => {
     if (running) return { skipped: true };
     running = true;
+    let result;
     try {
-      return runTick();
-    } finally {
+      result = runTick();
+    } catch (error) {
       running = false;
+      throw error;
     }
+    if (result && typeof result.then === "function") {
+      // PG 模式：runTick 回 Promise；等它結算才釋放 non-reentrant 鎖。
+      return Promise.resolve(result)
+        .catch((error) => { log("rental-notify-tick", { error: error?.message || String(error) }); })
+        .finally(() => { running = false; });
+    }
+    running = false;
+    return result;
   };
   timer = setInterval(() => {
     try { tick(); } catch (error) { log("rental-notify-tick", { error: error.message }); }

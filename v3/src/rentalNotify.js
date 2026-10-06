@@ -67,6 +67,12 @@ export function setRentalNotifyPushSink(fn) {
   pushSink = typeof fn === "function" ? fn : null;
 }
 
+// 匯出給 driver-aware 的 worker（rentalNotifyWorkerAsync.js）讀取目前三個 sink。
+// `deliverOne()` 直接讀模組層的 `dockWriter`／`mailSink`／`pushSink`，PG 版需要同一份。
+export function getRentalNotifySinks() {
+  return { dockWriter, mailSink, pushSink };
+}
+
 // 取消訂閱時的「暫時打開閘門」：使用者按了取消連結就一定要生效，不該被
 // 「站上通知已關閉」擋下（同步版原本直接改模組層的 `flagsCache`）。
 // 抽成函式讓 PG 版逐字重用——**非同步版必須另寫一支**：同步版的 `finally` 會在

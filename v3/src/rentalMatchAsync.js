@@ -24,11 +24,13 @@ import {
   MATCH_CANDIDATE_CHUNK,
   applyMatchCursor,
   clampLimit,
+  evaluateMatch,
   expireMatchPageCursor,
   isListingMatchable,
   isWishMatchable,
   listingMatchSnapshot,
   readOpaqueMatchCursor,
+  wishMatchSnapshot,
 } from "./rentalMatch.js";
 import {
   activityMapFrom,
@@ -400,5 +402,29 @@ export async function ownerListingMatchesAsync(postId, userId, options = {}) {
     if (!sqliteFallbackAllowed(options, {})) throw error;
     const { ownerListingMatches } = await import("./db.js");
     return ownerListingMatches(postId, userId, { limit, cursor });
+  }
+}
+
+/** `rentalMatchQuery.js:pairStillHardEligible()` 的 PG 版（租屋通知 worker 的 hard gate）。
+ *
+ *  同步版任何錯誤都回 `false`（不通知）；這裡刻意比照同一條語意，不靠 fallback——
+ *  hard gate 的「不通知」是安全側，fail-open 回本機 SQLite 反而會用錯 store。
+ */
+export async function pairStillHardEligibleAsync(postId, userId, wishRef, options = {}) {
+  const now = nowOf(options);
+  if (!isPg(options)) {
+    const { pairStillHardEligible } = await import("./rentalMatchQuery.js");
+    return pairStillHardEligible(sqliteHandle(), postId, userId, wishRef, now);
+  }
+  try {
+    const run = await pgRunner(options);
+    const { listing } = await loadOwnedMatchListingAsync(run, postId, userId, now);
+    const row = rowsOf(await run("SELECT * FROM demand_posts WHERE public_token = ?", [String(wishRef || "")]))[0];
+    if (!row) return false;
+    const catalog = currentMatchCatalog();
+    const wish = wishMatchSnapshot(row, { catalog });
+    return evaluateMatch(listing, wish, { catalog, now }).eligible === true;
+  } catch {
+    return false;
   }
 }

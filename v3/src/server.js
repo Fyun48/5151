@@ -29,6 +29,7 @@ import {
   listingToolsInfoAsync,
   ownerListingMatchSummaryAsync,
   ownerListingMatchesAsync,
+  pairStillHardEligibleAsync,
   rentalMatchOwnerMetaAsync,
 } from "./rentalMatchAsync.js";
 // 站內複製島嶼
@@ -334,6 +335,7 @@ import {
   projectOfferContactAsync,
   publicOfferViewAsync,
   reportVisibleOfferAsync,
+  runWishOfferExpiryTickAsync,
   unblockByRefAsync,
   withdrawWishOfferAsync,
 } from "./wishOffersAsync.js";
@@ -499,6 +501,9 @@ import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
 import { startWishLifecycleLoop } from "./wishLifecycleLoop.js";
 import { startWishOfferExpiryLoop } from "./wishOfferWorker.js";
 import { startRentalNotifyLoop } from "./rentalNotifyWorker.js";
+// 三支 5 分鐘 tick 的 PG 島嶼入口（PG 模式下 worker 必須跑 PG 的資料，否則同步版讀寫本機）。
+import { runWishLifecycleTickAsync } from "./wishLifecycleAsync.js";
+import { runRentalNotifyTickAsync } from "./rentalNotifyWorkerAsync.js";
 import { catalogDiff, isSystemCatalogTemplate, publicAdminCatalog } from "./rentalCatalog.js";
 import { isRentalCatalogV2Enabled, publicRentalMarketplaceFlags } from "./rentalMarketplaceFlags.js";
 import { startCrmDeliveryLoop } from "./crmDelivery.js";
@@ -5085,10 +5090,42 @@ function startWorkerLoops() {
     }
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
   }
-  startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
-  startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
-  startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  // 三支 5 分鐘 tick：PG 模式走 async 入口（讀寫 PG），其餘保持同步版（讀寫本機 SQLite）。
+  if (resolveDbDriver() === "postgres") {
+    startWishLifecycleLoop(() => runWishLifecycleWorkerTickAsync(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTickAsync(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    startRentalNotifyLoop(() => runRentalNotifyWorkerTickAsync(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  } else {
+    startWishLifecycleLoop(() => runWishLifecycleWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    startWishOfferExpiryLoop(() => runWishOfferExpiryWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    startRentalNotifyLoop(() => runRentalNotifyWorkerTick(), { intervalMs: 5 * 60 * 1000, log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+  }
   startCrmDeliveryLoop(opsDeliveryDb(), process.env, { log: (tag, info) => console.log(tag, JSON.stringify(info)), ops: crmOutboxOps() });
+}
+
+// PG 模式的許願房生命週期 tick 入口（旗標先從 PG 收斂）。
+async function runWishLifecycleWorkerTickAsync(now = new Date()) {
+  const flags = await getRentalMarketplaceFlagsAsync({ driver: "postgres" });
+  return runWishLifecycleTickAsync(now, { flags }, { driver: "postgres" });
+}
+
+// PG 模式的提案逾期 tick 入口（旗標先從 PG 收斂）。
+async function runWishOfferExpiryWorkerTickAsync(now = new Date()) {
+  const flags = await getRentalMarketplaceFlagsAsync({ driver: "postgres" });
+  return runWishOfferExpiryTickAsync(now, { flags }, { driver: "postgres" });
+}
+
+// PG 模式的租屋通知 tick 入口：先從 PG 收斂旗標與目錄快取（配對 hard gate 需要目錄），
+// 再把 async 的 matchFn／hardGateFn 注入（對齊 db.js:runRentalNotifyWorkerTick 的同步版）。
+async function runRentalNotifyWorkerTickAsync(now = new Date(), extra = {}) {
+  const flags = await getRentalMarketplaceFlagsAsync({ driver: "postgres" });
+  await getRentalCatalogAsync({ driver: "postgres" });
+  return runRentalNotifyTickAsync(now, {
+    flags,
+    matchFn: (listingId, ownerId) => ownerListingMatchesAsync(listingId, ownerId, { limit: 20, driver: "postgres" }),
+    hardGateFn: (listingId, ownerId, wishRef) => pairStillHardEligibleAsync(listingId, ownerId, wishRef, { driver: "postgres" }),
+    ...extra,
+  }, { driver: "postgres" });
 }
 
 // 啟動後 20 秒做第一次爬取 + geo backfill（crawler 與 worker 共用）。
