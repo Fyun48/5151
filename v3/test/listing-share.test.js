@@ -150,7 +150,7 @@ test("listingShareStatsForUser：dailyLimit／dailyUsed／totals／items 都正�
   assert.equal(stats.items[0].listingId, 5001);
   assert.equal(stats.items[0].views, 2);
   assert.equal(stats.items[0].ctas, 1);
-  assert.match(stats.items[0].url, /^https:\/\/example\.com\/go\/5001\?ref=/);
+  assert.match(stats.items[0].url, /^https:\/\/example\.com\/p\/5001\?ref=/);
 });
 
 test("listingShareStatsForAdmin：totals／daily／top 都正確", () => {

@@ -264,9 +264,10 @@ export async function recordListingShareEventAsync(exec, {
 // ---- URL ----
 
 export function listingSharePath(listingId, source) {
+  // 2026-10-06 後續：分享落地統一改導站內內頁 `/p/:id`（站內/外部物件同頁、OG 與 IA 完整；
+  // 舊的 `/l/:id?ref=`／`/go/:id?ref=` 連結仍會被記錄，只是不再新發）。
   const id = Number(listingId) || 0;
-  const isSelf = String(source || "").trim() === "self" || isSelfListingId(id);
-  return isSelf ? `/l/${id}` : `/go/${id}`;
+  return `/p/${id}`;
 }
 
 export function listingShareUrl(listingId, shareToken, baseUrl, source) {
