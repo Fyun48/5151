@@ -2,6 +2,31 @@
 
 依 `5151_DeepSeek_PG_Exit_Release_Complete_20260926.md` 執行。Owner 於 2026-09-26 核准。
 
+> ## ✅ 2026-09-27 04:08Z：修正版已成功上線，切換完成
+>
+> 下方「失敗並已回滾」的記載是 2026-09-26 的事實，保留作為歷史；**已由本次上線取代**。
+>
+> | 項目 | 值 |
+> |---|---|
+> | source SHA | `04da0c7afe3fd04401adca5cad18a45a2507c035` |
+> | image digest | `sha256:ffbeb45579829a405c319807f6105ae7e94ab016a674609fa6dda5b086509f27` |
+> | build | [36293176302](https://github.com/Fyun48/5151/actions/runs/36293176302) success |
+> | predeploy | [36293252857](https://github.com/Fyun48/5151/actions/runs/36293252857) success；SQLite `integrity_check: ok`、PG dump 62,433,323 bytes／105 TABLE DATA |
+> | deploy | [36293359990](https://github.com/Fyun48/5151/actions/runs/36293359990) success |
+>
+> **部署後驗證（前兩次都在這一關失敗，這次通過）**：
+>
+> - 兩節點（CasaOS `591-tracker-v3`、Synology `5151-web-B`）都跑 digest `sha256:ffbeb455…`、revision `04da0c7a…`。
+> - 公開站 `/api/health` → `{"ok":true,"version":"3.57"}`。
+> - **`第一次檢查：19 組覆蓋條件` 之後沒有出現 `第一次檢查失敗`**；30 秒的失敗點已過。
+> - 排程 tick 每 60 秒回報 `busy`，代表首次 crawl 仍在持有鎖、正常執行（過去這裡是整條 crawler 死掉）。
+> - `listings.last_seen_at` 與 `now()` 只差 **0.8 秒**；3 分鐘內更新 **11,168 筆**。
+> - **HAProxy `cD`／`sD` 在部署後 10 分鐘內為 0**。
+>
+> 修正在 PR [#505](https://github.com/Fyun48/5151/pull/505)（advisory lock 持有連線的心跳）
+> 與 [#503](https://github.com/Fyun48/5151/pull/503)（reconcile 候選查詢索引）。
+> 完整根因與證據見 `CUTOVER-STALL-ROOTCAUSE-20260926.md`。
+
 > ## ⚠️ 本紀錄已修正：**這次上線失敗並已回滾，切換未完成**
 >
 > 本文原本宣稱「切換完成且已驗證」，**與事實不符**，2026-09-26 由 DSH 更正。
