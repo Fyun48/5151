@@ -44,7 +44,15 @@ if [ "${#DATA_MOUNTS[@]}" -gt 1 ]; then
 fi
 DATA_HOST="${DATA_MOUNTS[0]}"
 [ -n "$DATA_HOST" ] || fail "empty /data source path"
-[ -f "$DATA_HOST/v3.db" ] || fail "v3.db is absent at $DATA_HOST/v3.db"
+# v3.db（SQLite）在 PG 時代是凍結的舊資料，不再是業務來源（正式站 DB_DRIVER=postgres）。
+# 仍存在就保留備份；不存在也不再是 predeploy 的失敗條件——業務資料備份（pg_dump）由
+# production-predeploy-pg-remote.sh 在 primary 主機（Synology）負責。
+V3DB_PRESENT=0
+if [ -f "$DATA_HOST/v3.db" ]; then
+  V3DB_PRESENT=1
+else
+  echo "v3_db=absent (PostgreSQL is the source of truth; SQLite-only inspect/backup will be skipped)"
+fi
 
 echo "discovered_data_host=$DATA_HOST"
 
@@ -75,23 +83,28 @@ else
 fi
 
 echo "=== wish room read-only ==="
-INSPECT_SRC="${INSPECT_SCRIPT:-}"
-if [ -z "$INSPECT_SRC" ] || [ ! -f "$INSPECT_SRC" ]; then
-  fail "sqlite-readonly-inspect.mjs not provided on NAS"
+if [ "$V3DB_PRESENT" -ne 1 ]; then
+  echo '{"demand_posts":"ABSENT","note":"v3.db absent; demand_posts is served by PostgreSQL (DB_DRIVER=postgres)"}' > "$WORKDIR/demand.json"
+  echo "wish_room=skipped (v3.db absent)"
+else
+  INSPECT_SRC="${INSPECT_SCRIPT:-}"
+  if [ -z "$INSPECT_SRC" ] || [ ! -f "$INSPECT_SRC" ]; then
+    fail "sqlite-readonly-inspect.mjs not provided on NAS"
+  fi
+  docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
+  set +e
+  DEMAND_JSON="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /data/v3.db demand 2>"$WORKDIR/demand.err")"
+  DEMAND_RC=$?
+  set -e
+  docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs
+  if [ "$DEMAND_RC" -ne 0 ]; then
+    echo "demand inspect stderr (no secrets expected):"
+    cat "$WORKDIR/demand.err" || true
+    fail "read-only demand_posts inspect failed (fail-closed)"
+  fi
+  echo "$DEMAND_JSON" > "$WORKDIR/demand.json"
+  echo "$DEMAND_JSON"
 fi
-docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
-set +e
-DEMAND_JSON="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /data/v3.db demand 2>"$WORKDIR/demand.err")"
-DEMAND_RC=$?
-set -e
-docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs
-if [ "$DEMAND_RC" -ne 0 ]; then
-  echo "demand inspect stderr (no secrets expected):"
-  cat "$WORKDIR/demand.err" || true
-  fail "read-only demand_posts inspect failed (fail-closed)"
-fi
-echo "$DEMAND_JSON" > "$WORKDIR/demand.json"
-echo "$DEMAND_JSON"
 
 echo "=== capability detect SQLite online backup ==="
 BACKUP_METHOD=""
@@ -194,27 +207,32 @@ copy_media "$BACKUP_DIR"
 
 echo "=== sqlite online backup (must not raw-cp live db) ==="
 DEST_DB="$BACKUP_DIR/v3.db"
-if [ "$API_CHECK" = "function" ]; then
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
-  docker exec "$CONTAINER" node /tmp/sqlite-online-backup.mjs /data/v3.db /tmp/v3-predeploy-backup.db
-  docker cp "$CONTAINER:/tmp/v3-predeploy-backup.db" "$DEST_DB"
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
-  BACKUP_METHOD="node:sqlite backup()"
-elif [ -n "$HOST_PYTHON" ] && [ -n "$BACKUP_PY" ] && [ -f "$BACKUP_PY" ]; then
-  python3 "$BACKUP_PY" "$DATA_HOST/v3.db" "$DEST_DB"
-  BACKUP_METHOD="python3 sqlite3.Connection.backup"
-elif [ -n "$IN_CONTAINER_SQLITE3" ]; then
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
-  docker exec "$CONTAINER" sqlite3 /data/v3.db ".backup /tmp/v3-predeploy-backup.db"
-  docker cp "$CONTAINER:/tmp/v3-predeploy-backup.db" "$DEST_DB"
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
-  BACKUP_METHOD="sqlite3 .backup (container)"
-elif [ -n "$SQLITE3_BIN" ]; then
-  sqlite3 "$DATA_HOST/v3.db" ".backup '$DEST_DB'"
-  BACKUP_METHOD="sqlite3 .backup (host)"
+if [ "$V3DB_PRESENT" -ne 1 ]; then
+  BACKUP_METHOD="none (v3.db absent; PostgreSQL-only backup)"
+  echo "sqlite_backup=skipped (v3.db absent)"
 else
-  docker exec "$CONTAINER" rm -f /tmp/sqlite-online-backup.mjs || true
-  fail "no safe SQLite online backup capability (node:sqlite backup(), python3 Connection.backup, and sqlite3 .backup unavailable); refusing live raw cp"
+  if [ "$API_CHECK" = "function" ]; then
+    docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
+    docker exec "$CONTAINER" node /tmp/sqlite-online-backup.mjs /data/v3.db /tmp/v3-predeploy-backup.db
+    docker cp "$CONTAINER:/tmp/v3-predeploy-backup.db" "$DEST_DB"
+    docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
+    BACKUP_METHOD="node:sqlite backup()"
+  elif [ -n "$HOST_PYTHON" ] && [ -n "$BACKUP_PY" ] && [ -f "$BACKUP_PY" ]; then
+    python3 "$BACKUP_PY" "$DATA_HOST/v3.db" "$DEST_DB"
+    BACKUP_METHOD="python3 sqlite3.Connection.backup"
+  elif [ -n "$IN_CONTAINER_SQLITE3" ]; then
+    docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
+    docker exec "$CONTAINER" sqlite3 /data/v3.db ".backup /tmp/v3-predeploy-backup.db"
+    docker cp "$CONTAINER:/tmp/v3-predeploy-backup.db" "$DEST_DB"
+    docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup.db
+    BACKUP_METHOD="sqlite3 .backup (container)"
+  elif [ -n "$SQLITE3_BIN" ]; then
+    sqlite3 "$DATA_HOST/v3.db" ".backup '$DEST_DB'"
+    BACKUP_METHOD="sqlite3 .backup (host)"
+  else
+    docker exec "$CONTAINER" rm -f /tmp/sqlite-online-backup.mjs || true
+    fail "no safe SQLite online backup capability (node:sqlite backup(), python3 Connection.backup, and sqlite3 .backup unavailable); refusing live raw cp"
+  fi
 fi
 docker exec "$CONTAINER" rm -f /tmp/sqlite-online-backup.mjs || true
 
@@ -244,18 +262,25 @@ done
 shopt -u dotglob nullglob
 
 echo "=== verify BACKUP db (not live db; not app db.js) ==="
-[ -f "$DEST_DB" ] || fail "backup db missing"
-BACKUP_SIZE="$(stat -c%s "$DEST_DB" 2>/dev/null || stat -f%z "$DEST_DB")"
-[ "$BACKUP_SIZE" -gt 0 ] || fail "backup db size is zero"
-ORIG_SIZE="$(stat -c%s "$DATA_HOST/v3.db" 2>/dev/null || stat -f%z "$DATA_HOST/v3.db")"
-BACKUP_SHA="$(sha256sum "$DEST_DB" | awk '{print $1}')"
+if [ "$V3DB_PRESENT" -ne 1 ]; then
+  BACKUP_SIZE=0
+  ORIG_SIZE=0
+  BACKUP_SHA=""
+  echo '{"integrity_check":"absent","ok":true,"note":"v3.db absent; no SQLite backup to verify"}' > "$WORKDIR/integrity.json"
+  echo "sqlite_integrity=absent (v3.db absent)"
+else
+  [ -f "$DEST_DB" ] || fail "backup db missing"
+  BACKUP_SIZE="$(stat -c%s "$DEST_DB" 2>/dev/null || stat -f%z "$DEST_DB")"
+  [ "$BACKUP_SIZE" -gt 0 ] || fail "backup db size is zero"
+  ORIG_SIZE="$(stat -c%s "$DATA_HOST/v3.db" 2>/dev/null || stat -f%z "$DATA_HOST/v3.db")"
+  BACKUP_SHA="$(sha256sum "$DEST_DB" | awk '{print $1}')"
 
-docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
-# Verify the backup without importing app db.js. Host Node is used only when node:sqlite is actually available.
-if [ "$HOST_NODE_SQLITE" = "yes" ]; then
-  INTEGRITY="$(node "$INSPECT_SRC" "$DEST_DB" integrity)"
-elif [ -n "$HOST_PYTHON" ]; then
-  INTEGRITY="$(python3 - "$DEST_DB" <<'PY'
+  docker cp "$INSPECT_SRC" "$CONTAINER:/tmp/sqlite-readonly-inspect.mjs"
+  # Verify the backup without importing app db.js. Host Node is used only when node:sqlite is actually available.
+  if [ "$HOST_NODE_SQLITE" = "yes" ]; then
+    INTEGRITY="$(node "$INSPECT_SRC" "$DEST_DB" integrity)"
+  elif [ -n "$HOST_PYTHON" ]; then
+    INTEGRITY="$(python3 - "$DEST_DB" <<'PY'
 import json, sqlite3, sys, urllib.parse
 path = sys.argv[1]
 uri = "file:" + urllib.parse.quote(path, safe="/") + "?mode=ro"
@@ -268,46 +293,29 @@ finally:
 print(json.dumps({"integrity_check": result, "ok": result == "ok"}))
 PY
 )"
-else
-  docker cp "$DEST_DB" "$CONTAINER:/tmp/v3-predeploy-backup-verify.db"
-  INTEGRITY="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /tmp/v3-predeploy-backup-verify.db integrity)"
-  docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db
+  else
+    docker cp "$DEST_DB" "$CONTAINER:/tmp/v3-predeploy-backup-verify.db"
+    INTEGRITY="$(docker exec "$CONTAINER" node /tmp/sqlite-readonly-inspect.mjs /tmp/v3-predeploy-backup-verify.db integrity)"
+    docker exec "$CONTAINER" rm -f /tmp/v3-predeploy-backup-verify.db
+  fi
+  docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs || true
+  echo "$INTEGRITY" > "$WORKDIR/integrity.json"
+  echo "$INTEGRITY"
+  VERIFY_PY="${VERIFY_INTEGRITY_SCRIPT:-$(dirname "$0")/verify-sqlite-integrity-json.py}"
+  if [ ! -f "$VERIFY_PY" ]; then
+    fail "verify-sqlite-integrity-json.py is missing; refusing to treat backup as verified"
+  fi
+  python3 "$VERIFY_PY" "$WORKDIR/integrity.json" || fail "backup integrity_check is not ok"
 fi
-docker exec "$CONTAINER" rm -f /tmp/sqlite-readonly-inspect.mjs || true
-echo "$INTEGRITY" > "$WORKDIR/integrity.json"
-echo "$INTEGRITY"
-VERIFY_PY="${VERIFY_INTEGRITY_SCRIPT:-$(dirname "$0")/verify-sqlite-integrity-json.py}"
-if [ ! -f "$VERIFY_PY" ]; then
-  fail "verify-sqlite-integrity-json.py is missing; refusing to treat backup as verified"
-fi
-python3 "$VERIFY_PY" "$WORKDIR/integrity.json" || fail "backup integrity_check is not ok"
 
-# --- PostgreSQL backup (2026-09-26) ---
-# PG 已經是線上業務資料的來源（SQLite 只剩舊資料），所以 predeploy 不能只備份 SQLite：
-# 沒有 PG dump 就沒有可回版的業務資料。從本機 PG 容器取 dump——standby 也能 pg_dump
-# （一致性快照），不必連 primary、也不必把連線字串或密碼帶進來。
-# 容器不存在、dump 空、或 pg_restore 讀不出目錄時一律 fail，不讓「只有 SQLite 備份」的
-# predeploy 假裝成功。
-PG_CONTAINER="${PREDEPLOY_PG_CONTAINER:-5151-postgres-A}"
-PG_DB_NAME="${PREDEPLOY_PG_DB:-5151_shadow}"
-PG_DUMP="$BACKUP_DIR/pg-${PG_DB_NAME}.dump"
-echo "=== pg_dump ($PG_CONTAINER / $PG_DB_NAME) ==="
-if ! docker inspect "$PG_CONTAINER" >/dev/null 2>&1; then
-  fail "PG container $PG_CONTAINER not found; refusing a release without a PostgreSQL backup"
-fi
-PG_IN_RECOVERY="$(docker exec "$PG_CONTAINER" psql -X -w -U postgres -d "$PG_DB_NAME" -At -c 'SELECT pg_is_in_recovery()' 2>/dev/null || echo unknown)"
-echo "pg_in_recovery=$PG_IN_RECOVERY"
-if ! docker exec "$PG_CONTAINER" pg_dump -U postgres -Fc -d "$PG_DB_NAME" > "$PG_DUMP" 2>"$WORKDIR/pg_dump.err"; then
-  tail -5 "$WORKDIR/pg_dump.err" 2>/dev/null || true
-  fail "pg_dump failed for $PG_CONTAINER/$PG_DB_NAME"
-fi
-PG_SIZE="$(stat -c%s "$PG_DUMP" 2>/dev/null || stat -f%z "$PG_DUMP")"
-[ "${PG_SIZE:-0}" -gt 0 ] || fail "PG dump is empty"
-PG_SHA="$(sha256sum "$PG_DUMP" | awk '{print $1}')"
-PG_TABLES="$(docker exec -i "$PG_CONTAINER" pg_restore -l < "$PG_DUMP" 2>/dev/null | grep -c 'TABLE DATA' || true)"
-[ "${PG_TABLES:-0}" -gt 0 ] || fail "PG dump is not readable by pg_restore"
-echo "pg_dump_bytes=$PG_SIZE pg_dump_table_data=$PG_TABLES pg_dump_sha256=$PG_SHA"
-echo "pg_dump=$PG_DUMP"
+# --- PostgreSQL 備份在「primary 主機」另跑，不在這裡（2026-10 修正） ---
+# PG 是線上業務資料來源（SQLite 只剩凍結舊資料），但本腳本跑在 CasaOS，其上的
+# 5151-postgres-A 目前是 hot standby：從 standby pg_dump 會被 recovery conflict 隨機取消
+# （2026-10-05 predeploy run 37402173149 即因此失敗）。PG dump 已移到
+# .github/scripts/production-predeploy-pg-remote.sh，由 workflow 另以 ssh-tori bridge 連到
+# Synology 的 primary（5151-postgres-B）在本機 docker exec pg_dump（unix socket trust、不帶密碼）。
+# 本腳本只負責 v3 容器檢查 + SQLite/member-media 備份 + wish room 預檢；PG 的
+# pg_backup_ok 與 pg_backup_sha256 由 workflow 合併 syn-nas 的 pg-predeploy-evidence.json。
 
 count_files() {
   local dir="$1"
@@ -340,15 +348,14 @@ python3 - "$EVIDENCE" "$WORKDIR/demand.json" "$WORKDIR/integrity.json" \
   "$STAMP" "$CONTAINER" "$STATE" "$IMAGE_REF" "$IMAGE_ID" "$REPO_DIGESTS" "$ARCH" "$NODE_VER" \
   "$SHARP_STATUS" "$DATA_HOST" "$BACKUP_DIR" "$BACKUP_METHOD" "$ORIG_SIZE" "$BACKUP_SIZE" \
   "$BACKUP_SHA" "$SECRET_COPIED" "$SRC_MEDIA_COUNT" "$SRC_MEDIA_BYTES" "$BK_MEDIA_COUNT" \
-  "$BK_MEDIA_BYTES" "$MEDIA_MISMATCH" "$PG_SIZE" "$PG_SHA" "$PG_TABLES" "$PG_IN_RECOVERY" \
-  "$(basename "$PG_DUMP")" <<'PY'
+  "$BK_MEDIA_BYTES" "$MEDIA_MISMATCH" "$V3DB_PRESENT" <<'PY'
 import json, sys
 path, demand_path, integrity_path = sys.argv[1], sys.argv[2], sys.argv[3]
 (
     stamp, container, state, image_ref, image_id, repo_digests, arch, node_ver,
     sharp, data_host, backup_dir, backup_method, orig_size, backup_size,
     backup_sha, secret_copied, src_mc, src_mb, bk_mc, bk_mb, media_mismatch,
-    pg_size, pg_sha, pg_tables, pg_in_recovery, pg_dump_file,
+    v3db_present,
 ) = sys.argv[4:]
 demand = json.loads(open(demand_path).read())
 integrity = json.loads(open(integrity_path).read())
@@ -369,14 +376,10 @@ doc = {
   "db_original_size": int(orig_size),
   "db_backup_size": int(backup_size),
   "backup_sha256": backup_sha,
-  "pg_backup_file": pg_dump_file,
-  "pg_backup_bytes": int(pg_size),
-  "pg_backup_sha256": pg_sha,
-  "pg_backup_table_data": int(pg_tables),
-  "pg_dump_source_in_recovery": pg_in_recovery,
-  "pg_backup_ok": int(pg_size) > 0 and int(pg_tables) > 0,
+  "sqlite_backup_present": int(v3db_present),
   "integrity_check": integrity.get("integrity_check"),
-  "ok": integrity.get("integrity_check") == "ok" and integrity.get("ok") is True,
+  "ok": int(v3db_present) == 0
+      or (integrity.get("integrity_check") == "ok" and integrity.get("ok") is True),
   "secret_files_copied_to_nas_backup_only": bool(int(secret_copied)),
   "member_media_source_files": int(src_mc),
   "member_media_source_bytes": int(src_mb),
