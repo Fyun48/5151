@@ -471,6 +471,38 @@ test("冷卻期：被擋到停工的來源會記住冷卻到什麼時候，下�
   assert.equal(sourceBlockedUntil(at, 0), "");
 });
 
+test("冷卻預設改 30 分鐘（跨 2 輪）：預設 1800s、env 覆寫仍生效、跨過下一輪 15 分鐘邊界仍在冷卻", async () => {
+  const { applySourceRound } = await import("../src/crawlSourceStreaks.js");
+  const { isSourceCoolingDown, SOURCE_BLOCK_COOLDOWN_MS } = await import("../src/crawlWatchdog.js");
+  // (a) 預設值：30 分鐘＝1800000ms。env 在模組載入時就解析，本行程沒設 env ⇒ 直接驗常數，
+  // 並用原始碼釘住「return 1800 * 1000」防退步（與「5168 明細量」測試同風格）。
+  const watchdogSrc = readFileSync(new URL("../src/crawlWatchdog.js", import.meta.url), "utf8");
+  assert.match(watchdogSrc, /return 1800 \* 1000;/, "預設冷卻要寫成 1800 秒");
+  assert.equal(SOURCE_BLOCK_COOLDOWN_MS, 1_800_000, "預設冷卻 30 分鐘＝1800000ms");
+
+  // (c) 被擋到停工（沒帶 cooldownMs ⇒ 吃預設）：blockedUntil ≈ now + 30 分鐘，
+  // 且下一輪（15 分鐘後）開頭仍在冷卻，代表冷卻真正跨過輪間隔、有實質效果。
+  const at = "2026-09-30T12:00:00.000Z";
+  const blocked = applySourceRound({}, [{ source: "houseprice", covered: 0, total: 6, blocked: true, error: "403" }], { at });
+  assert.equal(blocked.streaks.houseprice.blockedUntil, "2026-09-30T12:30:00.000Z", "blockedUntil = 該輪時間 + 30 分鐘");
+  assert.equal(isSourceCoolingDown(blocked.streaks.houseprice, Date.parse(at) + 15 * 60 * 1000), true,
+    "下一輪（15 分鐘後）開頭仍在冷卻，要跳過");
+  assert.equal(isSourceCoolingDown(blocked.streaks.houseprice, Date.parse(at) + 30 * 60 * 1000), false,
+    "30 分鐘到期就照常嘗試");
+
+  // (b) env 覆寫仍生效：模組已以預設值載入，改用子行程（新行程、重解析 env）驗證。
+  const { spawnSync } = await import("node:child_process");
+  const moduleUrl = new URL("../src/crawlWatchdog.js", import.meta.url).href;
+  const script = `
+    process.env.CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS = "45";
+    const { SOURCE_BLOCK_COOLDOWN_MS } = await import(${JSON.stringify(moduleUrl)});
+    console.log(SOURCE_BLOCK_COOLDOWN_MS);
+  `;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "45000", "env CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS 覆寫要真的生效");
+});
+
 test("watcher：還在冷卻期的來源這一輪要跳過，並在輪次結果留 warning", () => {
   const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
   assert.match(src, /const cooling = new Set\(\);/);

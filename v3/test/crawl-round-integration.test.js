@@ -88,7 +88,7 @@ test("runWatch：來源被擋到停工時，輪次要標記 blocked 並記下冷
   const { streaks } = await readCrawlSourceStreaksAsync({ driver: "sqlite" });
   assert.ok(streaks.hbhousing, "來源狀態要寫進去");
   assert.ok(streaks.hbhousing.fails >= 1, "被擋 ⇒ 這一輪算失敗輪");
-  // 預設冷卻 90 秒：停工之後要留下冷卻期，讓下一輪跳過這一家。
+  // 預設冷卻 30 分鐘（跨 2 輪）：停工之後要留下冷卻期，讓下一輪跳過這一家。
   assert.ok(streaks.hbhousing.blockedUntil, `被擋到停工要記冷卻期，實際 ${JSON.stringify(streaks.hbhousing)}`);
   assert.ok(Date.parse(streaks.hbhousing.blockedUntil) > Date.now() - 1000, "冷卻期必須是未來時間");
 });
