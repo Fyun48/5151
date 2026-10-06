@@ -10,6 +10,7 @@ import {
   crmDeliveryControl as crmDeliveryControlSync,
   isLocalCrmSyncStopped as isLocalCrmSyncStoppedSync,
   setLocalCrmSyncStopped as setLocalCrmSyncStoppedSync,
+  startCrmDeliveryLoop,
 } from "./crmDelivery.js";
 import { sqliteHandle } from "./db.js";
 import {
@@ -260,5 +261,13 @@ export function setCrmDeliveryStopAsync(stopped, env = process.env, options = {}
     },
     () => setLocalCrmSyncStoppedSync(sqliteFor(options), stopped),
   );
+}
+
+// crmDelivery.js startCrmDeliveryLoop() 的 driver-aware 入口（對稱 feedback 側的
+// startDeliveryLoopAsync，第五十七批）。PG 模式由 server.js 走這支，讀寫 PG 的 crm_outbox
+// （ops = crmOutboxOps()）；SQLite 站維持同步版 startCrmDeliveryLoop(opsDeliveryDb(), …)。
+// `db` 傳 null 是安全的：ops 有給時 loop 不會回頭碰 defaultOps(db)（deliverOne 也不用 db）。
+export function startCrmDeliveryLoopAsync(env = process.env, { fetchImpl = globalThis.fetch, log = () => {}, options = {} } = {}) {
+  return startCrmDeliveryLoop(null, env, { fetchImpl, log, ops: crmOutboxOps(options) });
 }
 
