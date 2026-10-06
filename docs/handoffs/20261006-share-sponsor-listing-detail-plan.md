@@ -188,8 +188,9 @@ capability 宣告（寫進 `SPONSOR_PROVIDER_CAPABILITIES`）：`{ supportsPrefi
 - **Phase 1（分享機制）**：migration v9 新表＋4 個分享端點＋分享面板 UI＋OG meta。落地頁暫用既有 `/l/:id`（站內刊登）與 `/go/:id?ref=`（外部物件，302 前先記 view）。驗收：`npm test` 全綠、Playwright 375/768/1440 截圖、a11y AA、未登入按分享回 401 且畫面有引導、`rental_analytics_daily` 查得到 `listing_share_view`。回滾＝關 `listingShareFlags.enabled`（settings KV，預設 true）。
   **狀態（2026-10-06）**：PR #624 已合併（merge `5a89aa0`）並部署正式站（build 37447535689 → predeploy 37447798216 → deploy 37448069650，皆 success）；正式站驗證：share-link 未登入 401、share-events 無效 token 404、admin share-stats 401、`/l/` 200。實機證據見 `evidence/phase1/`；cta 歸因依管道保留（migration v10 重建去重索引）。
 - **Phase 2（通用內頁）**：`/p/:id`＋`detail.html`＋`publicListingView()` 擴充＋訪客遮蔽（電話/LINE 登入才可見）＋相似物件＋地圖；分享連結正式改導 `/p/:id?ref=`。驗收：既有 `public-share-page.test.js`／`listing-projection-kind-keys.test.js` 不壞、375 無橫向溢出、無圖 fallback 不 CLS。回滾＝移除路由、還原投影白名單。
-  **狀態（2026-10-06）**：已實作並開 PR #625（`/p/:id`＋detail/similar API＋D6 遮蔽＋`detail.html`＋index「站內頁」入口；相似物件改走「同行政區＋租金±20%」公開查詢，不 import support/sponsor）。**分享連結改導 `/p/:id?ref=` 留作後續小改**（Phase 1 已上線用 `/l/`＋`/go/`，兩條落地頁都會記 view）；地圖區塊本期未做（mrt/座標覆蓋率不足，先以捷運步行文字呈現）。
+  **狀態（2026-10-06）**：PR #625 已合併（merge `360a145`）並部署（build 37452667727→predeploy 37452864469→deploy 37453115254）；正式站以真實 591 物件驗證訪客遮蔽與 OG。後續小改（分享連結改導 `/p/:id?ref=`、後台總覽分享三數字）於 PR #626（merge `e897a0b`）完成並部署（build 37468575894→predeploy 37468813350→deploy 37469108680）。地圖區塊仍未做（mrt/座標覆蓋率不足）。
 - **Phase 3（贊助連動）**：migration **v11** 新表（v10 已被 Phase 1 的 cta 去重索引重建占用）＋`buildSponsorOutbound()`＋`applySponsorEntitlement()`＋webhook 簽章＋API 輪詢 tick＋後台門檻設定＋人工審核佇列。4 個新 flag 全預設關。驗收：影子站/沙盒跑一輪 mock provider 對帳、冪等與退款撤銷測試、稽核可查、flags 全關時行為與現況完全相同。回滾＝4 flag 全關，回復「手動改已贊助」現狀。
+  **狀態（2026-10-06）**：骨架已實作並開 PR #627（v11 三表、代碼歸因、出站組裝、冪等開通＋到期降級、BMC/Ko-fi webhook 對帳、5 條 flag-gated 路由、後台 flags/rules 設定端點）。**未做**：API 輪詢 tick（flag 預留）、後台審核佇列 UI、PayPal Orders／歐付寶 AioCheckOut 伺服器建單（D11→Phase 4）、影子站 mock provider 對帳輪（待金鑰或 mock 模式）。D5/D8 以建議值落地為 rules 預設（100/30/30/不撤銷），Owner 可於後台 PUT 調整。
 
 ---
 
