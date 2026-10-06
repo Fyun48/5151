@@ -8,14 +8,21 @@ export function startWishOfferExpiryLoop(runTick, { intervalMs = 60 * 1000, log 
   const tick = () => {
     if (running) return;
     running = true;
+    const finish = () => { running = false; };
+    const report = (result) => { if (result && result.changed) log("wish-offer-expiry", result); };
+    const fail = (error) => log("wish-offer-expiry-error", { error: error?.message || String(error) });
     try {
       const result = runTick();
-      if (result && result.changed) log("wish-offer-expiry", result);
+      if (result && typeof result.then === "function") {
+        // PG 模式：runTick 回 Promise；等它結算才釋放 non-reentrant 鎖。
+        Promise.resolve(result).then(report, fail).finally(finish);
+        return;
+      }
+      report(result);
     } catch (error) {
-      log("wish-offer-expiry-error", { error: error?.message || String(error) });
-    } finally {
-      running = false;
+      fail(error);
     }
+    finish();
   };
   const timer = setInterval(tick, intervalMs);
   return {

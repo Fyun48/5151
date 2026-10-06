@@ -20,6 +20,7 @@ import { ensurePgSchema } from "./pgSchema.js";
 import { expireOpenSelfListingsAsync, getSelfRowAsync } from "./selfListingsAsync.js";
 import {
   ACCEPTED_OFFER_SQL,
+  OFFER_EXPIRE_BATCH,
   OFFER_LISTING_DAILY_CAP,
   OFFER_OWNER_DAILY_CAP,
   OFFER_SAME_WISH_COOLDOWN_MS,
@@ -64,6 +65,7 @@ import {
 } from "./wishOffers.js";
 import { currentRentalMarketplaceFlags } from "./demand.js";
 import { isWishOfferEnabled } from "./rentalMarketplaceFlags.js";
+import { runWishOfferExpiryTick } from "./wishOfferWorker.js";
 import { getRentalCatalogAsync, getWishConditionsAsync } from "./rentalCatalogAsync.js";
 import { emitRentalNotifyEventAsync } from "./rentalNotifyWriteAsync.js";
 import { containsUnsafeMarkup, sanitizeDocumentText } from "./safeContent.js";
@@ -990,4 +992,38 @@ export async function createWishOfferAsync(ownerUserId, listingRef, wishRef, {
     } catch { /* notify must not fail create */ }
     return publicOfferViewAsync(offer, ownerUserId, {}, runOpts);
   }, async () => (await import("./db.js")).createWishOfferFor(ownerUserId, listingRef, wishRef, { idempotencyKey, now, actorKey }));
+}
+
+// ── 提案逾期 tick（每 5 分鐘）─────────────────────────────────────────────────────────
+//
+// `runWishOfferExpiryTick(db=本機)` 同步過期節點 SQLite 的 pending 提案 ⇒ PG 的 pending 提案
+// 不會主動過期（只有使用者對該筆動作時才 lazy 補）。這裡補 PG 路徑：判斷與事件寫入全部
+// 重用既有零件（`isWishOfferEnabled`／`writeOfferEventAsync`），只把三句 SQL 換成注入式 runner。
+export const OFFER_EXPIRY_SELECT_SQL = `SELECT id, version FROM wish_offers
+  WHERE status = 'pending' AND expires_at <= ?
+  ORDER BY expires_at ASC, id ASC
+  LIMIT ?`;
+export const OFFER_EXPIRY_FRESH_SQL = "SELECT status, version FROM wish_offers WHERE id = ?";
+export const OFFER_EXPIRY_UPDATE_SQL = `UPDATE wish_offers
+  SET status = 'expired', expired_at = ?, updated_at = ?, version = version + 1
+  WHERE id = ? AND status = 'pending' AND version = ?`;
+
+export async function runWishOfferExpiryTickAsync(now = new Date(), { limit = OFFER_EXPIRE_BATCH, flags } = {}, options = {}) {
+  if (!isWishOfferEnabled(flags)) return { changed: 0, scanned: 0, skipped: true };
+  return withFallback(options, { write: true }, async (run) => {
+    const stamp = isoOf(now);
+    const rows = (await run(OFFER_EXPIRY_SELECT_SQL, [stamp, Math.max(1, Number(limit) || OFFER_EXPIRE_BATCH)])).rows;
+    if (!rows.length) return { changed: 0, scanned: 0, skipped: false };
+    let changed = 0;
+    for (const row of rows) {
+      const fresh = one((await run(OFFER_EXPIRY_FRESH_SQL, [row.id])).rows);
+      if (!fresh || fresh.status !== "pending") continue;
+      const result = await run(OFFER_EXPIRY_UPDATE_SQL, [stamp, stamp, row.id, fresh.version]);
+      if (Number(result?.rowCount)) {
+        await writeOfferEventAsync(run, { offerId: row.id, eventType: "offer_expired", now });
+        changed += 1;
+      }
+    }
+    return { changed, scanned: rows.length, skipped: false };
+  }, () => runWishOfferExpiryTick(sqliteHandle(), now, { limit, flags }));
 }
