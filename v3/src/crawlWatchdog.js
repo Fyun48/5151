@@ -57,15 +57,20 @@ export const SOURCE_BLOCK_PAUSE_LIMIT = 2;
 /**
  * 達門檻之後「先冷卻再重試」要等多久（毫秒）。
  *
- * 為什麼需要：2026-09-30 實測（正式站容器，同一顆 IP）——5168 被記 403 的**幾分鐘後**
- * 同一個網址就回 200（sid 3/5/8/12 各 20 張卡片）。擋的是一個短窗口，不是永久封鎖。
- * 所以第 2 次被擋時先等這個時間再試一次，比立刻放棄整輪划算。
- * `CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS` 可覆寫（0 ＝ 不等待，測試用）。
+ * 為什麼需要冷卻：2026-09-30 實測（正式站容器，同一顆 IP）——5168 被記 403 的幾分鐘後
+ * 同一個網址就回 200。擋的是一個窗口，不是永久封鎖；第 2 次被擋時先等一段時間再試，
+ * 比立刻放棄整輪划算。
+ *
+ * 為什麼預設 1800 秒（30 分鐘）：爬蟲輪間隔是 15 分鐘（SYSTEM_CRAWL_INTERVAL_MINUTES），
+ * 冷卻必須**跨輪**才有意義——若只有 90 秒，下一輪開頭早就過期，被擋的來源每輪都重新硬撞
+ * 同一面牆（5168 三芝區 sticky 403 實測約 2.2 次被擋輪/天）。30 分鐘＝跨 2 輪：
+ * 「連 2 次被擋」之後真正休息 2 輪再試。
+ * `CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS` 可覆寫（0 ＝ 不等待，測試用），語義不變。
  */
 export const SOURCE_BLOCK_COOLDOWN_MS = (() => {
   const raw = Number(process.env.CRAWL_SOURCE_BLOCK_COOLDOWN_SECONDS);
   if (Number.isFinite(raw) && raw >= 0) return Math.round(raw * 1000);
-  return 90 * 1000;
+  return 1800 * 1000;
 })();
 
 /** 這一輪結束時「因為被擋而停工」的來源，冷卻到什麼時候（給下一輪跳過用）。 */
