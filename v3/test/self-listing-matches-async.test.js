@@ -137,7 +137,7 @@ test("配對清單：PG 版與同步版逐欄位相同（含 CTA 四種狀態）
   const exec = pgFixture();
   const opts = { ...PG, exec, now: NOW };
   dbMod.getWishConditions();
-  const sync = plain(dbMod.ownerListingMatches(listingId, OWNER, {}));
+  const sync = plain(dbMod.ownerListingMatches(listingId, OWNER, { now: NOW }));
   const async_ = plain(await matchAsync.ownerListingMatchesAsync(listingId, OWNER, opts));
   assert.deepEqual(async_, sync, "配對清單（含 items 的 CTA 欄位）必須逐欄位相同");
   assert.ok(async_.total >= 1, `四則同區需求至少一則要配得上（實際 ${async_.total}）`);
@@ -230,7 +230,7 @@ test("提案功能關閉時：CTA 一律「即將推出」（兩個 driver 相�
   const opts = { ...PG, exec, now: NOW };
   dbMod.saveRentalMarketplaceFlags({ wish: { owner_matching_enabled: true, offer_enabled: false } });
   await catalogAsync.saveRentalMarketplaceFlagsAsync({ wish: { owner_matching_enabled: true, offer_enabled: false } }, opts);
-  const sync = plain(dbMod.ownerListingMatches(listingId, OWNER, {}));
+  const sync = plain(dbMod.ownerListingMatches(listingId, OWNER, { now: NOW }));
   const async_ = plain(await matchAsync.ownerListingMatchesAsync(listingId, OWNER, opts));
   assert.deepEqual(async_, sync, "提案關閉時的清單必須相同");
   assert.ok(async_.items.every((item) => item.offer_available === false), "提案關閉時不得出現可提供");

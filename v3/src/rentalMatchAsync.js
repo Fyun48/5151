@@ -363,9 +363,9 @@ export async function ownerListingMatchesAsync(postId, userId, options = {}) {
         items: await attachOfferCtasAsync(items, {
           listingId: listing.id,
           ownerUserId: userId,
-          now,
           flags,
           ...options,
+          now,
         }),
       };
     }
@@ -390,9 +390,9 @@ export async function ownerListingMatchesAsync(postId, userId, options = {}) {
       items: await attachOfferCtasAsync(items, {
         listingId: listing.id,
         ownerUserId: userId,
-        now,
         flags,
         ...options,
+        now,
       }),
     };
   } catch (error) {

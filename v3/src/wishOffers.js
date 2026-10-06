@@ -112,8 +112,23 @@ function iso(now = new Date()) {
   return now instanceof Date ? now.toISOString() : new Date(now).toISOString();
 }
 
-function atMs(now = new Date()) {
-  return now instanceof Date ? now.getTime() : (Number(now) || Date.now());
+// 時間正規化（同步版與 async 版共用，避免兩份漂移）：
+//   Date → getTime；number → 直接用；數字字串 → Number；ISO 字串 → Date.parse；都失敗才 Date.now()。
+// ⚠️ 舊版對 ISO 字串做 `Number(now)` 會得到 NaN → 退化 Date.now()（真實時鐘），
+// 讓「冷卻時間」這類相對時間政策在測試注入過去的 now 時被真實時鐘蓋掉（2026-10 timebomb）。
+export function atMs(now = new Date()) {
+  if (now instanceof Date) {
+    const t = now.getTime();
+    return Number.isFinite(t) ? t : Date.now();
+  }
+  if (typeof now === "number") return Number.isFinite(now) ? now : Date.now();
+  if (typeof now === "string") {
+    const numeric = Number(now);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(now);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
 }
 
 export function withImmediate(db, fn) {

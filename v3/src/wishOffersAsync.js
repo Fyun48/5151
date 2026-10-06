@@ -45,6 +45,7 @@ import {
   assertContactReadable,
   assertOfferBurst,
   assertWishOfferEnabled,
+  atMs,
   attachOfferCtas,
   contactFieldsFor,
   contactProjection,
@@ -805,7 +806,7 @@ export async function blockOwnerFromOfferAsync(userId, offerRef, { now = new Dat
 // （`idx_wish_offers_pending_unique`／`_active_unique`）擋併發，撞到就回既有那筆
 // ——與同步版 catch UNIQUE 的語意相同（PG 丟 23505、SQLite 夾具丟訊息，`isUniqueViolation()` 都認）。
 
-const atMsOf = (now) => (now instanceof Date ? now.getTime() : Number(now) || Date.now());
+const atMsOf = atMs;
 
 async function loadWishByPublicRefAsync(run, wishRef) {
   const raw = String(wishRef || "").trim();
