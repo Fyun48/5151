@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>分享面板原型 · 吉比租房物件追蹤</title>
+  <meta name="description" content="「物件一鍵分享面板」互動流程靜態原型：未登入提示、已登入 bottom sheet、桌面版、成功回饋與分享統計。" />
+  <style>
+    /* ── tokens：逐字取自 v3/public/tokens.css（原型自包含，供 file:// 直接開啟）── */
+    :root {
+      --bg: #f3efe8;
+      --paper: #faf8f4;
+      --ink: #1c1917;
+      --muted: #6f6a64;
+      --line: #e4dfd6;
+      --accent: #0f6f6a;
+      --accent-deep: #0b5551;
+      --accent-soft: #e7f1ef;
+      --accent-mist: #f3f6f5;
+      --radius: 8px;
+      --radius-lg: 10px;
+      --shadow: none;
+      --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+      --text-xs: 12px;
+      --text-sm: 13px;
+      --text-md: 14px;
+      --text-lg: 16px;
+      --text-price: 20px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --touch: 44px;
+      --page-gutter: 16px;
+      --btn-height: var(--touch);
+      --background: var(--bg);
+      --foreground: var(--ink);
+      --card: var(--paper);
+      --card-foreground: var(--ink);
+      --primary: var(--accent);
+      --primary-foreground: #faf8f4;
+      --muted-foreground: var(--muted);
+      --border: var(--line);
+      --ring: var(--accent);
+    }
+    /* 第三方品牌色：只出現在各平台的小圖示圓點，不做為頁面主色。 */
+    .dot-line     { background: #06C755; }
+    .dot-facebook { background: #1877F2; }
+    .dot-threads  { background: #000000; }
+
+    * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: clip; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+      font-size: var(--text-md);
+    }
+    a { color: var(--accent-deep); }
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto 96px;
+    }
+    header.hero { padding: 24px 0 4px; }
+    header.hero h1 {
+      margin: 0 0 6px;
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 600;
+    }
+    .kicker {
+      display: inline-block;
+      margin: 0 0 4px;
+      font-size: var(--text-xs);
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+    .muted { color: var(--muted); }
+    .hint { font-size: var(--text-sm); color: var(--muted); }
+
+    /* 按鈕（沿用 support.html 的 primary／ghost 形狀） */
+    button, .btn {
+      min-height: var(--touch);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 9px 16px;
+      font: 14px/1.4 var(--font-sans);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .primary { background: var(--accent); color: #fff; border: 0; }
+    .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* 狀態牆 */
+    .states {
+      display: grid;
+      gap: var(--space-4);
+      grid-template-columns: 1fr;
+      margin-top: var(--space-4);
+    }
+    .state {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+    .state-head { border-bottom: 1px solid var(--line); padding-bottom: var(--space-2); }
+    .state-head .kicker { color: var(--accent-deep); }
+    .state-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 700; }
+    .state-head p { margin: 4px 0 0; font-size: var(--text-sm); color: var(--muted); }
+
+    /* 卡片（面板內層） */
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+    }
+    .panel[role="dialog"] { border-color: var(--accent); }
+
+    /* 物件摘要列 */
+    .listing-summary {
+      display: flex;
+      gap: var(--space-3);
+      align-items: center;
+    }
+    .photo {
+      flex: 0 0 72px;
+      width: 72px;
+      height: 72px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      color: var(--muted);
+      font-size: var(--text-xs);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .listing-summary .meta { min-width: 0; }
+    .listing-summary .title {
+      margin: 0;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .rent {
+      margin: 2px 0 0;
+      font-size: var(--text-price);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* bottom sheet 面板 */
+    .sheet { max-width: 420px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+    .sheet-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+    }
+    .sheet-head h3 { margin: 0; font-size: var(--text-md); font-weight: 700; }
+    .icon-btn {
+      min-height: var(--touch);
+      min-width: var(--touch);
+      width: var(--touch);
+      height: var(--touch);
+      padding: 0;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--paper);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    /* 分享選項 */
+    .share-options { display: flex; flex-direction: column; gap: var(--space-2); }
+    .share-option {
+      min-height: var(--touch);
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius);
+      padding: 0 var(--space-3);
+      cursor: pointer;
+    }
+    .share-option:hover { background: var(--accent-mist); }
+    .dot {
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+    }
+    .dot-accent { background: var(--accent); }
+    .share-option .name { font-weight: 700; }
+    .share-option .desc { display: block; font-size: var(--text-xs); color: var(--muted); }
+
+    .note {
+      margin: var(--space-3) 0 0;
+      padding: var(--space-3);
+      background: var(--accent-soft);
+      border-radius: var(--radius);
+      color: var(--accent-deep);
+      font-size: var(--text-sm);
+    }
+
+    /* QR 佔位 */
+    .qr {
+      width: 96px;
+      height: 96px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      color: var(--muted);
+      font-size: var(--text-xs);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    /* 統計卡 */
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-2); }
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--accent-mist);
+      padding: var(--space-3);
+    }
+    .stat .num {
+      display: block;
+      font-size: var(--text-price);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat .lab { font-size: var(--text-xs); color: var(--muted); }
+
+    .flow { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+    /* 實作備註 */
+    .impl {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      margin-top: var(--space-4);
+    }
+    .impl h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+    .impl dl { margin: 0; display: grid; gap: var(--space-2); }
+    .impl dt { font-weight: 700; color: var(--accent-deep); }
+    .impl dd { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--muted); word-break: break-all; }
+    code {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: var(--text-xs);
+      background: var(--accent-mist);
+      padding: 1px 4px;
+      border-radius: var(--radius);
+    }
+
+    @media (min-width: 768px) {
+      .states { grid-template-columns: 1fr 1fr; }
+      .state.wide, .impl { grid-column: 1 / -1; }
+    }
+    @media (min-width: 1200px) {
+      .states { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="kicker">互動流程原型（A）</p>
+      <h1>物件一鍵分享面板</h1>
+      <p class="muted">以下把同一個流程的不同狀態並排展示，每格都有標題說明。面板／對話框均具備 focus trap、Esc 關閉與 aria-modal。</p>
+    </header>
+
+    <main class="states">
+
+      <!-- 狀態 1：未登入 -->
+      <section class="state" aria-labelledby="s1-title">
+        <div class="state-head">
+          <p class="kicker">狀態 1</p>
+          <h2 id="s1-title">未登入點分享</h2>
+          <p>點選分享時不跳轉，改為在此顯示登入提示。</p>
+        </div>
+        <div class="panel">
+          <p style="margin:0;font-weight:700;">登入會員才能分享</p>
+          <p class="hint" style="margin:4px 0 12px;">訪客仍可<strong>查看</strong>被分享的頁面，只是不能發起分享。</p>
+          <div class="flow">
+            <button type="button" class="primary">免費註冊</button>
+            <button type="button" class="ghost">登入</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 狀態 2：已登入分享面板（bottom sheet） -->
+      <section class="state" aria-labelledby="s2-title">
+        <div class="state-head">
+          <p class="kicker">狀態 2</p>
+          <h2 id="s2-title">已登入分享面板（行動版 bottom sheet）</h2>
+          <p>四個選項各 44px 高、含平台名與一行說明；上方是物件摘要，租金用 tabular 數字。</p>
+        </div>
+        <div class="panel sheet" role="dialog" aria-modal="true" aria-labelledby="s2-heading">
+          <div class="sheet-head">
+            <h3 id="s2-heading">分享這個物件</h3>
+            <button type="button" class="icon-btn" data-dialog-close aria-label="關閉分享面板">×</button>
+          </div>
+          <div class="listing-summary">
+            <div class="photo">物件照片<br />（佔位）</div>
+            <div class="meta">
+              <p class="title">台北市大安區 2 房電梯大樓</p>
+              <p class="rent">NT$ 32,000<span style="font-size:var(--text-sm);font-weight:400;color:var(--muted);">／月</span></p>
+            </div>
+          </div>
+          <div class="share-options" style="margin-top:var(--space-3);">
+            <button type="button" class="share-option">
+              <span class="dot dot-line" aria-hidden="true"></span>
+              <span><span class="name">LINE</span><span class="desc">傳送給 LINE 好友或群組</span></span>
+            </button>
+            <button type="button" class="share-option">
+              <span class="dot dot-threads" aria-hidden="true"></span>
+              <span><span class="name">Threads</span><span class="desc">發一篇 Threads 貼文</span></span>
+            </button>
+            <button type="button" class="share-option">
+              <span class="dot dot-facebook" aria-hidden="true"></span>
+              <span><span class="name">Facebook</span><span class="desc">分享到動態時報</span></span>
+            </button>
+            <button type="button" class="share-option">
+              <span class="dot dot-accent" aria-hidden="true"></span>
+              <span><span class="name">複製連結</span><span class="desc">複製含歸因碼的站內公開頁連結</span></span>
+            </button>
+          </div>
+          <p class="hint" style="margin:12px 0 0;">統計只記連結點擊與來源，不追蹤第三方行為。</p>
+        </div>
+      </section>
+
+      <!-- 狀態 3：桌面版 -->
+      <section class="state" aria-labelledby="s3-title">
+        <div class="state-head">
+          <p class="kicker">狀態 3</p>
+          <h2 id="s3-title">桌面版分享（popover／側欄卡片）</h2>
+          <p>桌面不用 bottom sheet，改為卡片；含 QR code 佔位與「複製連結」。</p>
+        </div>
+        <div class="panel" role="dialog" aria-modal="true" aria-labelledby="s3-heading">
+          <div class="sheet-head">
+            <h3 id="s3-heading">分享這個物件</h3>
+            <button type="button" class="icon-btn" data-dialog-close aria-label="關閉分享面板">×</button>
+          </div>
+          <div class="listing-summary">
+            <div class="photo">物件照片<br />（佔位）</div>
+            <div class="meta">
+              <p class="title">台北市大安區 2 房電梯大樓</p>
+              <p class="rent">NT$ 32,000<span style="font-size:var(--text-sm);font-weight:400;color:var(--muted);">／月</span></p>
+            </div>
+          </div>
+          <div style="display:flex;gap:var(--space-3);align-items:center;margin-top:var(--space-3);">
+            <div class="qr">QR code<br />佔位</div>
+            <button type="button" class="ghost" style="flex:1;">複製連結</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 狀態 4：分享成功回饋 -->
+      <section class="state" aria-labelledby="s4-title">
+        <div class="state-head">
+          <p class="kicker">狀態 4</p>
+          <h2 id="s4-title">分享成功回饋</h2>
+          <p>即時統計回饋＋隱私界線說明。</p>
+        </div>
+        <div class="panel">
+          <p style="margin:0;font-weight:700;">已開啟 LINE</p>
+          <p class="hint" style="margin:4px 0 0;">這組分享連結已被點閱 <strong style="font-variant-numeric:tabular-nums;">12</strong> 次</p>
+          <div class="note" style="margin-top:var(--space-3);">統計只記連結點擊與來源，不追蹤第三方行為。</div>
+        </div>
+      </section>
+
+      <!-- 狀態 5：分享統計（會員視角） -->
+      <section class="state" aria-labelledby="s5-title">
+        <div class="state-head">
+          <p class="kicker">狀態 5</p>
+          <h2 id="s5-title">分享統計（會員視角）</h2>
+          <p>「我的分享」小卡片，示意總點擊、本週點擊與轉換。</p>
+        </div>
+        <div class="panel">
+          <p style="margin:0 0 8px;font-weight:700;">我的分享</p>
+          <div class="stat-grid">
+            <div class="stat"><span class="num">128</span><span class="lab">總點擊</span></div>
+            <div class="stat"><span class="num">12</span><span class="lab">本週點擊</span></div>
+            <div class="stat"><span class="num">3</span><span class="lab">轉換（註冊／收藏）</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 實作備註 -->
+      <section class="impl" aria-labelledby="impl-title">
+        <h2 id="impl-title">實作備註（給工程師）</h2>
+        <dl>
+          <dt>LINE</dt>
+          <dd><code>https://social-plugins.line.me/lineit/share?url=&lt;encoded&gt;</code></dd>
+          <dt>Facebook</dt>
+          <dd><code>https://www.facebook.com/sharer/sharer.php?u=&lt;encoded&gt;</code></dd>
+          <dt>Threads</dt>
+          <dd><code>https://www.threads.net/intent/post?text=&lt;encoded&gt;</code></dd>
+          <dt>行動版優先</dt>
+          <dd>先呼叫 <code>navigator.share()</code>（Web Share API）帶出系統原生選單，失敗才 fallback 到自訂面板。</dd>
+          <dt>分享連結形狀</dt>
+          <dd>站內公開內頁 <code>＋?ref=&lt;shareToken&gt;</code>，靠既有 <code>jr_share</code> cookie 做歸因。</dd>
+        </dl>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      // 所有 [role="dialog"] 面板共用：focus trap、Esc 關閉、關閉鈕。
+      function focusable(d) {
+        return [...d.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter(function (el) { return !el.disabled; });
+      }
+      document.querySelectorAll('[role="dialog"]').forEach(function (dialog) {
+        dialog.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Escape') {
+            ev.preventDefault();
+            dialog.hidden = true;
+            return;
+          }
+          if (ev.key !== 'Tab') return;
+          var nodes = focusable(dialog);
+          if (nodes.length < 2) return;
+          var first = nodes[0];
+          var last = nodes[nodes.length - 1];
+          if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+          else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+        });
+        var close = dialog.querySelector('[data-dialog-close]');
+        if (close) close.addEventListener('click', function () { dialog.hidden = true; });
+      });
+    })();
+  </script>
+</body>
+</html>

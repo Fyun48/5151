@@ -11,26 +11,35 @@
        權重比 UA 的 `[hidden]{display:none}` 高，於是訪客也會看到會員區的連結
        （實際在 375px 的訪客截圖上看到「回找房頁面／登出」）。 */
     [hidden] { display: none !important; }
-    body { margin: 0; font-family: var(--font-sans, system-ui, sans-serif); color: var(--ink, #1f1b16); background: var(--bg, #f7f4ef); }
+    :focus-visible { outline: 2px solid var(--accent, #0f6f6a); outline-offset: 2px; }
+    body { margin: 0; font-family: var(--font-sans, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif); color: var(--ink, #1c1917); background: var(--bg, #f3efe8); }
     .wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px)); }
     header.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 0; flex-wrap: wrap; }
     .brand { font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
     .brand a { color: inherit; text-decoration: none; }
     h1 { font-size: 20px; margin: 8px 0 4px; }
-    .price { font-size: 22px; font-weight: 800; color: var(--accent-deep, #a6532b); }
-    .meta { color: var(--muted, #6b6258); font-size: 14px; margin: 2px 0; }
-    .card { background: var(--paper, #fff); border: 1px solid var(--line, #e7ded2); border-radius: 12px; padding: 14px; margin: 12px 0; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3, 12px); }
+    .title-row h1 { flex: 1 1 auto; min-width: 0; }
+    .price { font-size: var(--text-price, 20px); font-weight: 700; color: var(--accent-deep, #0b5551); font-variant-numeric: tabular-nums; }
+    .meta { color: var(--muted, #6f6a64); font-size: var(--text-md, 14px); margin: 2px 0; }
+    .card { background: var(--paper, #faf8f4); border: 1px solid var(--line, #e4dfd6); border-radius: var(--radius-lg, 10px); padding: 14px; margin: 12px 0; }
     .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
-    .gallery button { padding: 0; border: 1px solid var(--line, #e7ded2); border-radius: 8px; overflow: hidden; background: #eee; aspect-ratio: 4/3; cursor: pointer; }
+    .gallery button { padding: 0; border: 1px solid var(--line, #e4dfd6); border-radius: var(--radius, 8px); overflow: hidden; background: #eee; aspect-ratio: 4/3; cursor: pointer; }
     .gallery img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .cover { width: 100%; max-height: 420px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line, #e7ded2); background: #eee; margin-bottom: 8px; cursor: zoom-in; }
+    .cover { width: 100%; max-height: 420px; object-fit: cover; border-radius: var(--radius-lg, 10px); border: 1px solid var(--line, #e4dfd6); background: #eee; margin-bottom: 8px; cursor: zoom-in; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-    .chip { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: var(--accent-mist, #f3ece3); border: 1px solid var(--line, #e7ded2); }
+    .chip { font-size: var(--text-xs, 12px); padding: 4px 8px; border-radius: 999px; background: var(--accent-mist, #f3f6f5); border: 1px solid var(--line, #e4dfd6); }
     .body { white-space: pre-wrap; line-height: 1.7; }
-    .contact a { color: var(--accent-deep, #a6532b); }
-    .cta { position: sticky; bottom: 0; margin-top: 16px; background: var(--accent-mist, #f3ece3); border: 1px solid var(--line, #e7ded2); border-radius: 12px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .cta a.btn { background: var(--accent, #c9773f); color: #fff; text-decoration: none; padding: 8px 14px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
-    .muted { color: var(--muted, #6b6258); font-size: 13px; }
+    .contact a { color: var(--accent-deep, #0b5551); }
+    .cta { position: sticky; bottom: 0; margin-top: var(--space-4, 16px); background: var(--accent-mist, #f3f6f5); border: 1px solid var(--line, #e4dfd6); border-radius: var(--radius-lg, 10px); padding: var(--space-3, 12px) var(--space-3, 12px) calc(var(--space-3, 12px) + env(safe-area-inset-bottom, 0px)); }
+    .cta-note { display: block; margin: 0 0 var(--space-2, 8px); font-size: var(--text-sm, 13px); color: var(--muted, #6f6a64); }
+    .cta-actions { display: flex; gap: var(--space-2, 8px); }
+    .cta-actions > * { flex: 1 1 0; }
+    .cta a.btn { background: var(--accent, #0f6f6a); color: var(--primary-foreground, #faf8f4); text-decoration: none; padding: 0 var(--space-4, 16px); border-radius: 999px; font-weight: 700; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; min-height: var(--touch, 44px); }
+    .share-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2, 8px); min-height: var(--touch, 44px); padding: 0 var(--space-3, 12px); border: 1px solid var(--line, #e4dfd6); background: var(--paper, #faf8f4); color: var(--ink, #1c1917); border-radius: 999px; font-size: var(--text-md, 14px); font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .share-btn:hover { background: var(--accent-soft, #e7f1ef); }
+    .share-btn svg { flex: 0 0 auto; }
+    .muted { color: var(--muted, #6f6a64); font-size: var(--text-sm, 13px); }
     .auth { display: flex; align-items: center; gap: 10px; min-height: 20px; text-align: right; }
     .auth .member { display: flex; align-items: center; gap: 10px; }
     .auth a { text-decoration: none; }
@@ -38,13 +47,51 @@
     /* lightbox */
     .lb { position: fixed; inset: 0; background: rgba(20,16,12,0.92); display: none; z-index: 100; }
     .lb.open { display: flex; align-items: center; justify-content: center; }
-    .lb img { max-width: 96vw; max-height: 82vh; object-fit: contain; border-radius: 8px; }
+    .lb img { max-width: 96vw; max-height: 82vh; object-fit: contain; border-radius: var(--radius, 8px); }
     .lb .lb-close { position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); right: 14px; }
     .lb button { background: rgba(255,255,255,0.14); color: #fff; border: 0; border-radius: 999px; width: 44px; height: 44px; font-size: 20px; cursor: pointer; }
     .lb .lb-prev { position: fixed; left: 10px; top: 50%; transform: translateY(-50%); }
     .lb .lb-next { position: fixed; right: 10px; top: 50%; transform: translateY(-50%); }
     .lb .lb-count { position: fixed; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; text-align: center; color: #fff; font-size: 13px; }
-    .err { text-align: center; padding: 40px 12px; color: var(--muted, #6b6258); }
+    .err { text-align: center; padding: 40px 12px; color: var(--muted, #6f6a64); }
+    /* share dialogs（同一份 DOM 用 media query 切換：行動 bottom sheet、桌面卡片） */
+    .modal { position: fixed; inset: 0; z-index: 200; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(20,16,12,0.5); }
+    .modal-card { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper, #faf8f4); border: 1px solid var(--line, #e4dfd6); border-bottom: 0; border-radius: var(--radius-lg, 10px) var(--radius-lg, 10px) 0 0; padding: var(--space-4, 16px) var(--space-4, 16px) calc(var(--space-4, 16px) + env(safe-area-inset-bottom, 0px)); max-height: 88vh; overflow-y: auto; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2, 8px); margin-bottom: var(--space-3, 12px); }
+    .modal-head h3 { margin: 0; font-size: var(--text-md, 14px); font-weight: 700; }
+    .modal-close { min-height: var(--touch, 44px); min-width: var(--touch, 44px); width: var(--touch, 44px); height: var(--touch, 44px); padding: 0; border-radius: var(--radius, 8px); border: 1px solid var(--line, #e4dfd6); background: var(--paper, #faf8f4); color: var(--ink, #1c1917); font-size: 18px; line-height: 1; cursor: pointer; }
+    .modal-hint { margin: 0; font-size: var(--text-sm, 13px); color: var(--muted, #6f6a64); }
+    .modal-actions { display: flex; gap: var(--space-2, 8px); margin-top: var(--space-3, 12px); }
+    .modal-actions > * { flex: 1 1 0; }
+    .btn-primary { display: inline-flex; align-items: center; justify-content: center; min-height: var(--touch, 44px); padding: 0 var(--space-4, 16px); border-radius: 999px; background: var(--accent, #0f6f6a); color: var(--primary-foreground, #faf8f4); border: 0; font-weight: 700; text-decoration: none; }
+    .btn-ghost { display: inline-flex; align-items: center; justify-content: center; min-height: var(--touch, 44px); padding: 0 var(--space-4, 16px); border-radius: 999px; background: var(--paper, #faf8f4); color: var(--ink, #1c1917); border: 1px solid var(--line, #e4dfd6); font-weight: 700; text-decoration: none; }
+    .listing-summary { display: flex; gap: var(--space-3, 12px); align-items: center; }
+    .summary-photo { flex: 0 0 72px; width: 72px; height: 72px; border: 1px dashed var(--line, #e4dfd6); border-radius: var(--radius, 8px); background: var(--accent-mist, #f3f6f5); color: var(--muted, #6f6a64); font-size: var(--text-xs, 12px); display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
+    .summary-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .summary-meta { min-width: 0; }
+    .summary-title { margin: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .summary-rent { margin: 2px 0 0; font-size: var(--text-price, 20px); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .share-options { display: flex; flex-direction: column; gap: var(--space-2, 8px); margin-top: var(--space-3, 12px); }
+    .share-option { min-height: var(--touch, 44px); display: flex; align-items: center; gap: var(--space-3, 12px); width: 100%; text-align: left; border: 1px solid var(--line, #e4dfd6); background: var(--paper, #faf8f4); border-radius: var(--radius, 8px); padding: 0 var(--space-3, 12px); cursor: pointer; }
+    .share-option:hover { background: var(--accent-mist, #f3f6f5); }
+    .dot { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 50%; }
+    .dot-line { background: #06C755; }
+    .dot-facebook { background: #1877F2; }
+    .dot-threads { background: #000000; }
+    .dot-copy { background: var(--accent, #0f6f6a); }
+    .so-text { min-width: 0; display: flex; flex-direction: column; }
+    .so-name { font-weight: 700; }
+    .so-desc { display: block; font-size: var(--text-xs, 12px); color: var(--muted, #6f6a64); }
+    .limit-msg { margin-top: var(--space-3, 12px); padding: var(--space-3, 12px); background: var(--accent-soft, #e7f1ef); border-radius: var(--radius, 8px); color: var(--accent-deep, #0b5551); font-size: var(--text-sm, 13px); }
+    .share-privacy { margin-top: var(--space-3, 12px); }
+    .toast { position: fixed; left: 50%; bottom: calc(var(--space-4, 16px) + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 300; background: var(--ink, #1c1917); color: var(--paper, #faf8f4); border-radius: var(--radius-lg, 10px); padding: var(--space-3, 12px) var(--space-4, 16px); max-width: calc(100vw - 32px); text-align: center; }
+    .toast-title { margin: 0; font-weight: 700; font-size: var(--text-md, 14px); }
+    .toast-hint { margin: 2px 0 0; font-size: var(--text-xs, 12px); opacity: 0.85; }
+    body.modal-open { overflow: hidden; }
+    @media (min-width: 768px) {
+      .modal-card { left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); width: 400px; max-width: calc(100vw - 32px); border-radius: var(--radius-lg, 10px); border-bottom: 1px solid var(--line, #e4dfd6); padding-bottom: var(--space-4, 16px); }
+    }
   </style>
 </head>
 <body>
@@ -71,6 +118,66 @@
     <img id="lbImg" alt="物件照片" />
     <button class="lb-next" id="lbNext" aria-label="下一張">›</button>
     <div class="lb-count" id="lbCount"></div>
+  </div>
+
+  <!-- 未登入分享提示 -->
+  <div class="modal" id="shareLogin" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="shareLoginTitle">
+      <header class="modal-head">
+        <h3 id="shareLoginTitle">登入會員才能分享</h3>
+        <button type="button" class="modal-close" data-modal-close aria-label="關閉分享提示">×</button>
+      </header>
+      <p class="modal-hint">訪客仍可<strong>查看</strong>被分享的頁面，只是不能發起分享。</p>
+      <div class="modal-actions">
+        <a class="btn-primary" href="/login.html">免費註冊</a>
+        <a class="btn-ghost" href="/login.html">登入</a>
+      </div>
+    </section>
+  </div>
+
+  <!-- 已登入分享面板 -->
+  <div class="modal" id="sharePanel" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sharePanelTitle">
+      <header class="modal-head">
+        <h3 id="sharePanelTitle">分享這個物件</h3>
+        <button type="button" class="modal-close" data-modal-close aria-label="關閉分享面板">×</button>
+      </header>
+      <div class="listing-summary">
+        <div class="summary-photo" id="summaryPhoto">物件照片</div>
+        <div class="summary-meta">
+          <p class="summary-title" id="summaryTitle"></p>
+          <p class="summary-rent" id="summaryRent"></p>
+        </div>
+      </div>
+      <p class="limit-msg" id="shareLimitMsg" hidden>今日分享次數已達上限</p>
+      <div class="share-options" id="shareOptions">
+        <button type="button" class="share-option" data-channel="line">
+          <span class="dot dot-line" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">LINE</span><span class="so-desc">傳送給 LINE 好友或群組</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="threads">
+          <span class="dot dot-threads" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">Threads</span><span class="so-desc">發一篇 Threads 貼文</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="facebook">
+          <span class="dot dot-facebook" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">Facebook</span><span class="so-desc">分享到動態時報</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="copy">
+          <span class="dot dot-copy" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">複製連結</span><span class="so-desc">複製含歸因碼的站內公開頁連結</span></span>
+        </button>
+      </div>
+      <p class="modal-hint share-privacy">統計只記連結點擊與來源，不追蹤第三方行為。</p>
+    </section>
+  </div>
+
+  <!-- 成功回饋 -->
+  <div class="toast" id="shareToast" role="status" aria-live="polite" hidden>
+    <p class="toast-title" id="shareToastTitle"></p>
+    <p class="toast-hint">統計只記連結點擊與來源，不追蹤第三方行為。</p>
   </div>
 
   <script>
@@ -122,6 +229,15 @@
     let viewer = null;
     let lastData = null;
 
+    // ── 分享狀態 ──
+    let shareToken = null;
+    let shareUrl = null;
+    let shareLimit = false;
+    let featureDisabled = false;
+
+    const SHARE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>';
+    const shareBtnHtml = '<button type="button" class="share-btn" data-share-trigger aria-label="分享這個物件">' + SHARE_ICON + '分享</button>';
+
     function openLightbox(i) {
       if (!photos.length) return;
       lbIndex = (i + photos.length) % photos.length;
@@ -150,6 +266,207 @@
       touchX = null;
     }, { passive: true });
 
+    // ── 對話框：focus trap、Esc、還原焦點 ──
+    let activeDialog = null;
+    let lastFocused = null;
+    function focusableIn(scope) {
+      return [...scope.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+        .filter((el) => !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+    }
+    function openDialog(modalEl, triggerEl) {
+      closeDialog();
+      lastFocused = triggerEl || document.activeElement;
+      activeDialog = modalEl;
+      modalEl.hidden = false;
+      document.body.classList.add("modal-open");
+      const scope = modalEl.querySelector('[role="dialog"]');
+      const first = scope ? focusableIn(scope)[0] : null;
+      if (first) first.focus();
+    }
+    function closeDialog() {
+      if (!activeDialog) return;
+      const prev = activeDialog;
+      activeDialog = null;
+      prev.hidden = true;
+      document.body.classList.remove("modal-open");
+      if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+      lastFocused = null;
+    }
+    document.querySelectorAll("[data-modal-close]").forEach((el) => el.addEventListener("click", closeDialog));
+    document.addEventListener("keydown", (e) => {
+      if (!activeDialog) return;
+      if (e.key === "Escape") { e.preventDefault(); closeDialog(); return; }
+      if (e.key !== "Tab") return;
+      const scope = activeDialog.querySelector('[role="dialog"]');
+      if (!scope) return;
+      const nodes = focusableIn(scope);
+      if (!nodes.length) return;
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+
+    // ── 分享事件（fail-soft） ──
+    async function postShareEvent(token, eventType, channel) {
+      if (!listingId || !token) return;
+      try {
+        await fetch(`/api/public/listings/${encodeURIComponent(listingId)}/share-events`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shareToken: token, eventType, channel: channel || null }),
+        });
+      } catch {}
+    }
+    // 頁面載入時，?ref= 存在就打一次 view 事件；同 session 用 sessionStorage 去重。
+    function fireViewEventOnce() {
+      if (!listingId) return;
+      const ref = new URLSearchParams(location.search).get("ref");
+      if (!ref) return;
+      const key = "jr-share-view:" + ref;
+      try {
+        if (sessionStorage.getItem(key)) return;
+        sessionStorage.setItem(key, "1");
+      } catch {}
+      postShareEvent(ref, "view", null);
+    }
+
+    function shareTitle() { return (lastData && lastData.title) || "租屋物件"; }
+    function rentText() {
+      if (!lastData) return "";
+      return lastData.price || (lastData.price_num ? `${lastData.price_num} 元/月` : "");
+    }
+    function buildShareUrl(token) {
+      return `${location.origin}/l/${encodeURIComponent(listingId)}?ref=${encodeURIComponent(token)}`;
+    }
+    function isMobileShare() {
+      return window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(max-width: 767px)").matches;
+    }
+    function channelLabel(channel) {
+      return { line: "LINE", threads: "Threads", facebook: "Facebook" }[channel] || channel;
+    }
+    function intentUrl(channel) {
+      const u = encodeURIComponent(shareUrl);
+      if (channel === "line") return `https://social-plugins.line.me/lineit/share?url=${u}`;
+      if (channel === "facebook") return `https://www.facebook.com/sharer/sharer.php?u=${u}&display=popup`;
+      if (channel === "threads") return `https://www.threads.net/intent/post?text=${encodeURIComponent(`${shareTitle()} ${shareUrl}`)}`;
+      return "";
+    }
+    async function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(text); return true; } catch {}
+      }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "0";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch {}
+        ta.remove();
+        return ok;
+      } catch { return false; }
+    }
+    let toastTimer = null;
+    function showToast(title) {
+      const t = $("shareToast");
+      $("shareToastTitle").textContent = title;
+      t.hidden = false;
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
+    }
+    function updateShareButtons() {
+      document.querySelectorAll("[data-share-trigger]").forEach((b) => { b.hidden = featureDisabled; });
+    }
+
+    async function fetchShareLink() {
+      try {
+        const res = await fetch(`/api/listings/${encodeURIComponent(listingId)}/share-link`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+        });
+        if (res.status === 409) { featureDisabled = true; updateShareButtons(); return null; }
+        if (res.status === 429) { shareLimit = true; return "limit"; }
+        if (res.status === 401) {
+          sessionState = "guest";
+          viewer = null;
+          applySession();
+          openDialog($("shareLogin"));
+          return null;
+        }
+        if (!res.ok) return null;
+        const data = await res.json();
+        shareToken = String(data.shareToken || "");
+        shareUrl = data.url || buildShareUrl(shareToken);
+        shareLimit = false;
+        return "ok";
+      } catch { return null; }
+    }
+
+    function renderSharePanel() {
+      const photo = photos[0] || "";
+      const ph = $("summaryPhoto");
+      if (photo) {
+        ph.innerHTML = `<img src="${esc(photo)}" alt="" />`;
+      } else {
+        ph.textContent = "物件照片";
+      }
+      $("summaryTitle").textContent = shareTitle();
+      $("summaryRent").textContent = rentText();
+      $("shareLimitMsg").hidden = !shareLimit;
+      $("shareOptions").hidden = shareLimit;
+    }
+
+    async function onShareTrigger(trigger) {
+      if (sessionState === "loading") return;
+      if (sessionState !== "member") {
+        openDialog($("shareLogin"), trigger);
+        return;
+      }
+      const result = await fetchShareLink();
+      if (result === null) return;
+      if (result === "limit") {
+        renderSharePanel();
+        openDialog($("sharePanel"), trigger);
+        return;
+      }
+      // 行動版優先走系統原生分享；不支援或取消才開自訂面板（AbortError 靜默）。
+      if (isMobileShare() && navigator.share) {
+        try {
+          await navigator.share({ title: shareTitle(), text: shareTitle(), url: shareUrl });
+          return;
+        } catch (err) {}
+      }
+      renderSharePanel();
+      openDialog($("sharePanel"), trigger);
+    }
+    document.addEventListener("click", (e) => {
+      const trigger = e.target.closest("[data-share-trigger]");
+      if (trigger) onShareTrigger(trigger);
+    });
+
+    $("shareOptions").addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-channel]");
+      if (!btn || shareLimit) return;
+      const channel = btn.dataset.channel;
+      postShareEvent(shareToken, "cta", channel);
+      if (channel === "copy") {
+        const ok = await copyText(shareUrl);
+        showToast(ok ? "連結已複製" : "複製失敗，請改用手動複製");
+        return;
+      }
+      const url = intentUrl(channel);
+      if (url) window.open(url, "_blank", "noopener");
+      showToast(`已開啟 ${channelLabel(channel)}`);
+    });
+
     function renderCta() {
       const slot = $("shareCta");
       if (!slot) return;
@@ -158,12 +475,12 @@
         return;
       }
       if (sessionState === "member") {
-        slot.innerHTML = `<span class="muted">你已登入，可用特別關注、通知與更多找房功能。</span>
-          <a class="btn" href="/">回找房頁面</a>`;
+        slot.innerHTML = `<p class="cta-note">你已登入，可用特別關注、通知與更多找房功能。</p>
+          <div class="cta-actions">${shareBtnHtml}<a class="btn" href="/">回找房頁面</a></div>`;
         return;
       }
-      slot.innerHTML = `<span class="muted">註冊會員可使用特別關注、通知與更多找房功能。</span>
-        <a class="btn" href="/login.html">免費註冊</a>`;
+      slot.innerHTML = `<p class="cta-note">註冊會員可使用特別關注、通知與更多找房功能。</p>
+        <div class="cta-actions">${shareBtnHtml}<a class="btn" href="/login.html">免費註冊</a></div>`;
     }
 
     function applySession() {
@@ -197,6 +514,8 @@
       lastData = d;
       photos = Array.isArray(d.photos) && d.photos.length ? d.photos : (d.cover ? [d.cover] : []);
       const cover = photos[0] || "";
+      const title = d.title || "租屋物件";
+      const price = d.price || (d.price_num ? d.price_num + " 元/月" : "");
       const thumbs = photos.map((u, i) => `<button type="button" data-i="${i}" aria-label="放大第 ${i + 1} 張照片"><img src="${esc(u)}" alt="物件照片 ${i + 1}" loading="lazy" /></button>`).join("");
       const chips = (d.trait_labels || []).map((t) => `<span class="chip">${esc(t)}</span>`).join("");
       const contactBits = [];
@@ -204,9 +523,12 @@
       if (d.phone) contactBits.push(`電話：<a href="tel:${esc(d.phone)}">${esc(d.phone)}</a>`);
       if (d.line_url) contactBits.push(`<a href="${esc(d.line_url)}" rel="nofollow noopener" target="_blank">LINE 聯絡</a>`);
       $("main").innerHTML = `
-        ${cover ? `<img class="cover" id="coverImg" src="${esc(cover)}" alt="${esc(d.title)}" />` : ""}
-        <h1>${esc(d.title || "租屋物件")}</h1>
-        <div class="price">${esc(d.price || (d.price_num ? d.price_num + " 元/月" : ""))}</div>
+        ${cover ? `<img class="cover" id="coverImg" src="${esc(cover)}" alt="${esc(title)}" />` : ""}
+        <div class="title-row">
+          <h1>${esc(title)}</h1>
+          ${shareBtnHtml}
+        </div>
+        <div class="price">${esc(price)}</div>
         <p class="meta">${esc(d.address || "")}</p>
         <p class="meta">${[d.kind_name, d.layout, d.area_name, d.floor_display || d.floor_name].filter(Boolean).map(esc).join("・")}</p>
         ${photos.length > 1 ? `<div class="card"><div class="gallery" id="gallery">${thumbs}</div></div>` : ""}
@@ -215,12 +537,13 @@
         ${contactBits.length ? `<div class="card contact">${contactBits.join("<br />")}</div>` : ""}
         <div class="cta" id="shareCta"></div>`;
       renderCta();
+      updateShareButtons();
       $("coverImg")?.addEventListener("click", () => openLightbox(0));
       $("gallery")?.addEventListener("click", (e) => {
         const b = e.target.closest("button[data-i]");
         if (b) openLightbox(Number(b.dataset.i));
       });
-      document.title = `${d.title || "租屋物件"} · 吉比租房物件追蹤`;
+      document.title = `${title} · 吉比租房物件追蹤`;
     }
 
     async function load() {
@@ -235,6 +558,7 @@
     }
     load();
     loadSession();
+    fireViewEventOnce();
   </script>
 </body>
 </html>

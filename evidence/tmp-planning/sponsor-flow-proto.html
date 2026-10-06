@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>贊助引導流程原型 · 吉比租房物件追蹤</title>
+  <meta name="description" content="「贊助引導流程」互動流程靜態原型：選擇管道、帶身分確認、贊助代碼、對帳狀態與續費。" />
+  <style>
+    /* ── tokens：逐字取自 v3/public/tokens.css（原型自包含，供 file:// 直接開啟）── */
+    :root {
+      --bg: #f3efe8;
+      --paper: #faf8f4;
+      --ink: #1c1917;
+      --muted: #6f6a64;
+      --line: #e4dfd6;
+      --accent: #0f6f6a;
+      --accent-deep: #0b5551;
+      --accent-soft: #e7f1ef;
+      --accent-mist: #f3f6f5;
+      --radius: 8px;
+      --radius-lg: 10px;
+      --shadow: none;
+      --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+      --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+      --text-xs: 12px;
+      --text-sm: 13px;
+      --text-md: 14px;
+      --text-lg: 16px;
+      --text-price: 20px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --touch: 44px;
+      --page-gutter: 16px;
+      --btn-height: var(--touch);
+      --background: var(--bg);
+      --foreground: var(--ink);
+      --card: var(--paper);
+      --card-foreground: var(--ink);
+      --primary: var(--accent);
+      --primary-foreground: #faf8f4;
+      --muted-foreground: var(--muted);
+      --border: var(--line);
+      --ring: var(--accent);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { max-width: 100%; overflow-x: clip; }
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+      font-size: var(--text-md);
+    }
+    a { color: var(--accent-deep); }
+    .page { width: min(1180px, calc(100% - 32px)); margin: 0 auto 96px; }
+    header.hero { padding: 24px 0 4px; }
+    header.hero h1 { margin: 0 0 6px; font-family: var(--font-serif); font-size: 26px; font-weight: 600; }
+    .kicker { display: inline-block; margin: 0 0 4px; font-size: var(--text-xs); color: var(--muted); letter-spacing: 0.05em; }
+    .muted { color: var(--muted); }
+    .hint { font-size: var(--text-sm); color: var(--muted); }
+
+    button, .btn {
+      min-height: var(--touch);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 9px 16px;
+      font: 14px/1.4 var(--font-sans);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .primary { background: var(--accent); color: #fff; border: 0; }
+    .primary:disabled { background: var(--muted); cursor: not-allowed; }
+    .ghost { background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .states { display: grid; gap: var(--space-4); grid-template-columns: 1fr; margin-top: var(--space-4); }
+    .state {
+      border: 1px solid var(--line);
+      background: var(--paper);
+      border-radius: var(--radius-lg);
+      padding: var(--space-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+    }
+    .state-head { border-bottom: 1px solid var(--line); padding-bottom: var(--space-2); }
+    .state-head .kicker { color: var(--accent-deep); }
+    .state-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 700; }
+    .state-head p { margin: 4px 0 0; font-size: var(--text-sm); color: var(--muted); }
+
+    .panel { border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius); padding: var(--space-3); }
+    .panel[role="dialog"] { border-color: var(--accent); }
+
+    .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+    .sheet-head h3 { margin: 0; font-size: var(--text-md); font-weight: 700; }
+    .icon-btn {
+      min-height: var(--touch); min-width: var(--touch); width: var(--touch); height: var(--touch);
+      padding: 0; border-radius: var(--radius); border: 1px solid var(--line);
+      background: var(--paper); font-size: 18px; line-height: 1;
+    }
+
+    .note {
+      padding: var(--space-3);
+      background: var(--accent-soft);
+      border-radius: var(--radius);
+      color: var(--accent-deep);
+      font-size: var(--text-sm);
+    }
+
+    /* 管道卡 */
+    .channel-list { display: flex; flex-direction: column; gap: var(--space-2); }
+    .channel {
+      display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+      border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3);
+    }
+    .channel .name { font-weight: 700; }
+    .channel .desc { font-size: var(--text-xs); color: var(--muted); }
+    .external-tag {
+      display: inline-block; font-size: var(--text-xs); color: var(--muted);
+      border: 1px dashed var(--line); border-radius: 999px; padding: 2px 8px; margin-left: 8px;
+    }
+
+    /* 身分選項 */
+    fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3); margin: 0; }
+    legend { padding: 0 4px; font-weight: 700; font-size: var(--text-sm); color: var(--accent-deep); }
+    .radio-row { display: flex; flex-direction: column; gap: var(--space-2); }
+    input[type="checkbox"], input[type="radio"] { width: 24px; height: 24px; min-width: 24px; accent-color: var(--accent); }
+    label:has(> input[type="checkbox"]),
+    label:has(> input[type="radio"]) {
+      min-height: var(--touch);
+      display: flex; align-items: center; gap: var(--space-2);
+      cursor: pointer;
+    }
+    .identity-box { border: 1px dashed var(--line); border-radius: var(--radius); padding: var(--space-3); }
+
+    /* 贊助代碼 */
+    .code-box {
+      display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+      border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-3);
+      background: var(--accent-mist);
+    }
+    .code {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: var(--text-lg); font-weight: 700; letter-spacing: 0.06em;
+      font-variant-numeric: tabular-nums;
+    }
+    .badge {
+      display: inline-block; font-size: var(--text-xs); border-radius: 999px; padding: 2px 10px;
+    }
+    .badge-ok { background: var(--accent-soft); color: var(--accent-deep); }
+    .badge-warn { background: var(--line); color: var(--ink); }
+
+    /* 權益清單 */
+    ul.benefits { margin: 0; padding-left: 20px; }
+    ul.benefits li { margin: 2px 0; }
+
+    /* 狀態徽章 */
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      border-radius: 999px; padding: 4px 12px; font-size: var(--text-sm); font-weight: 700;
+    }
+    .status-pending { background: var(--line); color: var(--ink); }
+    .status-active { background: var(--accent-soft); color: var(--accent-deep); }
+
+    .divider { border: 0; border-top: 1px solid var(--line); margin: var(--space-3) 0; }
+
+    .impl { border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius-lg); padding: var(--space-4); margin-top: var(--space-4); }
+    .impl h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+    .impl dl { margin: 0; display: grid; gap: var(--space-2); }
+    .impl dt { font-weight: 700; color: var(--accent-deep); }
+    .impl dd { margin: 0 0 var(--space-2); font-size: var(--text-sm); color: var(--muted); }
+    code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--text-xs); background: var(--accent-mist); padding: 1px 4px; border-radius: var(--radius); }
+
+    @media (min-width: 768px) {
+      .states { grid-template-columns: 1fr 1fr; }
+      .state.wide, .impl { grid-column: 1 / -1; }
+    }
+    @media (min-width: 1200px) { .states { grid-template-columns: repeat(3, 1fr); } }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="kicker">互動流程原型（B）</p>
+      <h1>贊助引導流程</h1>
+      <p class="muted">以下把「選擇管道 → 帶身分確認 → 贊助代碼 → 對帳狀態 → 續費」並排展示。確認對話框具備 focus trap、Esc 關閉與 aria-modal。</p>
+      <div class="note" style="margin-top:12px;">贊助會員是自願的進階方案，沒有支持也不會減少任何功能。</div>
+    </header>
+
+    <main class="states">
+
+      <!-- 狀態 1：選擇贊助管道 -->
+      <section class="state wide" aria-labelledby="b1-title">
+        <div class="state-head">
+          <p class="kicker">狀態 1 · 贊助內容</p>
+          <h2 id="b1-title">選擇贊助管道</h2>
+          <p>列出「已啟用的贊助方式」，每張卡片標明「外部連結」；點「前往」會進入帶身分確認。</p>
+        </div>
+        <div class="channel-list">
+          <div class="channel">
+            <div>
+              <span class="name">Buy Me a Coffee</span><span class="external-tag">外部連結</span>
+              <div class="desc">請開發者喝杯咖啡，完成後自動對帳</div>
+            </div>
+            <button type="button" class="primary" data-open-confirm>前往</button>
+          </div>
+          <div class="channel">
+            <div>
+              <span class="name">Ko-fi</span><span class="external-tag">外部連結</span>
+              <div class="desc">小額支持開發，站長認出你後開通贊助會員</div>
+            </div>
+            <button type="button" class="primary" data-open-confirm>前往</button>
+          </div>
+          <div class="channel">
+            <div>
+              <span class="name">銀行轉帳說明頁</span><span class="external-tag">外部連結</span>
+              <div class="desc">查看轉帳資訊，由站長人工對帳</div>
+            </div>
+            <button type="button" class="primary" data-open-confirm>前往</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 狀態 2：帶身分確認（關鍵） -->
+      <section class="state" aria-labelledby="b2-title">
+        <div class="state-head">
+          <p class="kicker">狀態 2（關鍵）</p>
+          <h2 id="b2-title">帶身分確認</h2>
+          <p>點「前往」後先顯示確認卡；三個選項 + 個資告知 + 「我已了解」勾選。</p>
+        </div>
+        <div class="panel" role="dialog" aria-modal="true" aria-labelledby="b2-heading">
+          <div class="sheet-head">
+            <h3 id="b2-heading">確認要帶入的身分</h3>
+            <button type="button" class="icon-btn" data-dialog-close aria-label="關閉確認對話框">×</button>
+          </div>
+          <p class="hint" style="margin-top:0;">將以下身分帶到贊助頁，方便站長認出你並自動開通贊助會員。</p>
+          <div class="identity-box">
+            <p style="margin:0;">暱稱：<strong>小吉</strong></p>
+            <p class="hint" style="margin:2px 0 0;">沒有暱稱時會改用你的註冊 Email：member@example.com</p>
+          </div>
+          <fieldset style="margin-top:var(--space-3);">
+            <legend>選擇要帶入的資料</legend>
+            <div class="radio-row">
+              <label><input type="radio" name="identity" value="nick" checked /> 用暱稱（預設）</label>
+              <label><input type="radio" name="identity" value="email" /> 改用 Email</label>
+              <label><input type="radio" name="identity" value="anon" /> 完全匿名（只帶代碼）</label>
+            </div>
+          </fieldset>
+          <p class="hint" style="margin:var(--space-3) 0 0;">你的 Email 只會傳給該贊助平台用於對帳，不會公開顯示。</p>
+          <label style="margin-top:var(--space-2);"><input type="checkbox" id="consent" /> 我已了解</label>
+          <button type="button" class="primary" id="confirmGo" style="width:100%;margin-top:var(--space-2);" disabled>帶入並前往</button>
+        </div>
+      </section>
+
+      <!-- 狀態 3：贊助代碼 -->
+      <section class="state" aria-labelledby="b3-title">
+        <div class="state-head">
+          <p class="kicker">狀態 3</p>
+          <h2 id="b3-title">贊助代碼</h2>
+          <p>站內產生的代碼；依平台能力不同，分「已自動帶入」與「需要手動貼上」兩種變體。</p>
+        </div>
+        <div class="panel">
+          <div class="code-box">
+            <span class="code">JIBBY-7K3M9</span>
+            <button type="button" class="ghost">複製</button>
+          </div>
+          <div style="margin-top:var(--space-2); display:flex; gap:8px; flex-wrap:wrap;">
+            <span class="badge badge-ok">變體 A：已自動帶入</span>
+            <span class="badge badge-warn">變體 B：需要手動貼上</span>
+          </div>
+          <p class="hint" style="margin:8px 0 0;">若該平台不能自動帶入留言，請把這組代碼貼在贊助頁的留言欄，站長就能認出你。</p>
+        </div>
+      </section>
+
+      <!-- 狀態 4：付款後站內狀態 -->
+      <section class="state wide" aria-labelledby="b4-title">
+        <div class="state-head">
+          <p class="kicker">狀態 4</p>
+          <h2 id="b4-title">付款後的站內狀態</h2>
+          <p>對帳中 → 已開通（權益清單）→ 找不到紀錄的人工核對入口。</p>
+        </div>
+        <div class="panel">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="status-pill status-pending">對帳中</span>
+            <span class="hint">通常 10 分鐘內完成</span>
+          </div>
+          <hr class="divider" />
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="status-pill status-active">已開通贊助會員</span>
+          </div>
+          <p style="margin:8px 0 4px; font-weight:700;">你的權益</p>
+          <ul class="benefits">
+            <li>照片素材庫 100 張</li>
+            <li>特別關注 15 筆</li>
+            <li>自動搜尋間隔約 5 分鐘</li>
+            <li>可匯入 591／5168 公開物件</li>
+            <li>說明範本 5 則</li>
+          </ul>
+          <hr class="divider" />
+          <p style="margin:0 0 4px; font-weight:700;">找不到你的贊助紀錄？</p>
+          <p class="hint" style="margin:0 0 8px;">可貼上交易編號、付款時間與金額，交由站長人工核對。</p>
+          <button type="button" class="ghost">點這裡回報</button>
+        </div>
+      </section>
+
+      <!-- 狀態 5：已贊助會員再進來 -->
+      <section class="state" aria-labelledby="b5-title">
+        <div class="state-head">
+          <p class="kicker">狀態 5</p>
+          <h2 id="b5-title">已贊助會員再進來</h2>
+          <p>顯示效期與「續費」，不再出現「贊助」按鈕。</p>
+        </div>
+        <div class="panel">
+          <p style="margin:0 0 4px; font-weight:700;">你已是贊助會員</p>
+          <p class="hint" style="margin:0;">有效期到 2026-12-31</p>
+          <button type="button" class="primary" style="margin-top:var(--space-3);">續費</button>
+        </div>
+      </section>
+
+      <!-- 實作備註 -->
+      <section class="impl" aria-labelledby="b-impl-title">
+        <h2 id="b-impl-title">實作備註（給工程師）</h2>
+        <dl>
+          <dt>回抓方式</dt>
+          <dd>webhook 即時通知／API 輪詢／人工登帳，三種並存；平台不支援 webhook 時退到輪詢。</dd>
+          <dt>匹配鍵優先序</dt>
+          <dd>代碼 &gt; Email &gt; 人工核對。</dd>
+          <dt>開通門檻與效期</dt>
+          <dd>由後台設定（金額門檻、有效天數）。</dd>
+          <dt>Feature flags</dt>
+          <dd>預設全關：<code>support.enabled</code>、<code>support.cta_enabled</code>、<code>support.sponsor_enabled</code>、<code>support.public_cost_enabled</code>。</dd>
+          <dt>稽核</dt>
+          <dd>所有自動開通都要寫入 admin 稽核紀錄。</dd>
+        </dl>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      // 勾選「我已了解」才啟用「帶入並前往」。
+      var consent = document.getElementById('consent');
+      var go = document.getElementById('confirmGo');
+      if (consent && go) {
+        consent.addEventListener('change', function () { go.disabled = !consent.checked; });
+      }
+
+      // 所有 [role="dialog"] 面板共用：focus trap、Esc 關閉、關閉鈕。
+      function focusable(d) {
+        return [...d.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter(function (el) { return !el.disabled; });
+      }
+      document.querySelectorAll('[role="dialog"]').forEach(function (dialog) {
+        dialog.addEventListener('keydown', function (ev) {
+          if (ev.key === 'Escape') {
+            ev.preventDefault();
+            dialog.hidden = true;
+            return;
+          }
+          if (ev.key !== 'Tab') return;
+          var nodes = focusable(dialog);
+          if (nodes.length < 2) return;
+          var first = nodes[0];
+          var last = nodes[nodes.length - 1];
+          if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+          else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+        });
+        var close = dialog.querySelector('[data-dialog-close]');
+        if (close) close.addEventListener('click', function () { dialog.hidden = true; });
+      });
+
+      // 示範用：點「前往」把焦點帶到確認對話框（靜態原型不真正跳轉）。
+      document.querySelectorAll('[data-open-confirm]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var dialog = document.querySelector('[role="dialog"][aria-labelledby="b2-heading"]');
+          if (dialog && dialog.hidden) dialog.hidden = false;
+          if (dialog) {
+            var first = focusable(dialog)[0];
+            if (first) first.focus();
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

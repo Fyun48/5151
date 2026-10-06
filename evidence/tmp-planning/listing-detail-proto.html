@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>大安區整層住家 3房2廳2衛 · 27,000 元/月 · 吉比租房物件追蹤</title>
+<!--
+  吉比租房物件追蹤（v3）— 物件內頁（listing detail）靜態原型
+  · 僅供 IA／視覺討論，不做正式實作。
+  · 所有文字皆為台灣繁體中文假資料；照片為純 CSS 佔位色塊（標明「佔位」）。
+  · 下方「狀態展示區」為 loading／empty／error 三態示意，非本頁實際內容。
+  · token 來源：v3/public/tokens.css。下方 :root 是「原樣複製」該檔的變數，
+    未新增、未修改任何值。正式頁面應以 <link rel="stylesheet" href="/tokens.css"> 引用，勿再複製 :root。
+-->
+<style>
+/* ── :root 原樣複製自 v3/public/tokens.css（第 5–75 行），僅此一份，勿改值 ── */
+:root {
+  --bg: #f3efe8;
+  --paper: #faf8f4;
+  --ink: #1c1917;
+  --muted: #6f6a64;
+  --line: #e4dfd6;
+  --accent: #0f6f6a;
+  --accent-deep: #0b5551;
+  --accent-soft: #e7f1ef;
+  --accent-mist: #f3f6f5;
+  --rose: #b08989;
+  --rose-soft: #f7f1f0;
+  --rose-deep: #8a5e5e;
+  --accent-2: #0b5551;
+  --watch: #9a6b6b;
+  --new: #0b5551;
+  --same: #6b6394;
+  --same-soft: #eceaf4;
+  --tag-on-bg: var(--accent-soft);
+  --tag-on-fg: var(--accent-deep);
+  --tag-off-bg: var(--line);
+  --tag-off-fg: var(--muted);
+  --tag-strong-bg: var(--ink);
+  --tag-strong-fg: var(--paper);
+  --radius: 8px;
+  --radius-lg: 10px;
+  --shadow: none;
+  --font-sans: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-serif: "Noto Serif TC", "Source Han Serif TC", serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-price: 20px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --touch: 44px;
+  --page-gutter: 16px;
+  --btn-height: var(--touch);
+  --chip-height: var(--touch);
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--paper);
+  --card-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #faf8f4;
+  --muted-foreground: var(--muted);
+  --border: var(--line);
+  --ring: var(--accent);
+}
+
+/* ── 原型樣式（一律只用上方 token，不新造顏色／字級／間距／圓角／陰影）── */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.6;
+}
+a { color: var(--accent-deep); }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button {
+  font-family: inherit;
+  font-size: var(--text-md);
+  color: var(--ink);
+  min-height: var(--touch);
+  cursor: pointer;
+}
+img, svg { display: block; }
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 var(--page-gutter) calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+/* 頂列 */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
+.topbar nav { display: flex; align-items: center; gap: var(--space-2); }
+.topbar nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  text-decoration: none;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+/* 桌面錨點導覽（≥1024 才顯示，sticky） */
+.anchor-nav {
+  display: none;
+}
+.anchor-nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: var(--space-1);
+}
+.anchor-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch);
+  padding: 0 var(--space-3);
+  text-decoration: none;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--muted);
+}
+.anchor-nav a:hover, .anchor-nav a:focus-visible { color: var(--accent-deep); }
+
+/* 雙欄主區（行動單欄） */
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+/* 行動版區塊順序（交通在設備前）與桌面版不同，用 flex order 切換。
+   注意：這只改視覺順序，DOM 仍維持「基本資料→設備→交通…」的桌面順序（正式實作需另議）。 */
+main.wrap { display: flex; flex-direction: column; }
+main.wrap > * { min-width: 0; }
+.detail-grid { order: 1; }
+#basic { order: 2; }
+#amenities { order: 4; }   /* 行動：設備在交通後 */
+#transport { order: 3; }   /* 行動：交通在設備前 */
+#description { order: 5; }
+#contact { order: 6; }
+#similar { order: 7; }
+.state-showcase { order: 8; }
+
+/* ── 照片牆 ── */
+.gallery-panel { min-width: 0; }
+
+/* 佔位照片底色（輪用既有 soft token，非新色） */
+.ph-0 { background: var(--accent-soft); }
+.ph-1 { background: var(--accent-mist); }
+.ph-2 { background: var(--rose-soft); }
+.ph-3 { background: var(--same-soft); }
+.ph-4 { background: var(--line); }
+.ph-5 { background: var(--paper); }
+
+.photo-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 100%;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.photo-label .note { color: var(--ink); font-size: var(--text-xs); font-weight: 400; }
+
+/* 行動版：全寬左右滑照片牆 */
+.swipe {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  gap: var(--space-2);
+  border-radius: var(--radius-lg);
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.swipe::-webkit-scrollbar { display: none; }
+.swipe-item {
+  flex: 0 0 100%;
+  min-width: 100%;
+  scroll-snap-align: start;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  margin: 0;
+  overflow: hidden;
+  position: relative;
+}
+.swipe-badge {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.dots {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.dot.active { background: var(--accent-deep); }
+.swipe-count {
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  margin-top: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 桌面版：主圖＋縮圖條＋張數徽章 */
+.main-photo {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.badge {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.thumb-strip {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  overflow-x: auto;
+  padding: var(--space-1) 0;
+}
+.thumb-strip::-webkit-scrollbar { display: none; }
+.thumb {
+  flex: 0 0 96px;
+  aspect-ratio: 4 / 3;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden;
+  min-height: var(--touch);
+}
+.thumb[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* 摘要卡 */
+.summary-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  min-width: 0;
+}
+.price-line { display: flex; align-items: baseline; gap: var(--space-1); margin: 0; }
+.price {
+  font-size: var(--text-price);
+  font-weight: 800;
+  color: var(--accent-deep);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.price-unit { font-size: var(--text-md); color: var(--muted); font-variant-numeric: tabular-nums; }
+.deposit { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.summary-card h1 {
+  margin: var(--space-3) 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  line-height: 1.45;
+}
+.tags {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.tags li {
+  background: var(--accent-mist);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.address {
+  font-style: normal;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-3);
+}
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* 按鈕 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: var(--touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-decoration: none;
+}
+.btn-primary { background: var(--accent); color: var(--primary-foreground); border-color: var(--accent); }
+.btn-primary:hover { background: var(--accent-deep); }
+.btn-secondary { background: var(--paper); color: var(--ink); border-color: var(--line); }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent-deep); }
+.btn-ghost { background: transparent; color: var(--accent-deep); border-color: transparent; }
+.btn svg { flex: 0 0 auto; }
+
+/* 區塊 */
+.section { margin-top: var(--space-4); padding: var(--space-4); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.section h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: 700;
+}
+.section-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--touch);
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--ink);
+  text-align: left;
+}
+.section-toggle .chev { color: var(--muted); font-size: var(--text-md); }
+
+/* key/value 表格 */
+.kv {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+.kv > div { display: contents; }
+.kv dt {
+  margin: 0;
+  padding: var(--space-3) var(--space-2) var(--space-3) 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--line);
+}
+.kv dd {
+  margin: 0;
+  padding: var(--space-3) 0;
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 設備／家具家電 icon 格 */
+.amenity-group { margin: 0 0 var(--space-3); }
+.amenity-group:last-child { margin-bottom: 0; }
+.amenity-group h3 { margin: 0 0 var(--space-2); font-size: var(--text-md); font-weight: 700; color: var(--muted); }
+.amenity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-2);
+}
+.amenity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 76px;
+  padding: var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-align: center;
+}
+.amenity svg { color: var(--accent-deep); width: 24px; height: 24px; }
+
+/* 交通／地圖 */
+.mrt-line { margin: 0 0 var(--space-3); font-size: var(--text-md); }
+.mrt-line strong { color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.map {
+  position: relative;
+  aspect-ratio: 16 / 7;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--accent-mist);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.map .pin { color: var(--accent-deep); }
+
+/* 說明 */
+.desc { white-space: pre-wrap; line-height: 1.7; font-size: var(--text-md); margin: 0; }
+.desc-toggle { margin-top: var(--space-2); }
+
+/* 屋主聯絡卡 */
+.contact-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.contact-head { display: flex; align-items: center; gap: var(--space-3); }
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: var(--text-lg);
+  flex: 0 0 auto;
+}
+.contact-name { font-weight: 700; font-size: var(--text-md); }
+.contact-role { color: var(--muted); font-size: var(--text-xs); }
+.contact-methods { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.contact-hint { color: var(--muted); font-size: var(--text-xs); }
+
+/* 相似物件 */
+.similar-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+.similar-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  overflow: hidden;
+}
+.similar-card:hover { border-color: var(--accent); }
+.similar-photo { display: flex; aspect-ratio: 16 / 9; border-bottom: 1px solid var(--line); }
+.similar-body { display: block; padding: var(--space-3); }
+.similar-price { font-size: var(--text-price); font-weight: 800; color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.similar-unit { font-size: var(--text-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+.similar-title { display: block; margin: var(--space-1) 0; font-size: var(--text-md); font-weight: 700; line-height: 1.45; }
+.similar-meta { display: block; margin: 0; color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+
+/* 底部固定 CTA bar（行動版 ≤767） */
+.cta-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--page-gutter) calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+.cta-bar .btn { min-height: var(--touch); padding: 0 var(--space-2); }
+
+/* 分享面板（靜態示意） */
+.share-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(28, 25, 23, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--page-gutter);
+}
+.share-panel {
+  position: relative;
+  width: min(340px, 100%);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+.share-panel h2 { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 700; }
+.share-hint { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-sm); }
+.share-options { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.share-close {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  min-width: var(--touch);
+  min-height: var(--touch);
+  border: 0;
+  background: transparent;
+  font-size: var(--text-lg);
+}
+
+/* Lightbox */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(28, 25, 23, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lb-stage {
+  width: min(92vw, 880px);
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.lb-close, .lb-prev, .lb-next {
+  position: absolute;
+  min-width: var(--touch);
+  min-height: var(--touch);
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-lg);
+}
+.lb-close { top: calc(var(--space-3) + env(safe-area-inset-top, 0px)); right: var(--space-3); }
+.lb-prev { left: var(--space-3); top: 50%; transform: translateY(-50%); }
+.lb-next { right: var(--space-3); top: 50%; transform: translateY(-50%); }
+.lb-count {
+  position: absolute;
+  bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--paper);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 狀態展示區（示意） */
+.state-showcase {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+.state-showcase h2 { margin: 0 0 var(--space-3); font-size: var(--text-lg); font-weight: 700; }
+.state-row { display: grid; grid-template-columns: 1fr; gap: var(--space-3); }
+.state-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-3); }
+.state-card h3 { margin: 0 0 var(--space-2); font-size: var(--text-md); font-weight: 700; }
+.skeleton { height: 12px; border-radius: var(--radius); background: var(--line); margin: var(--space-1) 0; }
+.skeleton.short { width: 55%; }
+.empty-photo {
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+}
+.err-box {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+}
+
+/* 響應式 */
+/* 行動預設：swipe 顯示、主圖＋縮圖隱藏、CTA bar 顯示 */
+.main-photo, .thumb-strip { display: none; }
+
+@media (min-width: 768px) {
+  /* 768 起仍單欄，但改「主圖＋縮圖條」，藏 swipe／dots／CTA bar */
+  .swipe, .dots, .swipe-count { display: none; }
+  .main-photo, .thumb-strip { display: flex; }
+  .main-photo { display: block; }
+  .cta-bar { display: none; }
+  .similar-grid { grid-template-columns: repeat(2, 1fr); }
+  .state-row { grid-template-columns: repeat(3, 1fr); }
+  /* 768 起改回桌面順序：設備在交通前 */
+  #amenities { order: 3; }
+  #transport { order: 4; }
+}
+
+@media (min-width: 1024px) {
+  /* 桌面雙欄：左照片牆、右 sticky 摘要卡；錨點導覽 sticky 顯示 */
+  .detail-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-items: start; }
+  .summary-card { position: sticky; top: var(--space-3); }
+  .anchor-nav {
+    display: block;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    margin: var(--space-3) 0 0;
+    padding: 0 var(--page-gutter);
+  }
+  .similar-grid { grid-template-columns: repeat(3, 1fr); }
+}
+</style>
+</head>
+<body>
+<header class="topbar wrap">
+  <div class="brand">吉比租房物件追蹤</div>
+  <nav aria-label="網站導覽">
+    <a href="#">回找房頁</a>
+  </nav>
+</header>
+
+<!-- 桌面 sticky 錨點導覽 -->
+<nav class="anchor-nav" aria-label="本頁導覽">
+  <ul>
+    <li><a href="#basic">基本資料</a></li>
+    <li><a href="#amenities">設備</a></li>
+    <li><a href="#transport">交通</a></li>
+    <li><a href="#description">說明</a></li>
+    <li><a href="#contact">聯絡</a></li>
+  </ul>
+</nav>
+
+<main class="wrap">
+  <div class="detail-grid">
+    <!-- 左欄：照片牆 -->
+    <section class="gallery-panel" aria-label="物件照片">
+      <!-- 行動版：全寬左右滑照片牆（含張數＋點點指示） -->
+      <div class="swipe" id="swipe" role="group" aria-label="照片輪播" tabindex="0">
+        <figure class="swipe-item ph-0" role="img" aria-label="物件照片 1（佔位）">
+          <span class="photo-label"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/></svg>照片 1<span class="note">（佔位）</span></span>
+          <span class="swipe-badge">6 張</span>
+        </figure>
+        <figure class="swipe-item ph-1" role="img" aria-label="物件照片 2（佔位）"><span class="photo-label">照片 2<span class="note">（佔位）</span></span></figure>
+        <figure class="swipe-item ph-2" role="img" aria-label="物件照片 3（佔位）"><span class="photo-label">照片 3<span class="note">（佔位）</span></span></figure>
+        <figure class="swipe-item ph-3" role="img" aria-label="物件照片 4（佔位）"><span class="photo-label">照片 4<span class="note">（佔位）</span></span></figure>
+        <figure class="swipe-item ph-4" role="img" aria-label="物件照片 5（佔位）"><span class="photo-label">照片 5<span class="note">（佔位）</span></span></figure>
+        <figure class="swipe-item ph-5" role="img" aria-label="物件照片 6（佔位）"><span class="photo-label">照片 6<span class="note">（佔位）</span></span></figure>
+      </div>
+      <div class="dots" aria-hidden="true">
+        <span class="dot active"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </div>
+      <div class="swipe-count" id="swipeCount">1 / 6</div>
+
+      <!-- 桌面版：主圖＋縮圖條＋「6 張」徽章 -->
+      <figure class="main-photo ph-0" id="mainPhoto" role="img" aria-label="物件照片 1（佔位）">
+        <span class="photo-label"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 7h3l1.5-2h7L17 7h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.2"/></svg>照片 1<span class="note">（佔位）</span></span>
+        <span class="badge">6 張</span>
+      </figure>
+      <div class="thumb-strip" role="group" aria-label="縮圖列" tabindex="0">
+        <button type="button" class="thumb ph-0" data-i="0" aria-current="true" aria-label="放大第 1 張照片"><span class="photo-label">1</span></button>
+        <button type="button" class="thumb ph-1" data-i="1" aria-label="放大第 2 張照片"><span class="photo-label">2</span></button>
+        <button type="button" class="thumb ph-2" data-i="2" aria-label="放大第 3 張照片"><span class="photo-label">3</span></button>
+        <button type="button" class="thumb ph-3" data-i="3" aria-label="放大第 4 張照片"><span class="photo-label">4</span></button>
+        <button type="button" class="thumb ph-4" data-i="4" aria-label="放大第 5 張照片"><span class="photo-label">5</span></button>
+        <button type="button" class="thumb ph-5" data-i="5" aria-label="放大第 6 張照片"><span class="photo-label">6</span></button>
+      </div>
+    </section>
+
+    <!-- 右欄：sticky 摘要卡 -->
+    <aside class="summary-card" aria-label="物件摘要">
+      <p class="price-line"><span class="price">27,000</span><span class="price-unit">元/月</span></p>
+      <p class="deposit">押金 2 個月（54,000 元）</p>
+      <h1>大安區整層住家 3房2廳2衛 近捷運 可養寵物</h1>
+      <ul class="tags" aria-label="核心標籤">
+        <li>整層住家</li>
+        <li>3房2廳2衛</li>
+        <li>2F/7F</li>
+        <li>大安區</li>
+      </ul>
+      <address class="address">台北市大安區〇〇路二段 12 巷 3 弄 5 號 2F</address>
+      <div class="actions">
+        <button type="button" class="btn btn-secondary" id="favBtn" aria-pressed="false">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 20l-1.4-1.3C6.8 15.1 4 12.6 4 9.5 4 7 6 5 8.5 5c1.4 0 2.8.7 3.5 1.8C12.7 5.7 14.1 5 15.5 5 18 5 20 7 20 9.5c0 3.1-2.8 5.6-6.6 9.2L12 20z"/></svg>
+          收藏
+        </button>
+        <button type="button" class="btn btn-secondary" id="shareBtn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 4v10M8 8l4-4 4 4M4 14v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"/></svg>
+          分享
+        </button>
+        <a class="btn btn-primary" href="#contact">回原站聯絡</a>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 基本資料 -->
+  <section class="section" id="basic" aria-labelledby="basic-h">
+    <h2 id="basic-h"><button type="button" class="section-toggle" aria-expanded="true" aria-controls="basicBody">基本資料<span class="chev" aria-hidden="true">▾</span></button></h2>
+    <dl class="kv" id="basicBody">
+      <div><dt>型態</dt><dd>整層住家</dd></div>
+      <div><dt>格局</dt><dd>3房2廳2衛</dd></div>
+      <div><dt>坪數</dt><dd>38.6 坪</dd></div>
+      <div><dt>樓層</dt><dd>2F / 7F（有電梯）</dd></div>
+      <div><dt>屋齡</dt><dd>12 年</dd></div>
+      <div><dt>押金</dt><dd>2 個月（54,000 元）</dd></div>
+      <div><dt>租金內含</dt><dd>管理費、水費</dd></div>
+      <div><dt>可養寵物</dt><dd>可</dd></div>
+      <div><dt>刊登時間</dt><dd>3 天前</dd></div>
+      <div><dt>刊登者</dt><dd>屋主</dd></div>
+      <div><dt>物件狀態</dt><dd>刊登中</dd></div>
+      <div><dt>有效期限</dt><dd>至 2026-11-02</dd></div>
+    </dl>
+  </section>
+
+  <!-- 設備與家具家電 -->
+  <section class="section" id="amenities" aria-labelledby="amenities-h">
+    <h2 id="amenities-h">設備與家具家電</h2>
+    <div class="amenity-group">
+      <h3>房屋設備</h3>
+      <div class="amenity-grid">
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7v6M9 10l3-3 3 3M12 17v-6M9 14l3 3 3-3"/></svg>電梯</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 20h16M6 20v-5M18 20v-5"/><circle cx="12" cy="9" r="3"/></svg>陽台</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="13" r="4"/><circle cx="6" cy="8" r="1.6"/><circle cx="9.5" cy="5" r="1.3"/><circle cx="14.5" cy="5" r="1.3"/><circle cx="18" cy="8" r="1.6"/></svg>可養寵物</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3c1 2 4 3.5 4 7a4 4 0 0 1-8 0c0-1.5.8-2.8 1.6-3.7.3 1 .9 1.7 1.6 2.2C11.4 7 11.5 5 12 3z"/></svg>天然瓦斯</div>
+      </div>
+    </div>
+    <div class="amenity-group">
+      <h3>家具家電</h3>
+      <div class="amenity-grid">
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 2v20M4 6l16 12M20 6L4 18"/></svg>冷氣</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="1"/><path d="M7 9h10"/></svg>冰箱</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="1"/><circle cx="12" cy="12" r="4"/></svg>洗衣機</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 4v3M12 4v3M16 4v3"/><path d="M5 7h14a1 1 0 0 1 1 1v2H4V8a1 1 0 0 1 1-1z"/><path d="M12 14a3 3 0 0 1 3 3M9 17a3 3 0 0 1 3-3"/></svg>熱水器</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 18v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8M3 18v2M21 18v2M3 14h18v4H3zM6 10V6h6v4"/></svg>床</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 8h16M5 8v8M19 8v8M5 16h14"/></svg>桌子</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 4v8M17 4v8M7 12h10M6 12l1 6h10l1-6M7 20v-2h10v2"/></svg>椅子</div>
+        <div class="amenity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18h.01"/></svg>網路</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 交通與地圖 -->
+  <section class="section" id="transport" aria-labelledby="transport-h">
+    <h2 id="transport-h">交通與地圖</h2>
+    <p class="mrt-line">步行 <strong>6 分鐘</strong>（<strong>450 公尺</strong>）至 捷運〇〇站</p>
+    <div class="map" role="img" aria-label="地圖示意（佔位）：物件與捷運〇〇站相對位置，步行 6 分鐘 450 公尺">
+      <svg class="pin" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="1.6"/></svg>
+      地圖示意（佔位）
+    </div>
+  </section>
+
+  <!-- 說明 -->
+  <section class="section" id="description" aria-labelledby="description-h">
+    <h2 id="description-h">說明</h2>
+    <p class="desc" id="descBody">近捷運、生活機能佳，走路 6 分鐘到捷運〇〇站。整層住家，三面採光，前後陽台，通風良好。社區有管理員，垃圾集中處理，可代收包裹。租金已含管理費與水費，電費、瓦斯費依帳單自付。可養寵物（以不吵到鄰居為原則）。歡迎上班族、小家庭，看屋請先預約。</p>
+    <button type="button" class="btn btn-secondary desc-toggle" id="descToggle" aria-expanded="false" hidden>展開完整說明</button>
+  </section>
+
+  <!-- 屋主／聯絡 -->
+  <section class="section" id="contact" aria-labelledby="contact-h">
+    <h2 id="contact-h">屋主聯絡</h2>
+    <div class="contact-card">
+      <div class="contact-head">
+        <span class="avatar" aria-hidden="true">王</span>
+        <div>
+          <div class="contact-name">王小姐</div>
+          <div class="contact-role">屋主</div>
+        </div>
+      </div>
+      <div class="contact-methods">
+        <a class="btn btn-primary" href="tel:0912345678">電話聯絡</a>
+        <a class="btn btn-secondary" href="#">LINE 聯絡</a>
+      </div>
+      <p class="contact-hint">完整聯絡方式登入後顯示（示意）。電話 0912-345-678 為假資料。</p>
+    </div>
+  </section>
+
+  <!-- 相似物件 -->
+  <section class="section" id="similar" aria-labelledby="similar-h">
+    <h2 id="similar-h">相似物件</h2>
+    <div class="similar-grid">
+      <a class="similar-card" href="#">
+        <span class="similar-photo ph-1" role="img" aria-label="相似物件照片（佔位）"><span class="photo-label">照片<span class="note">（佔位）</span></span></span>
+        <span class="similar-body">
+          <span class="similar-price">25,000</span> <span class="similar-unit">元/月</span>
+          <span class="similar-title">大安區 2房1廳1衛 整層住家</span>
+          <span class="similar-meta">24 坪・3F/5F</span>
+        </span>
+      </a>
+      <a class="similar-card" href="#">
+        <span class="similar-photo ph-2" role="img" aria-label="相似物件照片（佔位）"><span class="photo-label">照片<span class="note">（佔位）</span></span></span>
+        <span class="similar-body">
+          <span class="similar-price">29,000</span> <span class="similar-unit">元/月</span>
+          <span class="similar-title">中正區 3房2廳2衛 整層住家</span>
+          <span class="similar-meta">32 坪・5F/7F</span>
+        </span>
+      </a>
+      <a class="similar-card" href="#">
+        <span class="similar-photo ph-3" role="img" aria-label="相似物件照片（佔位）"><span class="photo-label">照片<span class="note">（佔位）</span></span></span>
+        <span class="similar-body">
+          <span class="similar-price">19,500</span> <span class="similar-unit">元/月</span>
+          <span class="similar-title">大安區 1房1廳1衛 電梯大樓</span>
+          <span class="similar-meta">15 坪・6F/12F</span>
+        </span>
+      </a>
+    </div>
+  </section>
+
+  <!-- 狀態展示區：loading / empty / error 三態示意 -->
+  <section class="state-showcase" aria-labelledby="states-h">
+    <h2 id="states-h">狀態展示區（loading / empty / error 示意，非本頁實際內容）</h2>
+    <div class="state-row">
+      <div class="state-card">
+        <h3>載入中</h3>
+        <div class="skeleton"></div>
+        <div class="skeleton short"></div>
+        <div class="skeleton"></div>
+        <p class="contact-hint">正在載入物件資料…</p>
+      </div>
+      <div class="state-card">
+        <h3>無照片</h3>
+        <div class="empty-photo" role="img" aria-label="暫無照片">暫無照片</div>
+        <p class="contact-hint">此物件尚未提供照片。</p>
+      </div>
+      <div class="state-card">
+        <h3>資料載入失敗</h3>
+        <div class="err-box" role="alert">載入失敗，請稍後再試。</div>
+        <button type="button" class="btn btn-secondary">重新載入</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 行動版底部固定 CTA bar（三個 44px 觸控目標，留 safe-area） -->
+<div class="cta-bar" role="toolbar" aria-label="物件操作">
+  <button type="button" class="btn btn-secondary" id="favBtnMobile" aria-pressed="false">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 20l-1.4-1.3C6.8 15.1 4 12.6 4 9.5 4 7 6 5 8.5 5c1.4 0 2.8.7 3.5 1.8C12.7 5.7 14.1 5 15.5 5 18 5 20 7 20 9.5c0 3.1-2.8 5.6-6.6 9.2L12 20z"/></svg>
+    收藏
+  </button>
+  <button type="button" class="btn btn-secondary" id="shareBtnMobile">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 4v10M8 8l4-4 4 4M4 14v3a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3v-3"/></svg>
+    分享
+  </button>
+  <a class="btn btn-primary" href="#contact">聯絡</a>
+</div>
+
+<!-- 分享面板（靜態示意；完整互動與未登入狀態由另一位同事實作） -->
+<div class="share-backdrop" id="shareBackdrop" hidden>
+  <div class="share-panel" id="sharePanel" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+    <button type="button" class="share-close" id="shareClose" aria-label="關閉分享">✕</button>
+    <h2 id="shareTitle">分享物件</h2>
+    <p class="share-hint">分享連結會記錄來源與點擊次數</p>
+    <div class="share-options">
+      <button type="button" class="btn btn-secondary">LINE</button>
+      <button type="button" class="btn btn-secondary">Threads</button>
+      <button type="button" class="btn btn-secondary">Facebook</button>
+      <button type="button" class="btn btn-secondary">複製連結</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox（focus trap ＋ Esc 關閉） -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="照片瀏覽" hidden>
+  <div class="lb-stage ph-0" id="lbStage" role="img" aria-label="物件照片 1（佔位）">照片 1（佔位）</div>
+  <button type="button" class="lb-close" id="lbClose" aria-label="關閉">✕</button>
+  <button type="button" class="lb-prev" id="lbPrev" aria-label="上一張">‹</button>
+  <button type="button" class="lb-next" id="lbNext" aria-label="下一張">›</button>
+  <div class="lb-count" id="lbCount">1 / 6</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var photoBgs = ["ph-0", "ph-1", "ph-2", "ph-3", "ph-4", "ph-5"];
+  var total = 6;
+
+  /* ── Lightbox：focus trap ＋ Esc 關閉 ── */
+  var lightbox = document.getElementById("lightbox");
+  var lbStage = document.getElementById("lbStage");
+  var lbCount = document.getElementById("lbCount");
+  var lbIndex = 0;
+  var lastFocus = null;
+
+  function renderLb() {
+    lbStage.textContent = "照片 " + (lbIndex + 1) + "（佔位）";
+    lbStage.setAttribute("aria-label", "物件照片 " + (lbIndex + 1) + "（佔位）");
+    lbStage.className = "lb-stage " + photoBgs[lbIndex % total];
+    lbCount.textContent = (lbIndex + 1) + " / " + total;
+  }
+  function openLightbox(i) {
+    lbIndex = (i + total) % total;
+    renderLb();
+    lastFocus = document.activeElement;
+    lightbox.hidden = false;
+    document.body.style.overflow = "hidden";
+    document.getElementById("lbClose").focus();
+  }
+  function closeLightbox() {
+    lightbox.hidden = true;
+    document.body.style.overflow = "";
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  function trapFocus(e, root) {
+    var focusables = root.querySelectorAll("button, [href], [tabindex]:not([tabindex='-1'])");
+    if (!focusables.length) return;
+    var first = focusables[0];
+    var last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+  document.getElementById("lbClose").addEventListener("click", closeLightbox);
+  document.getElementById("lbPrev").addEventListener("click", function () { openLightbox(lbIndex - 1); });
+  document.getElementById("lbNext").addEventListener("click", function () { openLightbox(lbIndex + 1); });
+  lightbox.addEventListener("click", function (e) { if (e.target === lightbox) closeLightbox(); });
+  lightbox.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeLightbox();
+    else if (e.key === "ArrowLeft") openLightbox(lbIndex - 1);
+    else if (e.key === "ArrowRight") openLightbox(lbIndex + 1);
+    else if (e.key === "Tab") trapFocus(e, lightbox);
+  });
+
+  /* 縮圖／主圖點開 lightbox */
+  document.querySelectorAll(".thumb").forEach(function (b) {
+    b.addEventListener("click", function () { openLightbox(Number(b.dataset.i)); });
+  });
+  var mainPhoto = document.getElementById("mainPhoto");
+  if (mainPhoto) mainPhoto.addEventListener("click", function () { openLightbox(0); });
+
+  /* 行動版 swipe → 點點與計數 */
+  var swipe = document.getElementById("swipe");
+  var dots = Array.prototype.slice.call(document.querySelectorAll(".dot"));
+  var swipeCount = document.getElementById("swipeCount");
+  function syncSwipe() {
+    var i = Math.min(total - 1, Math.max(0, Math.round(swipe.scrollLeft / swipe.clientWidth)));
+    dots.forEach(function (d, idx) { d.classList.toggle("active", idx === i); });
+    swipeCount.textContent = (i + 1) + " / " + total;
+  }
+  if (swipe) {
+    swipe.addEventListener("scroll", syncSwipe, { passive: true });
+    syncSwipe();
+  }
+
+  /* 分享面板：開／關 + Esc + 焦點還原（靜態示意） */
+  var backdrop = document.getElementById("shareBackdrop");
+  var sharePanel = document.getElementById("sharePanel");
+  var shareClose = document.getElementById("shareClose");
+  function openShare() {
+    lastFocus = document.activeElement;
+    backdrop.hidden = false;
+    shareClose.focus();
+  }
+  function closeShare() {
+    backdrop.hidden = true;
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  document.getElementById("shareBtn").addEventListener("click", openShare);
+  document.getElementById("shareBtnMobile").addEventListener("click", openShare);
+  shareClose.addEventListener("click", closeShare);
+  backdrop.addEventListener("click", function (e) { if (e.target === backdrop) closeShare(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !backdrop.hidden) closeShare();
+    else if (e.key === "Tab" && !backdrop.hidden) trapFocus(e, sharePanel);
+  });
+
+  /* 收藏：僅切換 aria-pressed（示意） */
+  function toggleFav(btn) {
+    var on = btn.getAttribute("aria-pressed") === "true";
+    btn.setAttribute("aria-pressed", String(!on));
+  }
+  document.getElementById("favBtn").addEventListener("click", function () { toggleFav(this); });
+  document.getElementById("favBtnMobile").addEventListener("click", function () { toggleFav(this); });
+
+  /* 基本資料：摺疊 */
+  var basicToggle = document.querySelector("#basic .section-toggle");
+  var basicBody = document.getElementById("basicBody");
+  basicToggle.addEventListener("click", function () {
+    var collapsed = basicToggle.getAttribute("aria-expanded") === "true";
+    basicToggle.setAttribute("aria-expanded", String(!collapsed));
+    basicBody.hidden = collapsed;
+    basicToggle.querySelector(".chev").textContent = collapsed ? "▸" : "▾";
+  });
+
+  /* 說明：展開／收合（行動版預設只顯示前 4 行；本原型直接切換） */
+  var descToggle = document.getElementById("descToggle");
+  var descBody = document.getElementById("descBody");
+  function syncDescToggle() {
+    var mobile = window.matchMedia("(max-width: 767px)").matches;
+    if (mobile) {
+      descToggle.hidden = false;
+      var collapsed = descToggle.getAttribute("aria-expanded") !== "true";
+      descBody.style.maxHeight = collapsed ? "4.8em" : "none";
+      descBody.style.overflow = collapsed ? "hidden" : "visible";
+      descToggle.textContent = collapsed ? "展開完整說明" : "收合說明";
+    } else {
+      descToggle.hidden = true;
+      descBody.style.maxHeight = "none";
+      descBody.style.overflow = "visible";
+    }
+  }
+  descToggle.addEventListener("click", function () {
+    var collapsed = descToggle.getAttribute("aria-expanded") !== "true";
+    descToggle.setAttribute("aria-expanded", String(collapsed));
+    syncDescToggle();
+  });
+  window.matchMedia("(max-width: 767px)").addEventListener("change", syncDescToggle);
+  syncDescToggle();
+})();
+</script>
+</body>
+</html>

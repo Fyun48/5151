@@ -453,8 +453,24 @@ import { recentEventsAsync } from "./notifyQueueAsync.js";
 // 「清除物件紀錄／清除全部資料」的 PG 島嶼入口（管理員的核彈按鈕）。
 import { resetAllDataAsync, resetListingsAsync } from "./siteResetAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
-import { listingRedirectTarget } from "./openLink.js";
-import { catalogTraitLabelMap, publicListingView, stripServerVerifiedFields } from "./selfListings.js";
+import { listingRedirectTarget, publicBaseUrl as publicBaseUrlEnv } from "./openLink.js";
+import { catalogTraitLabelMap, isSelfListingId, publicListingView, stripServerVerifiedFields } from "./selfListings.js";
+import {
+  absoluteAssetUrl,
+  buildListingShareOgMeta,
+  firstListingShareImage,
+  injectListingShareMeta,
+  listingShareDescription,
+  listingShareUrl,
+} from "./listingShare.js";
+import {
+  createListingShareLinkAsync,
+  getListingShareFlagsAsync,
+  listingShareOverviewAsync,
+  listingShareStatsForAdminAsync,
+  listingShareStatsForUserAsync,
+  recordListingShareEventAsync,
+} from "./listingShareAsync.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -668,6 +684,8 @@ const PORT = Number(process.env.PORT || 5153);
 const HOST = process.env.HOST || "0.0.0.0";
 const INDEX_HTML = readFileSync(path.join(__dirname, "../public/index.html"));
 const LOGIN_HTML = readFileSync(path.join(__dirname, "../public/login.html"));
+// 站內刊登分享頁：啟動時讀一次＋快取；檔案變動不必 hot reload（OG 注入用同一份快取）。
+const LISTING_SHARE_TEMPLATE = readFileSync(path.join(__dirname, "../public/listing.html"), "utf8");
 
 function sendHtmlBuffer(res, buf) {
   res.status(200);
@@ -943,10 +961,23 @@ app.get("/go/:id", async (req, res) => {
   const id = Number(req.params.id);
   let listing = null;
   const session = readSession(req);
+  const ref = String(req.query?.ref || "").trim();
   if (Number.isFinite(id) && id > 0) {
     try {
       // Awaited so the redirect follows the store the list came from (listingDetailAsync.js).
       listing = await getListingAsync(id);
+      if (ref) {
+        // 分享落地：query 有合法 ref 時，**先** server 端記一筆 view（不依賴 cookie），
+        // 再照原邏輯 302。token 無效／限流只損失該筆歸因，不擋住轉址。
+        await recordListingShareEventAsync({
+          shareToken: ref,
+          eventType: "view",
+          userId: session?.userId || null,
+          ip: clientIp(req),
+          userAgent: req.get("user-agent") || "",
+          source: "public",
+        }).catch(() => {});
+      }
       if (session?.userId && await getListingAsync(id, session.userId)) {
         await setFlagsAsync(id, { viewed: true }, session.userId);
       }
@@ -1314,6 +1345,41 @@ app.post("/api/public/wish-room/:id/share-events", async (req, res) => {
   }
 });
 
+// 物件一鍵分享（Phase 1）：公開事件落地端點。只收 view/cta；flag 關閉時 204 no-op。
+app.post("/api/public/listings/:id/share-events", async (req, res) => {
+  try {
+    const flags = await getListingShareFlagsAsync();
+    if (!flags.enabled) {
+      res.status(204).end();
+      return;
+    }
+    const shareToken = String(req.body?.shareToken || "").trim();
+    const eventType = String(req.body?.eventType || "");
+    const channel = String(req.body?.channel || "");
+    if (!["view", "cta"].includes(eventType)) {
+      res.status(403).json({ error: "無法記錄轉換", code: "share_conversion_forbidden" });
+      return;
+    }
+    if (!shareToken) {
+      res.status(404).json({ error: "找不到分享", code: "share_not_found" });
+      return;
+    }
+    const session = readSession(req);
+    await recordListingShareEventAsync({
+      shareToken,
+      eventType,
+      channel,
+      userId: session?.userId || null,
+      ip: clientIp(req),
+      userAgent: req.get("user-agent") || "",
+      source: "public",
+    });
+    res.status(204).end();
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message, code: error.code || "" });
+  }
+});
+
 app.post("/api/public/unsubscribe/:token", async (req, res) => {
   try {
     res.json(await applyUnsubscribeTokenAsync(req.params.token));
@@ -1670,6 +1736,81 @@ function requireAdminApi(req, res, next) {
   if (actorIsAdmin(req)) return next();
   res.status(403).json({ error: "只有管理員可以做這個" });
 }
+
+// 物件一鍵分享（Phase 1）：以「訪客視角」解析物件是否公開可見。
+async function resolvePublicListing(id) {
+  const n = Number(id) || 0;
+  if (!n) return null;
+  try {
+    if (isSelfListingId(n)) return await getSelfListingAsync(n, { viewerId: 0 });
+    return (await getListingAsync(n)) || null;
+  } catch {
+    return null;
+  }
+}
+
+app.post("/api/listings/:id/share-link", async (req, res) => {
+  try {
+    const session = readSession(req);
+    const actorId = Number(session?.userId) || 0;
+    if (!actorId) {
+      res.status(401).json({ error: "請先登入", code: "AUTH_REQUIRED" });
+      return;
+    }
+    const flags = await getListingShareFlagsAsync();
+    if (!flags.enabled) {
+      res.status(409).json({ error: "分享功能尚未開放", code: "feature_disabled" });
+      return;
+    }
+    const id = Number(req.params.id) || 0;
+    const listing = await resolvePublicListing(id);
+    if (!listing) {
+      res.status(404).json({ error: "找不到物件", code: "listing_not_found" });
+      return;
+    }
+    const result = await createListingShareLinkAsync({ listingId: id, actorId, now: new Date() });
+    if (!result.ok) {
+      if (result.code === "daily_limit") {
+        res.status(429).json({
+          error: "今日分享連結已達上限",
+          code: "daily_limit",
+          dailyUsed: result.dailyUsed,
+          dailyLimit: result.dailyLimit,
+        });
+      } else {
+        res.status(404).json({ error: "找不到物件", code: result.code || "listing_not_found" });
+      }
+      return;
+    }
+    const url = listingShareUrl(id, result.shareToken, publicBaseUrlEnv() || publicBaseUrl(req), String(listing?.source || ""));
+    res.json({ shareToken: result.shareToken, url, dailyUsed: result.dailyUsed, dailyLimit: result.dailyLimit });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法建立分享連結", code: error.code || "" });
+  }
+});
+
+app.get("/api/me/listings/share-stats", async (req, res) => {
+  try {
+    const session = readSession(req);
+    const userId = Number(session?.userId) || 0;
+    if (!userId) {
+      res.status(401).json({ error: "請先登入" });
+      return;
+    }
+    res.json(await listingShareStatsForUserAsync(userId, {}));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取分享統計" });
+  }
+});
+
+app.get("/api/admin/listings/share-stats", requireAdminApi, async (req, res) => {
+  try {
+    const days = Number(req.query?.days) || 7;
+    res.json(await listingShareStatsForAdminAsync(days, {}));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取分享統計" });
+  }
+});
 
 function auditReq(req, action, target, before, after) {
   try {
@@ -2873,7 +3014,11 @@ app.post("/api/admin/same-house/reconcile", requireAdminApi, async (req, res) =>
 
 app.get("/api/admin/overview", requireAdminApi, async (_req, res) => {
   try {
-    res.json(await getAdminOverviewAsync());
+    const [overview, listingShare] = await Promise.all([
+      getAdminOverviewAsync(),
+      listingShareOverviewAsync(7, {}),
+    ]);
+    res.json({ ...overview, listingShare });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || "無法讀取後台總覽" });
   }
@@ -3747,8 +3892,27 @@ app.get("/api/public/self-listing/:id", async (req, res) => {
     res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
   }
 });
-app.get("/l/:id", (_req, res) => {
-  res.sendFile(path.join(__dirname, "../public/listing.html"));
+// 站內刊登公開分享頁：從快取範本注入 OG meta（供 LINE／Threads／FB 爬蟲預覽）後回傳。
+// 注入失敗 fail-soft：回原始檔案內容，不得 500。
+app.get("/l/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id) || 0;
+    let html = LISTING_SHARE_TEMPLATE;
+    if (id) {
+      const listing = await getSelfListingAsync(id, { viewerId: 0 });
+      const view = publicListingView(listing, id);
+      const title = String(view.title || "").trim() || "物件分享 · 吉比租房物件追蹤";
+      const description = listingShareDescription(view).slice(0, 160);
+      const base = publicBaseUrlEnv() || publicBaseUrl(req);
+      const canonical = `${base}/l/${id}`;
+      const image = firstListingShareImage(view, base) || absoluteAssetUrl("/brand/mark.png", base);
+      const meta = buildListingShareOgMeta({ title, description, image, url: canonical });
+      html = injectListingShareMeta(LISTING_SHARE_TEMPLATE, meta, title);
+    }
+    res.type("html").send(html);
+  } catch {
+    res.sendFile(path.join(__dirname, "../public/listing.html"));
+  }
 });
 app.get("/w/:id", (_req, res) => {
   res.sendFile(path.join(__dirname, "../public/wish.html"));

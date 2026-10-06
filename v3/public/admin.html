@@ -1093,6 +1093,11 @@
           <p class="msg" id="rentalOpsMsg"></p>
           <div id="rentalOpsSummary" class="catalog-list"><p class="muted">載入區間彙總…</p></div>
         </section>
+        <section class="card">
+          <h3>物件分享統計</h3>
+          <p class="hint">近 7 日分享連結的點閱、CTA 與新建立連結。數字為彙總，不含租客聯絡資料。</p>
+          <div id="listingShareStats"><p class="muted">載入中…</p></div>
+        </section>
       </div>
       <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
         <section class="card">
@@ -2769,6 +2774,34 @@
         if (msg) msg.textContent = error.message;
       }
     }
+    async function loadListingShareStats() {
+      const box = $("listingShareStats");
+      if (!box) return;
+      try {
+        const res = await fetch("/api/admin/listings/share-stats?days=7", { cache: "no-store" });
+        const data = await readApi(res);
+        if (!res.ok) throw new Error(data.error || "載入分享統計失敗");
+        const totals = data.totals || {};
+        const daily = Array.isArray(data.daily) ? data.daily : [];
+        const top = Array.isArray(data.top) ? data.top.slice(0, 3) : [];
+        const bigNums = `
+          <div class="admin-metric-grid">
+            ${metric("7 日總點閱", totals.views ?? 0)}
+            ${metric("7 日總 CTA", totals.ctas ?? 0)}
+            ${metric("7 日新連結", totals.links ?? 0)}
+          </div>`;
+        const dailyRows = daily.length
+          ? daily.map((row) => `<tr><td>${esc(row.day)}</td><td style="font-variant-numeric:tabular-nums">${Number(row.views) || 0}</td><td style="font-variant-numeric:tabular-nums">${Number(row.ctas) || 0}</td></tr>`).join("")
+          : `<tr><td colspan="3" class="muted">暫無資料</td></tr>`;
+        const dailyTable = `<table style="margin-top:12px"><thead><tr><th>日期</th><th>點閱</th><th>CTA</th></tr></thead><tbody>${dailyRows}</tbody></table>`;
+        const topList = top.length
+          ? `<p style="margin:12px 0 0"><strong>Top 3 物件</strong></p><table style="margin-top:4px"><thead><tr><th>物件</th><th>點閱</th><th>CTA</th></tr></thead><tbody>${top.map((row) => `<tr><td>物件 #${esc(row.listingId ?? "")}</td><td style="font-variant-numeric:tabular-nums">${Number(row.views) || 0}</td><td style="font-variant-numeric:tabular-nums">${Number(row.ctas) || 0}</td></tr>`).join("")}</tbody></table>`
+          : "";
+        box.innerHTML = bigNums + dailyTable + topList;
+      } catch (error) {
+        box.innerHTML = `<p class="muted">統計暫時無法載入</p>`;
+      }
+    }
     async function loadRentalMatchRules() {
       const box = $("rentalMatchRules");
       if (!box) return;
@@ -4256,7 +4289,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadRentalOps(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadRentalOps(), loadListingShareStats(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {
