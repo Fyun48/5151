@@ -220,12 +220,52 @@ jobs:
             rm -f /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
                   /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
                   /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
+      - name: Synology NAS SSH endpoint for the PG primary (Cloudflare Access bridge only)
+        id: cf-tori-bridge
+        uses: ./.github/actions/cf-ssh-bridge
+        with:
+          hostname: ssh-tori.reversalplay.me
+          port: "2223"
+          client-id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          ssh-user: ${{ secrets.V3_SYNOLOGY_USER }}
+          ssh-key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+      - name: Copy PG backup helper to Synology (primary host)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ steps.cf-tori-bridge.outputs.docker_host }}
+          port: ${{ steps.cf-tori-bridge.outputs.port }}
+          username: ${{ secrets.V3_SYNOLOGY_USER }}
+          key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          source: ".github/scripts/production-predeploy-pg-remote.sh"
+          target: /var/services/homes/tori/5151-predeploy-pg-helpers
+          overwrite: true
+      - name: PostgreSQL backup from primary (Synology, no deploy)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ steps.cf-tori-bridge.outputs.host }}
+          port: ${{ steps.cf-tori-bridge.outputs.port }}
+          username: ${{ secrets.V3_SYNOLOGY_USER }}
+          key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          script_stop: true
+          # pg_dump of the shadow DB is small, but keep a generous timeout for parity.
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            # 從 primary（5151-postgres-B）本機 docker exec pg_dump（unix socket trust，不帶密碼）。
+            # 不 pull、不 restart、不印 secrets；failover 後改以 PREDEPLOY_PG_CONTAINER 指向新 primary。
+            export PREDEPLOY_PG_CONTAINER=5151-postgres-B
+            bash /var/services/homes/tori/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh
       - name: Pull NAS predeploy evidence
         env:
           NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
           NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
           NAS_USER: ${{ secrets.NAS_USER }}
           NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+          TORI_HOST: ${{ steps.cf-tori-bridge.outputs.host }}
+          TORI_PORT: ${{ steps.cf-tori-bridge.outputs.port }}
+          TORI_USER: ${{ secrets.V3_SYNOLOGY_USER }}
+          TORI_SSH_KEY: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
         run: |
           set -euo pipefail
           key="$(mktemp)"
@@ -234,18 +274,25 @@ jobs:
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
             "$NAS_USER@$NAS_HOST:/mnt/Storage1/docker_data/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
           rm -f "$key"
+          tkey="$(mktemp)"
+          printf '%s\n' "$TORI_SSH_KEY" > "$tkey"
+          chmod 600 "$tkey"
+          scp -o StrictHostKeyChecking=accept-new -P "$TORI_PORT" -i "$tkey" \
+            "$TORI_USER@$TORI_HOST:/var/services/homes/tori/backups/5151/pg-predeploy-evidence.json" ./pg-predeploy-evidence.json
+          rm -f "$tkey"
           python3 - <<'PY'
           import json, re
           nas = json.load(open("nas-predeploy-evidence.json"))
+          pg = json.load(open("pg-predeploy-evidence.json"))
           backup_id = nas.get("backup_dir") or ""
           # PG 時代：可回版的業務資料是 PG dump，以它的 sha256 作為備份身份（rollback 用的
           # BACKUP_HASH）；v3.db 的 sha256 只在 PG dump 缺失時當 fallback。
-          backup_hash = nas.get("pg_backup_sha256") or nas.get("backup_sha256") or ""
+          backup_hash = pg.get("pg_backup_sha256") or nas.get("backup_sha256") or ""
           if not backup_id or not backup_hash:
               raise SystemExit("predeploy NAS evidence missing backup identity")
           if not backup_hash.startswith("sha256:"):
               backup_hash = "sha256:" + backup_hash
-          if nas.get("pg_backup_ok") is not True:
+          if pg.get("pg_backup_ok") is not True:
               raise SystemExit("predeploy NAS PostgreSQL backup is not ok")
           if nas.get("ok") is not True:
               raise SystemExit("predeploy NAS evidence is not ok")
@@ -262,6 +309,9 @@ jobs:
               f"BACKUP_ID={backup_id}",
               f"BACKUP_HASH={backup_hash}",
               "BACKUP_VERIFIED=true",
+              f"PG_BACKUP_HOST={pg.get('pg_backup_host') or ''}",
+              f"PG_BACKUP_PATH={pg.get('pg_backup_path') or ''}",
+              f"PG_CONTAINER={pg.get('pg_container') or ''}",
           ]
           if digest:
               lines.append(f"CURRENT_DIGEST={digest}")
