@@ -28,6 +28,7 @@ import { ensureListingToolsSchema } from "./listingTools.js";
 import { ensurePushSchema } from "./webPush.js";
 import { ensureCommsSchema } from "./comms.js";
 import { ensureSupportSchema } from "./supportSchema.js";
+import { ensureListingShareSchema } from "./listingShare.js";
 
 export const SCHEMA_MIGRATIONS = [
   {
@@ -125,6 +126,29 @@ export const SCHEMA_MIGRATIONS = [
     name: "self_listing_mrt_state_schema",
     up(db) {
       ensureSelfListingSchema(db);
+    },
+  },
+  {
+    // 物件一鍵分享（Phase 1）：分享 token 與分享事件兩張獨立新表。
+    // 純新增，不碰既有的 `rental_share_events`。
+    version: 9,
+    name: "listing_share_schema",
+    up(db) {
+      ensureListingShareSchema(db);
+    },
+  },
+  {
+    // 分享事件去重升級：cta 依「管道」各自保留歸因（v9 的唯一索引未含 channel）。
+    // 已跑過 v9 的庫（含開發庫）靠這版重建索引；新庫跑完 v9 再跑這版結果相同（冪等）。
+    version: 10,
+    name: "listing_share_dedup_channel",
+    up(db) {
+      db.exec(`
+        DROP INDEX IF EXISTS idx_listing_share_dedup_user;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_share_dedup_user
+          ON listing_share_events(share_token, event_type, channel, user_id, created_at)
+          WHERE user_id IS NOT NULL;
+      `);
     },
   },
 ];

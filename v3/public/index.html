@@ -1613,6 +1613,45 @@
       background: var(--danger-mist, #f4ebe6);
       color: var(--danger, #8a3d2a);
     }
+    .share-stats-panel {
+      margin: 0 0 16px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--accent-mist);
+    }
+    .share-stats-panel h3 { margin: 0 0 8px; font-size: var(--text-md); }
+    .share-stats-panel .hint { margin: 0 0 10px; }
+    .share-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: var(--space-2);
+    }
+    .share-stat {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+      padding: var(--space-3);
+    }
+    .share-stat .num {
+      display: block;
+      font-size: var(--text-price);
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .share-stat .lab { font-size: var(--text-xs); color: var(--muted); }
+    .share-link-item {
+      margin: 8px 0 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--paper);
+    }
+    .share-link-item strong { display: block; margin-bottom: 4px; }
+    .share-link-item .muted { margin: 2px 0; }
+    .share-link-item .row { margin-top: 8px; }
     .demand-exposure {
       margin: 0 0 12px;
       padding: 10px 12px;
@@ -4096,6 +4135,11 @@
         <div class="aggregate-grid" id="aggregateResults"></div>
       </section>
       <div class="list" id="selfMineList" style="padding-top:12px"></div>
+      <section class="share-stats-panel" id="shareStatsPanel" hidden>
+        <h3>我的分享</h3>
+        <p class="hint">分享連結的點閱與 CTA 統計，只記你自己的連結。</p>
+        <div id="shareStatsBody">載入中…</div>
+      </section>
     </div>
   </section>
   <div id="siteNotice" class="site-notice" hidden>
@@ -8970,7 +9014,7 @@
         history.replaceState({}, "", `${location.pathname}${location.search}`);
       }
       if (view === "listings") loadDemandExposure().catch(() => {});
-      if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); }
+      if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); loadMyShareStats().catch(() => {}); }
       if (view === "me") loadWishOfferBlocks().catch(() => {});
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
@@ -9729,6 +9773,56 @@
       loadListingTools().catch(() => {});
       const overlayList = $("ownerOverlayList");
       if (overlayList) overlayList.innerHTML = rows.length ? rows.map((item) => ownerCardHtml(item)).join("") : `<div class="empty">尚未刊登。</div>`;
+    }
+    function shareStatCell(label, value) {
+      return `<div class="share-stat"><span class="num">${esc(value)}</span><span class="lab">${esc(label)}</span></div>`;
+    }
+    function myShareItemHtml(item) {
+      const when = item.createdAt ? String(item.createdAt).replace("T", " ").slice(0, 10) : "";
+      const label = item.title ? item.title : (item.listingId ? `物件 #${item.listingId}` : "物件");
+      const url = item.url || "";
+      const stats = `點閱 ${Number(item.views) || 0} · CTA ${Number(item.ctas) || 0}`;
+      return `
+        <article class="share-link-item">
+          <strong>${esc(label)}</strong>
+          <div class="muted">${esc(stats)}${when ? ` · ${esc(when)}` : ""}</div>
+          ${url ? `<div class="row"><a class="ghost" href="${esc(url)}" target="_blank" rel="noopener noreferrer">開啟連結</a></div>` : ""}
+        </article>`;
+    }
+    async function loadMyShareStats() {
+      const panel = $("shareStatsPanel");
+      const body = $("shareStatsBody");
+      if (!panel || !body || isGuest) {
+        if (panel) panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      body.innerHTML = `<p class="muted">載入中…</p>`;
+      try {
+        const res = await fetch("/api/me/listings/share-stats");
+        if (res.status === 401) {
+          panel.hidden = true;
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "讀取分享統計失敗");
+        const totals = data.totals || {};
+        const items = Array.isArray(data.items) ? data.items.slice(0, 3) : [];
+        const used = data.dailyUsed ?? 0;
+        const limit = data.dailyLimit ?? 0;
+        const statsHtml = `
+          <div class="share-stat-grid">
+            ${shareStatCell("總點閱", Number(totals.views) || 0)}
+            ${shareStatCell("總 CTA", Number(totals.ctas) || 0)}
+            ${shareStatCell("今日已用分享", `${used}／${limit}`)}
+          </div>`;
+        const listHtml = items.length
+          ? items.map(myShareItemHtml).join("")
+          : `<p class="muted" style="margin:8px 0 0">還沒有分享紀錄。到「有房刊登」的物件按「公開分享頁」即可建立分享連結。</p>`;
+        body.innerHTML = statsHtml + listHtml;
+      } catch (error) {
+        body.innerHTML = `<p class="muted">統計暫時無法載入</p>`;
+      }
     }
     async function openSelfFromQuery() {
       const id = new URLSearchParams(location.search).get("self");

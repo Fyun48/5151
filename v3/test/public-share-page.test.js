@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 
 const page = readFileSync(new URL("../public/listing.html", import.meta.url), "utf8");
 const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+const share = readFileSync(new URL("../src/listingShare.js", import.meta.url), "utf8");
 
 test("A5：分享頁會取得登入狀態，而且預設是載入中（不是先畫成訪客）", () => {
   assert.match(page, /fetch\("\/api\/me", \{ cache: "no-store"/);
@@ -49,6 +50,15 @@ test("A5：公開房源內容維持訪客視角，登入狀態不混進公開快
   // 分享頁不得用網址／localStorage 自行宣告身分
   assert.doesNotMatch(page, /localStorage/);
   assert.doesNotMatch(page, /searchParams.*(userId|role|token)/);
-  // `/l/:id` 仍然只是送靜態檔（訪客可讀；權限不會因為這包而緊縮）
-  assert.match(server, /app\.get\("\/l\/:id", \(_req, res\) => \{\s*\n\s*res\.sendFile/);
+  // `/l/:id` 改成：讀範本 → 注入 OG meta → 回傳 HTML（仍訪客可讀、可公開快取；
+  // 內容仍由 publicListingView(viewerId:0) 提供，登入狀態不混入）。
+  assert.match(server, /res\.type\("html"\)\.send\(html\)/); // 回應仍是 HTML
+  assert.match(server, /injectListingShareMeta\(LISTING_SHARE_TEMPLATE, meta, title\)/); // 注入 title／og／canonical
+  assert.match(server, /buildListingShareOgMeta\(\{ title, description, image, url: canonical \}\)/); // canonical link 來源
+  assert.match(server, /getSelfListingAsync\(id, \{ viewerId: 0 \}\)/); // 訪客視角
+  assert.match(server, /publicListingView\(listing, id\)/); // 公開白名單欄位
+  // 注入的 meta 區塊真的要吐出 <title>、og:title 與 canonical link（至少要有 canonical）
+  assert.match(share, /<link rel="canonical" href=/);
+  assert.match(share, /property="og:title"/);
+  assert.match(share, /<title>\$\{escapeHtmlAttr\(title/);
 });

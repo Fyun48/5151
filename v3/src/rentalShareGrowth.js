@@ -24,11 +24,11 @@ function iso(now = new Date()) {
   return now instanceof Date ? now.toISOString() : new Date(now).toISOString();
 }
 
-function looksLikeBot(ua = "") {
+export function looksLikeBot(ua = "") {
   return /bot|crawler|spider|preview|slurp|facebookexternalhit|whatsapp/i.test(String(ua || ""));
 }
 
-function visitorHash(ip, ua) {
+export function visitorHash(ip, ua) {
   return createHash("sha256").update(`${ip || ""}|${String(ua || "").slice(0, 120)}`).digest("hex").slice(0, 32);
 }
 
@@ -43,7 +43,7 @@ function evictViewHits(at) {
   }
 }
 
-function allowView(hash, now) {
+export function allowView(hash, now) {
   const at = now instanceof Date ? now.getTime() : Date.now();
   evictViewHits(at);
   const row = viewHits.get(hash) || { n: 0, start: at };
