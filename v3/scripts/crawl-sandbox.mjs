@@ -19,6 +19,8 @@
 //   node v3/scripts/crawl-sandbox.mjs --once          # 只跑一輪（開 PR 前的驗收用）
 //   node v3/scripts/crawl-sandbox.mjs --rounds 3      # 跑三輪後結束（驗證「連續失敗 N 輪」這種時間相關政策）
 //   node v3/scripts/crawl-sandbox.mjs --once --json   # 只印 JSON 報告（給程式解析）
+//   CRAWL_SANDBOX_SCHEDULER=0 node v3/scripts/crawl-sandbox.mjs  # 常駐但只待命、不自動跑輪
+//       （手動跑輪時拿來停掉內部排程，避免與 docker exec … --rounds N 在 owner lock 上撞車）
 import { mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
@@ -53,6 +55,14 @@ export function checkSandboxTarget(env = process.env) {
   } catch (error) {
     return { ok: false, driver, database: "", reason: error?.message || String(error) };
   }
+}
+
+/**
+ * 排程器開關（純函式，可測）：`CRAWL_SANDBOX_SCHEDULER=0` 表示停用內部排程。
+ * 只影響**常駐模式**（無 --once／--rounds 參數）的自動跑輪；手動輪照常。
+ */
+export function isSchedulerEnabled(env = process.env) {
+  return String(env.CRAWL_SANDBOX_SCHEDULER ?? "1") !== "0";
 }
 
 /**
@@ -171,8 +181,18 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   const intervalMinutes = Math.max(1, Number(env.CRAWL_SANDBOX_INTERVAL_MINUTES) || 30);
   const reportFile = String(env.CRAWL_SANDBOX_REPORT || "/data/crawl-sandbox.jsonl");
+  const schedulerEnabled = isSchedulerEnabled(env);
   try { mkdirSync(path.dirname(reportFile), { recursive: true }); } catch { /* 目錄已存在或不可寫，下面會再試 */ }
-  console.log(`[沙盒] 啟動：資料庫=${check.database}、每 ${intervalMinutes} 分鐘一輪、報告=${reportFile}`);
+  console.log(`[沙盒] 啟動：資料庫=${check.database}、${schedulerEnabled ? `每 ${intervalMinutes} 分鐘一輪` : "排程器已停用（CRAWL_SANDBOX_SCHEDULER=0，待命）"}、報告=${reportFile}`);
+
+  // 手動跑輪（--once／--rounds N）時 args.rounds > 0，照常跑並在 N 輪後結束；
+  // 常駐模式（args.rounds === 0）且排程器停用時，主程序只待命、不自動跑輪，
+  // 避免與「docker exec … --rounds N」這種手動輪在 advisory lock 上撞車。
+  if (!schedulerEnabled && args.rounds === 0) {
+    console.log("[沙盒] 排程器已停用：待命中，不自動跑輪（手動跑請用 --once 或 --rounds N）。");
+    // 用一個長間隔的空計時器維持事件迴圈存活，容器（restart: unless-stopped）才不會反覆重啟。
+    return new Promise(() => { setInterval(() => {}, 60 * 60 * 1000); });
+  }
 
   let round = 0;
   for (;;) {

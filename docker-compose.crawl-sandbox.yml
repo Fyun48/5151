@@ -15,6 +15,11 @@
 #   docker logs -f 5151-crawl-sandbox
 #   docker exec 5151-crawl-sandbox tail -3 /data/crawl-sandbox.jsonl
 #
+# 手動跑輪時暫停內部排程（避免兩邊在 owner lock 上撞車、把噪音混進測試報告）：
+#   CRAWL_SANDBOX_SCHEDULER=0 docker compose -f docker-compose.crawl-sandbox.yml up -d --force-recreate
+#   docker exec 5151-crawl-sandbox node scripts/crawl-sandbox.mjs --rounds 3 --json
+#   docker compose -f docker-compose.crawl-sandbox.yml up -d --force-recreate   # 跑完恢復排程
+#
 # 程式碼來源：`./v3/src`、`./v3/scripts` 由 `crawl-sandbox-sync.sh` 從 repo 同步過來
 # （刻意**不**跟正式站的自動部署綁在一起：沙盒要能在部署前測「還沒上線的候選版本」）。
 name: 591-tracker-sandbox
@@ -33,6 +38,9 @@ services:
       DB_DRIVER: postgres
       CRAWL_TICK_BUDGET_MINUTES: ${CRAWL_TICK_BUDGET_MINUTES:-40}
       CRAWL_SANDBOX_INTERVAL_MINUTES: ${CRAWL_SANDBOX_INTERVAL_MINUTES:-30}
+      # 排程器開關：0 = 常駐模式只待命、不自動跑輪（手動跑輪時停用，避免與
+      # docker exec … --rounds N 在 owner lock 上撞車）；預設 1（正常排程）。
+      CRAWL_SANDBOX_SCHEDULER: ${CRAWL_SANDBOX_SCHEDULER:-1}
       CRAWL_SANDBOX_REPORT: /data/crawl-sandbox.jsonl
     volumes:
       - ${SANDBOX_DATA_ROOT:-/mnt/Storage1/docker_data/5151-crawl-sandbox}:/data
