@@ -471,6 +471,14 @@ import {
   listingShareStatsForUserAsync,
   recordListingShareEventAsync,
 } from "./listingShareAsync.js";
+import { rentAmount } from "./listingCost.js";
+import {
+  buildPublicListingDetailResponse,
+  isPublicListingDetail,
+  listingDetailOgDescription,
+  listingDetailOgTitle,
+  similarPublicListingsAsync,
+} from "./listingDetailPublic.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -686,6 +694,14 @@ const INDEX_HTML = readFileSync(path.join(__dirname, "../public/index.html"));
 const LOGIN_HTML = readFileSync(path.join(__dirname, "../public/login.html"));
 // 站內刊登分享頁：啟動時讀一次＋快取；檔案變動不必 hot reload（OG 注入用同一份快取）。
 const LISTING_SHARE_TEMPLATE = readFileSync(path.join(__dirname, "../public/listing.html"), "utf8");
+// 通用物件公開內頁：啟動時讀一次＋快取（與 listing.html 相同，不 hot reload）。
+// detail.html 由前端同事建立；尚未存在時留空字串，`/p/:id` 會 fail-soft 回退到 listing.html 範本。
+let LISTING_DETAIL_TEMPLATE = "";
+try {
+  LISTING_DETAIL_TEMPLATE = readFileSync(path.join(__dirname, "../public/detail.html"), "utf8");
+} catch {
+  LISTING_DETAIL_TEMPLATE = "";
+}
 
 function sendHtmlBuffer(res, buf) {
   res.status(200);
@@ -3892,6 +3908,76 @@ app.get("/api/public/self-listing/:id", async (req, res) => {
     res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
   }
 });
+
+// ── 通用物件公開內頁（Phase 2）：`/p/:id` 頁面 ＋ 兩支公開資料 API ──
+
+// 公開內頁資料。contact 依 D6 收斂：訪客遮蔽，登入會員才露電話／LINE。
+// 不存在或 hidden／站內已關閉 → 404；前端在頁面上另行處理 empty 態。
+app.get("/api/public/listings/:id/detail", async (req, res) => {
+  try {
+    const id = Number(req.params.id) || 0;
+    const session = readSession(req);
+    const loggedIn = Boolean(session?.userId);
+    const listing = id ? await getListingAsync(id) : null;
+    const { status, body } = buildPublicListingDetailResponse(listing, id, { loggedIn });
+    res.status(status).json(body);
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "無法讀取物件", code: error.code || "" });
+  }
+});
+
+// 相似物件：同行政區＋租金 ±20%＋排除自身與同屋源群，限 4 筆、更新時間倒序。
+// 單查詢失敗 fail-soft 回空陣列（前端顯示 empty 文案）。
+app.get("/api/public/listings/:id/similar", async (req, res) => {
+  try {
+    const id = Number(req.params.id) || 0;
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || 4, 10));
+    const listing = id ? await getListingAsync(id) : null;
+    if (!listing || !isPublicListingDetail(listing, id)) {
+      res.json({ items: [] });
+      return;
+    }
+    const items = await similarPublicListingsAsync({
+      postId: id,
+      district: String(listing.district || ""),
+      rent: rentAmount(listing),
+      limit,
+    }, { db });
+    res.json({ items });
+  } catch (error) {
+    console.warn("相似物件查詢失敗：", error.message);
+    res.json({ items: [] });
+  }
+});
+
+// 公開內頁：從快取範本注入 OG meta（title/description/url/canonical/og:image 首圖）。
+// 物件不存在或 hidden 也回頁面（前端顯示 empty 態），但 OG 用品牌 fallback。
+// 注入失敗 fail-soft：回原始範本內容，不得 500。
+app.get("/p/:id", async (req, res) => {
+  const id = Number(req.params.id) || 0;
+  const base = publicBaseUrlEnv() || publicBaseUrl(req);
+  const template = LISTING_DETAIL_TEMPLATE || LISTING_SHARE_TEMPLATE;
+  let html = template;
+  try {
+    let title = "吉比租房物件追蹤";
+    let description = "租房物件追蹤，租金、格局、交通與聯絡方式一次看齊。";
+    let image = absoluteAssetUrl("/brand/mark.png", base);
+    if (id) {
+      const listing = await getListingAsync(id);
+      if (listing && isPublicListingDetail(listing, id)) {
+        title = listingDetailOgTitle(listing) || title;
+        description = listingDetailOgDescription(listing) || description;
+        image = firstListingShareImage(listing, base) || image;
+      }
+    }
+    const meta = buildListingShareOgMeta({ title, description, image, url: `${base}/p/${id}` });
+    html = injectListingShareMeta(template, meta, title);
+  } catch {
+    // fail-soft：注入失敗回原始範本
+  }
+  res.type("html").send(html);
+});
+
 // 站內刊登公開分享頁：從快取範本注入 OG meta（供 LINE／Threads／FB 爬蟲預覽）後回傳。
 // 注入失敗 fail-soft：回原始檔案內容，不得 500。
 app.get("/l/:id", async (req, res) => {

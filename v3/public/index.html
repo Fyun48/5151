@@ -8077,6 +8077,7 @@
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
             ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-card-action btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
+            <a class="ghost" href="/p/${encodeURIComponent(id)}" target="_blank" rel="noopener" style="padding:0 14px;border-radius:999px">站內頁</a>
           </div>
           ${sameHousePanel(item)}
         </article>

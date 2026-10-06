@@ -368,6 +368,7 @@ export function publicPath(req) {
     p.startsWith("/media/lib/") ||
     p.startsWith("/media/brand/") ||
     p.startsWith("/l/") ||
+    p.startsWith("/p/") ||
     p.startsWith("/w/") ||
     p.startsWith("/api/public/") ||
     p.startsWith("/go/")

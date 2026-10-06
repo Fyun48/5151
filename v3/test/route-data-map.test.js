@@ -61,7 +61,7 @@ const route = (key) => {
   return r;
 };
 
-test("分析器仍然涵蓋全部 299 條入口（不能因為改壞而少抓）", () => {
+test("分析器仍然涵蓋全部 302 條入口（不能因為改壞而少抓）", () => {
   // 288 → 292：第九十九批（C3 回饋附圖）新增四條
   //   POST   /api/feedback/attachments
   //   DELETE /api/feedback/attachments/:id
@@ -78,8 +78,12 @@ test("分析器仍然涵蓋全部 299 條入口（不能因為改壞而少抓）
   //   GET  /api/me/listings/share-stats
   //   GET  /api/admin/listings/share-stats
   // （`/l/:id` 也從「無直接DB」改為 PG：原本只送靜態檔，現在查 getSelfListingAsync 再注入 OG meta）
-  assert.equal(matched, 299, `應解析到 299 列，實際 ${matched}`);
-  assert.match(out, /共 \*\*299\*\* 條入口/);
+  // 299 → 302：物件內頁 Phase2 新增三條（皆 PG）
+  //   GET /p/:id
+  //   GET /api/public/listings/:id/detail
+  //   GET /api/public/listings/:id/similar
+  assert.equal(matched, 302, `應解析到 302 列，實際 ${matched}`);
+  assert.match(out, /共 \*\*302\*\* 條入口/);
 });
 
 test("/api/health 必須是「無直接DB」——它只讀行程內計數器，不碰 DB", () => {
