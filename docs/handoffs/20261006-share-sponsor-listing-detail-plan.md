@@ -185,7 +185,8 @@ capability 宣告（寫進 `SPONSOR_PROVIDER_CAPABILITIES`）：`{ supportsPrefi
 ---
 
 ## 6. 分期 rollout（每期可獨立上線與回滾）
-- **Phase 1（分享機制）**：migration v9 新表＋4 個分享端點＋分享面板 UI＋OG meta。落地頁暫用既有 `/l/:id`（站內刊登）與 `/go/:id?ref=`（外部物件，302 前先記 view）。驗收：`npm test` 全綠、Playwright 375/768/1440 截圖、a11y AA、未登入按分享回 401 且畫面有引導、`rental_analytics_daily` 查得到 `listing_share_view`。回滾＝關 `listing_share_v2` flag。
+- **Phase 1（分享機制）**：migration v9 新表＋4 個分享端點＋分享面板 UI＋OG meta。落地頁暫用既有 `/l/:id`（站內刊登）與 `/go/:id?ref=`（外部物件，302 前先記 view）。驗收：`npm test` 全綠、Playwright 375/768/1440 截圖、a11y AA、未登入按分享回 401 且畫面有引導、`rental_analytics_daily` 查得到 `listing_share_view`。回滾＝關 `listingShareFlags.enabled`（settings KV，預設 true）。
+  **狀態（2026-10-06）**：已實作並開 PR #624（未合併、未部署）；實機證據見 `evidence/phase1/`；cta 歸因依管道保留（migration v10 重建去重索引）。
 - **Phase 2（通用內頁）**：`/p/:id`＋`detail.html`＋`publicListingView()` 擴充＋訪客遮蔽（電話/LINE 登入才可見）＋相似物件＋地圖；分享連結正式改導 `/p/:id?ref=`。驗收：既有 `public-share-page.test.js`／`listing-projection-kind-keys.test.js` 不壞、375 無橫向溢出、無圖 fallback 不 CLS。回滾＝移除路由、還原投影白名單。
 - **Phase 3（贊助連動）**：migration v10 新表＋`buildSponsorOutbound()`＋`applySponsorEntitlement()`＋webhook 簽章＋API 輪詢 tick＋後台門檻設定＋人工審核佇列。4 個新 flag 全預設關。驗收：影子站/沙盒跑一輪 mock provider 對帳、冪等與退款撤銷測試、稽核可查、flags 全關時行為與現況完全相同。回滾＝4 flag 全關，回復「手動改已贊助」現狀。
 
