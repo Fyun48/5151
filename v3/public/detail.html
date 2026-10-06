@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>物件內頁 · 吉比租房物件追蹤</title>
+  <link rel="stylesheet" href="/tokens.css" />
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    body { margin: 0; font-family: var(--font-sans); color: var(--ink); background: var(--bg); line-height: 1.6; }
+    body.modal-open { overflow: hidden; }
+    a { color: var(--accent-deep); }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    button { font-family: inherit; font-size: var(--text-md); color: var(--ink); cursor: pointer; }
+    img { display: block; max-width: 100%; }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 0 var(--page-gutter) calc(96px + env(safe-area-inset-bottom, 0px)); }
+
+    /* ── 頂列 ── */
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+    .brand { font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
+    .brand a { color: inherit; text-decoration: none; }
+    .topbar-nav a { display: inline-flex; align-items: center; min-height: var(--touch); text-decoration: none; font-size: var(--text-md); font-weight: 600; }
+
+    /* ── 錨點導覽：桌面 sticky（≥1024）／行動橫滑晶片 ── */
+    .anchor-nav { display: none; }
+    .anchor-nav { position: sticky; top: 0; z-index: 40; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .anchor-nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: var(--space-1); }
+    .anchor-nav a { display: inline-flex; align-items: center; min-height: var(--touch); padding: 0 var(--space-3); text-decoration: none; font-size: var(--text-md); font-weight: 600; color: var(--muted); }
+    .anchor-nav a:hover, .anchor-nav a:focus-visible { color: var(--accent-deep); }
+
+    .anchor-chips { position: sticky; top: 0; z-index: 40; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .chips-scroll { display: flex; gap: var(--space-2); overflow-x: auto; padding: var(--space-2) var(--page-gutter); -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .chips-scroll::-webkit-scrollbar { display: none; }
+    .chips-scroll a { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: var(--chip-height, var(--touch)); padding: 0 var(--space-3); border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--muted); text-decoration: none; font-size: var(--text-md); font-weight: 600; white-space: nowrap; }
+    .chips-scroll a:hover, .chips-scroll a:focus-visible { color: var(--accent-deep); border-color: var(--accent); }
+    @media (min-width: 1024px) {
+      .anchor-nav { display: block; }
+      .anchor-chips { display: none; }
+    }
+
+    /* ── 雙欄主區（DOM＝行動順序，桌面用 grid-template-areas，禁用 order） ── */
+    .detail-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "gallery"
+        "summary"
+        "basic"
+        "amenities"
+        "transport"
+        "description"
+        "contact"
+        "similar";
+      gap: var(--space-4);
+      margin-top: var(--space-4);
+    }
+    .gallery-panel { grid-area: gallery; min-width: 0; }
+    .summary-card { grid-area: summary; min-width: 0; }
+    #basic { grid-area: basic; min-width: 0; }
+    #amenities { grid-area: amenities; min-width: 0; }
+    #transport { grid-area: transport; min-width: 0; }
+    #description { grid-area: description; min-width: 0; }
+    #contact { grid-area: contact; min-width: 0; }
+    #similar { grid-area: similar; min-width: 0; }
+    @media (min-width: 1024px) {
+      .detail-grid {
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+        grid-template-areas:
+          "gallery summary"
+          "basic summary"
+          "amenities summary"
+          "transport summary"
+          "description summary"
+          "contact summary"
+          "similar summary";
+        align-items: start;
+      }
+      .summary-card { position: sticky; top: calc(var(--touch) + var(--space-2)); align-self: start; }
+    }
+
+    /* ── 照片牆 ── */
+    .swipe { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: var(--space-2); border-radius: var(--radius-lg); -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .swipe::-webkit-scrollbar { display: none; }
+    .swipe-item {
+      flex: 0 0 100%; min-width: 100%; scroll-snap-align: start; aspect-ratio: 4 / 3; border-radius: var(--radius-lg); border: 1px solid var(--line); margin: 0; padding: 0; overflow: hidden; position: relative; background: var(--accent-mist); cursor: zoom-in;
+    }
+    .swipe-item img { width: 100%; height: 100%; object-fit: cover; }
+    .swipe-badge { position: absolute; right: var(--space-3); bottom: var(--space-3); background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-1) var(--space-2); font-size: var(--text-xs); font-weight: 600; }
+    .dots { display: flex; justify-content: center; gap: var(--space-1); margin-top: var(--space-2); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+    .dot.active { background: var(--accent-deep); }
+    .swipe-count { text-align: center; color: var(--muted); font-size: var(--text-xs); margin-top: var(--space-1); font-variant-numeric: tabular-nums; }
+
+    .main-photo { display: none; position: relative; width: 100%; margin: 0; padding: 0; aspect-ratio: 16 / 10; border-radius: var(--radius-lg); border: 1px solid var(--line); overflow: hidden; background: var(--accent-mist); cursor: zoom-in; }
+    .main-photo img { width: 100%; height: 100%; object-fit: cover; }
+    .badge { position: absolute; right: var(--space-3); bottom: var(--space-3); background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-1) var(--space-2); font-size: var(--text-xs); font-weight: 600; }
+    .thumb-strip { display: none; gap: var(--space-2); margin-top: var(--space-2); overflow-x: auto; padding: var(--space-1) 0; }
+    .thumb-strip::-webkit-scrollbar { display: none; }
+    .thumb { flex: 0 0 96px; aspect-ratio: 4 / 3; border: 1px solid var(--line); border-radius: var(--radius); padding: 0; overflow: hidden; min-height: var(--touch); background: var(--accent-mist); }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .thumb[aria-current="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .empty-photo { aspect-ratio: 16 / 9; border: 1px dashed var(--line); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: var(--text-md); background: var(--accent-mist); }
+
+    @media (min-width: 768px) {
+      .swipe, .dots, .swipe-count { display: none; }
+      .main-photo { display: block; }
+      .thumb-strip { display: flex; }
+    }
+
+    /* ── 摘要卡 ── */
+    .summary-card { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); }
+    .summary-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 700; line-height: 1.45; }
+    .price-line { display: flex; align-items: baseline; gap: var(--space-1); margin: 0; }
+    .price { font-size: var(--text-price); font-weight: 800; color: var(--accent-deep); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+    .price-unit { font-size: var(--text-md); color: var(--muted); font-variant-numeric: tabular-nums; }
+    .deposit { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+    .rent-chips { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+    .rent-chips li { background: var(--accent-mist); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: var(--space-1) var(--space-2); font-size: var(--text-xs); font-weight: 600; }
+    .extra-fee { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+    .address { font-style: normal; color: var(--muted); font-size: var(--text-sm); margin: var(--space-3) 0; }
+    .tags { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+    .tags li { background: var(--accent-mist); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--space-1) var(--space-2); font-size: var(--text-xs); font-weight: 600; }
+    .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+    /* ── 按鈕 ── */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-1); min-height: var(--touch); padding: 0 var(--space-4); border-radius: var(--radius); border: 1px solid transparent; font-family: inherit; font-size: var(--text-md); font-weight: 600; text-decoration: none; }
+    .btn svg { flex: 0 0 auto; }
+    .btn-primary { background: var(--accent); color: var(--primary-foreground); border-color: var(--accent); }
+    .btn-primary:hover { background: var(--accent-deep); }
+    .btn-secondary { background: var(--paper); color: var(--ink); border-color: var(--line); }
+    .btn-secondary:hover { border-color: var(--accent); color: var(--accent-deep); }
+
+    /* ── 區塊 ── */
+    .section { padding: var(--space-4); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); scroll-margin-top: calc(var(--touch) + var(--space-2)); }
+    .section h2 { margin: 0 0 var(--space-3); font-size: var(--text-lg); font-weight: 700; }
+    .section-empty { margin: 0; color: var(--muted); font-size: var(--text-md); }
+
+    /* key/value 表格 */
+    .kv { display: grid; grid-template-columns: 96px 1fr; margin: 0; border-top: 1px solid var(--line); }
+    .kv > div { display: contents; }
+    .kv dt { margin: 0; padding: var(--space-3) var(--space-2) var(--space-3) 0; color: var(--muted); font-size: var(--text-sm); border-bottom: 1px solid var(--line); }
+    .kv dd { margin: 0; padding: var(--space-3) 0; font-size: var(--text-sm); border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+
+    /* 設備 icon 格 */
+    .amenity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--space-2); }
+    .amenity { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-1); min-height: 76px; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); color: var(--ink); font-size: var(--text-xs); font-weight: 600; text-align: center; }
+    .amenity svg { color: var(--accent-deep); width: 24px; height: 24px; }
+
+    /* 交通 */
+    .mrt-line { margin: 0 0 var(--space-3); font-size: var(--text-md); }
+    .mrt-line strong { color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+    .map-link { display: inline-flex; align-items: center; min-height: var(--touch); text-decoration: none; font-weight: 600; font-size: var(--text-md); }
+
+    /* 說明 */
+    .desc { white-space: pre-wrap; line-height: 1.7; font-size: var(--text-md); margin: 0; overflow-wrap: break-word; }
+
+    /* 屋主聯絡 */
+    .contact-card { display: flex; flex-direction: column; gap: var(--space-3); }
+    .contact-head { display: flex; align-items: center; gap: var(--space-3); }
+    .avatar { width: 48px; height: 48px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-deep); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: var(--text-lg); flex: 0 0 auto; }
+    .contact-name { font-weight: 700; font-size: var(--text-md); }
+    .contact-role { color: var(--muted); font-size: var(--text-xs); }
+    .contact-methods { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .contact-hint { color: var(--muted); font-size: var(--text-sm); margin: 0; }
+
+    /* 相似物件 */
+    .similar-strip { display: flex; gap: var(--space-3); overflow-x: auto; padding: var(--space-1) 0; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .similar-strip::-webkit-scrollbar { display: none; }
+    .similar-card { flex: 0 0 260px; display: block; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); overflow: hidden; }
+    .similar-card:hover { border-color: var(--accent); }
+    .similar-photo { display: flex; aspect-ratio: 16 / 9; border-bottom: 1px solid var(--line); background: var(--accent-mist); }
+    .similar-photo img { width: 100%; height: 100%; object-fit: cover; }
+    .similar-photo.empty { align-items: center; justify-content: center; color: var(--muted); font-size: var(--text-xs); }
+    .similar-body { display: block; padding: var(--space-3); }
+    .similar-title { display: block; margin: 0 0 var(--space-1); font-size: var(--text-md); font-weight: 700; line-height: 1.45; }
+    .similar-price { display: block; font-size: var(--text-price); font-weight: 800; color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+    .similar-unit { font-size: var(--text-sm); color: var(--muted); font-weight: 400; }
+    .similar-meta { display: block; margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+
+    /* 底部固定 CTA bar（行動 ≤767） */
+    .cta-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); padding: var(--space-2) var(--page-gutter) calc(var(--space-2) + env(safe-area-inset-bottom, 0px)); background: var(--paper); border-top: 1px solid var(--line); }
+    .cta-bar .btn { min-height: var(--touch); padding: 0 var(--space-2); }
+    @media (min-width: 768px) { .cta-bar { display: none; } }
+
+    /* ── 對話框（同一份 DOM 用 media query 切換：行動 bottom sheet、桌面卡片） ── */
+    .modal { position: fixed; inset: 0; z-index: 200; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(28, 25, 23, 0.5); }
+    .modal-card { position: absolute; left: 0; right: 0; bottom: 0; background: var(--paper); border: 1px solid var(--line); border-bottom: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding: var(--space-4) var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px)); max-height: 88vh; overflow-y: auto; }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-3); }
+    .modal-head h2 { margin: 0; font-size: var(--text-lg); font-weight: 700; }
+    .modal-close { min-width: var(--touch); min-height: var(--touch); width: var(--touch); height: var(--touch); padding: 0; border-radius: var(--radius); border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-size: 18px; line-height: 1; cursor: pointer; }
+    .modal-hint { margin: 0; font-size: var(--text-sm); color: var(--muted); }
+    .modal-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+    .modal-actions > * { flex: 1 1 0; }
+    .btn-primary.modal-cta, .btn-ghost.modal-cta { border-radius: 999px; }
+    .listing-summary { display: flex; gap: var(--space-3); align-items: center; }
+    .summary-photo { flex: 0 0 72px; width: 72px; height: 72px; border: 1px dashed var(--line); border-radius: var(--radius); background: var(--accent-mist); color: var(--muted); font-size: var(--text-xs); display: flex; align-items: center; justify-content: center; text-align: center; overflow: hidden; }
+    .summary-photo img { width: 100%; height: 100%; object-fit: cover; }
+    .summary-meta { min-width: 0; }
+    .summary-meta .summary-title { margin: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-md); }
+    .summary-meta .summary-rent { margin: 2px 0 0; font-size: var(--text-price); font-weight: 700; font-variant-numeric: tabular-nums; }
+    .share-options { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+    .share-option { min-height: var(--touch); display: flex; align-items: center; gap: var(--space-3); width: 100%; text-align: left; border: 1px solid var(--line); background: var(--paper); border-radius: var(--radius); padding: 0 var(--space-3); cursor: pointer; }
+    .share-option:hover { background: var(--accent-mist); }
+    .dot { flex: 0 0 16px; width: 16px; height: 16px; border-radius: 50%; }
+    .dot-line { background: #06C755; }
+    .dot-facebook { background: #1877F2; }
+    .dot-threads { background: #000000; }
+    .dot-copy { background: var(--accent); }
+    .so-text { min-width: 0; display: flex; flex-direction: column; }
+    .so-name { font-weight: 700; }
+    .so-desc { display: block; font-size: var(--text-xs); color: var(--muted); }
+    .limit-msg { margin-top: var(--space-3); padding: var(--space-3); background: var(--accent-soft); border-radius: var(--radius); color: var(--accent-deep); font-size: var(--text-sm); }
+    .share-privacy { margin-top: var(--space-3); }
+    @media (min-width: 768px) {
+      .modal-card { left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); width: 400px; max-width: calc(100vw - 32px); border-radius: var(--radius-lg); border-bottom: 1px solid var(--line); padding-bottom: var(--space-4); }
+    }
+
+    /* ── Lightbox ── */
+    .lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(28, 25, 23, 0.92); display: flex; align-items: center; justify-content: center; }
+    .lightbox img { max-width: 92vw; max-height: 78vh; object-fit: contain; border-radius: var(--radius); }
+    .lb-close, .lb-prev, .lb-next { position: absolute; min-width: var(--touch); min-height: var(--touch); border: 0; border-radius: var(--radius); background: var(--paper); color: var(--ink); font-size: var(--text-lg); cursor: pointer; }
+    .lb-close { top: calc(var(--space-3) + env(safe-area-inset-top, 0px)); right: var(--space-3); }
+    .lb-prev { left: var(--space-3); top: 50%; transform: translateY(-50%); }
+    .lb-next { right: var(--space-3); top: 50%; transform: translateY(-50%); }
+    .lb-count { position: absolute; bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px)); left: 0; right: 0; text-align: center; color: var(--paper); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+
+    /* ── 狀態（loading / error） ── */
+    .state { max-width: 560px; margin: 48px auto; padding: var(--space-4); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+    .state-title { margin: 0 0 var(--space-2); font-size: var(--text-lg); font-weight: 700; }
+    .state-note { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--text-md); }
+    .skeleton { height: 12px; border-radius: var(--radius); background: var(--line); margin: var(--space-1) 0; }
+    .skeleton.short { width: 55%; }
+
+    /* ── Toast ── */
+    .toast { position: fixed; left: 50%; bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 300; background: var(--ink); color: var(--paper); border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); max-width: calc(100vw - 32px); text-align: center; }
+    .toast-title { margin: 0; font-weight: 700; font-size: var(--text-md); }
+  </style>
+</head>
+<body>
+  <header class="topbar wrap">
+    <div class="brand"><a href="/">吉比租房物件追蹤</a></div>
+    <nav class="topbar-nav" aria-label="網站導覽"><a href="/">回找房頁</a></nav>
+  </header>
+
+  <nav class="anchor-nav" aria-label="本頁導覽">
+    <div class="wrap">
+      <ul>
+        <li><a href="#basic">基本資料</a></li>
+        <li><a href="#amenities">設備</a></li>
+        <li><a href="#transport">交通</a></li>
+        <li><a href="#description">說明</a></li>
+        <li><a href="#contact">聯絡</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <nav class="anchor-chips" aria-label="本頁導覽">
+    <div class="chips-scroll">
+      <a href="#basic">基本資料</a>
+      <a href="#amenities">設備</a>
+      <a href="#transport">交通</a>
+      <a href="#description">說明</a>
+      <a href="#contact">聯絡</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <div id="loading" class="state" aria-busy="true">
+      <div class="skeleton"></div>
+      <div class="skeleton short"></div>
+      <div class="skeleton"></div>
+      <p class="state-note">載入中…</p>
+    </div>
+
+    <div id="errorState" class="state" hidden>
+      <h1 class="state-title">找不到這個物件</h1>
+      <p class="state-note" id="errorNote">這則物件不存在或已下架。</p>
+      <a class="btn btn-primary" href="/">回找房頁</a>
+    </div>
+
+    <div id="detailGrid" class="detail-grid" hidden></div>
+  </main>
+
+  <div class="cta-bar" id="ctaBar" role="toolbar" aria-label="物件操作">
+    <button type="button" class="btn btn-secondary" data-share-trigger aria-label="分享這個物件">分享</button>
+    <a class="btn btn-primary" href="#contact">聯絡</a>
+  </div>
+
+  <!-- 未登入分享提示 -->
+  <div class="modal" id="shareLogin" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="shareLoginTitle">
+      <header class="modal-head">
+        <h2 id="shareLoginTitle">登入會員才能分享</h2>
+        <button type="button" class="modal-close" data-modal-close aria-label="關閉">×</button>
+      </header>
+      <p class="modal-hint">訪客仍可<strong>查看</strong>被分享的頁面，只是不能發起分享。</p>
+      <div class="modal-actions">
+        <a class="btn btn-primary modal-cta" href="/login.html">免費註冊</a>
+        <a class="btn btn-secondary modal-cta" href="/login.html">登入</a>
+      </div>
+    </section>
+  </div>
+
+  <!-- 已登入分享面板 -->
+  <div class="modal" id="sharePanel" hidden>
+    <div class="modal-backdrop" data-modal-close></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sharePanelTitle">
+      <header class="modal-head">
+        <h2 id="sharePanelTitle">分享這個物件</h2>
+        <button type="button" class="modal-close" data-modal-close aria-label="關閉">×</button>
+      </header>
+      <div class="listing-summary">
+        <div class="summary-photo" id="summaryPhoto">物件照片</div>
+        <div class="summary-meta">
+          <p class="summary-title" id="summaryTitle"></p>
+          <p class="summary-rent" id="summaryRent"></p>
+        </div>
+      </div>
+      <p class="limit-msg" id="shareLimitMsg" hidden>今日分享次數已達上限</p>
+      <div class="share-options" id="shareOptions">
+        <button type="button" class="share-option" data-channel="line">
+          <span class="dot dot-line" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">LINE</span><span class="so-desc">傳送給 LINE 好友或群組</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="threads">
+          <span class="dot dot-threads" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">Threads</span><span class="so-desc">發一篇 Threads 貼文</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="facebook">
+          <span class="dot dot-facebook" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">Facebook</span><span class="so-desc">分享到動態時報</span></span>
+        </button>
+        <button type="button" class="share-option" data-channel="copy">
+          <span class="dot dot-copy" aria-hidden="true"></span>
+          <span class="so-text"><span class="so-name">複製連結</span><span class="so-desc">複製含歸因碼的站內公開頁連結</span></span>
+        </button>
+      </div>
+      <p class="modal-hint share-privacy">統計只記連結點擊與來源，不追蹤第三方行為。</p>
+    </section>
+  </div>
+
+  <!-- Lightbox -->
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="照片瀏覽" hidden>
+    <img id="lbImg" alt="物件照片第 1 張" />
+    <button type="button" class="lb-close" id="lbClose" aria-label="關閉">✕</button>
+    <button type="button" class="lb-prev" id="lbPrev" aria-label="上一張">‹</button>
+    <button type="button" class="lb-next" id="lbNext" aria-label="下一張">›</button>
+    <div class="lb-count" id="lbCount" aria-live="polite"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <p class="toast-title" id="toastTitle"></p>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+      const idMatch = location.pathname.match(/\/p\/(\d+)/);
+      const listingId = idMatch ? idMatch[1] : "";
+
+      let photos = [];
+      let lbIndex = 0;
+      let lastData = null;
+      let sessionState = "loading";
+      let shareEnabled = true;
+      let shareToken = null;
+      let shareUrl = null;
+      let shareLimit = false;
+      let featureDisabled = false;
+      let lastFocused = null;
+
+      const SHARE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>';
+
+      /* ── 數字與格式化 ── */
+      const num = (v) => { if (v == null || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+      const fmtMoney = (v) => { const n = num(v); return n == null ? "" : n.toLocaleString("zh-TW"); };
+      const depositValue = (v) => (v == null || v === "") ? "" : (typeof v === "number" ? v.toLocaleString("zh-TW") + " 元" : String(v));
+      function fmtLayout(l) {
+        if (!l || typeof l !== "object") return "";
+        const parts = [];
+        if (l.rooms != null) parts.push(l.rooms + "房");
+        if (l.halls != null) parts.push(l.halls + "廳");
+        if (l.baths != null) parts.push(l.baths + "衛");
+        return parts.join("");
+      }
+      function fmtFloor(f, t) {
+        if (f == null && t == null) return "";
+        if (f != null && t != null) return f + "F / " + t + "F";
+        if (f != null) return f + "F";
+        return "共 " + t + " 層";
+      }
+      const fmtArea = (v) => (v == null ? "" : String(v) + " 坪");
+      function fmtUpdatedAt(v) {
+        if (v == null || v === "") return "";
+        const d = new Date(v);
+        if (!Number.isNaN(d.getTime())) return d.toLocaleDateString("zh-TW", { year: "numeric", month: "long", day: "numeric" });
+        return String(v);
+      }
+
+      /* ── 設備 icon ── */
+      const AMENITY_ICONS = {
+        "電梯": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7v6M9 10l3-3 3 3M12 17v-6M9 14l3 3 3-3"/></svg>',
+        "有電梯": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7v6M9 10l3-3 3 3M12 17v-6M9 14l3 3 3-3"/></svg>',
+        "陽台": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 20h16M6 20v-5M18 20v-5M6 15h12"/></svg>',
+        "可養寵物": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="13" r="4"/><circle cx="6" cy="8" r="1.6"/><circle cx="9.5" cy="5" r="1.3"/><circle cx="14.5" cy="5" r="1.3"/><circle cx="18" cy="8" r="1.6"/></svg>',
+        "可寵物": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="13" r="4"/><circle cx="6" cy="8" r="1.6"/><circle cx="9.5" cy="5" r="1.3"/><circle cx="14.5" cy="5" r="1.3"/><circle cx="18" cy="8" r="1.6"/></svg>',
+        "天然瓦斯": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3c1 2 4 3.5 4 7a4 4 0 0 1-8 0c0-1.5.8-2.8 1.6-3.7.3 1 .9 1.7 1.6 2.2C11.4 7 11.5 5 12 3z"/></svg>',
+        "瓦斯": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 3c1 2 4 3.5 4 7a4 4 0 0 1-8 0c0-1.5.8-2.8 1.6-3.7.3 1 .9 1.7 1.6 2.2C11.4 7 11.5 5 12 3z"/></svg>',
+        "冷氣": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="4" width="14" height="8" rx="1"/><path d="M8 16v4M12 16v4M16 16v4M8 12h8"/></svg>',
+        "空調": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="4" width="14" height="8" rx="1"/><path d="M8 16v4M12 16v4M16 16v4M8 12h8"/></svg>',
+        "冰箱": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="1"/><path d="M7 9h10"/></svg>',
+        "洗衣機": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="1"/><circle cx="12" cy="12" r="4"/></svg>',
+        "熱水器": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 7h14a1 1 0 0 1 1 1v2H4V8a1 1 0 0 1 1-1z"/><path d="M12 14a3 3 0 0 1 3 3M9 17a3 3 0 0 1 3-3M6 20h12"/></svg>',
+        "床": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 18v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8M3 18v2M21 18v2M3 14h18v4H3zM6 10V6h6v4"/></svg>',
+        "床組": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 18v-8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v8M3 18v2M21 18v2M3 14h18v4H3zM6 10V6h6v4"/></svg>',
+        "桌子": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 8h16M5 8v8M19 8v8M5 16h14"/></svg>',
+        "書桌": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 8h16M5 8v8M19 8v8M5 16h14"/></svg>',
+        "椅子": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 4v8M17 4v8M7 12h10M6 12l1 6h10l1-6M7 20v-2h10v2"/></svg>',
+        "網路": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18h.01"/></svg>',
+        "寬頻": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18h.01"/></svg>',
+        "WiFi": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18h.01"/></svg>',
+        "wifi": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 12a10 10 0 0 1 14 0M8 15a6 6 0 0 1 8 0M12 18h.01"/></svg>',
+        "電視": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="12" rx="1"/><path d="M9 20h6M12 16v4"/></svg>',
+        "衣櫃": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 3v18M9 8h.01M15 8h.01"/></svg>',
+        "衣櫥": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 3v18M9 8h.01M15 8h.01"/></svg>',
+        "微波爐": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M8 13h5"/></svg>',
+        "瓦斯爐": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="10" rx="1"/><circle cx="9" cy="9" r="1.6"/><circle cx="15" cy="9" r="1.6"/><path d="M8 14h8"/></svg>',
+        "電磁爐": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="4" y="4" width="16" height="10" rx="1"/><circle cx="9" cy="9" r="1.6"/><circle cx="15" cy="9" r="1.6"/><path d="M8 14h8"/></svg>',
+        "烘衣機": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7v6M9 10l3-3 3 3"/></svg>',
+        "乾衣機": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M12 7v6M9 10l3-3 3 3"/></svg>'
+      };
+      const FALLBACK_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>';
+      function amenityIcon(name) { return AMENITY_ICONS[name] || FALLBACK_ICON; }
+
+      /* ── 區塊渲染 ── */
+      function renderGallery() {
+        if (!photos.length) {
+          return '<section class="gallery-panel" aria-label="物件照片"><div class="empty-photo" role="img" aria-label="暫無照片">暫無照片</div></section>';
+        }
+        const swipeItems = photos.map((u, i) =>
+          '<button type="button" class="swipe-item" data-lb="' + i + '" aria-label="放大第 ' + (i + 1) + ' 張照片">' +
+            '<img src="' + esc(u) + '" alt="" loading="lazy" decoding="async" />' +
+            (i === 0 ? '<span class="swipe-badge" aria-hidden="true">' + photos.length + ' 張</span>' : "") +
+          '</button>').join("");
+        const dots = photos.map((_, i) => '<span class="dot' + (i === 0 ? " active" : "") + '"></span>').join("");
+        const thumbs = photos.map((u, i) =>
+          '<button type="button" class="thumb" data-lb="' + i + '" aria-current="' + (i === 0 ? "true" : "false") + '" aria-label="放大第 ' + (i + 1) + ' 張照片">' +
+            '<img src="' + esc(u) + '" alt="" loading="lazy" decoding="async" />' +
+          '</button>').join("");
+        return '<section class="gallery-panel" aria-label="物件照片">' +
+          '<div class="swipe" role="group" aria-label="照片輪播">' + swipeItems + '</div>' +
+          '<div class="dots" aria-hidden="true">' + dots + '</div>' +
+          '<div class="swipe-count" aria-live="polite">1 / ' + photos.length + '</div>' +
+          '<button type="button" class="main-photo" data-lb="0" aria-label="放大第 1 張照片（共 ' + photos.length + ' 張）">' +
+            '<img src="' + esc(photos[0]) + '" alt="" />' +
+            '<span class="badge" aria-hidden="true">' + photos.length + ' 張</span>' +
+          '</button>' +
+          '<div class="thumb-strip" role="group" aria-label="縮圖列">' + thumbs + '</div>' +
+        '</section>';
+      }
+
+      function renderSummary(d) {
+        const rentStr = fmtMoney(d.rent);
+        const dep = depositValue(d.deposit);
+        const rentChips = Array.isArray(d.rentIncludes) && d.rentIncludes.length ? d.rentIncludes.map((t) => '<li>' + esc(t) + '</li>').join("") : "";
+        const extra = num(d.extraMonthlyFee);
+        const tags = Array.isArray(d.tags) && d.tags.length ? d.tags.map((t) => '<li>' + esc(t) + '</li>').join("") : "";
+        return '<aside class="summary-card" aria-label="物件摘要">' +
+          '<h1 class="summary-title">' + esc(d.title || "租屋物件") + '</h1>' +
+          (rentStr ? '<p class="price-line"><span class="price">' + rentStr + '</span><span class="price-unit">元/月</span></p>' : "") +
+          (dep ? '<p class="deposit">押金 ' + esc(dep) + '</p>' : "") +
+          (rentChips ? '<ul class="rent-chips" aria-label="租金內含">' + rentChips + '</ul>' : "") +
+          (extra != null ? '<p class="extra-fee">額外月費 <span>' + extra.toLocaleString("zh-TW") + '</span> 元/月</p>' : "") +
+          (d.address ? '<address class="address">' + esc(d.address) + '</address>' : "") +
+          (tags ? '<ul class="tags" aria-label="核心標籤">' + tags + '</ul>' : "") +
+          '<div class="actions">' +
+            '<button type="button" class="btn btn-secondary" data-share-trigger aria-label="分享這個物件">' + SHARE_ICON + '分享</button>' +
+            '<a class="btn btn-primary" href="#contact">聯絡</a>' +
+          '</div>' +
+        '</aside>';
+      }
+
+      function renderBasic(d) {
+        const rows = [];
+        const layout = fmtLayout(d.layout);
+        if (layout) rows.push(["格局", layout]);
+        const area = fmtArea(d.areaPing);
+        if (area) rows.push(["坪數", area]);
+        const floor = fmtFloor(d.floor, d.floorsTotal);
+        if (floor) rows.push(["樓層", floor]);
+        const dep = depositValue(d.deposit);
+        if (dep) rows.push(["押金", dep]);
+        const includes = Array.isArray(d.rentIncludes) && d.rentIncludes.length ? d.rentIncludes.join("、") : "";
+        if (includes) rows.push(["租金內含", includes]);
+        const extra = num(d.extraMonthlyFee);
+        if (extra != null) rows.push(["額外月費", extra.toLocaleString("zh-TW") + " 元/月"]);
+        if (d.community) rows.push(["社區", d.community]);
+        const updated = fmtUpdatedAt(d.updatedAt);
+        if (updated) rows.push(["更新時間", updated]);
+        if (d.status) rows.push(["物件狀態", d.status]);
+        if (!rows.length) return '<p class="section-empty">尚無此項資訊</p>';
+        return '<dl class="kv">' + rows.map((r) => '<div><dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd></div>').join("") + '</dl>';
+      }
+
+      function renderAmenities(d) {
+        const eq = Array.isArray(d.equipment) ? d.equipment.filter(Boolean) : [];
+        if (!eq.length) return '<p class="section-empty">尚無此項資訊</p>';
+        return '<div class="amenity-grid">' + eq.map((n) => '<div class="amenity">' + amenityIcon(n) + '<span>' + esc(n) + '</span></div>').join("") + '</div>';
+      }
+
+      function renderTransport(d) {
+        const bits = [];
+        if (d.mrt && (d.mrt.walkMinutes != null || d.mrt.station)) {
+          const walkPart = d.mrt.walkMinutes != null ? '步行 <strong>' + esc(String(d.mrt.walkMinutes)) + '</strong> 分鐘' : "";
+          const stationPart = d.mrt.station ? (d.mrt.walkMinutes != null ? "至 " : "") + esc(d.mrt.station) : "";
+          bits.push('<p class="mrt-line">' + walkPart + stationPart + '</p>');
+        }
+        if (d.address) {
+          const mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(d.address);
+          bits.push('<a class="map-link" href="' + esc(mapUrl) + '" target="_blank" rel="noopener noreferrer">在地圖查看位置</a>');
+        }
+        if (!bits.length) return '<p class="section-empty">尚無此項資訊</p>';
+        return bits.join("");
+      }
+
+      function renderDescription(d) {
+        if (!d.description) return '<p class="section-empty">尚無此項資訊</p>';
+        return '<p class="desc">' + esc(d.description) + '</p>';
+      }
+
+      function renderContact(d) {
+        const c = d.contact || {};
+        if (c.masked) {
+          const hint = c.hint ? '<p class="contact-hint">' + esc(c.hint) + '</p>' : "";
+          return '<div class="contact-card">' +
+            '<p class="contact-hint">屋主聯絡方式需登入後查看。</p>' + hint +
+            '<div class="contact-methods"><a class="btn btn-primary" href="/login.html">登入 / 註冊</a></div>' +
+          '</div>';
+        }
+        const bits = [];
+        if (c.phone) bits.push('<a class="btn btn-primary" href="tel:' + esc(c.phone) + '">電話聯絡</a>');
+        if (c.lineUrl) bits.push('<a class="btn btn-secondary" href="' + esc(c.lineUrl) + '" target="_blank" rel="noopener noreferrer">LINE 聯絡</a>');
+        const methods = bits.length ? '<div class="contact-methods">' + bits.join("") + '</div>' : '<p class="section-empty">尚無此項資訊</p>';
+        const nick = c.ownerNick ? esc(c.ownerNick) : "屋主";
+        const initial = c.ownerNick ? esc(String(c.ownerNick).charAt(0)) : "屋";
+        return '<div class="contact-card">' +
+          '<div class="contact-head"><span class="avatar" aria-hidden="true">' + initial + '</span><div><div class="contact-name">' + nick + '</div><div class="contact-role">屋主</div></div></div>' +
+          methods +
+        '</div>';
+      }
+
+      function renderSimilar(items) {
+        if (!Array.isArray(items) || !items.length) return '<p class="section-empty">暫無相似物件</p>';
+        return '<div class="similar-strip">' + items.map((s) => {
+          const photo = s.photoUrl
+            ? '<span class="similar-photo"><img src="' + esc(s.photoUrl) + '" alt="" loading="lazy" decoding="async" /></span>'
+            : '<span class="similar-photo empty" aria-hidden="true">暫無照片</span>';
+          const rent = s.rent != null ? '<span class="similar-price">' + fmtMoney(s.rent) + '<span class="similar-unit"> 元/月</span></span>' : "";
+          const meta = [s.district, s.layoutLabel].filter(Boolean).join(" · ");
+          return '<a class="similar-card" href="/p/' + encodeURIComponent(s.listingId) + '" target="_blank" rel="noopener noreferrer">' +
+            photo +
+            '<span class="similar-body">' +
+              '<span class="similar-title">' + esc(s.title || "租屋物件") + '</span>' +
+              rent +
+              (meta ? '<span class="similar-meta">' + esc(meta) + '</span>' : "") +
+            '</span>' +
+          '</a>';
+        }).join("") + '</div>';
+      }
+
+      function renderSection(id, title, body) {
+        return '<section class="section" id="' + id + '" aria-labelledby="' + id + '-h">' +
+          '<h2 id="' + id + '-h">' + title + '</h2>' + body +
+        '</section>';
+      }
+
+      function render(d, similarItems) {
+        lastData = d;
+        photos = Array.isArray(d.photos) ? d.photos.map((p) => (p && p.url) || "").filter(Boolean) : [];
+        shareEnabled = !d.share || d.share.enabled !== false;
+        document.title = (d.title ? d.title + " · " : "") + "吉比租房物件追蹤";
+        $("detailGrid").innerHTML =
+          renderGallery() +
+          renderSummary(d) +
+          renderSection("basic", "基本資料", renderBasic(d)) +
+          renderSection("amenities", "設備與家具家電", renderAmenities(d)) +
+          renderSection("transport", "交通與地圖", renderTransport(d)) +
+          renderSection("description", "說明", renderDescription(d)) +
+          renderSection("contact", "屋主聯絡", renderContact(d)) +
+          renderSection("similar", "相似物件", renderSimilar(similarItems));
+        $("detailGrid").hidden = false;
+        updateShareButtons();
+        bindGallery();
+      }
+
+      function bindGallery() {
+        const swipe = document.querySelector(".swipe");
+        if (swipe) {
+          const dots = Array.from(swipe.parentElement.querySelectorAll(".dot"));
+          const count = swipe.parentElement.querySelector(".swipe-count");
+          const sync = () => {
+            if (!photos.length) return;
+            const i = Math.min(photos.length - 1, Math.max(0, Math.round(swipe.scrollLeft / swipe.clientWidth)));
+            dots.forEach((d, idx) => d.classList.toggle("active", idx === i));
+            if (count) count.textContent = (i + 1) + " / " + photos.length;
+          };
+          swipe.addEventListener("scroll", sync, { passive: true });
+          sync();
+        }
+      }
+
+      /* ── 狀態切換 ── */
+      function showError(note) {
+        $("loading").hidden = true;
+        $("detailGrid").hidden = true;
+        $("errorNote").textContent = note;
+        $("errorState").hidden = false;
+      }
+      function hideLoading() { $("loading").hidden = true; }
+
+      /* ── Lightbox：focus trap、Esc、左右鍵、還原焦點 ── */
+      function renderLb() {
+        $("lbImg").src = photos[lbIndex];
+        $("lbImg").alt = "物件照片第 " + (lbIndex + 1) + " 張";
+        $("lbCount").textContent = (lbIndex + 1) + " / " + photos.length;
+      }
+      function openLightbox(i) {
+        if (!photos.length) return;
+        lbIndex = (i + photos.length) % photos.length;
+        renderLb();
+        lastFocused = document.activeElement;
+        $("lightbox").hidden = false;
+        document.body.classList.add("modal-open");
+        $("lbClose").focus();
+      }
+      function closeLightbox() {
+        $("lightbox").hidden = true;
+        document.body.classList.remove("modal-open");
+        if (lastFocused && typeof lastFocused.focus === "function") lastFocused.focus();
+      }
+      $("lbClose").addEventListener("click", closeLightbox);
+      $("lbPrev").addEventListener("click", () => openLightbox(lbIndex - 1));
+      $("lbNext").addEventListener("click", () => openLightbox(lbIndex + 1));
+      $("lightbox").addEventListener("click", (e) => { if (e.target === $("lightbox")) closeLightbox(); });
+      $("lightbox").addEventListener("keydown", (e) => {
+        if ($("lightbox").hidden) return;
+        if (e.key === "Escape") { e.preventDefault(); closeLightbox(); return; }
+        if (e.key === "ArrowLeft") openLightbox(lbIndex - 1);
+        else if (e.key === "ArrowRight") openLightbox(lbIndex + 1);
+        else if (e.key === "Tab") {
+          const nodes = focusableIn($("lightbox"));
+          if (!nodes.length) return;
+          const first = nodes[0], last = nodes[nodes.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      });
+
+      $("detailGrid").addEventListener("click", (e) => {
+        const lb = e.target.closest("[data-lb]");
+        if (lb) openLightbox(Number(lb.dataset.lb));
+      });
+
+      /* ── 對話框：focus trap、Esc、還原焦點 ── */
+      function focusableIn(scope) {
+        return [...scope.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+          .filter((el) => !el.disabled && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+      }
+      let activeDialog = null;
+      let lastDialogTrigger = null;
+      function openDialog(modalEl, triggerEl) {
+        closeDialog();
+        lastDialogTrigger = triggerEl || document.activeElement;
+        activeDialog = modalEl;
+        modalEl.hidden = false;
+        document.body.classList.add("modal-open");
+        const scope = modalEl.querySelector('[role="dialog"]');
+        const first = scope ? focusableIn(scope)[0] : null;
+        if (first) first.focus();
+      }
+      function closeDialog() {
+        if (!activeDialog) return;
+        const prev = activeDialog;
+        activeDialog = null;
+        prev.hidden = true;
+        document.body.classList.remove("modal-open");
+        if (lastDialogTrigger && typeof lastDialogTrigger.focus === "function") lastDialogTrigger.focus();
+        lastDialogTrigger = null;
+      }
+      document.querySelectorAll("[data-modal-close]").forEach((el) => el.addEventListener("click", closeDialog));
+      document.addEventListener("keydown", (e) => {
+        if (!activeDialog) return;
+        if (e.key === "Escape") { e.preventDefault(); closeDialog(); return; }
+        if (e.key !== "Tab") return;
+        const scope = activeDialog.querySelector('[role="dialog"]');
+        if (!scope) return;
+        const nodes = focusableIn(scope);
+        if (!nodes.length) return;
+        const first = nodes[0], last = nodes[nodes.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      });
+
+      /* ── 分享 ── */
+      async function postShareEvent(token, eventType, channel) {
+        if (!listingId || !token) return;
+        try {
+          await fetch('/api/public/listings/' + encodeURIComponent(listingId) + '/share-events', {
+            method: "POST", credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ shareToken: token, eventType: eventType, channel: channel || null }),
+          });
+        } catch {}
+      }
+      function fireViewEventOnce() {
+        if (!listingId) return;
+        const ref = new URLSearchParams(location.search).get("ref");
+        if (!ref) return;
+        const key = "jr-share-view:" + ref;
+        try { if (sessionStorage.getItem(key)) return; sessionStorage.setItem(key, "1"); } catch {}
+        postShareEvent(ref, "view", null);
+      }
+      function shareTitle() { return (lastData && lastData.title) || "租屋物件"; }
+      function rentText() { return lastData && lastData.rent != null ? (fmtMoney(lastData.rent) + " 元/月") : ""; }
+      function buildShareUrl(token) { return location.origin + "/p/" + encodeURIComponent(listingId) + "?ref=" + encodeURIComponent(token); }
+      function isMobileShare() { return window.matchMedia("(pointer: coarse)").matches || window.matchMedia("(max-width: 767px)").matches; }
+      function channelLabel(channel) { return { line: "LINE", threads: "Threads", facebook: "Facebook" }[channel] || channel; }
+      function intentUrl(channel) {
+        const u = encodeURIComponent(shareUrl);
+        if (channel === "line") return "https://social-plugins.line.me/lineit/share?url=" + u;
+        if (channel === "facebook") return "https://www.facebook.com/sharer/sharer.php?u=" + u + "&display=popup";
+        if (channel === "threads") return "https://www.threads.net/intent/post?text=" + encodeURIComponent(shareTitle() + " " + shareUrl);
+        return "";
+      }
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(text); return true; } catch {}
+        }
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = text; ta.setAttribute("readonly", "");
+          ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "-9999px";
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          let ok = false;
+          try { ok = document.execCommand("copy"); } catch {}
+          ta.remove();
+          return ok;
+        } catch { return false; }
+      }
+      let toastTimer = null;
+      function showToast(title) {
+        $("toastTitle").textContent = title;
+        $("toast").hidden = false;
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { $("toast").hidden = true; }, 4000);
+      }
+      function updateShareButtons() {
+        document.querySelectorAll("[data-share-trigger]").forEach((b) => { b.hidden = featureDisabled || !shareEnabled; });
+      }
+      async function fetchShareLink() {
+        try {
+          const res = await fetch('/api/listings/' + encodeURIComponent(listingId) + '/share-link', {
+            method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+          });
+          if (res.status === 409) { featureDisabled = true; updateShareButtons(); return null; }
+          if (res.status === 429) { shareLimit = true; return "limit"; }
+          if (res.status === 401) { sessionState = "guest"; openDialog($("shareLogin")); return null; }
+          if (!res.ok) return null;
+          const data = await res.json();
+          shareToken = String(data.shareToken || "");
+          shareUrl = data.url || buildShareUrl(shareToken);
+          shareLimit = false;
+          return "ok";
+        } catch { return null; }
+      }
+      function renderSharePanel() {
+        const photo = photos[0] || "";
+        const ph = $("summaryPhoto");
+        if (photo) ph.innerHTML = '<img src="' + esc(photo) + '" alt="" />';
+        else ph.textContent = "物件照片";
+        $("summaryTitle").textContent = shareTitle();
+        $("summaryRent").textContent = rentText();
+        $("shareLimitMsg").hidden = !shareLimit;
+        $("shareOptions").hidden = shareLimit;
+      }
+      async function onShareTrigger(trigger) {
+        if (sessionState === "loading") return;
+        if (sessionState !== "member") { openDialog($("shareLogin"), trigger); return; }
+        const result = await fetchShareLink();
+        if (result === null) return;
+        if (result === "limit") { renderSharePanel(); openDialog($("sharePanel"), trigger); return; }
+        if (isMobileShare() && navigator.share) {
+          try { await navigator.share({ title: shareTitle(), text: shareTitle(), url: shareUrl }); return; } catch (err) {}
+        }
+        renderSharePanel();
+        openDialog($("sharePanel"), trigger);
+      }
+      document.addEventListener("click", (e) => {
+        const trigger = e.target.closest("[data-share-trigger]");
+        if (trigger) onShareTrigger(trigger);
+      });
+      $("shareOptions").addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-channel]");
+        if (!btn || shareLimit) return;
+        const channel = btn.dataset.channel;
+        postShareEvent(shareToken, "cta", channel);
+        if (channel === "copy") {
+          const ok = await copyText(shareUrl);
+          showToast(ok ? "連結已複製" : "複製失敗，請改用手動複製");
+          return;
+        }
+        const url = intentUrl(channel);
+        if (url) window.open(url, "_blank", "noopener");
+        showToast("已開啟 " + channelLabel(channel));
+      });
+
+      /* ── 身分 ── */
+      async function loadSession() {
+        try {
+          const res = await fetch("/api/me", { cache: "no-store", credentials: "same-origin" });
+          const data = res.ok ? await res.json() : null;
+          sessionState = data && data.ok ? "member" : "guest";
+        } catch { sessionState = "guest"; }
+      }
+
+      /* ── 載入 ── */
+      async function load() {
+        if (!listingId) { showError("找不到物件。"); return; }
+        try {
+          const detailRes = await fetch('/api/public/listings/' + encodeURIComponent(listingId) + '/detail', { credentials: "same-origin" });
+          if (detailRes.status === 404) { showError("這則物件不存在或已下架。"); return; }
+          if (!detailRes.ok) { showError("載入失敗，請稍後再試。"); return; }
+          const d = await detailRes.json();
+          let similarItems = [];
+          try {
+            const similarRes = await fetch('/api/public/listings/' + encodeURIComponent(listingId) + '/similar?limit=4', { credentials: "same-origin" });
+            if (similarRes.ok) { const sd = await similarRes.json(); similarItems = Array.isArray(sd.items) ? sd.items : []; }
+          } catch {}
+          hideLoading();
+          render(d, similarItems);
+        } catch { showError("載入失敗，請稍後再試。"); }
+      }
+
+      load();
+      loadSession();
+      fireViewEventOnce();
+    })();
+  </script>
+</body>
+</html>
