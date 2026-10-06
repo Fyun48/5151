@@ -531,7 +531,7 @@ async function wishStillHardEligibleForNotifyAsync(run, ownerUserId, listingId, 
   }
 }
 
-async function openMatchEpisodeIfNeededAsync(run, ownerUserId, listingId, wishRef, now = new Date()) {
+export async function openMatchEpisodeIfNeededAsync(run, ownerUserId, listingId, wishRef, now = new Date()) {
   const owner = Number(ownerUserId) || 0;
   const listing = Number(listingId) || 0;
   const ref = String(wishRef || "");
@@ -541,12 +541,25 @@ async function openMatchEpisodeIfNeededAsync(run, ownerUserId, listingId, wishRe
     [owner, listing, ref],
   )).rows);
   if (!row) {
-    await run(
+    // ⚠️ 多節點 HA：兩台 web 各跑一支 tick、共享同一 PG，這一段是 SELECT-then-INSERT。
+    // `rental_match_seen` 已有複合主鍵 (owner_user_id, listing_id, wish_ref) 擋重複，但若兩個
+    // 節點同時命中「無 row」的同一組鍵，第二筆 INSERT 會以 23505 unique_violation 讓**整筆 tick
+    // 交易回滾**（PG 撞唯一鍵＝交易進入 aborted，後續語句全失敗）。因此改成冪等 INSERT：
+    // `ON CONFLICT DO NOTHING` 把「撞鍵」從例外降級為「沒寫入」；以 rowCount 判定誰贏，
+    // 輸家重新讀取贏家剛寫入的那一筆，回報與單次呼叫一致的結果（不重複 notify）。
+    const inserted = await run(
       `INSERT INTO rental_match_seen(owner_user_id, listing_id, wish_ref, generation, eligible, episode, created_at)
-       VALUES (?, ?, ?, 0, 1, 1, ?)`,
+       VALUES (?, ?, ?, 0, 1, 1, ?)
+       ON CONFLICT (owner_user_id, listing_id, wish_ref) DO NOTHING`,
       [owner, listing, ref, iso(now)],
     );
-    return { notify: true, episode: 1 };
+    if ((Number(inserted.rowCount) || 0) > 0) return { notify: true, episode: 1 };
+    const winner = one((await run(
+      "SELECT eligible, episode FROM rental_match_seen WHERE owner_user_id = ? AND listing_id = ? AND wish_ref = ?",
+      [owner, listing, ref],
+    )).rows);
+    if (!winner) return { notify: false, episode: 0 };
+    return { notify: false, episode: Number(winner.episode) || 1 };
   }
   if (Number(row.eligible) === 1) return { notify: false, episode: Number(row.episode) || 1 };
   const episode = (Number(row.episode) || 0) + 1;
