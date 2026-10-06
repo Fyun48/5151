@@ -471,6 +471,18 @@ import {
   listingShareStatsForUserAsync,
   recordListingShareEventAsync,
 } from "./listingShareAsync.js";
+import {
+  getSponsorEntitlementFlagsAsync,
+  getSponsorEntitlementRulesAsync,
+  setSponsorEntitlementFlagsAsync,
+  setSponsorEntitlementRulesAsync,
+  issueMemberSupportCodeAsync,
+  currentMemberSupportCodeAsync,
+} from "./sponsorEntitlementAsync.js";
+import { buildSponsorOutbound } from "./sponsorEntitlement.js";
+import { handleSponsorEntitlementWebhookAsync } from "./sponsorEntitlementWebhook.js";
+import { normalizeSponsorConfig, publicSponsorLinks } from "./sponsorLinks.js";
+import { getSiteSettingAsync } from "./settingsKvAsync.js";
 import { rentAmount } from "./listingCost.js";
 import {
   buildPublicListingDetailResponse,
@@ -718,7 +730,8 @@ function yieldEventLoop() {
 app.use(express.json({
   limit: "1mb",
   verify(req, _res, buf) {
-    if ((req.originalUrl || req.url || "").startsWith("/api/ops/commands/apply")) {
+    const path = req.originalUrl || req.url || "";
+    if (path.startsWith("/api/ops/commands/apply") || path.startsWith("/api/support/webhook/")) {
       req.rawBody = buf.toString("utf8");
     }
   },
@@ -1828,6 +1841,77 @@ app.get("/api/admin/listings/share-stats", requireAdminApi, async (req, res) => 
   }
 });
 
+// ---- 贊助連動 Phase 3（flags 全預設關；關時一律 409 feature_disabled，行為與現況相同）----
+
+app.get("/api/me/support/code", async (req, res) => {
+  try {
+    const session = readSession(req);
+    const userId = Number(session?.userId) || 0;
+    if (!userId) { res.status(401).json({ error: "請先登入", login: true }); return; }
+    const flags = await getSponsorEntitlementFlagsAsync({});
+    if (!flags.codeAttribution) { res.status(409).json({ error: "贊助代碼功能未開啟", code: "feature_disabled" }); return; }
+    res.json({ code: await currentMemberSupportCodeAsync({ userId }, {}) });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取贊助代碼" });
+  }
+});
+
+app.post("/api/me/support/code", async (req, res) => {
+  try {
+    const session = readSession(req);
+    const userId = Number(session?.userId) || 0;
+    if (!userId) { res.status(401).json({ error: "請先登入", login: true }); return; }
+    const flags = await getSponsorEntitlementFlagsAsync({});
+    if (!flags.codeAttribution) { res.status(409).json({ error: "贊助代碼功能未開啟", code: "feature_disabled" }); return; }
+    const existing = await currentMemberSupportCodeAsync({ userId }, {});
+    if (existing) { res.json(existing); return; }
+    const issued = await issueMemberSupportCodeAsync({ userId }, {});
+    if (!issued) { res.status(500).json({ error: "無法產生贊助代碼" }); return; }
+    res.json(issued);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法產生贊助代碼" });
+  }
+});
+
+app.post("/api/support/outbound", async (req, res) => {
+  try {
+    const session = readSession(req);
+    const userId = Number(session?.userId) || 0;
+    if (!userId) { res.status(401).json({ error: "請先登入", login: true }); return; }
+    const flags = await getSponsorEntitlementFlagsAsync({});
+    if (!flags.codeAttribution) { res.status(409).json({ error: "贊助代碼功能未開啟", code: "feature_disabled" }); return; }
+    const providerId = String(req.body?.providerId || "").trim();
+    const config = normalizeSponsorConfig(await getSiteSettingAsync("sponsorLinks", {}));
+    const link = publicSponsorLinks(config).find((row) => row.id === providerId);
+    if (!link) { res.status(404).json({ error: "找不到贊助管道", code: "provider_not_found" }); return; }
+    const current = await currentMemberSupportCodeAsync({ userId }, {});
+    const user = await getUserByIdAsync(userId, {});
+    const displayName = String(user?.nickname || "").trim();
+    const sendEmail = req.body?.sendEmail === true;
+    res.json(buildSponsorOutbound(providerId, link.url, {
+      code: current?.code || "",
+      displayName,
+      sendEmail,
+      email: sendEmail ? String(user?.email || "") : "",
+    }));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法組出贊助連結" });
+  }
+});
+
+app.get("/api/admin/support/entitlement", requireAdminApi, async (_req, res) => {
+  res.json({
+    flags: await getSponsorEntitlementFlagsAsync({}),
+    rules: await getSponsorEntitlementRulesAsync({}),
+  });
+});
+
+app.put("/api/admin/support/entitlement", requireAdminApi, async (req, res) => {
+  const flags = req.body?.flags !== undefined ? await setSponsorEntitlementFlagsAsync(req.body.flags, {}) : await getSponsorEntitlementFlagsAsync({});
+  const rules = req.body?.rules !== undefined ? await setSponsorEntitlementRulesAsync(req.body.rules, {}) : await getSponsorEntitlementRulesAsync({});
+  res.json({ flags, rules });
+});
+
 function auditReq(req, action, target, before, after) {
   try {
     const session = readSession(req);
@@ -2270,6 +2354,16 @@ app.post("/api/support/event", async (req, res) => {
 
 app.post("/api/support/webhook/:provider", async (req, res) => {
   try {
+    const entitlement = await handleSponsorEntitlementWebhookAsync({
+      provider: req.params.provider,
+      body: req.body,
+      rawBody: req.rawBody,
+      headers: req.headers,
+    }, {});
+    if (entitlement.handled) {
+      res.status(entitlement.status).json(entitlement.json);
+      return;
+    }
     const result = await verifySupportWebhook(req.params.provider, req.body, req.headers);
     res.status(result.ok ? 200 : 501).json(result);
   } catch (error) {
