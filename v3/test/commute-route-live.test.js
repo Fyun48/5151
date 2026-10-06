@@ -141,9 +141,14 @@ test("failed front items release the queue so later listings still run", () => {
 test("cursor walks past the old 2000-row candidate cap", () => {
   const out = runIsolated(`
     ${seedPrelude}
+    // 2105 筆逐筆 upsert 走 node:sqlite autocommit（每句一次 commit）時，在 fsync 慢的環境
+    // 每筆可到 ~250ms（>8 分鐘），超過 runIsolated 的 30s 上限。包成單一交易讓 2105 筆只
+    // commit 一次；資料與逐筆 upsert 完全相同，只差在速度。
+    db.exec("BEGIN");
     for (let i = 1; i <= 2105; i += 1) {
       seed(800000 + i, { lat: 25.03 + (i % 80) * 0.001, lng: 121.52 + Math.floor(i / 80) * 0.001, geo_source: "591" });
     }
+    db.exec("COMMIT");
     const later = listingsNeedingRoute(8, { cursor: 802000 });
     console.log(JSON.stringify({
       count: later.length,
