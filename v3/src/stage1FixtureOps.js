@@ -208,6 +208,21 @@ function loadWish(db, wishId) {
   }
 }
 
+/**
+ * 手機號碼偵測：`09` ＋ 8 位數字，而且**不可以夾在十六進位字串裡面**。
+ *
+ * 兩個已實際發生過的誤判（都會讓整個 fixture 準備失敗）：
+ * 1. 緊湊的 run id／時間戳（P1-22）⇒ 用前後不是數字的邊界擋掉。
+ * 2. `opaqueId()` 是 sha256 的前 12 個十六進位字元，**光靠機率**就會出現
+ *    `e0912345678d` 這種形狀（中間剛好 10 位全是數字）。2026-10-01 的 CI
+ *    （`a3b9821` 的 Run Tests）就是被這種 token hash 打到，錯誤訊息只留下
+ *    `"token_hash":"e**********d"`。⇒ 再排除「前後是十六進位字元」的位置。
+ *
+ * 真的外洩的電話在 evidence 裡一定是獨立的值（`"phone":"0912345678"`），
+ * 前後會是引號／空白，兩種邊界都還是會命中。
+ */
+export const FIXTURE_PHONE_RE = /(?<![0-9a-fA-F])09\d{8}(?![0-9a-fA-F])/;
+
 function publicEvidence(doc) {
   const copy = structuredClone(doc);
   const strip = (row) => {
@@ -224,9 +239,7 @@ function publicEvidence(doc) {
   if (/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(text)) {
     throw new Error("fixture evidence leaked email");
   }
-  // Boundary-anchored so a compact fixture run id / timestamp such as
-  // "stage1-fix:20260918061756:35314199788" is not mistaken for a 09xxxxxxxx phone.
-  const phoneHit = /(?<!\d)09\d{8}(?!\d)/.exec(text);
+  const phoneHit = FIXTURE_PHONE_RE.exec(text);
   if (phoneHit) {
     // Include redacted context so an intermittent hit can be triaged from CI logs alone.
     const near = text.slice(Math.max(0, phoneHit.index - 70), phoneHit.index + 12).replace(/\d/g, "*");

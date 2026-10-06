@@ -27,7 +27,7 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 mkdir -p "$RESCUE/$STAMP"
 
 # 1) 掛載前先救出「本機寫入」的檔案（掛載後會被遮蔽）
-for sub in member-media self-photos; do
+for sub in member-media self-photos feedback-media; do
   if [ -d "$MOUNT/$sub" ]; then
     mkdir -p "$RESCUE/$STAMP/$sub"
     if command -v rsync >/dev/null 2>&1; then
@@ -48,7 +48,7 @@ fi
 log "重新掛載成功"
 
 # 3) 把救出的檔案送回共享
-for sub in member-media self-photos; do
+for sub in member-media self-photos feedback-media; do
   if [ -d "$RESCUE/$STAMP/$sub" ]; then
     cp -an "$RESCUE/$STAMP/$sub/." "$MOUNT/$sub/" >>"$LOG" 2>&1 || true
   fi

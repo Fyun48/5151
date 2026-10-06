@@ -1,6 +1,7 @@
 // 使用者回饋（bug 回報／功能建議／其他）。
 // 設計目標：使用者輸入越少越好，系統自動補齊情境，方便日後自動化分類與優先排序。
 import { enqueueFeedbackOutbox } from "./feedbackOutbox.js";
+import { claimFeedbackAttachments } from "./feedbackMedia.js";
 
 export const FEEDBACK_KINDS = [
   { id: "bug", label: "回報問題", hint: "哪裡怪怪的、壞掉、看到錯誤" },
@@ -157,7 +158,10 @@ export function createFeedback(db, userId, input = {}, now = new Date()) {
     throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);
   }
   const trimmedBody = body.slice(0, FEEDBACK_BODY_MAX);
-  const contact = String(input.contact || "").trim().slice(0, FEEDBACK_CONTACT_MAX);
+  // C1（2026-10-01 工作單）：聯絡方式一律用「已驗證會員的 email」。
+  // 不採用前端傳來的 `input.contact`：那可以被改請求偽造成別人的聯絡方式；
+  // 會員沒有 email 時留空（不捏造），前台也不再顯示或要求填寫。
+  const contact = userInfo(db, uid).email.slice(0, FEEDBACK_CONTACT_MAX);
   const context = normalizeFeedbackContext(input.context);
   let contextText = JSON.stringify(context);
   if (contextText.length > FEEDBACK_CONTEXT_MAX) contextText = "{}";
@@ -177,6 +181,9 @@ export function createFeedbackWithOutbox(db, userId, input = {}, { enqueue = tru
   db.exec("BEGIN IMMEDIATE");
   try {
     const res = createFeedback(db, userId, input, now);
+    // C3：附件綁定與回饋列**同一個交易**。附件不存在／已被綁走／不是本人的 ⇒ 整筆 rollback，
+    // 不會留下「回饋有寫、附件沒綁」的半套狀態。
+    if (res.id > 0) claimFeedbackAttachments(db, userId, input?.attachments, res.id, now);
     if (enqueue && res.id > 0) {
       const row = db.prepare("SELECT * FROM feedback WHERE id = ?").get(res.id);
       const ctx = parseContext(row.context);

@@ -96,3 +96,27 @@ test("wan-style prices count as tens of thousands of TWD", () => {
   assert.equal(passesPriceFilter({ price_num: 3.8, price: "3.8萬" }, { priceMax: 36000 }), false);
   assert.equal(passesPriceFilter({ price_num: 8500, price: "8,500" }, { priceMax: 36000 }), true);
 });
+
+test("R2：費用推論不得過度概括（水電要兩項、第四台不等於網路）", async () => {
+  const { feeInclusionStates } = await import("../src/listingCost.js");
+  const states = (listing) => feeInclusionStates(listing);
+  // 只有水費已含 ⇒ 不足以說「含水電」
+  assert.equal(states({ price_contain_text: "含水費" }).utilities, "unknown");
+  // 只有電費已含 ⇒ 同樣不足以
+  assert.equal(states({ price_contain_text: "含電費" }).utilities, "unknown");
+  // 水電合寫、或水與電都寫出來 ⇒ 才是已含
+  assert.equal(states({ price_contain_text: "含水電" }).utilities, "present");
+  assert.equal(states({ extra_fee_text: "水費已含，電費已含" }).utilities, "present");
+  // 任何一項明確另計 ⇒ 這個要求不成立
+  assert.equal(states({ extra_fee_text: "水費 300 另計" }).utilities, "absent");
+  assert.equal(states({ extra_fee_text: "水電 500 另計" }).utilities, "absent");
+  // 只有第四台已含 ⇒ 不足以說「含網路」
+  assert.equal(states({ price_contain_text: "含第四台" }).internet, "unknown");
+  assert.equal(states({ price_contain_text: "含有線電視" }).internet, "unknown");
+  // 明確寫網路才判定
+  assert.equal(states({ price_contain_text: "含網路" }).internet, "present");
+  assert.equal(states({ extra_fee_text: "網路費 500 另計" }).internet, "absent");
+  // 站內刊登自己填的三態優先於任何文字推論
+  assert.equal(states({ fee_includes: JSON.stringify({ utilities: 1 }), price_contain_text: "含水費" }).utilities, "present");
+  assert.equal(states({ fee_includes: JSON.stringify({ internet: 0 }), price_contain_text: "含第四台" }).internet, "absent");
+});

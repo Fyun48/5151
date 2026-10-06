@@ -5912,6 +5912,318 @@ region 4 section 1 → zip    → sid 0
 > 所以沒有資料安全缺口。**教訓**：部署腳本要 `set -e`／逐段檢查結論字串，
 > 閘門失敗就停，不要用 `>/dev/null` 把狀態吃掉。
 
+## 二之負七十、2026-10-01 第九十九批：Owner 工作單 A1～C3（有房刊登／許願房／意見回饋）
+
+**來源**：Owner 附件工作單 `5151_DS_Fixes_20261001.txt`（A1～A5、B1～B2、C1～C3）。
+分支 `fix/owner-workorder-20261001`，同一張 PR。**Production 維持 manual-only，本批未部署。**
+
+### 99.1 兩份唯讀調查（先查清楚再動手）
+
+兩個 subagent 只讀盤點，回報的關鍵事實（後續實作全部照這份基準，行號已對 `7701c29` 重驗）：
+
+1. **A3 的根因有兩個，只有一個是程式缺陷**
+   - 根因 1：後台畫面顯示的是**草稿**（`admin.html` 的 `catalogWorking() = draft || published`），
+     前台讀的是**已發布**目錄。實查正式庫 `settings.rentalCatalog` 的 `elevator.label` 仍是「電梯」，
+     而「華廈」二字在全部 30 筆 settings 列裡都找不到 ⇒ 那次改名從沒落地到已發布目錄。
+   - 根因 2（**真正的 bug**）：`v3/src/selfTraits.js` 的 `selfTraitLabels()` 寫成
+     `ALL_TRAITS.get(id) || extra.get(id)`，目錄標籤被放在 `||` 後面 ⇒ 就算發布了，
+     「我的刊登」卡片與公開分享頁的 chips 還是顯示靜態表。刊登表單走的是
+     `catalogAsSelfTraitGroups()`（正確），所以只有一半的前台會同步 —— 這正是「後台改了前台沒改」。
+2. **`includes_management` 今天 100% 只是顯示字串**：`evaluateMatch()` 的判定來源只有
+   district／budget／catalog 條件／layout／area／housing 六類，沒有一行碰費用；
+   `candidateSql()`、`matchesFilter()` 也都沒有。欄位名（management）與標籤（水電＋管理費）
+   互相矛盾 ⇒ **原意無法確定，不能自動拆成五項**。
+3. **Match Engine 只配對站內刊登**（`isListingMatchable()` 要求 `source === "self"`），
+   而站內刊登表單沒有費用欄位 ⇒ 新條件對所有可配對物件都會是 `unknown`。
+4. **v3 完全沒有附件表**（`grep -rni attachment v3/` = 0 命中）；`feedback_attachment`
+   只存在於另一個服務 `ops/src/opsDb.js`（FK 指 `ingested_feedback`，與 v3 的 `feedback` 無關）。
+5. **既有兩條上傳路徑都不能用在回饋附件**：`/media/lib/` 在 `auth.js publicPath()` 是**公開**路徑，
+   R2 bucket 也是公開網域，`putMemberMediaObjects()` 的 key 前綴寫死 `member-media/`。
+6. **A4 的服務選擇有解**：`router.project-osrm.org` 的公開示範站**只跑車用 profile**，
+   `walking` 這個字完全是裝飾（實測 `driving`／`walking`／`cycling`／`foot` 四個字串回傳
+   **位元組完全相同**的結果）。FOSSGIS 的 `routing.openstreetmap.de/routed-foot` 是真 foot profile。
+
+### 99.2 A 有房刊登
+
+| 項 | 做法 |
+|---|---|
+| A1 | 說明提示與送出訊息改成「請寫一些這屋子的故事與回憶（至少 N 個字）」，前後端同一條規則 |
+| A2 | 說明範本與輸入區**直接展開**，放在「刊登物件」按鈕上方；`#selfBody` 仍是唯一內容來源，新增可見的 `contenteditable` 當輸入介面，所有寫入都走 `setSelfBody()`；套用範本前用 `confirm` 保護已輸入文字；驗證失敗只提示、保留內容 |
+| A3 | **兩個根因**：① `selfTraits.js` 目錄標籤被放在 `\|\|` 後面；② 標籤對照表被 `rental_catalog_v2` 旗標擋住（旗標沒開時連刊登表單都不跟著改名）。修法是把「顯示名稱」與「可寫入 id」分開：`catalogTraitLabelMap()` 不受旗標影響、`overlayTraitLabels()` 只覆蓋 label。另把後台「草稿未發布」畫出來（按鈕文字、逐列標記、預覽標題、抽屜提示）；分享頁 `max-age` 60 → 15 |
+| A4 | 見 99.4 |
+| A5 | 分享頁自己打 `/api/me` 取身分（三態：載入中／訪客／會員），公開房源內容**維持訪客視角**（後端 `viewerId: 0`、`public, max-age=15`）；另外修好分享頁把物件說明當純文字印出 `<p>` 的問題（同一份白名單 sanitizer） |
+
+**A2 的驗證方式**：`v3/test/listing-tools-ui.test.js` 原本有一條
+`assert.doesNotMatch(html, /id="selfBodyEditor"/)`（舊設計「說明只能由範本套用」的守衛），
+A2 明確要求可手寫 ⇒ 改成正面斷言（存在、`contenteditable="true"`、在 `#selfSubmit` 之前、只有一個寫入入口 `setSelfBody`）。
+
+### 99.3 B 許願房
+
+- **B1 儲存**：新增 `demand_posts.fee_includes`（TEXT）＋`fee_includes_at`，形狀
+  `{"items":[...]}`。純函式島 `v3/src/feeIncludes.js`（key／標籤／`normalizeFeeIncludes`／
+  `parseFeeIncludes`）供 demand／rentalMatch／listingCost 共用。
+- **B1 相容（重點）**：**不拆、不推論**。`''` = 不曾用新制儲存；`{"items":[]}` = 明確全部未指定；
+  舊的 `includes_management = 1 且 fee_includes = ''` ⇒ `state = "legacy"`，顯示
+  「含水電／管理費（舊資料，未拆分）」，重新編輯時引導使用者確認。
+  **舊旗標保留原值不清空**，只讓讀取端在新制非空時不採計它 ⇒ 不會新舊同時生效，也留得住歷史。
+- **B1 配對**：`evaluateMatch()` 新增費用 gate —— 勾選的每一項都要同時滿足；
+  房源標示另計 ⇒ 硬衝突；**房源沒有資料 ⇒ 只進 `unmet_unknowns`，不算符合也不算衝突**
+  （與 catalog 條件既有的 `unknown` 語意一致，否則既有許願房會全部失去曝光）。
+  房源端判定 `listingCost.feeInclusionStates()` 沿用既有解析器，**泛用「車位／停車」不推定
+  汽車位或機車位**（兩個 key 都回 unknown），同一項同時出現已含與另計也回 unknown。
+- **B2 表單**：五個費用條件＋捷運距離需求集中在同一個連續選項區（共六項）；文字改成
+  「需要離捷運距離（可行徑路線 1 公里內）」；移除獨立的「捷運／車站」欄位
+  （`transit_note` 欄位與歷史顯示保留，新表單不再送，編輯時由 fallback 保住原值）。
+- **B2 配對**：`wish.mrt_walk` 用**與 A4 相同的步行定義**（≤ 1,000 公尺），
+  房源沒有已查證的步行距離 ⇒ `unmet_unknowns`，不可當成已符合。
+
+### 99.4 A4 步行捷運：真正的一公里
+
+- `v3/src/mrt.js` 的步行路線服務改成 **foot profile**（`MRT_FOOT_ROUTE_BASE` 可覆寫），
+  新增 `MRT_ACCESS_MAX_M = 1000`、`isMrtAccessWithin()`、`fetchMrtAccessWithin()`。
+- **直線距離只挑候選站**：直線是步行距離的下界，所以直線 > 1 公里的站不可能合格，
+  這樣可以少打外部服務，而且這個結論是**已查證的「沒有」**（不是未查證）。
+- 狀態機：`within`（已查證符合）／`none`（已查證沒有）／`unknown`（候選站有但路線服務沒回可用結果
+  ⇒ 待確認）／`unlocatable`（地址定位不到）／`error`（服務失敗，可重試，不擋刊登）。
+- 新端點 `GET /api/self-listings/mrt-access`（**必須註冊在 `/api/self-listings/:id` 之前**）。
+  查證成功會把結果寫進**同一份** `mrt_cache`，讓表單與內頁讀同一組數字。
+- 前端：debuounce 900ms、失焦立即查、地址一改就清舊結果、`mrtAccessSeq` 丟棄較早的回應、
+  「重新查詢」按鈕。地址不足以定位與服務失敗都保留表單內容。
+- **真實案例（實測，非 mock）**：
+  - 台北市士林區中正路 100 號 → 捷運士林站 **958 公尺**（1 公里內）⇒ 符合
+  - 25.0330,121.5650（101 旁）→ 步行 **330 公尺** ⇒ 符合
+  - 25.0720,121.5480（大直對岸）→ 直線 843 公尺但步行 **1,327 公尺** ⇒ **不符合**
+    （這筆就是「直線近、步行遠」的驗收案例）
+  - 同服務 `foot` 與 `car` 對同一組座標回不同距離（2,826.8 m vs 2,925.1 m）⇒ 證明真的用了 foot profile
+- ⚠️ **未做（列為後續）**：`mrt_cache` 沒有 TTL，切換 profile **之前**寫入的舊值（當時是車用 profile
+  算出來的）不會自動重算。快取是顯示用（1.5 公里門檻），且新查詢會在同一個 key 上覆寫；
+  要一次清乾淨的話，最小作法是**把 profile 名放進 cache key**（`mrt:v2:<lat>,<lng>`），
+  這樣舊 key 自然失效、也不必新增欄位或做 PG 遷移。
+
+### 99.5 C 意見回饋
+
+- **C1／C2**（前一段已提交）：聯絡方式取自已驗證會員的 email，前台移除聯絡欄位與長段說明。
+- **C3 附件**：新增 `v3/src/feedbackMedia.js`（同步）＋`feedbackMediaAsync.js`（PG 島嶼）＋
+  `feedback_attachment` 表（schema migration **version 6**）。
+  - **只寫本機** `DATA_DIR/feedback-media/`：**不推 R2、不掛 express.static、
+    `auth.js publicPath()` 不得出現任何 feedback-attachment 字串**；唯一入口是
+    `requireAdminApi` 的兩條 GET（縮圖／原圖，`Cache-Control: private, no-store`）。
+  - 驗證順序：空檔 → 大小（> 1,000,000 bytes ⇒ 413）→ magic bytes → **只允許 PNG／JPEG／WebP
+    （明確拒絕 AVIF，不沿用 `/api/media` 的允許清單）** → `normalizeImage()` 真的解碼。
+    sharp 不在時維持 503，**不降級**成只驗 magic bytes。
+  - 生命週期：先上傳（`feedback_id = 0`）→ 送出回饋時在**同一筆交易**內 claim（數量不符就
+    整筆 rollback）→ 取消／關閉由前端 best-effort DELETE → 24 小時孤兒由 sweep 清（開站 60 秒後
+    一次、之後每 6 小時）。
+  - 前端：`express.raw` 逐檔上傳（不引入 multipart 相依）、貼上與選檔共用同一份清單、
+    第 5 張／過大／格式不符都有明確訊息並保留已成功的、失敗時保留內容與附件可重試。
+  - 上限提示的補強：**已達上限時伺服器把「目前還沒送出的附件」一起回給前端**，
+    讓上一次沒送完就關掉瀏覽器的使用者看得到、刪得掉（否則會卡在「已達上限」卻看不到那幾張圖）。
+
+### 99.6 順手修掉的既有缺陷（不是工作單項目，但當場擋住了驗收）
+
+1. **SQLite 模式下每一筆站內刊登都 400**：`server.js` 傳給 `createSelfListingAsync()` 的
+   `matchCandidates` 是 **async** 的 PG 島嶼版本，而 SQLite 分支把它直接往下傳給**同步**的
+   `createSelfListing()` ⇒ `bestMatch()` 收到 Promise，回一句
+   `(candidates || []) is not iterable`。已改成在 SQLite 分支用同步的 `listMatchCandidates()`。
+2. **分享頁把物件說明當純文字印出來**：`esc(d.body)` 會讓畫面直接出現 `<p>` 這幾個字。
+   改成過一次與 `index.html` 相同的白名單 sanitizer 再放進 `innerHTML`。
+3. **`[hidden]` 輸給 `display:flex`**：`.auth .member { display:flex }` 的權重高於 UA 的
+   `[hidden]{display:none}`，於是**訪客也會看到「回找房頁面／登出」**（375px 訪客截圖上實際看到）。
+   已在 `listing.html` 加上 `[hidden] { display: none !important; }`。
+
+> 📌 第 3 點是**看截圖才發現的**：自動化斷言（`hidden` 屬性、`aria-live`）全綠，
+> 但畫面是錯的。視覺檢查不能只用 DOM 屬性代理。
+
+### 99.6b A3 的完整修法（第一次只修了一半，靠端到端驗收才發現）
+
+第一次只改了 `selfTraits.js` 的 `||` 優先序，單元測試也綠。但把後台真的改名並發布之後，
+**前台仍然顯示舊名稱** —— 因為 `catalogTraitExtras().labels` 與 `selfListingMeta()` 的目錄來源
+都被 `isRentalCatalogV2Enabled(flags)` 擋住；本機（與任何沒開 v2 的安裝）旗標是關的，
+所以標籤根本沒被套用。
+
+修法（工作單要求的「顯示名稱與穩定的條件 ID／key 必須分開處理」）：
+
+- `catalogTraitLabelMap(catalog)`：只回 id → label，**不看旗標**。
+- `overlayTraitLabels(groups, labels)`：只換 `label`，結構與 id 完全不動（純函式，不改原陣列）。
+- `selfListingMeta({ catalog, catalogLabels })`：`catalog` 決定**結構**（仍綁 v2 旗標），
+  `catalogLabels` 決定**顯示名稱**（一律套用）。
+- `decorateSelfListing()` 的 `trait_labels` 改用 `catalogTraitLabelMap()`。
+- `GET /api/self-listings` 一律讀已發布目錄（v2 開時當結構來源，關時只當標籤來源）。
+
+驗收：後台改名 → 發布 → 重新載入，刊登表單 chip／我的刊登卡片／分享頁 chips 全部同步，
+且 24 個條件的 id 與已勾選項不變。**這一條是「單元測試綠但功能沒通」的實例，
+寫進 §7 的踩坑清單。**
+
+### 99.7 這一批的測試與尺規
+
+- 新增：`v3/test/feedback-media.test.js`（C3 核心）、`v3/test/public-share-page.test.js`（A5）、
+  `v3/test/mrt-walk-live.test.js`（A4 打**真實**外部服務）。
+- 擴充：`mrt.test.js`（A4 門檻／狀態機／前端狀態機／路由順序）、`rental-match.test.js`（B1／B2 配對）、
+  `wish-room.test.js`（B1 儲存與 legacy）、`self-traits-taxonomy.test.js`（A3 目錄優先＋後台可見性）、
+  `listing-tools-ui.test.js`（A2）、`wish-room-ui.test.js`（B2）、`feedback.test.js`（C3 UI）。
+- **尺規**：新增四條 C3 路由＋一條 A4 路由 ⇒ **288 → 293 條**，
+  `v3/test/route-data-map.test.js` 與本文件的「現況」表都已同步。
+
+## 二之負七十一、2026-10-01 第一百批：PR #611 審閱修正（R1～R6）
+
+**來源**：Owner 審閱文件 `5151_PR611_Review_and_DS_Followup_20261001.txt`（審閱 HEAD `1b93cd9`）。
+維持同一張 PR #611。**Production 未部署。**
+
+### 100.1 R1｜A4 的四個正確性缺口
+
+1. **快取沒有來源／版本契約**：`mrt_cache` 現在有 `source`／`checked`／`walk_m`／`searched_m`
+   四欄，`MRT_CACHE_CONTRACT = "osrm-foot:v1"` 是**來源＋演算法版本**的契約字串。
+   `getCachedMrt()` 只採計 `checked = 1 且 source = 契約` 的列，其餘一律當成「沒有快取」⇒ 重算。
+   舊的車用 profile 值就是靠這一條失效的（不必做全站回填，按需重算）。
+   **PG 也要補欄位**：`ensurePgSchema()` 只在 cutover 鏡射整張表，既有 PG 表補不了欄位
+   ⇒ `crawlerWrites.setCachedMrtAsync()` 第一次寫入前送 `ADD COLUMN IF NOT EXISTS`
+   （`MRT_CACHE_PG_COLUMNS`）。背景掃描 `mrtCacheKeysQuery()` 也改成只回已查證的 key。
+2. **門檻要用未四捨五入的公尺**：`fetchMrtAccessWithin()` 的 `walk_m` 現在是原始公尺
+   （不再 `Math.round` 後才判定），`walk_km` 只給顯示。配對端 `evaluateMatch()` 也改成讀
+   `mrt_walk_m`；只有公里可用時採保守規則（**1.0 公里＝未確認**，因為可能是 1,049 公尺）。
+   ⚠️ 這裡踩到兩次 `Number(null) === 0`：snapshot 與 `evaluateMatch` 都曾把「沒有資料」
+   轉成 0 公尺 ⇒ 直接符合。已用 `nonNegativeNumberOrNull()` 收斂。
+3. **候選站部分失敗／被上限截斷時不得宣告「已查證沒有」**：只有「所有必要候選都查完、
+   沒有失敗、也沒有被上限截斷」才回 `none`（`resolved: true`）；否則回 `unknown`（待確認）並附上
+   `nearest_walk_m` 供前端顯示。候選上限由 5 提到 8，並加上「查到符合就提早結束」
+   （最常見的情況只打一次外部服務）。
+4. **0 公尺是合法距離**：`roundKm()`／`minutesFromKm()`／`isWalkableMrtDistance()` 都改成 `>= 0`，
+   不再用 `> 0` 把「查詢點與站點出入口重合」過濾掉。
+
+### 100.2 R2｜站內刊登的費用三態與座標關聯
+
+- `listings` 新增 `fee_includes`（JSON 三態）與 `self_mrt_station`／`self_mrt_walk_m`／
+  `self_mrt_source`／`self_mrt_checked_at`。**migration version 7**（`self_listing_fee_mrt_schema`）。
+  ⚠️ 只改 `ensureSelfListingSchema()` 沒有用：migration runner 只跑沒跑過的版本，既有資料庫不會
+  重跑 version 3（本機實測回 `no such column: fee_includes`）。PG 由
+  `SELF_LISTING_PG_COLUMNS` 的 `ADD COLUMN IF NOT EXISTS` 補。
+- 三個寫入路徑（建立／草稿發布／匯入發布）× 兩個 driver 共用
+  `resolveSelfListingMeta(input, previous, { addressChanged })`：
+  費用沒提到就沿用；**地址變了卻定位不到 ⇒ 清掉舊座標與舊查證**；地址沒變則沿用。
+- 發布路徑（`POST /api/self-listings`、`POST /api/self-listings/:id/publish`）先做
+  `resolveSelfListingGeo()`：地理編碼 → `fetchMrtAccessWithin()` → 把結果寫進**同一份 `mrt_cache`**
+  與房源列。**全程 fail-soft**，外部服務失敗不擋刊登（配對看到的就是「未確認」）。
+- 費用推論的過度概括也修了（`listingCost.js`）：改成以「費用**組成項目**」判定
+  —— `utilities` 要同時看到水與電（「只有水費已含」⇒ unknown）、`internet` 不再接受
+  「第四台／有線電視」（那是不同的東西）。`水電` 也補進 `FEE_KIND`（很多來源只寫「水電費 500 另計」）。
+
+### 100.3 R3～R5｜回饋附圖的三個使用流程缺口
+
+| 缺口 | 修法 |
+|---|---|
+| R3 一般會員的縮圖 403 | `publicAttachmentShape(row, { scope })` 分兩種：`owner`（`/api/feedback/attachments/:id/thumb`，只給**本人且尚未送出**）與 `admin`（`/api/feedback-attachments/…`）。前台另外優先用**本機 blob** 預覽，並在換世代／刪除時 `revokeObjectURL()` |
+| R3 上傳中提交／延遲完成的圖混進新回饋 | 送出鈕在上傳中 disabled，提交前再擋一次；每次開啟對話框 `feedbackImageGeneration += 1`，上傳回來時世代不符就丟棄並刪掉那一張 |
+| R4 四張上限可被並行請求繞過 | 配額改成**單句條件式 INSERT**（`… SELECT … WHERE (SELECT COUNT(*) …) < 4`），不再 `COUNT → await 解碼 → INSERT`；`claim` 自己也擋 `> 4` |
+| R5 claim 與刪除／清理競態 | 刪除與孤兒清理都改成**帶齊條件的 UPDATE … RETURNING**（`user_id`／`feedback_id = 0`／`deleted_at IS NULL`），只有真的搶到資格的那一列才會被 unlink |
+
+### 100.4 R6｜兩個 web 節點的附件可用性
+
+**證據**（2026-10-01 實查）：
+
+| 節點 | `DATA_DIR` 本體 | 私有媒體 |
+|---|---|---|
+| web-A（CasaOS 192.168.0.140） | `/opt/5151-shadow/web-a/data`（**節點本機**） | `/mnt/5151-media/...`＝**NFS**（`192.168.0.220:/volume1/5151-media`，vers=3, soft） |
+| web-B（Synology 192.168.0.220） | `~/5151-shadow/web-b/data`（**節點本機**） | `/volume1/5151-media/...`（本機 volume，NFS 來源） |
+
+`member-media`／`self-photos` 早在 2026-09-24 就用這份共享儲存疊上去了（`deploy/shadow-ha/media-share/`），
+**`feedback-media` 漏了** ⇒ A 台上傳、B 台 404，跨節點 sweep 也會刪 metadata 卻留下另一台的孤兒檔。
+修法是把 `feedback-media` 加進同一份共享儲存（程式只認 `DATA_DIR/feedback-media`，不必改程式）：
+
+- repo：`docker-compose.yml`、`deploy/shadow-ha/web/web-a|web-b/docker-compose.yml`（web-B 的 **worker** service 也要）
+- 主機正本：`/opt/5151-shadow/web-a/docker-compose.yml`、`~/5151-shadow/web-b/docker-compose.yml`
+  已同步更新（各自備份 `.bak-20261001`），`docker compose config` 驗證通過
+- 共享目錄 `/volume1/5151-media/feedback-media` 已建立；A 端 NFS 可讀寫（實測 touch/rm）
+- ⚠️ **容器尚未重建**：bind mount 要 `docker compose up -d` 才會生效，那是一次部署
+  ⇒ 依 Owner 規則等當次批准，**沒有**自行重啟
+- 新增守衛測試 `v3/test/media-share-mounts.test.js`：三份 compose 都要有三個目錄、
+  web-B 的兩個 service 都要有、mount-guard 腳本的兩個迴圈都要涵蓋 `feedback-media`
+
+### 100.5 A1 與其他
+
+- A1：提示與送出訊息改回工作單指定的原文「請寫一些這屋子的故事與回憶」（不再附加「（至少 8 個字）」）；
+  8 字規則保留，改由欄位下方的即時字數提示說明。前端與後端各一份常數（`SELF_BODY_HINT` /
+  `SELF_BODY_HINT_CLIENT`），測試釘住不得再附加字數。
+- 順手修掉一個**既有的跨月假紅**：`admin-settings-async.test.js` 把 maps 用量寫死在 `2026-09`，
+  而 `summarizeMapsUsage()` 用的是**太平洋時區**的「今天」⇒ 太平洋跨月的那一刻本機紅、CI 綠。
+  改成跟著實作同一個 `pacificYmd()` 擺資料。
+- ⚠️ **新增欄位一定要開新的 migration version**（見 100.2 的踩坑）：這是同一類錯誤的第二次
+  （第一次是 `mrt_cache`，那次運氣好寫在 `addColumnsIfMissing()` 的模組初始化路徑上）。
+
+## 二之負七十二、2026-10-01 第一百零一批：第二輪複審的補正（PG 分支漏修）
+
+**來源**：`5151_PR611_Round2_Review_20261001.txt`（審閱 HEAD `682b18d`）。
+
+### 101.1 🚨 這一輪最重要的一件事：我的編輯腳本中止了，我卻以為改好了
+
+第一百批的 R4／R5 我寫了一個 python 腳本要改 `feedbackMediaAsync.js`，腳本裡有 6 個 `sub()`，
+**第 5 個的錨點數量不符而丟出 AssertionError ⇒ 整個腳本沒有寫檔**。
+我後續只用 `grep -n 'FEEDBACK_ATTACHMENT_MAX' feedbackMediaAsync.js` 就看到有命中（那其實是 **import 行**），
+於是回報「PG 也修好了」。審閱用注入 SQLite executor 跑 PG async 原始碼，五張並行得到
+`upload_count=5、claim_count=5、stored_count=5`，當場戳破。
+
+**教訓**：批次改檔的腳本失敗時要**重新確認每一個目標都真的落地**（逐檔 `sed` 讀回來看），
+不能用「某個字串有出現」代替「這一段邏輯改了」。這一條已寫進 §7 的踩坑清單。
+
+### 101.2 R4／R5：PG async 分支
+
+- 上傳配額：`saveFeedbackAttachmentAsync()` 不再先 COUNT。改成 `runInQuotaTransaction()`：
+  **真 PG 走 `pgDriver.withTransaction()`**（`pgDriver.query()` 是連線池，用語句送 `BEGIN`／`COMMIT`
+  不會形成同一個交易、advisory lock 也白鎖），交易內 `pg_advisory_xact_lock(使用者)` →
+  COUNT → INSERT。同一使用者的並行上傳會被序列化；不同使用者不互相阻塞。
+  超過上限回 `0` ⇒ 呼叫端刪掉這次寫出的檔案並回 409。
+- claim：去重後 > 4 ⇒ 400 `attachment_limit`，讓回饋交易整筆 rollback。
+- delete／sweep：改成帶齊條件的 `UPDATE … RETURNING`，只刪 RETURNING 勝出的那一列實體檔。
+
+### 101.3 R1：OSRM 原始公尺、缺值、升級順序
+
+- `osrmWalkKm()` 不再 `Math.round(meters)`：1,000.4 公尺曾被當成 1,000 ⇒ 判成符合。
+  公里只給顯示，判定一律用原始公尺。
+- `nullableMeters()`：`Number(null) === 0` 這個坑在本專案踩過三次（snapshot、`evaluateMatch`、
+  現在是 `mrtRowToAccess`／`mrtCacheUpsert`）。缺值一律 null，而且**不可以用顯示公里回推原始距離**。
+- 升級順序：`MRT_CACHE_PG_COLUMNS` 與升級函式搬到 `v3/src/mrtCacheSchema.js`；
+  **讀取路徑**（`preloadDecorationProviderAsync`）在建立 decoration loader 之前先升級
+  （以 exec 函式身分用 WeakMap 記憶）。升級是 **best-effort**（`try/catch`、失敗不快取）：
+  離線夾具的注入式 `exec` 只接受它認識的 SQL，硬要它跑 DDL 會讓整個讀取路徑陪葬
+  （`commute-snapshot-async` 3 項紅就是這樣來的）。真的升級不了時，讓後面那句 SELECT
+  用 42703 自己講缺哪個欄位。「真的有升級」由**真 PG** 的
+  `v3/test/mrt-cache-schema-live-pg.test.js`（先建舊形狀的表）守住。
+
+### 101.4 R2：查證狀態持久化與偽造防護
+
+- `listings` 加 `self_mrt_state`（within／outside）與 `self_mrt_nearest_m`
+  （**migration version 8**；PG 由 `SELF_LISTING_PG_COLUMNS` 補）。
+  「已查證超過 1 公里」以前會掉回 unknown，現在是 `outside` ⇒ 配對產生硬衝突。
+- `resolveSelfListingMeta()`：缺值保持 null；沿用舊結果時驗來源契約（`MRT_CACHE_CONTRACT`）。
+- HTTP 入口（建立／發布）先 `stripServerVerifiedFields()` 剝掉會員自帶的
+  `lat`／`lng`／`geo_source`／`mrt_*`，只認站方查證結果。
+
+### 101.5 順手抓到的第二個同類缺陷
+
+`publishImportedDraftListingAsync()` 的 SQLite 分支也把 **async** 的 `options.matchCandidates`
+傳給**同步**的 `publishImportedDraftListing()` ⇒ 發布時回「(candidates || []) is not iterable」。
+與第九十九批的建立路徑是同一個坑（那次只修了建立）。由新的 HTTP 端到端測試抓到。
+
+### 101.6 這一輪的測試與變異
+
+- 新增：`feedback-media-live-pg`（真 PG／不同連線）、`feedback-media-ui-generation`
+  （deferred fetch 實跑 A／B 交錯）、`self-listing-http-mrt`（真 HTTP 路由）、
+  `mrt-cache-schema-live-pg`（舊形狀 PG 表 + 讀取路徑升級）。
+- 變異：這一輪 15 個新變異全部被殺（PG 5、R3 前台 2、R2 HTTP 5、R1 3）；
+  六套電池 ＋ 工具內建那一條合計 **38 個變異、存活 0/38**。
+- 順手修掉的既有缺陷（二）：訪客搜尋的「請求路徑零 SQLite I/O」量測會撞到啟動暖機 ——
+  projection 暖機每 500 毫秒做一次 `db.exec` 的 DDL，插進量測區間就被記成違規 I/O
+  （CI 的 `cooperative member processing…` 隨機紅燈）。暖機改成可暫停
+  （`pausePublicListingsProjectionBackfill()`／`resume…()`），`withoutSqliteIO()` 量測期間暫停；
+  正式站行為不變。本機：沒暫停 3/3 紅、加了 4/4 綠。
+- 順手修掉的既有缺陷：Stage 1 fixture 的電話外洩偵測會把 12 字元 token hash
+  （`opaqueId()`＝sha256 前 12 碼）的隨機數字串誤判成手機號碼 —— CI 的 `a3b9821`
+  就是這樣紅的（實測 0.0091%／每個 hash ⇒ 該測試檔每次約 4.5% 會中）。
+  偵測器改成匯出常數 `FIXTURE_PHONE_RE`，邊界從「前後不是數字」改成「前後不是十六進位字元」，
+  測試改吃正式那一條，變異套組 `FIXTUREPHONE_MUTATIONS` 守住。
+- 全套 `npm test`（HEAD `1653b96`、工作區乾淨）：3594 項、**2 紅**，兩項都在乾淨的
+  `origin/master`（`f485a89`）上照樣紅（cursor-2000、cooperative），與本批無關。
+  `PR A src manifest` 在 Commit 之後就過（它只在工作區髒時紅）。
+
 ## 二之二、2026-09-27 session 收尾：現況、下一步、交接紀律
 
 **這一段是給下一個 session 的第一站。** 前面的第一～二十批是逐批紀錄，這裡是「現在在哪」。
@@ -5922,12 +6234,12 @@ region 4 section 1 → zip    → sid 0
 node v3/scripts/route-data-map.mjs
 ```
 
-| 判定 | 起點 | **現在（2026-09-29 第八十七批）** |
+| 判定 | 起點 | **現在（2026-10-01 第一百批：審閱修正 R1～R6）** |
 |---|---:|---:|
 | SQLite | 95 | **0** |
 | MIXED | — | **0** |
 | 無直接DB | — | **20** |
-| PG | 22 | **268** |
+| PG | 22 | **275** |
 | **缺口（SQLite＋MIXED）** | — | **0** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的

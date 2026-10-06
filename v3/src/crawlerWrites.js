@@ -150,10 +150,22 @@ export async function persistHpListingFieldsAsync(postId, next, options = {}) {
 }
 
 // db.js setCachedMrt(): the MRT access cache (decoration reads it per row).
+//
+// R1：`mrt_cache` 的「來源／演算法版本／查證狀態／原始公尺」四欄 —— 升級與常數搬到
+// `mrtCacheSchema.js`，讓**讀取路徑**（裝飾資料的 provider）也能在 SELECT 之前先升級。
+// 這裡只負責在寫入前確保一次。
+export { MRT_CACHE_PG_COLUMNS, ensureMrtCacheContractOnce } from "./mrtCacheSchema.js";
+
 export function setCachedMrtAsync(lat, lng, access, options = {}) {
   return write(
     options,
-    (exec) => setCachedMrtRepo(exec, { deps: options.deps || listingFieldsBuildContext(), lat, lng, access }),
+    async (exec) => {
+      if (!options.exec) {
+        const { ensureMrtCacheContractOnce } = await import("./mrtCacheSchema.js");
+        await ensureMrtCacheContractOnce(options.pgDriver || (await sharedPgDriver()));
+      }
+      return setCachedMrtRepo(exec, { deps: options.deps || listingFieldsBuildContext(), lat, lng, access });
+    },
     () => setCachedMrtSync(lat, lng, access),
   );
 }

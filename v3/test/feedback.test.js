@@ -153,8 +153,32 @@ test("index.html exposes feedback entry, modal and context capture", () => {
   assert.match(html, /"\/api\/feedback"/);
   // honeypot field present and visually hidden
   assert.match(html, /id="feedbackHp"/);
-  assert.match(html, /id="feedbackLegal"/);
-  assert.match(html, /\/api\/feedback\/meta/);
+  // C1（2026-10-01 工作單）：前台不再有聯絡方式欄位，也不送 contact 給後端
+  //（聯絡方式一律由後端從已驗證的會員身分取得）。
+  assert.doesNotMatch(html, /id="feedbackContact"/, "前台不得再有聯絡方式欄位");
+  assert.doesNotMatch(html, /contact:\s*\(\$\("feedbackContact"\)/, "前端不得再送 contact");
+  // C2：整段長文說明不再顯示（元素與載入器都移除；`feedbackMeta().legal` 仍保留給稽核與測試）
+  assert.doesNotMatch(html, /id="feedbackLegal"/, "前台不得再顯示長段回饋說明");
+  assert.doesNotMatch(html, /loadFeedbackLegal/, "長文的載入器要一起移除");
+  assert.match(html, /\/api\/feedback/);
+  // C3：附圖——貼上與選檔共用同一份清單，合計最多 4 張、每張上限 1,000,000 bytes。
+  assert.match(html, /id="feedbackImages"/);
+  assert.match(html, /id="feedbackImageTray"/);
+  assert.match(html, /id="feedbackImageCount"/);
+  assert.match(html, /id="feedbackImagePick"/);
+  assert.match(html, /const FEEDBACK_IMAGE_MAX = 4/);
+  assert.match(html, /const FEEDBACK_IMAGE_MAX_BYTES = 1000000/);
+  assert.match(html, /async function addFeedbackImages\(/);
+  assert.match(html, /async function removeFeedbackImage\(/);
+  assert.match(html, /data-fb-image-del/);
+  // 貼上只掛在回饋對話框上（其他地方的一般文字貼上不受影響），而且有去重
+  assert.match(html, /\$\("feedbackDialog"\)\?\.addEventListener\("paste"/);
+  assert.match(html, /const seen = new Set\(\)/);
+  // 送出時把「已上傳成功的附件 id」一起送；失敗時保留內容與附件
+  assert.match(html, /attachments: feedbackAttachments\.map\(\(row\) => row\.id\)/);
+  assert.match(html, /\/api\/feedback\/attachments/);
+  // 成功後才清空（而且已綁定的附件直接歸零，不再發 DELETE）
+  assert.match(html, /feedbackAttachments = \[\];\s*\n\s*renderFeedbackImageTray\(\);/);
 });
 
 test("admin.html exposes feedback inbox", () => {
@@ -163,6 +187,12 @@ test("admin.html exposes feedback inbox", () => {
   assert.match(html, /async function loadFeedback/);
   assert.match(html, /\/api\/admin\/feedback/);
   assert.match(html, /data-fb-save/);
+  // C3：站方看得到附件縮圖（圖片本身只走 requireAdminApi 的路由）
+  assert.match(html, /function renderFeedbackImages\(row\)/);
+  // 圖片 URL 由 API 給（`thumb_url`／`url`），後台不自己拼路徑，避免與路由漂移。
+  assert.match(html, /item\.thumb_url/);
+  assert.match(html, /item\.url/);
+  assert.match(html, /renderFeedbackImages\(row\)/);
   assert.match(html, /id="opsOutboxCompact"[^>]*hidden/);
   assert.match(html, /button\[hidden\], a\.ghost\[hidden\], a\.primary\[hidden\]/);
   assert.match(html, /display:\s*none\s*!important/);

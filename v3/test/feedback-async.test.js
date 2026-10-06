@@ -107,14 +107,16 @@ function worlds({ failOutbox = false } = {}) {
 const INPUT = {
   kind: "bug",
   body: "搜尋結果的分頁偶爾會跳到第一頁",
-  contact: "fb@example.test",
+  // ⚠️ C1（2026-10-01 工作單）：這個欄位**故意留著**，用來證明它會被後端忽略——
+  // 實際儲存的 contact 必須是會員自己的 email（見下面 `contact 必須等於會員 email`）。
+  contact: "attacker@example.test",
   // ⚠️ `normalizeFeedbackContext()` 只留白名單（route／view／role／version／q／filter…）——
   // `path` 不在裡面會被丢掉（第一版測試就是這樣紅的：payload.context.path 是 undefined）。
   context: { route: "/listings", version: "test-1" },
 };
 
 test("送出：PG 上一筆 feedback ＋ 一筆 outbox 事件，欄位與同步版逐欄相同", async () => {
-  const [lite, , pgDriver, feedbackRows, outboxRows] = worlds();
+  const [lite, mem, pgDriver, feedbackRows, outboxRows] = worlds();
   const out = await feedbackAsync.submitFeedbackAsync(UID, INPUT, { ...PG, pgDriver });
   assert.deepEqual(out, { ok: true, id: Number(feedbackRows()[0].id) });
   assert.equal(feedbackRows().length, 1, "PG 要有一筆 feedback");
@@ -139,6 +141,11 @@ test("送出：PG 上一筆 feedback ＋ 一筆 outbox 事件，欄位與同步�
   for (const key of ["kind", "body", "contact", "status", "admin_note"]) {
     assert.equal(row[key], syncRow[key], `${key} 必須與同步版相同`);
   }
+  // C1：前端傳什麼都不算——contact 必須是會員自己的 email（兩條路徑都一樣）。
+  const memberEmail = mem.prepare("SELECT email FROM users WHERE id = ?").get(UID).email;
+  assert.equal(row.contact, memberEmail, "PG 的 contact 必須是會員 email，不是前端傳來的值");
+  assert.notEqual(row.contact, INPUT.contact, "前端傳來的 contact 不得被採用");
+  assert.equal(syncRow.contact, memberEmail, "同步版同一條規則");
   const syncPayload = JSON.parse(syncOutbox.payload);
   for (const key of ["kind", "content", "contact", "trust_level", "app_version"]) {
     assert.equal(payload[key], syncPayload[key], `payload.${key} 必須與同步版相同`);

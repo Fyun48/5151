@@ -44,6 +44,8 @@ const sync = {
   publicSponsorSettings: db.publicSponsorSettings,
 };
 const asyncMod = await import("../src/adminSettingsAsync.js");
+// 用**實作同一個**太平洋日期函式（測試自己算時區只會再製造一次跨月假紅）。
+const { pacificYmd } = await import("../src/mapsBilling.js");
 
 const PG = { driver: "postgres" };
 const diskPath = () => path.join(dataDir, "v3.db");
@@ -449,17 +451,31 @@ test("getAdminMapsSettingsAsync：開關、用量與 provider 判斷都與同步
   const usage = (h, day, essentials, advanced) => h.prepare(
     "INSERT OR REPLACE INTO maps_usage_daily(day, essentials, advanced) VALUES (?,?,?)",
   ).run(day, essentials, advanced);
-  usage(disk, "2026-09-01", 1, 0);
-  usage(exec.raw, "2026-09-01", 7, 3);
-  usage(exec.raw, "2026-09-28", 2, 1);
+  // ⚠️ 日期要**跟著實作的時鐘**（`summarizeMapsUsage()` 用的是太平洋時區的「今天」），
+  // 寫死 2026-09 會在太平洋時間跨月的那一刻無聲爆掉（2026-10-01 實測：本機紅、CI 綠，
+  // 差別只在跑的時間點）。這裡用「本月已過的日子」來擺資料：
+  // 月初第一天只有一個合法日期，就不要擺第二列（`INSERT OR REPLACE` 會蓋掉第一列）。
+  const today = pacificYmd(Date.now());
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const secondDay = today > monthStart ? today : "";
+  usage(disk, monthStart, 1, 0);
+  usage(exec.raw, monthStart, 7, 3);
+  let expectedMonthEssentials = 7;
+  let expectedMonthAdvanced = 3;
+  if (secondDay) {
+    usage(exec.raw, secondDay, 2, 1);
+    expectedMonthEssentials += 2;
+    expectedMonthAdvanced += 1;
+  }
 
   const viaPg = await asyncMod.getAdminMapsSettingsAsync({ ...PG, exec, strict: true });
   assert.equal(viaPg.googleEnabled, true, "要讀 PG 的開關（本機是 false）");
   assert.equal(viaPg.enabled, true, "通勤尖峰也要讀 PG");
   assert.equal(typeof viaPg.hasKey, "boolean", "hasKey 由環境變數決定（兩邊相同）");
   assert.equal(typeof viaPg.usage.todayEssentials, "number", "用量要有今天的 essentials");
-  assert.equal(viaPg.usage.monthEssentials, 9, `9 月要含 PG 的 7+2 筆（實際 ${viaPg.usage.monthEssentials}）`);
-  assert.equal(viaPg.usage.monthAdvanced, 4, "advanced 也要算 PG 的 3+1");
+  assert.equal(viaPg.usage.monthEssentials, expectedMonthEssentials,
+    `本月要含 PG 的每一筆（實際 ${viaPg.usage.monthEssentials}）`);
+  assert.equal(viaPg.usage.monthAdvanced, expectedMonthAdvanced, "advanced 也要一起算");
   // 形狀：與同步版同一組鍵（少了鍵前端會壞）
   assert.deepEqual(
     Object.keys(viaPg).sort(),

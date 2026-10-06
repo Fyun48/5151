@@ -38,6 +38,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { claimFeedbackAttachmentsAsync } from "./feedbackMediaAsync.js";
 import { ensurePgSchema } from "./pgSchema.js";
 
 export const FEEDBACK_TABLES = ["feedback", "feedback_outbox"];
@@ -99,6 +100,23 @@ export async function ensureFeedbackStoreOnce(pgDriver) {
   } catch (error) {
     schemaReady.delete(pgDriver);
     throw error;
+  }
+}
+
+// C1：會員 email（唯讀；注入式 exec／PG／SQLite 三條路都走同一個查詢）。
+export const FEEDBACK_MEMBER_EMAIL_SQL = "SELECT email FROM users WHERE id = ?";
+
+async function memberEmailAsync(userId, options = {}) {
+  const uid = Number(userId) || 0;
+  if (!uid) return "";
+  try {
+    const exec = await execFor(options);
+    // ⚠️ `execFor()` 已經回傳 `{ rows, rowCount }`（自己再包一層會拿到物件、`[0]` 永遠是 undefined）。
+    const { rows } = normalizeResult(await exec(FEEDBACK_MEMBER_EMAIL_SQL, [uid]));
+    return String(rows[0]?.email || "");
+  } catch {
+    // 讀不到會員 email 時留空（與同步版的 userInfo() 同一個容忍度）：不讓回饋因此送不出去。
+    return "";
   }
 }
 
@@ -190,7 +208,9 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
   const body = String(input.body || "").trim();
   if (body.length < FEEDBACK_BODY_MIN) throw httpError(`請多寫一點（至少 ${FEEDBACK_BODY_MIN} 個字）`);
   const trimmedBody = body.slice(0, FEEDBACK_BODY_MAX);
-  const contact = String(input.contact || "").trim().slice(0, FEEDBACK_CONTACT_MAX);
+  // C1（2026-10-01 工作單）：與同步版同一條規則——聯絡方式取自「已驗證會員的 email」，
+  // 不採用前端傳來的值（避免改請求偽造他人聯絡方式）。讀不到就留空，不捏造。
+  const contact = await memberEmailAsync(uid, options).then((email) => email.slice(0, FEEDBACK_CONTACT_MAX));
   let contextText = JSON.stringify(normalizeFeedbackContext(input.context));
   if (contextText.length > FEEDBACK_CONTEXT_MAX) contextText = "{}";
 
@@ -201,6 +221,8 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
     const row = one((await exec(FEEDBACK_INSERT_SQL, [uid, kind, trimmedBody, contact, contextText, iso(now)])).rows);
     const rowFull = row || one((await exec(FEEDBACK_BY_ID_SQL, [Number(row?.id) || 0])).rows);
     const ctx = decorateRow({ ...rowFull, context: rowFull?.context ?? contextText }).context;
+    // C3：附件綁定。注入式 exec 沒有真的交易（測試／探針），照同步版的順序跑並在失敗時往上丟。
+    await claimFeedbackAttachmentsAsync(exec, uid, input?.attachments, Number(rowFull.id), now);
     await enqueueWithExec(exec, {
       feedbackId: Number(rowFull.id),
       data: {
@@ -231,6 +253,8 @@ export async function submitFeedbackAsync(userId, input = {}, options = {}) {
       const row = one((await tx(FEEDBACK_INSERT_SQL, [uid, kind, trimmedBody, contact, contextText, iso(now)])).rows);
       if (!row) throw new Error("feedback 寫入沒有回傳列");
       const ctx = decorateRow(row).context;
+      // C3：在同一個 PG 交易內 claim；數量不符就丟 409，整筆（含 feedback 列）rollback。
+      await claimFeedbackAttachmentsAsync(tx, uid, input?.attachments, Number(row.id), now);
       await enqueueWithExec(tx, {
         feedbackId: Number(row.id),
         data: {

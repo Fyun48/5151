@@ -34,6 +34,7 @@ import {
   normalizePhotoUrl,
   selfOpenInsertParams,
   selfOpenUpdateParams,
+  resolveSelfListingMeta,
   selfSearchKey,
   selfSourceKey,
   OPEN_SELF_COUNT_SQL,
@@ -83,6 +84,7 @@ import {
   getListingOfferHook,
   expireOpenSelfListings as expireOpenSelfListingsSync,
   SELF_BODY_MAX,
+  SELF_BODY_HINT,
   SELF_BODY_MIN,
   SELF_TITLE_MAX,
   getSelfListing as getSelfListingSync,
@@ -95,6 +97,7 @@ import {
 import { listingBodyPlain, sanitizeListingBodyHtml } from "./listingBody.js";
 import { isMemberMediaUrl } from "./memberMedia.js";
 import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
+import { MRT_CACHE_CONTRACT } from "./mrt.js";
 import { matchCandidatesAsync } from "./crawlerReads.js";
 import { bestMatch } from "./match.js";
 import { isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
@@ -345,6 +348,36 @@ async function runWith(options, { write = false }, runPostgres, runSqlite) {
 }
 
 // 注入式 exec 有兩種慣例（裸陣列／`{rows}`）⇒ 在邊界正規化成 `{rows}`。
+// R2：`listings` 多了費用三態與捷運查證欄位。`ensurePgSchema()` 只在 cutover 時鏡射整張表，
+// **既有的 PG 表補不了欄位** ⇒ 第一次寫入前用 PG 的 ADD COLUMN IF NOT EXISTS 補一次
+// （沿用 listingToolsAsync／crawlerWrites 的做法，失敗不快取）。
+export const SELF_LISTING_PG_COLUMNS = [
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fee_includes TEXT NOT NULL DEFAULT ''",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_station TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_walk_m DOUBLE PRECISION",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_source TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_checked_at TEXT",
+  // R2（第二輪）：查證狀態與「最近但超過」的距離。
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_state TEXT",
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS self_mrt_nearest_m DOUBLE PRECISION",
+];
+
+const selfListingSchemaReady = new WeakMap();
+export async function ensureSelfListingColumnsOnce(pgDriver) {
+  if (!pgDriver) return;
+  if (selfListingSchemaReady.has(pgDriver)) return selfListingSchemaReady.get(pgDriver);
+  const ready = (async () => {
+    for (const sql of SELF_LISTING_PG_COLUMNS) await pgDriver.exec(sql);
+  })();
+  selfListingSchemaReady.set(pgDriver, ready);
+  try {
+    await ready;
+  } catch (error) {
+    selfListingSchemaReady.delete(pgDriver);
+    throw error;
+  }
+}
+
 async function runnerFor(options = {}) {
   if (options.exec) {
     const injected = options.exec;
@@ -354,6 +387,7 @@ async function runnerFor(options = {}) {
     };
   }
   const pgDriver = options.pgDriver || (await sharedPgDriver());
+  await ensureSelfListingColumnsOnce(pgDriver);
   return (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
 }
 
@@ -605,8 +639,13 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
   const now = options.now ? new Date(options.now) : new Date();
   if (!isPg(options)) {
     const { publishImportedDraftListing } = await import("./selfListings.js");
+    const { listMatchCandidates } = await import("./db.js");
+    // 🚨 與建立路徑同一個坑（2026-10-01 由 HTTP 端到端測試抓到）：`publishImportedDraftListing()` 是
+    // **同步**的，而呼叫端傳進來的 `options.matchCandidates` 是 async 的 PG 島嶼版本 ⇒
+    // `bestMatch()` 收到 Promise，發布時回「(candidates || []) is not iterable」。
+    // SQLite 分支要用同步版（同一組 SQL builder）。
     return publishImportedDraftListing(sqliteHandle(), uid, postId, input, now, {
-      matchCandidates: options.matchCandidates,
+      matchCandidates: (listing) => listMatchCandidates(listing?.post_id || 0, listing || null),
     });
   }
   try {
@@ -629,7 +668,7 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
     if (input.accept_pledge !== true) throw httpError("請勾選屋主／代理人聲明後才能刊登");
     const address = composeSelfAddress(district, input.street || input.address);
     const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
-    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+    if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
     const kind = kindId(input.kind || input.housing_type);
     const role = roleId(input.role);
     const layout = layoutText(input);
@@ -680,6 +719,11 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
       contactName,
       phone,
       lineUrl,
+      // R2：地址換了就要讓舊座標／舊步行結果失效（與同步版同一條規則）。
+      ...resolveSelfListingMeta(input, row, {
+        addressChanged: String(row.address || "").trim() !== String(address || "").trim(),
+        mrtCacheContract: MRT_CACHE_CONTRACT,
+      }),
     }));
     await setPublisherFaceAsync(run, row.post_id, uid);
     // 配對候選：PG 版走 `crawlerReads.matchCandidatesAsync()`（同一組 builder）。
@@ -791,8 +835,16 @@ export async function createSelfListingAsync(userId, input = {}, options = {}) {
   const now = options.now ? new Date(options.now) : new Date();
   if (!isPg(options)) {
     const { createSelfListing } = await import("./selfListings.js");
+    const { listMatchCandidates } = await import("./db.js");
     return createSelfListing(sqliteHandle(), uid, input, now, {
-      matchCandidates: options.matchCandidates, maturity: options.maturity, isolation: options.isolation,
+      // 🚨 `createSelfListing()` 是**同步**的，而呼叫端（server.js）傳進來的
+      // `options.matchCandidates` 是 async 的 PG 島嶼版本。直接往下傳，`bestMatch()` 會拿到
+      // 一個 Promise，於是每一次站內刊登都在 SQLite 模式回
+      // 「(candidates || []) is not iterable」（400）——使用者只看到一句天書，刊登完全不能用。
+      // 這裡改成同步版（同一組 SQL builder，只是走本機 handle）。
+      matchCandidates: (listing) => listMatchCandidates(listing?.post_id || 0, listing || null),
+      maturity: options.maturity,
+      isolation: options.isolation,
     });
   }
   try {
@@ -854,7 +906,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
 
   const address = composeSelfAddress(district, input.street || input.address);
   const body = sanitizeListingBodyHtml(input.body || "", SELF_BODY_MAX);
-  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(`請寫一點物件說明（至少 ${SELF_BODY_MIN} 個字）`);
+  if (listingBodyPlain(body).length < SELF_BODY_MIN) throw httpError(SELF_BODY_HINT);
   const kind = kindId(input.kind || input.housing_type);
   const role = roleId(input.role);
   const layout = layoutText(input);
@@ -898,6 +950,8 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
   }));
   await run(SELF_OPEN_UPDATE_SQL, selfOpenUpdateParams({
     uid: id, postId, expires, body, storedPhotos, traitIds, deposit, created, contactName, roleName, phone, lineUrl,
+    // R2：與同步版共用同一個解析器（費用三態、地址定位、步行捷運查證）。
+    ...resolveSelfListingMeta(input, {}, { mrtCacheContract: MRT_CACHE_CONTRACT }),
   }));
   if (fixtureNs && isolation?.runId && isolation.kind && isolation.role && isolation.registered !== true) {
     await registerFixtureRowAsync(run, {

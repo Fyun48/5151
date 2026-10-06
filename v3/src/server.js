@@ -440,6 +440,8 @@ import {
   updateDescriptionTemplateAsync,
 } from "./listingToolsAsync.js";
 import { boxFromRoadDescription, geocodeAddress, needsListingGeo, hasWorkPoint } from "./geo.js";
+import { MRT_CACHE_CONTRACT, fetchMrtAccessWithin } from "./mrt.js";
+import { setCachedMrtAsync } from "./crawlerWrites.js";
 // geo_cache（跨節點共用的地理編碼快取）的 PG 島嶼入口。
 import { geoLookupAsync, getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
 // 「已下線但還沒確認」的自動確認掃描（原本只寫本機 SQLite）。
@@ -450,7 +452,7 @@ import { recentEventsAsync } from "./notifyQueueAsync.js";
 import { resetAllDataAsync, resetListingsAsync } from "./siteResetAsync.js";
 import { isTaiwanCoord } from "./geoPrecision.js";
 import { listingRedirectTarget } from "./openLink.js";
-import { publicListingView } from "./selfListings.js";
+import { catalogTraitLabelMap, publicListingView, stripServerVerifiedFields } from "./selfListings.js";
 import { authorizedListingSources } from "./floors.js";
 import {
   mimeForSelfPhoto,
@@ -522,6 +524,22 @@ import {
   submitFeedbackAsync,
   updateFeedbackAsync,
 } from "./feedbackAsync.js";
+import {
+  FEEDBACK_ATTACHMENT_MAX,
+  FEEDBACK_ATTACHMENT_MAX_BYTES,
+} from "./feedbackMedia.js";
+import {
+  countOpenFeedbackAttachmentsAsync,
+  deleteFeedbackAttachmentAsync,
+  getFeedbackAttachmentAsync,
+  getOpenFeedbackAttachmentAsync,
+  listFeedbackAttachmentsForAsync,
+  listOpenFeedbackAttachmentsAsync,
+  listFeedbackAttachmentsAsync,
+  saveFeedbackAttachmentAsync,
+  streamFeedbackAttachment,
+  sweepOrphanFeedbackAttachmentsAsync,
+} from "./feedbackMediaAsync.js";
 import { refreshHousingData } from "./housingFetch.js";
 import {
   TICK_BUDGET_MS,
@@ -2394,13 +2412,27 @@ app.get("/api/admin/wish-offer-reports", requireAdminApi, async (req, res) => {
   }
 });
 
+// C3：後台列表要能看到附件。一次查完（不是每列查一次），附件形狀與上傳時一致。
+async function withFeedbackAttachments(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return rows;
+  try {
+    const byId = await listFeedbackAttachmentsForAsync(rows.map((row) => Number(row.id) || 0));
+    return rows.map((row) => ({ ...row, attachments: byId.get(Number(row.id)) || [] }));
+  } catch (error) {
+    // 附件是額外資訊：查不到不該讓整個後台回饋清單掛掉。
+    console.error("[api] 讀取回饋附件失敗：", error?.message || error);
+    return rows.map((row) => ({ ...row, attachments: [] }));
+  }
+}
+
 app.get("/api/admin/feedback", requireAdminApi, async (req, res) => {
   try {
     res.json({
       ...feedbackMeta(),
       // 名單、統計與遞送狀態三者都必須來自 PG：同步版會顯示「別的節點送的回饋 0 筆」。
       stats: await feedbackStatsAsync(),
-      items: await listFeedbackAsync({ status: req.query?.status, kind: req.query?.kind }),
+      items: await withFeedbackAttachments(await listFeedbackAsync({ status: req.query?.status, kind: req.query?.kind })),
       ops_delivery: await deliveryControlAsync(),
     });
   } catch (error) {
@@ -3031,15 +3063,134 @@ app.get("/api/self-listings", async (req, res) => {
     // 自己的刊登、配對摘要、方案額度與 marketplace 開關全部走 PG 島嶼：同步版會讀到
     // **這台節點**的刊登與會員（別的節點建立的完全看不到），配對候選也只算本機的許願房（第八十批）。
     const flags = await getRentalMarketplaceFlagsAsync();
-    const catalog = isRentalCatalogV2Enabled(flags) ? await getRentalCatalogAsync() : null;
+    const v2 = isRentalCatalogV2Enabled(flags);
+    // A3：已發布的共用條件目錄一律要讀 —— `catalog` 決定表單**結構**（只有 v2 開時才由目錄決定），
+    // `catalogLabels` 決定**顯示名稱**（任何情況都要套用，後台改名才會同步到前台）。
+    const catalog = await getRentalCatalogAsync();
     res.json({
-      ...selfListingMeta(catalog ? { catalog } : {}),
+      ...selfListingMeta({ catalog: v2 ? catalog : null, catalogLabels: v2 ? {} : catalogTraitLabelMap(catalog) }),
       tools: await listingToolsInfoAsync(session.userId),
       owner_matching: await rentalMatchOwnerMetaAsync(),
       listings: await listMineSelfListingsAsync(session.userId),
     });
   } catch (error) {
     res.status(error.status || 400).json({ error: error.message });
+  }
+});
+
+/**
+ * R2：把「地址 → 座標 → 步行捷運查證」綁到即將寫入的房源上。
+ *
+ * 這是**發布路徑**用的版本：失敗一律 fail-soft（回一個空物件），刊登不會因此卡住；
+ * 沒有查證結果時配對看到的就是「未確認」，而不是被推定成符合。
+ * 回傳的欄位直接餵給 `resolveSelfListingMeta()`。
+ */
+async function resolveSelfListingGeo(address) {
+  const text = String(address || "").trim();
+  if (text.length < 4) return {};
+  try {
+    const geo = await geocodeAddress(text, geoLookupAsync(), { strict: false, maxAttempts: 1, allowAdmin: false });
+    const lat = Number(geo?.lat);
+    const lng = Number(geo?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return {};
+    const out = { lat, lng, geo_source: "self" };
+    // 步行捷運用同一條 1 公里的定義查證一次。服務忙碌／沒查完 ⇒ **不寫狀態**，維持未確認。
+    try {
+      const access = await fetchMrtAccessWithin(lat, lng);
+      if (access.resolved) {
+        // `within` 與 `none` 都是已查證的結果，**狀態也要存下來**：
+        // 只存「符合的距離」會讓「已查證超過 1 公里」掉回未確認，配對就不會產生硬衝突。
+        const state = access.status === "within" ? "within" : "outside";
+        out.mrt_state = state;
+        out.mrt_source = MRT_CACHE_CONTRACT;
+        out.mrt_checked_at = new Date().toISOString();
+        out.mrt_station = state === "within" ? String(access.station || "") : "";
+        out.mrt_walk_m = state === "within" ? access.walk_m : null;
+        // 「最近但超過」的那一筆（沒有候選站時是 null，仍然代表已查證不符合）。
+        out.mrt_nearest_m = access.walk_m ?? access.nearest_walk_m ?? null;
+        // 同一份快取，讓內頁顯示與配對共用。
+        await setCachedMrtAsync(lat, lng, { ...access, source: MRT_CACHE_CONTRACT }).catch(() => {});
+      }
+    } catch { /* 外部服務失敗 ⇒ 維持未確認 */ }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// ── A4：刊登表單的「1 公里內可步行捷運」查詢 ──
+// 一定要註冊在 `/api/self-listings/:id` 之前，否則 `mrt-access` 會被當成一個 id。
+//
+// 判定一律用**真實步行路線**（`fetchMrtAccessWithin` 走 foot profile 的 OSRM）：
+// 直線距離只用來挑候選站，不可以當成結果。狀態刻意分得開，讓前端能區分
+// 「已查證符合」「已查證沒有」「還沒查證完成」「地址定位不到」「服務失敗」。
+app.get("/api/self-listings/mrt-access", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const address = String(req.query?.address || "").trim().slice(0, 120);
+    if (address.length < 4) {
+      res.json({ status: "unlocatable", address, message: "地址還太短，無法定位。" });
+      return;
+    }
+    const geo = await geocodeAddress(address, geoLookupAsync(), {
+      strict: false,
+      maxAttempts: 2,
+      allowAdmin: false,
+    });
+    if (geo?.busy) {
+      res.json({ status: "unknown", address, retryable: true, message: "地圖定位服務暫時忙碌，請稍後重試。" });
+      return;
+    }
+    const lat = Number(geo?.lat);
+    const lng = Number(geo?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      res.json({ status: "unlocatable", address, message: "這個地址定位不到，請補上門牌或改用鄰近地標。" });
+      return;
+    }
+    const access = await fetchMrtAccessWithin(lat, lng);
+    // A4：把查證過的結果寫進**同一份** `mrt_cache`（內頁裝飾與背景補齊都讀它）。
+    // 這樣「表單看到的數字」與「內頁顯示的數字」是同一份資料，不會各算一套而互相矛盾。
+    // 快取寫入失敗不影響這次查詢結果（它只是快取）。
+    // 只有「已查證」的結果才寫快取；`unknown`（部分候選失敗／被截斷）不寫，
+    // 免得把待確認寫成一份看起來像已查證的資料。
+    if (access.resolved && (access.status === "within" || access.status === "none")) {
+      try { await setCachedMrtAsync(lat, lng, { ...access, source: MRT_CACHE_CONTRACT }); } catch { /* 快取非必要 */ }
+    }
+    const base = {
+      address,
+      status: access.status,
+      station: access.station || "",
+      // walk_m 是未四捨五入的原始公尺；walk_km 只給顯示。
+      walk_m: access.walk_m ?? null,
+      walk_km: access.walk_km ?? null,
+      walk_min: access.walk_min ?? null,
+      nearest_walk_m: access.nearest_walk_m ?? null,
+      nearest_walk_km: access.nearest_walk_km ?? null,
+      searched_m: access.searched_m ?? null,
+    };
+    if (access.status === "within") {
+      res.json({ ...base, verified: true, message: `捷運${String(access.station).replace(/站$/, "")}站，步行路線約 ${Math.round(access.walk_m)} 公尺（1 公里內）。` });
+      return;
+    }
+    if (access.status === "none") {
+      res.json({ ...base, verified: true, message: "已查證：1 公里內沒有可步行到達的捷運站。" });
+      return;
+    }
+    // unknown：還有候選站沒查完／服務沒有給出可用結果。**不能**當成「符合」，也不能當成「確定沒有」。
+    const nearest = Number(access.nearest_walk_m);
+    res.json({
+      ...base,
+      verified: false,
+      retryable: true,
+      message: Number.isFinite(nearest)
+        ? `最近的候選站步行約 ${Math.round(nearest)} 公尺，但還有站點沒查完，所以這不是「符合」也不是「確定沒有」，請稍後重試。`
+        : "步行路線還沒查證完成，這不是「符合」也不是「確定沒有」，請稍後重試。",
+    });
+  } catch (error) {
+    // 外部服務失敗要讓表單還能用：回一個可重試的狀態，不要 500 把整頁打斷。
+    console.error("[api] 步行捷運查詢失敗：", error?.message || error);
+    res.json({ status: "error", retryable: true, verified: false, message: "步行路線服務暫時無法使用，請稍後重試；不影響你繼續填寫與刊登。" });
   }
 });
 
@@ -3376,7 +3527,11 @@ app.post("/api/self-listings", async (req, res) => {
     // 可刊登條件、草稿列、夾具 registry、頭像／條件值與配對候選全部走 PG 島嶼：
     // 同步版只寫本機 ⇒ **剛刊登的物件不在站上的清單裡**（第八十四批）。
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
-    const created = await createSelfListingAsync(session.userId, body, {
+    // R2：地址定位與步行捷運查證結果要綁在這則刊登上（外部服務失敗不擋刊登）。
+    // R2（第二輪）：只認**站方查證**的欄位。會員在 body 裡自己帶 lat／mrt_walk_m／mrt_source
+    // 一律剝掉（只檢查契約字串不足以防偽造 —— 那個字串是公開的）。
+    const geo = await resolveSelfListingGeo(body.street || body.address);
+    const created = await createSelfListingAsync(session.userId, { ...stripServerVerifiedFields(body), ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     });
     await attributeShareAsync(req, session.userId, "listing");
@@ -3496,11 +3651,92 @@ app.delete("/api/media/:id", async (req, res) => {
 // 素材庫公開顯示檔（主圖／已浮水印縮圖）。未浮水印 original 不經此路由解析。
 app.get("/media/lib/:file", servePublicMemberMedia);
 
+// ── C3：意見回饋附圖 ──
+// 三個刻意的設計：
+//   1. 沿用既有的 `express.raw` 單檔上傳（前端逐檔 POST），不引入 multipart 相依。
+//   2. 附件只寫本機 `DATA_DIR/feedback-media/`，**不推 R2、不掛 express.static**，
+//      也**不會**出現在 `auth.js publicPath()`（那兩條 GET 必須先過 requireAdminApi）。
+//   3. 先上傳取得 id，送出回饋時在同一筆交易內 claim 綁定；中途放棄的孤兒由 sweep 清掉。
+app.post("/api/feedback/attachments",
+  // limit 比 1,000,000 稍寬一點：讓「剛剛好超過 1MB」由 validateFeedbackImage() 回精確的 413 訊息，
+  // 而不是被 body-parser 用通用的「請求內容過大」攔掉（那只會發生在離譜的大檔）。
+  express.raw({ type: () => true, limit: FEEDBACK_ATTACHMENT_MAX_BYTES + 4096 }),
+  async (req, res) => {
+    try {
+      const session = readSession(req);
+      if (!session?.userId) { res.status(401).json({ error: "請先登入才能上傳圖片" }); return; }
+      const used = await countOpenFeedbackAttachmentsAsync(session.userId);
+      if (used >= FEEDBACK_ATTACHMENT_MAX) {
+        // 上一次沒送完就關掉瀏覽器時，伺服器端還留著未綁定的附件。把清單一起回給前端，
+        // 讓使用者可以直接在對話框裡刪掉它們 —— 否則他會卡在「已達上限」卻看不到那幾張圖。
+        let open = [];
+        try { open = await listOpenFeedbackAttachmentsAsync(session.userId); } catch { /* 清單拿不到就只回訊息 */ }
+        res.status(409).json({
+          error: `每則回饋最多 ${FEEDBACK_ATTACHMENT_MAX} 張圖片，請先刪除再上傳`,
+          code: "attachment_limit",
+          attachments: open,
+        });
+        return;
+      }
+      const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      res.json(await saveFeedbackAttachmentAsync(session.userId, buf));
+    } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+  });
+
+// R3：**本人、且還沒送出**的附件縮圖／原圖。會員在回饋對話框裡的預覽走這一條。
+// 已送出的附件不在此列（`feedback_id = 0` 是條件之一），仍然只有管理員讀得到。
+app.get("/api/feedback/attachments/:id/thumb", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const row = await getOpenFeedbackAttachmentAsync(session.userId, req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res, { thumb: true });
+  } catch { res.status(404).end(); }
+});
+app.get("/api/feedback/attachments/:id", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    const row = await getOpenFeedbackAttachmentAsync(session.userId, req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res);
+  } catch { res.status(404).end(); }
+});
+
+app.delete("/api/feedback/attachments/:id", async (req, res) => {
+  try {
+    const session = readSession(req);
+    if (!session?.userId) { res.status(401).json({ error: "請先登入" }); return; }
+    res.json(await deleteFeedbackAttachmentAsync(session.userId, req.params.id));
+  } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
+
+// 站方專用讀取：縮圖／原圖。私有快取，不進 CDN。
+app.get("/api/feedback-attachments/:id/thumb", requireAdminApi, async (req, res) => {
+  try {
+    const row = await getFeedbackAttachmentAsync(req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res, { thumb: true });
+  } catch { res.status(404).end(); }
+});
+app.get("/api/feedback-attachments/:id", requireAdminApi, async (req, res) => {
+  try {
+    const row = await getFeedbackAttachmentAsync(req.params.id);
+    if (!row) { res.status(404).end(); return; }
+    streamFeedbackAttachment(row, res);
+  } catch { res.status(404).end(); }
+});
+
 // ── 公開分享：站內會員刊登（未登入可看主要內容；只輸出白名單公開欄位） ──
 app.get("/api/public/self-listing/:id", async (req, res) => {
   try {
     const listing = await getSelfListingAsync(req.params.id, { viewerId: 0 });
-    res.setHeader("Cache-Control", "public, max-age=60");
+    // 這一支刻意維持「訪客視角」：viewerId 固定 0，回傳的是純公開欄位。
+    // 因此它可以公開快取；但 A5 的登入狀態**不可**混進這裡（前端另外打 /api/me），
+    // 否則 public 快取會把屋主版內容餵給訪客。
+    // max-age 由 60 降到 15：共用條件目錄改名後，分享頁的條件 chips 要跟著更新（A3）。
+    res.setHeader("Cache-Control", "public, max-age=15");
     res.json(publicListingView(listing, req.params.id));
   } catch (error) {
     res.status(error.status === 404 ? 404 : 400).json({ error: error.message });
@@ -3602,7 +3838,9 @@ app.post("/api/self-listings/:id/publish", async (req, res) => {
     // 草稿、可刊登條件（停權／註冊滿 24 小時／同時上限）、素材所有權與配對候選全部走 PG 島嶼：
     // 同步版只寫本機 ⇒ 公開動作看起來成功、刊登卻不在站上的清單裡（第八十三批）。
     await assertOwnsMemberMediaUrlsAsync(session.userId, media);
-    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, body, {
+    // R2：地址定位與步行捷運查證結果綁在這則刊登上（外部服務失敗不擋刊登）。
+    const geo = await resolveSelfListingGeo(body.street || body.address);
+    res.json(await publishImportedDraftListingAsync(session.userId, req.params.id, { ...stripServerVerifiedFields(body), ...geo }, {
       matchCandidates: (listing) => matchCandidatesAsync(listing.post_id, listing),
     }));
   } catch (error) { res.status(error.status || 400).json({ error: error.message }); }
@@ -4786,6 +5024,16 @@ app.get("/api/events/stream", (req, res) => {
 app.use("/api", apiNotFoundHandler());
 app.use(apiErrorHandler());
 
+// C3：清理「已上傳但回饋沒送出」的孤兒附件（正常情況前端會自己刪；這裡是最後一道）。
+// 每 6 小時一次；只清 feedback_id = 0 且超過 24 小時的列，已綁定的一律不動。
+function startFeedbackAttachmentSweep() {
+  const run = () => sweepOrphanFeedbackAttachmentsAsync({ olderThanMs: 24 * 60 * 60 * 1000 })
+    .then((r) => { if (r?.removed) console.log(`回饋附件清理：移除 ${r.removed} 張未綁定的暫存圖`); })
+    .catch((error) => console.warn("回饋附件清理失敗：", error?.message || error));
+  setTimeout(run, 60_000);
+  setInterval(run, 6 * 60 * 60 * 1000);
+}
+
 function runHousingRefresh() {
   // ⚠️ 這是**排程**的居住數據自動更新（日誌「居住數據自動更新：N 筆」就是它）。
   // 原本用同步的 SQLite 讀寫 ⇒ PG 模式下自動抓到的居住成本只寫進回答你那台的本機檔，
@@ -4824,6 +5072,7 @@ if (roleRunsWeb(APP_ROLE)) {
 function startWorkerLoops() {
   // 居住數據：開站 30 秒後補一次、之後每天自動抓開放資料（失敗不影響服務）
   setTimeout(runHousingRefresh, 30_000);
+  startFeedbackAttachmentSweep();
   setInterval(runHousingRefresh, 24 * 60 * 60 * 1000);
   // Phase 2：非同步 feedback → Ops 遞送。預設關閉（需 OPS_FEEDBACK_DELIVERY=1 + OPS_INGEST_URL + OPS_INGEST_SECRET）。
   const opsDelivery = deliveryConfigFromEnv();

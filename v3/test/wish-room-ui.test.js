@@ -30,7 +30,18 @@ test("navigation and empty/owner copy use 許願房", () => {
 test("form has renter fields, priority groups, and no long legal wall or 適合對象", () => {
   assert.match(html, /id="demandRentMax"/);
   assert.match(html, /房租上限/);
-  assert.match(html, /id="wishIncludesFee"/);
+  // B1／B2：舊的合併勾選改成五個獨立條件，與捷運距離需求集中在同一區（共六項）。
+  assert.doesNotMatch(html, /id="wishIncludesFee"/);
+  assert.match(html, /id="wishNeeds"/);
+  for (const key of ["utilities", "management", "parking_car", "parking_scooter", "internet"]) {
+    assert.match(html, new RegExp(`data-fee-include="${key}"`));
+  }
+  assert.match(html, /租金含水電/);
+  assert.match(html, /租金含管理費/);
+  assert.match(html, /租金含停汽車位/);
+  assert.match(html, /租金含停機車位/);
+  assert.match(html, /租金含網路/);
+  assert.match(html, /id="wishFeeIncludesLegacy"/);
   assert.match(html, /id="wishMoveIn"/);
   assert.match(html, /id="wishLease"/);
   assert.match(html, /id="wishMust"/);
@@ -39,11 +50,14 @@ test("form has renter fields, priority groups, and no long legal wall or 適合�
   assert.match(html, /需要可開伙/);
   assert.match(html, /需要可養寵物/);
   assert.match(html, /需要可申請租補／報稅/);
-  assert.match(html, /需要可步行捷運（1 公里內）/);
+  assert.match(html, /需要離捷運距離（可行徑路線 1 公里內）/);
+  assert.doesNotMatch(html, /需要可步行捷運（1 公里內）/);
   assert.match(html, /for="wishLayout">格局</);
   assert.match(html, /for="wishMoveIn">預計入住</);
   assert.match(html, /for="wishLease">租期</);
-  assert.match(html, /for="wishTransit">捷運／車站</);
+  // B2：獨立的「捷運／車站」欄位已移除（歷史資料仍在資料庫，只是新表單不再填）。
+  assert.doesNotMatch(html, /id="wishTransit"/);
+  assert.doesNotMatch(html, /for="wishTransit"/);
   assert.doesNotMatch(html, /希望1公里內有之捷運／車站名稱/);
   assert.match(html, /未指定/);
   assert.match(html, /全部要有/);

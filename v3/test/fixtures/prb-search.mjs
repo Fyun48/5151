@@ -68,6 +68,12 @@ export async function withPgFixture(db, fn, { tables = SEARCH_TABLES } = {}) {
 // Record attempts as well as throw: helpers must not be able to swallow an I/O
 // error and make a false claim that PostgreSQL never touched SQLite.
 export async function withoutSqliteIO(db, fn) {
+  // 2026-10-01：啟動時的 projection 暖機迴圈每 500 毫秒會 `db.exec` 一次 DDL
+  // （`ensureListingSearchProjection`）。它是**背景工作、不是請求路徑**，但只要剛好插進量測區間
+  // 就會被記成一次違規 I/O，讓這一條測試隨機變紅（CI 上真的發生過）。
+  // 量測期間暫停它、量完恢復 —— 正式站行為不變，測試也不必再靠運氣。
+  const backfill = await import("../../src/db.js");
+  const wasArmed = backfill.pausePublicListingsProjectionBackfill();
   const original = new Map();
   // Also intercept statements prepared before the measured path starts.
   const statementPrototype=Object.getPrototypeOf(db.prepare('SELECT 1'));
@@ -91,5 +97,6 @@ export async function withoutSqliteIO(db, fn) {
   finally {
     for (const [method, value] of original) db[method] = value;
     for (const [method, value] of originalStatement) statementPrototype[method] = value;
+    backfill.resumePublicListingsProjectionBackfill(wasArmed);
   }
 }

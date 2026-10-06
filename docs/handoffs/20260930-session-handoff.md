@@ -21,7 +21,17 @@
 
 ## 2. 目前狀態（2026-09-30 06:30Z）
 
-- **PG 島嶼遷移：路由缺口 0**。尺規 `PG 268／無直接DB 20／MIXED 0／SQLite 0`。
+- **PG 島嶼遷移：路由缺口 0**。尺規 `PG 273／無直接DB 20／MIXED 0／SQLite 0`（第九十九批，共 293 條入口）。
+- 🔶 **第九十九批（2026-10-01，分支 `fix/owner-workorder-20261001`，尚未部署）**：Owner 工作單
+  A1～C3（有房刊登／許願房／意見回饋）。摘要見主文件 §99。**這一包動了 schema**：
+  新增 `feedback_attachment` 表（migration version 6）與 `demand_posts.fee_includes`／`fee_includes_at`
+  （PG 用 `DEMAND_PG_ALTER_STATEMENTS` 的 `ADD COLUMN IF NOT EXISTS` 補）。
+  Production 維持 manual-only，**未經 Owner 核准不得部署**。
+- 🔶 **第一百批（2026-10-01，同一張 PR #611，尚未部署）**：Owner 審閱文件的 R1～R6 修正。
+  摘要見主文件 §100。**又動了 schema**：`mrt_cache` 加四個契約欄位、
+  `listings` 加 `fee_includes` 與 `self_mrt_*`（**migration version 7**；PG 用
+  `SELF_LISTING_PG_COLUMNS`／`MRT_CACHE_PG_COLUMNS` 的 `ADD COLUMN IF NOT EXISTS` 補）。
+  R6 的共享儲存掛載已寫進 repo 與**兩台主機的正本 compose**，但**要一次部署才會生效**。
 - 第 61～96 批全部合併；**第 85～96 批已部署**（92／93 兩批於 2026-09-30 08:17Z 與 09:35Z 上線，
   Owner 當次核准）。
   - 目前正式站 digest：`sha256:d2ba53ce1f4f8b2562e96406c00759d885896414d14ebaf148ca0b1274f1ebcd`
@@ -102,6 +112,9 @@
 4. `migrate-v3-data-volume.yml` 搬的是已作廢的 SQLite 目錄；`predeploy` 仍要求 `v3.db` 存在。
 5. 主機 `/opt/5151-scripts/` 有 repo 沒有的腳本（`projection-monitor`，PR #498 未合併）⇒ 可稽核性。
 6. 爬蟲長輪次：40 分鐘仍跑不完（落地 1.5 秒/筆）⇒ 未來要批次寫入／並行化。
+7. ~~`mrt_cache` 的舊值沒有失效機制~~ → **第一百批 R1 已修**：加 `source`／`checked` 契約欄位，
+   舊列一律不採計、按需重算。**但容器若沒重建，`feedback-media` 的共享掛載不會生效**（見 R6）。
+8. ~~站內刊登沒有費用與座標資料~~ → **第一百批 R2 已補**（房東端三態＋發布時定位＋步行查證）。
 
 ## 5. 常用指令（照抄）
 
@@ -190,5 +203,66 @@ gh workflow run deploy-v3.yml --ref master -f sha=$sha -f image_digest=sha256:�
     只放**兩個**受測對象時，「有暫停」與「沒暫停」的呼叫次數一樣 ⇒ 變異活下來；
     取消守衛只驗「有沒有丟錯」也不行（吞掉取消的版本最後仍會因整批失敗而丟錯）。
     **要驗「呼叫次數」與「後續有沒有再打」**，不是只驗最後的結果形狀。
-15. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
+15. **自動化斷言全綠不等於畫面是對的**（2026-10-01 第九十九批實測）：分享頁的 `hidden` 屬性、
+    `aria-live`、DOM 斷言全部通過，但 `.auth .member { display:flex }` 的權重高於 UA 的
+    `[hidden]{display:none}`，於是**訪客也看到會員區的「回找房頁面／登出」**——是看 375px 截圖才發現的。
+    **每一批都要真的看一次手機截圖**，不要只用 DOM 屬性代理視覺。
+16. **單元測試綠 ≠ 功能有通：要照驗收情境真的走一次**（2026-10-01 第九十九批實測）。
+    A3 第一次只改了 `selfTraits.js` 的 `||` 優先序，測試全綠；但把後台真的改名並發布之後，
+    前台**還是顯示舊名稱** —— 因為標籤對照表另外被 `rental_catalog_v2` 旗標擋住。
+    是「照工作單的驗收步驟實際操作一次」才發現的。**驗收條件寫「後台改名後前台重新載入要看到」，
+    就要真的改名、真的發布、真的重新載入，不能只驗那一行函式。**
+    修法原則：**顯示名稱與可寫入的 id 要分開**（label 不受 feature flag 影響、id 才受）。
+17. **`(candidates || []) is not iterable` 這一類錯誤＝把 async 函式傳進同步路徑**（第九十九批實測）：
+    `server.js` 傳給 `createSelfListingAsync()` 的 `matchCandidates` 是 async 的 PG 島嶼版本，
+    SQLite 分支直接往下傳給同步的 `createSelfListing()` ⇒ **每一筆站內刊登都 400**。
+    島嶼的 SQLite 分支要傳「同步版」而不是把呼叫端的 async 函式原封不動帶下去。
+18. 🚨 **批次改檔的腳本中止時，不可以只看 grep 就當成改好了**（2026-10-01 第一百零一批實測）。
+    我寫了一個 python 腳本要改 `feedbackMediaAsync.js` 的 6 處，第 5 處錨點數量不符就丟出例外
+    ⇒ **整個腳本沒有寫檔**；我後來只用 `grep FEEDBACK_ATTACHMENT_MAX` 看到有命中
+    （那其實是 **import 行**）就回報「PG 也修好了」。審閱用注入 executor 跑 PG async 原始碼，
+    五張並行得到 5 筆成功，當場戳破。
+    **規則：批次改檔後要逐檔把改動處 `sed` 讀回來看，不能用「某個字串有出現」代替「這段邏輯改了」。**
+19. **`Number(null) === 0` 在本專案踩過三次**（2026-10-01）：`listingMatchSnapshot`、
+    `evaluateMatch`、`mrtRowToAccess`／`mrtCacheUpsert`。任何「可能缺值的數字」都要走
+    `nullableMeters()` 這類顯式檢查，`Number.isFinite(Number(x))` **擋不住 null**。
+20. **PG 的 `pgDriver.query()` 是連線池**：用語句送 `BEGIN`／`COMMIT` 不會形成同一個交易，
+    `pg_advisory_xact_lock` 也就白鎖。需要交易時一律用 `pgDriver.withTransaction(client => …)`。
+21. **`npm test` 之外的驗證順序**：變異工具與 `npm test` 都會吃 CPU，而且變異會就地改寫 `v3/src/*.js`
     ⇒ **不要同時跑**（會讀到變異版的原始碼）。本批是等變異跑完才跑全套。
+22. **改一行呼叫形式，會打到「不會編譯錯」的守衛**（2026-10-01 第一百零一批實測）：
+    R3 把兩條路由的 `{ ...body, ...geo }` 改成 `{ ...stripServerVerifiedFields(body), ...geo }`，
+    功能與單元測試都對，卻有 **4 個測試**因此紅：突變工具裡兩組錨點（`mutation-check.mjs`）
+    加上兩條路由接線的靜態字串斷言。它們全部不是「功能壞了」，而是**守衛過期**。
+    **規則：改動任何被字串斷言／突變錨點鎖住的呼叫形式時，順手 `grep` 一次舊字串**
+    （`grep -rn '{ \.\.\.body, \.\.\.geo }' v3/`），把守衛一起更新；更新時順便**加一條「禁止舊形式」的斷言**，
+    否則下次很容易改回去。
+23. **讀取路徑的 schema 升級要 best-effort，不能硬到把整條路徑拖垮**（2026-10-01 第一百零一批實測）：
+    R1 把 `ADD COLUMN IF NOT EXISTS` 搬到 `preloadDecorationProviderAsync()` 之後，
+    `commute-snapshot-async.test.js` 有 3 項紅 —— 那些離線夾具的注入式 `exec(sql, params)`
+    **只接受它認識的 SQL**，收到 DDL 直接丟錯，於是整個讀取路徑陪葬。
+    schema 升級是「盡量做」：用 `try/catch` 包起來、失敗不快取（下次再試），
+    真的升級不了時讓後面那句 SELECT 用 42703 明講缺哪個欄位。想驗「真的有升級」就寫**真 PG 的測試**
+    （見 `v3/test/mrt-cache-schema-live-pg.test.js`：先建舊形狀的表，再讓讀取路徑自己補欄位）。
+
+24. **「隨機」的測試紅燈：雜湊值也會長得像電話號碼**（2026-10-01 第一百零一批實測）。
+    CI 的 Run Tests 紅在 `stage1-fixture-readiness.test.js`，訊息是
+    `fixture evidence leaked phone near …"token_hash":"e**********d"` —— 但那次 commit 只有改文件。
+    原因：`opaqueId()` 是 sha256 的前 12 個十六進位字元，**光靠機率**就會出現
+    `e0912345678d`（中間剛好 10 位數字）這種形狀，舊的邊界只排除「前後是數字」。
+    實測 0.0091%／每個 hash、那個測試檔每次約 510 個 hash ⇒ **約 4.5% 的執行會隨機變紅**。
+    修法：邊界改成「前後不是十六進位字元」，並把偵測器**匯出**給測試直接用
+    （原本測試自己抄一份 regex，改壞了也不會紅）。
+    **規則：看到「偶發紅」不要只重跑 —— 先算出機率並把誤判來源找出來**；
+    重跑只是把紅燈藏起來，下一次會再打到別人。
+
+25. **背景工作會把「零 I/O」的測試弄成隨機紅燈**（2026-10-01 第一百零一批實測）。
+    `listing-search-parity.test.js` 的 `cooperative member processing…` 偶爾會多錄到
+    `db.exec(CREATE TABLE IF NOT EXISTS listing_search_projection)`：db.js 啟動後的 projection
+    暖機迴圈**每 500 毫秒**跑一步，每步第一步就是 `ensureListingSearchProjection(db)`（DDL）。
+    暖機不是請求路徑，但只要插進 `withoutSqliteIO()` 的量測區間就會被記成違規。
+    修法：暖機加上 `pausePublicListingsProjectionBackfill()`／`resume…()`，
+    **量測期間暫停、量完恢復**（正式站行為不變），並加守衛測試與變異套組。
+    本機實測：沒暫停 3/3 紅、加了暫停 4/4 綠。
+    **規則：凡是「不准碰 X」的斷言，都要先問「有沒有背景迴圈也會碰 X」**；
+    有的話就在量測區間暫停它，而不是放寬斷言。
