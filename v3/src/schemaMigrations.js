@@ -2,6 +2,7 @@
 // is already idempotent (CREATE TABLE IF NOT EXISTS), so wrapping them in the
 // migration runner tracks versions without re-applying on an existing DB.
 import { ensurePersonalSchema } from "./personalSchema.js";
+import { ensureSponsorEntitlementSchema } from "./sponsorEntitlement.js";
 import { ensureUserSameHouseSchema } from "./userSameHouse.js";
 import { ensureListingGroupSchema } from "./listingGroups.js";
 import { ensureSearchProfileSchema } from "./searchProfiles.js";
@@ -149,6 +150,14 @@ export const SCHEMA_MIGRATIONS = [
           ON listing_share_events(share_token, event_type, channel, user_id, created_at)
           WHERE user_id IS NOT NULL;
       `);
+    },
+  },
+  {
+    // 贊助連動 Phase 3：贊助代碼／開通 grant／輪詢 cursor 三表（flags 全預設關）。
+    version: 11,
+    name: "sponsor_entitlement_schema",
+    up(db) {
+      ensureSponsorEntitlementSchema(db);
     },
   },
 ];
