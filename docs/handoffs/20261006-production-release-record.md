@@ -69,3 +69,14 @@ run [37405185152](https://github.com/Fyun48/5151/actions/runs/37405185152) 首�
 
 5168 爬蟲目前暫停中。三個旋鈕（`blockedUntil`／`interval`／cap 12→6、fairness）屬 Owner 業務決策，
 本次發版**未動**。
+
+## 同日第二梯發版（2026-10-06T07:20Z）
+
+- 部署身分：master SHA `8eda28ebb37e0c29785fd6c074c8d36cf7986065`、image digest `sha256:a127ee9d36c8f12dacbafcce568f914db895e1ee99ea2d0dff097d8f2a939e4f`
+- 三條 workflow：build #37428184612、predeploy #37428660475（PG primary dump：92160937 bytes、106 表、sha256 `c4e99b5fd7cbaba8df3728a36bac8d185afd59877c2e3985971cb81ffbf96484`）、deploy #37428944046，全 success
+- 本梯內容（三個 PR，皆 CI 四項綠後 squash）：
+  - #619 `fix(ticks)`: rental_match_seen SELECT-then-INSERT 改冪等 ON CONFLICT——多節點 HA（web-A/web-B 同跑 tick 打共享 PG）競態會以 23505 讓整輪 tick 交易回滾；附真 PG 雙連線併發測試（修復前可確定性重現）
+  - #620 `fix(crawl)`: 來源被擋冷卻預設 90s→1800s（輪間隔 15min，90s 跨輪形同虛設；5168/houseprice 實測 ~2.2 被擋輪/天）。決策紀錄 agent-brain D-0009：interval 400ms 與 cap 12 不動、fairness 不加權、來源不關；沙盒報告 3 輪全成功（836s/669s/699s、fetched 2016/1973/2059、errors_total=0、covers_max_last_run_at 持續前進）已附於 PR #620
+  - #621 `fix(test)`: commute-route-live 2105 筆種子包單一交易（node:sqlite autocommit 慢 fsync 每筆 ~253ms → 491s 超 30s 子程序上限；修後 5.8–7.2s）。修後本地全套 npm test 3607 tests / 0 fail / 96 skipped
+- 部署後驗證：三容器（casa-nas 591-tracker-v3、5151-web-A；syn-nas 5151-web-B）revision label 皆 `8eda28eb…`、同一 image id `sha256:348e369f57db113…`、feedback-media 掛載維持（各 1 條）、07:20:39–07:21:30Z 重建、全 running
+- 前梯（02:59Z，SHA 719ac65…）紀錄見本文件上方章節
