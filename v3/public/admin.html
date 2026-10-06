@@ -519,6 +519,10 @@
           <div class="admin-metric-grid" id="overviewListings"></div>
         </section>
         <section class="card">
+          <h3>物件分享（近 7 日）</h3>
+          <div class="admin-metric-grid" id="overviewListingShare"></div>
+        </section>
+        <section class="card">
           <h3>抓取狀態</h3>
           <div id="overviewSources"></div>
         </section>
@@ -4133,6 +4137,14 @@
           metric("疑似同房源", L.suspectedSameHouse || 0),
           metric("已建立同房源群組", L.sameHouseGroups || 0),
           metric("reconciliation 待處理", L.pendingReconcile || 0),
+        ].join("");
+      }
+      const LS = data.listingShare || {};
+      if ($("overviewListingShare")) {
+        $("overviewListingShare").innerHTML = [
+          metric("連結點閱", LS.views7d || 0),
+          metric("分享 CTA", LS.ctas7d || 0),
+          metric("新分享連結", LS.links7d || 0),
         ].join("");
       }
       const prep = data.listingPrep || {};
