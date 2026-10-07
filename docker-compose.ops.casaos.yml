@@ -1,0 +1,48 @@
+# OPS-only CasaOS compose（Owner 指示 2026-10-07：OPS 是跨專案控制台，須與單一專案的故障隔開）。
+#
+# 與吉比的 compose 分開：獨立 project（`-p 5151-ops`）、獨立原始碼目錄、獨立對外 tunnel。
+# 形狀沿用 `docker-compose.ops.synology.yml`（PR #369）：
+#   - 映像一律由 `.env` 的 `OPS_RUNTIME_IMAGE` **釘 digest**（不准 `:latest`，避免吉比下一次 build
+#     決定 OPS 重啟後跑到什麼執行環境）。
+#   - 原始碼走 `releases/<SHA>` ＋ `current` symlink；切 `current` 即發版，切回前一版即 rollback。
+#   - `ops-cloudflared` 走 **`TUNNEL_TOKEN_FILE` 掛檔**，不把 token 寫進 command line
+#     （現行 `591-tracker-tunnel`／`5151-cloudflared-A` 都把 token 放在 argv，`docker inspect`
+#     與 `ps` 看得到全文——這是既存衛生問題，新服務不要複製）。
+#
+# 建立／重建（可重跑）：`bash ops/scripts/deploy-ops-casaos.sh <SHA> <runtime-digest>`
+# 需要的 `.env`（同目錄，600，不進 git）：
+#   OPS_RUNTIME_IMAGE=ghcr.io/fyun48/5151@sha256:…
+#   OPS_TUNNEL_IMAGE=cloudflare/cloudflared:…（可省略，預設 latest）
+services:
+  5151-ops:
+    container_name: 5151-ops
+    image: ${OPS_RUNTIME_IMAGE:?OPS_RUNTIME_IMAGE is required（必須是 @sha256: digest）}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5154:5154"
+    environment:
+      OPS_HOST: "0.0.0.0"
+      OPS_PORT: "5154"
+      OPS_DATA_DIR: /data
+      TZ: Asia/Taipei
+      COOKIE_SECURE: "1"
+      # 預設禁止 Production release live mutation；Owner 明確開啟才允許（與 synology 版一致）。
+      PRODUCTION_RELEASE_ALLOW_LIVE: "0"
+    volumes:
+      # 資料維持原地不动（本次只搬「碼從哪裡來」與「誰負責對外通道」，不搬 DB）。
+      - ${OPS_CASAOS_DATA_ROOT:-/DATA/AppData/5151-ops}:/data
+      - ${OPS_CASAOS_APP_ROOT:-/mnt/Storage1/docker/5151-ops/app}/current/ops:/app/ops:ro
+    command: ["node", "ops/src/server.js"]
+
+  ops-cloudflared:
+    # OPS 專屬 tunnel：吉比的 cloudflared（591-tracker-tunnel）出事時，OPS 的對外入口不受影響。
+    container_name: 5151-ops-cloudflared
+    image: ${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}
+    restart: unless-stopped
+    # 127.0.0.1:5154 是「宿主」的 loopback，bridge 模式連不到，因此與既存做法一樣用 host 網路。
+    network_mode: host
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/ops-tunnel-token
+    volumes:
+      - ${OPS_CASAOS_SECRET_DIR:-/mnt/Storage1/docker/5151-ops/secrets}:/run/secrets:ro
+    command: ["tunnel", "--no-autoupdate", "run"]
