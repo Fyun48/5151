@@ -63,8 +63,8 @@ ingress 與 DNS，留一半會變成「解析得到但 tunnel 不認識」的 40
 | # | 耦合點 | 證據 | 後果 |
 |---|---|---|---|
 | a-1 | **共用對外 tunnel** | `ops.reversalplay.me` 與 `jibbyrenth.reversalplay.me` 都在 tunnel `5151`（`3adb90bf…`）的 ingress 裡；該 tunnel 由 `591-tracker-tunnel`（CasaOS）＋ `591-tracker-tunnel-b`（Synology）承載（見 `deploy/shadow-ha/cloudflared/README.md`） | 吉比的 tunnel 容器掛掉／被誤停，OPS 一起失去對外入口，**連登入頁都看不到** |
-| a-2 | **浮動映像** | `5151-ops` 跑 `ghcr.io/fyun48/5151:latest`；兩台 web 釘的是 digest `sha256:378d8f7a…` | 吉比下一次 build 會決定「OPS 下次重啟跑到什麼碼」；吉比壞版推上去，OPS 重啟就可能起不來 |
-| a-3 | **同 repo 同映像** | OPS 原始碼在吉比 repo 的 `ops/` 子目錄，與產品共用同一張 image | 回滚吉比 = 連帶回滚 OPS 程式；兩者無法各自發版 |
+| a-2 | **浮動映像（機制跟我原本寫的不一樣，已更正）** | `5151-ops` 的 `image:` 是 `ghcr.io/fyun48/5151:latest`，而兩台 web 釘 digest。但 `Dockerfile` 只 `COPY v3/src ./src` 與 `COPY v3/public ./public`——**映像裡根本沒有 `ops/`**。所以浮動映像決定的是 **Node 執行環境與 npm 依賴**，不是 OPS 的邏輯 | 吉比壞版推上去、OPS 需要重建容器時，可能拿到壞的執行環境而起不來（不是「跑到吉比的碼」） |
+| a-3 | **OPS 的碼是宿主上一份 git 未追蹤的手動複製**（原本的「同 repo 同 image」寫法是錯的） | 容器靠 bind mount `./ops:/app/ops:ro` 取碼，來源是 `/mnt/Storage1/apps/5151/ops`；該目錄在 NAS 上的 git  Checkout 停在 `ed62e71`（2026-08-28）且 `ops/` 狀態是 **`?? ops/`（未追蹤）**。逐檔比對 master：243 檔中 **241 檔位元組相同**，差的两檔是我今天改文案的 `ops/README.md`、`ops/BLUEPRINT.md` | 沒有版本、沒有重建途徑：那目錄被 `git clean -fdx` 或disk 故障带走，**映像救不回來**（映像沒備 ops）；也無法回答「正式 OPS 跑的是哪個 commit」 |
 
 已存在的**正面**因素（不必重做）：
 - 容器進程本來就分離：`5151-ops`（`node ops/src/server.js`）是獨立容器、只綁 `127.0.0.1:5154`。

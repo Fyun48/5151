@@ -14,7 +14,11 @@ workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日
 > （現況、常用命令、待辦、踩過的坑）。它是在 NAS 的瀏覽器 IDE（code-server）裡寫的，內容仍適用；
 > 但「權威來源」一律以本節的 2026-09-21 決定為準。
 
-請一律以這個 GitHub repo 為唯一權威來源；不要另開新專案或第二條 tunnel（同一 repo、同一張 Docker 映像、同一條 Cloudflare Tunnel）。
+請一律以這個 GitHub repo 為唯一權威來源；**產品站**不要另開新專案或第二條 tunnel（同一 repo、同一張 Docker 映像、同一條 Cloudflare Tunnel）。
+
+> **OPS 控制面的例外（Owner 明示，2026-10-07）**：OPS Console 是跨專案的控制台，理當不被單一專案的故障連坐，
+> 因此它走**自己的** Cloudflare Tunnel 與自己的 compose project（`-p 5151-ops`，見 `docker-compose.ops.casaos.yml`）。
+> 這條例外**只給 OPS**；v3／吉比的公開站仍然只准用現行那條 tunnel，不准藉此時開新通道。
 
 ## 開發範圍：只做 v3
 
@@ -24,6 +28,11 @@ workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日
 - **公開站**（同一條 Cloudflare Tunnel、同一台 v3 容器）：
   - `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`（5155 是同一容器別名）
 - **OPS Console**：`https://ops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）。
+  原始碼來自 `releases/<git SHA>/ops` ＋ `current` symlink（由 `ops/scripts/deploy-ops-casaos.sh` 建立，
+  容器只讀掛 `/app/ops`）；執行環境由 `.env` 的 `OPS_RUNTIME_IMAGE` **釘 digest**，
+  不准 `:latest`（吉比的下一次 build 不該決定 OPS 重啟後的執行環境）。
+  2026-10-07 前的做法是「把 `ops/` 手動複製到 `/mnt/Storage1/apps/5151/ops`，git 完全未追蹤」——
+  那種來源查無重建方式，`git clean -fdx` 就會讓 OPS 無碼可跑，已淘汰，不要回退。
 - 規劃見 `v3/ARCHITECTURE.md` 與 `v3/DESIGN.md`。
 - **v1／v2 已拆除**（不再啟動容器）。歷史庫仍可只讀掛給 v3 匯入。不要再用 `https://c5151.reversalplay.me/`。
 
@@ -31,7 +40,10 @@ workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日
 
 NAS、Cloudflare Tunnel／Access、SSH 走法、PG 連線、機密位置與代理人可操作範圍一律看
 `docs/runbooks/shared-infra-access.md`，並遵守 `.cursor/rules/infra-access.mdc`。
-禁止另開 tunnel／第二條通道；公網 SSH 埠（54722／58722）在自動化改走 CF 前不得關閉。
+禁止**產品站**另開 tunnel／第二條通道；公網 SSH 埠（54722／58722）在自動化改走 CF 前不得關閉。
+OPS 控制面依上節例外走自己的 tunnel（`5151-ops-cloudflared`，token 以 `TUNNEL_TOKEN_FILE` 掛檔，
+**不准**把 token 寫進容器 command line — 現行 `591-tracker-tunnel`／`5151-cloudflared-A` 那樣做是既存問題，
+不要複製）。
 
 ## 本機開發
 
@@ -98,7 +110,9 @@ ssh casa-nas "docker exec 5151-crawl-sandbox tail -3 /data/crawl-sandbox.jsonl" 
    - `.github/workflows/deploy-v3.yml`
 3. 確認字串（`DEPLOY-PRODUCTION` / `PREDEPLOY-PRODUCTION`）由代理人代填。Cursor 雲端身分可以觸發這三條。
 4. Ops Phase 15「不 merge、不部署」只約束 Ops 機器人自己的任務，**不約束**使用者直接交代 Cursor Agent 的改碼＋合併部署。
-5. 不要另開 tunnel、不要改 v1/v2、不要發明第四條部署路徑。
+5. **產品站**不要另開 tunnel、不要改 v1/v2、不要發明第四條部署路徑。OPS 發版走自己那條
+   （`docker-compose.ops.casaos.yml` ＋ `ops/scripts/deploy-ops-casaos.sh`；Synology 版走
+   `.github/workflows/deploy-ops-synology.yml`），兩條都**不碰 v3、不碰吉比的部署路徑**。
 
 ## 跨專案共用憑證庫（2026-09-23 起）
 
