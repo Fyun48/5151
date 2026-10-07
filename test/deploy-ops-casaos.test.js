@@ -139,3 +139,25 @@ test("AGENTS.md 已為 OPS 控制面留下 tunnel 例外（不得被無聲改回
   assert.match(agents, /ops\.reversalplay\.me/);
   assert.doesNotMatch(agents, /jibbyrentops/);
 });
+
+test("生效中的規則檔 .cursor/rules/infra-access.mdc 也要有 OPS 例外與掛檔禁令（不得只改 AGENTS.md）", () => {
+  // 這份是 Cursor 每次會讀的規則檔；若只有 AGENTS.md 改了、這裡還寫舊域名／舊做法，
+  // 下一个 agent 會照舊規則把 OPS 塞回吉比的 tunnel（本次稽核就發現它殘留 jibbyrentops）。
+  const mdc = readFileSync(path.join(ROOT, ".cursor/rules/infra-access.mdc"), "utf8");
+  assert.match(mdc, /產品站不要另開 tunnel/);
+  assert.match(mdc, /ops\.reversalplay\.me/);
+  assert.match(mdc, /TUNNEL_TOKEN_FILE/);
+  assert.doesNotMatch(mdc, /jibbyrentops/);
+});
+
+test("吉比的兩份 app 定義都不准再出現 OPS 服務（拆乾淨才算隔離）", () => {
+  // docker-compose.yml 給 workflow、casaos-compose.yml 給 CasaOS 介面的「重新部署」；
+  // 兩邊留著 5151-ops 都會在整 project up 時與獨立 project 撞 container_name，
+  // 或更糟：把 OPS 打回 :latest ＋ 宿主未追蹤的 ./ops。
+  const v3Compose = readFileSync(path.join(ROOT, "docker-compose.yml"), "utf8");
+  const casaos = readFileSync(path.join(ROOT, "casaos-compose.yml"), "utf8");
+  for (const [name, text] of [["docker-compose.yml", v3Compose], ["casaos-compose.yml", casaos]]) {
+    assert.doesNotMatch(text, /^ {2}5151-ops:/m, `${name} 不應定義 5151-ops`);
+    assert.doesNotMatch(text, /5154/, `${name} 不應出現 OPS 埠 5154`);
+  }
+});

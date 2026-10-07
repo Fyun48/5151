@@ -45,19 +45,22 @@ test("CasaOS compose lists v3 as the only app on port 5153", () => {
   assert.doesNotMatch(casaos, /^  591-tracker-v2:\s*$/m);
 });
 
-test("OPS console is a separate loopback service on 5154", () => {
+test("OPS 不屬於吉比的 compose（2026-10-07 拆出去，避免 CasaOS 重新部署時連坐）", () => {
   const casaos = readFileSync(path.join(root, "casaos-compose.yml"), "utf8");
-  const ops = serviceBlock(compose, "5151-ops");
-  assert.match(ops, /127\.0\.0\.1:5154:5154/);
-  assert.match(ops, /5151-ops:\/data/);
-  assert.match(ops, /\.\/ops:\/app\/ops:ro/);
-  assert.match(ops, /node", "ops\/src\/server\.js/);
-  assert.equal(ops.includes("5153:5153"), false, "OPS must not bind the v3 port");
-  assert.doesNotMatch(ops, /591-tracker-v3/);
-  // CasaOS manifest 也要帶 OPS 服務
-  const casaOps = serviceBlock(casaos, "5151-ops");
-  assert.match(casaOps, /127\.0\.0\.1:5154:5154/);
-  // v3 仍是唯一 live app，cloudflared 仍指向 v3；OPS 不得取代 v3
+  // 兩份吉比 app 定義都不得再宣告 5151-ops：
+  //   ① container_name 已歸獨立 project `5151-ops`，留在這裡會讓「整 project up」撞名失敗
+  //   ② CasaOS 介面对吉比 app 按「重新部署」用的就是 casaos-compose.yml，
+  //      留著那段會把 OPS 打回 `:latest` ＋ 宿主未追蹤的 ./ops（已淘汰的來源）
+  assert.equal(compose.includes("5151-ops:"), false, "docker-compose.yml 不該再定義 5151-ops");
+  assert.equal(casaos.includes("5151-ops:"), false, "casaos-compose.yml 不該再定義 5151-ops");
+  assert.doesNotMatch(compose, /127\.0\.0\.1:5154/);
+  assert.doesNotMatch(casaos, /127\.0\.0\.1:5154/);
+  assert.doesNotMatch(compose, /:\/app\/ops/);
+  // OPS 自己的定義在 OPS 專屬檔，且不得反向包含吉比 v3（一條路徑各管一邊）
+  const opsCompose = readFileSync(path.join(root, "docker-compose.ops.casaos.yml"), "utf8");
+  assert.match(opsCompose, /127\.0\.0\.1:5154:5154/);
+  assert.doesNotMatch(opsCompose, /591-tracker-v3/);
+  // 吉比自己仍是 5153，tunnel 不指 OPS 埠
   const v3 = serviceBlock(compose, "591-tracker-v3");
   assert.match(v3, /127\.0\.0\.1:5153:5153/);
   assert.doesNotMatch(v3, /127\.0\.0\.1:5155:5153/);
