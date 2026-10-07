@@ -214,3 +214,30 @@ test("async 開通：冪等且寫入 grant（module db 替身）", async () => {
   assert.equal(second.already, true);
   assert.equal(db.prepare("SELECT plan FROM users WHERE id=?").get(uid).plan, "sponsor");
 });
+
+test("async 對帳佇列：標出已開通／已匹配／未匹配", async () => {
+  const { listEntitlementQueueAsync } = await import("../src/sponsorEntitlementAsync.js");
+  const db = open();
+  const opts = { db };
+  const stamp = NOW.toISOString();
+  db.prepare(`INSERT INTO support_transaction
+    (provider, provider_transaction_id, supporter_user_id, supporter_name, amount, status, message, channel, received_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("bmc", "tx-a", 5, "小明", 150, "completed", "JIBBY-AAAAA", "webhook", stamp, stamp, stamp);
+  db.prepare(`INSERT INTO support_transaction
+    (provider, provider_transaction_id, supporter_user_id, supporter_name, amount, status, message, channel, received_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("bmc", "tx-b", 6, "小華", 50, "completed", "JIBBY-BBBBB", "webhook", stamp, stamp, stamp);
+  db.prepare(`INSERT INTO support_transaction
+    (provider, provider_transaction_id, supporter_user_id, supporter_name, amount, status, message, channel, received_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run("kofi", "tx-c", null, "路人", 300, "completed", "", "webhook", stamp, stamp, stamp);
+  db.prepare("INSERT INTO sponsor_entitlement_grant (support_transaction_id, user_id, provider, amount, reason, entitlement_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run("bmc:tx-a", 5, "bmc", 150, "webhook:single", stamp, stamp);
+  const { items } = await listEntitlementQueueAsync({ days: 30, now: new Date(NOW.getTime() + 1000) }, opts);
+  assert.equal(items.length, 3);
+  const byTx = Object.fromEntries(items.map((row) => [row.providerTransactionId, row]));
+  assert.equal(byTx["tx-a"].entitled, true);
+  assert.equal(byTx["tx-a"].userId, 5);
+  assert.equal(byTx["tx-b"].entitled, false);
+  assert.equal(byTx["tx-b"].userId, 6);
+  assert.equal(byTx["tx-c"].userId, null);
+  assert.equal(byTx["tx-c"].entitled, false);
+});

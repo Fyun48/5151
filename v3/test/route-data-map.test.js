@@ -83,12 +83,13 @@ test("分析器仍然涵蓋全部 302 條入口（不能因為改壞而少抓）
   //   GET /api/public/listings/:id/detail
   //   GET /api/public/listings/:id/similar
   // 302 → 307：贊助連動 Phase3 新增五條（皆 PG）
+  // 307 → 308：Phase3b 新增 GET /api/admin/support/entitlement/queue（PG）
   //   GET/POST /api/me/support/code
   //   POST /api/support/outbound
   //   GET/PUT /api/admin/support/entitlement
   // （`/api/support/webhook/:provider` 也從「無直接DB」改 PG：現在先讀 sponsorEntitlement flags）
-  assert.equal(matched, 307, `應解析到 307 列，實際 ${matched}`);
-  assert.match(out, /共 \*\*307\*\* 條入口/);
+  assert.equal(matched, 308, `應解析到 308 列，實際 ${matched}`);
+  assert.match(out, /共 \*\*308\*\* 條入口/);
 });
 
 test("/api/health 必須是「無直接DB」——它只讀行程內計數器，不碰 DB", () => {

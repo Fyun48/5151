@@ -135,6 +135,36 @@ export async function recentSupportSumAsync({ userId, sinceMs } = {}, options = 
   return Number(rows[0]?.total) || 0;
 }
 
+const QUEUE_SQL = `SELECT t.id, t.provider, t.provider_transaction_id, t.supporter_user_id, t.supporter_name,
+    t.supporter_email, t.amount, t.status, t.message, t.channel, t.received_at, g.id AS grant_id
+  FROM support_transaction t
+  LEFT JOIN sponsor_entitlement_grant g
+    ON g.support_transaction_id = (t.provider || ':' || t.provider_transaction_id)
+  WHERE t.received_at >= ? ORDER BY t.received_at DESC LIMIT 100`;
+
+// 人工對帳佇列：近 N 日的進帳（含 webhook 與人工補登），標出「已匹配會員」與「已開通」。
+export async function listEntitlementQueueAsync({ days = 30, now = new Date() } = {}, options = {}) {
+  const { exec } = await entitlementExec(options);
+  const since = iso((now instanceof Date ? now : new Date(now)).getTime() - Number(days || 30) * 86400000);
+  const rows = rowsOf(await exec(QUEUE_SQL, [since]));
+  return {
+    items: rows.map((row) => ({
+      id: Number(row.id),
+      provider: row.provider,
+      providerTransactionId: row.provider_transaction_id,
+      userId: row.supporter_user_id ? Number(row.supporter_user_id) : null,
+      supporterName: row.supporter_name || "",
+      supporterEmail: row.supporter_email || "",
+      amount: Number(row.amount) || 0,
+      status: row.status,
+      message: row.message || "",
+      channel: row.channel,
+      receivedAt: row.received_at,
+      entitled: Boolean(row.grant_id),
+    })),
+  };
+}
+
 export async function applySponsorEntitlementAsync({
   userId, transactionId, provider = "", amount = 0, reason = "", now = new Date(), durationDays = 30,
 } = {}, options = {}) {
