@@ -64,9 +64,12 @@ test("token 檔必須交給容器 uid（cloudflared 影像跑 65532，root:600 �
 test("要驗 tunnel 真的註冊，不能只看容器 running", () => {
   // 「容器 Up」不等於「對外通道可用」：token 讀不到時照樣 Up，hostname 搬過去只會 530。
   const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
-  // 字串與時間窗都要對：官方日誌是 "Registered tunnel connection"；
-  // 用 --since 90s 會在「容器沒被重建」時必然為空 → 誤判發版失敗。
-  assert.match(code, /grep -c "Registered tunnel connection"/);
+  // ① 字串要對：官方日誌是 "Registered tunnel connection"
+  // ② 不能用窄時間窗：容器沒被重建時 `--since 90s` 必然為空 → 誤判發版失敗
+  // ③ 要看「最後一條事件」而不是「歷史有沒有」：否則先成功、後來壞會被掩蓋
+  assert.match(code, /grep -E "Registered tunnel connection\|Failed to read token file" \| tail -1/);
+  assert.match(code, /\*"Registered tunnel connection"\) log /);
+  assert.match(code, /\*\) fail "cloudflared 最後一條事件不是註冊成功/);
   assert.doesNotMatch(code, /Registered a new connection/);
   assert.doesNotMatch(code, /docker logs --since \d+s 5151-ops-cloudflared/);
 });

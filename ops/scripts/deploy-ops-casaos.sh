@@ -165,21 +165,20 @@ if [ "$SKIP_TUNNEL" = 0 ]; then
   up=$(docker inspect -f '{{.State.Status}}' 5151-ops-cloudflared 2>/dev/null || echo absent)
   [ "$up" = "running" ] || fail "5151-ops-cloudflared 狀態=$up"
   # 「容器 running」不等於「tunnel 連得上」：token 讀不到時容器照樣 Up，卻永遠不註冊，
-  # hostname 搬過去只會得到 530。所以要驗日誌裡的註冊行。
-  # 兩個我踩過的誤判（2026-10-07）：
-  #  ① 正確字串是 `Registered tunnel connection`（我先前猜 "Registered a new connection" → 永遠 0）
-  #  ② 不能用 `--since 90s` 這種窄窗口：compose 認為沒變化就不重建容器，註冊行可能是幾天前寫的，
-  #     窄窗口必然為空 → 又誤判。改成看這個容器自己的整段日誌。
-  reg=""
+  # hostname 搬過去只會得到 530。所以要驗日誌。三個我踩過的誤判（2026-10-07）：
+  #  ① 字串是 `Registered tunnel connection`（猜成 "Registered a new connection" → 永遠 0）
+  #  ② 不能看窄時間窗（`--since 90s`）：compose 認為沒變就不重建容器，註冊行是舊的 → 窗口必然為空
+  #  ③ 但「整段歷史有註冊行」也不夠：會掩蓋「先註冊成功、后來 token 壞了」→ 改看**最後一條事件**
+  last_evt=""
   for _ in 1 2 3 4 5 6; do
-    reg=$(docker logs 5151-ops-cloudflared 2>&1 | grep -c "Registered tunnel connection" || true)
-    [ "${reg:-0}" -ge 1 ] && break
+    last_evt=$(docker logs 5151-ops-cloudflared 2>&1 | grep -E "Registered tunnel connection|Failed to read token file" | tail -1)
+    case "$last_evt" in *"Registered tunnel connection"*) break ;; esac
     sleep 3
   done
-  [ "${reg:-0}" -ge 1 ] || fail "cloudflared 日誌沒有「Registered tunnel connection」→ token 讀不到或 tunnel 不對（先 docker logs 5151-ops-cloudflared）"
-  perm=$(docker logs 5151-ops-cloudflared 2>&1 | grep -c "Failed to read token file" || true)
-  [ "${perm:-0}" = "0" ] || log "! 注意：日誌裡有 $perm 行「Failed to read token file」（可能是重建前的舊紀錄；目前已註冊成功）"
-  log "ops tunnel 已註冊連線（註冊行 $reg 條）✔"
+  case "$last_evt" in
+    *"Registered tunnel connection") log "ops tunnel 最後一條事件是註冊成功 ✔" ;;
+    *) fail "cloudflared 最後一條事件不是註冊成功（實際：${last_evt:-（日誌無相關行）}）→ token 讀不到或 tunnel 不對" ;;
+  esac
 fi
 
 # --- 驗明真的在跑這版碼 ---------------------------------------------------------------
