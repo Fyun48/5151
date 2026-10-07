@@ -135,19 +135,26 @@ a-3 拆 repo 等有第二個專案真的入驻 OPS 時再動，避免現在就�
   要開需要：簽發 ingest credential，並在 `5151-web-A` 設 `OPS_FEEDBACK_DELIVERY=1`、`OPS_INGEST_URL`、`OPS_INGEST_SECRET` 後重啟 ⇒ **屬 Production 變更，需要 Owner 明確核准**（F-0001），金鑰值不進對話。
 - 搬遷後 Cookie 是 host-only（無 `Domain=`），Owner 需用新域名**重新登入一次**（設計如此，不是故障）。
 
-### 操作注意（本次故意**沒改**吉比的 compose）
-吉比的 `/mnt/Storage1/apps/5151/docker-compose.yml` 裡**仍然留著 `5151-ops` 這個 service**（實查 3 處字串），
-但容器已改由獨立 project `5151-ops` 擁有。所以：
+### 操作注意：吉比 compose 裡的 OPS 服務**已刪除**（同日後續，PR #642）
+原本 `docker-compose.yml`（給 workflow）與 `casaos-compose.yml`（給 CasaOS 介面的「重新部署」）
+都還宣告 `5151-ops`，而容器已歸獨立 project `5151-ops` → 留著有兩種壞結果：
+① 對吉比 project 跑「整站 `up -d`」會因 `container_name` 衝突而報錯（看得见、fail-closed）；
+② CasaOS 介面对吉比 app 重新部署時，會拿那份的 `image: ghcr.io/fyun48/5151:latest` ＋
+   `/mnt/Storage1/apps/5151/ops`（git 未追蹤的過時來源）去**重建 OPS**，把釘版與新來源全打掉。
 
-- 若有人對吉比 project 跑 `docker compose up -d`（整站重建的常見手勢），Docker 會因
-  `container_name` 衝突而**報錯失敗**——這是 fail-closed、看得见，不會靜悄悄把 OPS 改回舊定義（好事）。
-- 要重建 OPS 只用這一條：
+所以兩邊都清了：
+- repo：`docker-compose.yml`、`casaos-compose.yml` 移除该服務；`test/v3-compose.test.js` 的尺規**反轉**
+  （現在斷言兩份都**不得**出現 `5151-ops`／`5154`，且 OPS 只活在自己的 compose）；
+  `.cursor/rules/infra-access.mdc` 也補上 OPS 例外＋`TUNNEL_TOKEN_FILE` 禁令（它之前還寫舊域名）。
+- NAS（`/mnt/Storage1/apps/5151/`）：同兩份檔以行區塊方式移除，並留備份 `.bak-rmops-20261007T092218Z`。
+  **證明吉比沒被改到**：改前後各跑一次 `docker compose -f docker-compose.yml -f docker-compose.override.yml config --format json`，
+  `services` 從 `['5151-ops','591-tracker-v3']` 變成 `['591-tracker-v3']`，而 `591-tracker-v3` 的定義
+  **前後 JSON 完全相同**（image 仍 `sha256:378d8f7a…`、port 仍 `5153`）；整個过程**沒有**下任何 `up`／`restart`，
+  實查 `591-tracker-v3` 與 `5151-ops` 都還是 `running`、project 各為 `591-tracker`／`5151-ops`。
+- 要重建 OPS 仍然只用這一條（不要走吉比的 compose）：
   `bash ops/scripts/deploy-ops-casaos.sh <git SHA> [runtime-digest 或 -]`
-  （或 `docker compose -p 5151-ops -f /mnt/Storage1/docker/5151-ops/app/current/docker-compose.ops.casaos.yml up -d`）
-- 我**刻意不去刪**吉比 compose 裡的 ops service：那份檔在 NAS 上是髒的／有 override，
-  動它等於動吉比的發版路徑（超出這次授權）。下次要收尾時再單獨開 PR 處理，並同步 `test/v3-compose.test.js`。
-- 舊碼來源 `/mnt/Storage1/apps/5151/ops`（11MB／243 檔）**保留未刪**，是回滚備援；
-  確認新轨跑穩一段後可另行處置（不要在還沒備份 `releases/` 之前就删）。
+- 舊碼來源 `/mnt/Storage1/apps/5151/ops`（11MB／243 檔）**仍保留未刪**，當回滚備援；
+  確認新軌跑穩一段後可另行處置（在 `releases/` 還沒有備份之前不要刪）。
 
 ### 追補：最後兩條也是我自己寫錯的檢查（都已鎖進尺規）
 | # | 失誤 | 現象 | 教訓 |
