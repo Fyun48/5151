@@ -6,7 +6,9 @@
 完整藍圖見 [`BLUEPRINT.md`](BLUEPRINT.md)；短表見 [`PLAN.md`](PLAN.md)；現況對照見 [`INVENTORY.md`](INVENTORY.md)。  
 v3 外掛／預算熔斷／進階比對見 [`../v3/PLAN-integrations.md`](../v3/PLAN-integrations.md)。
 
-Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `https://ops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
+Console：本機 `http://127.0.0.1:5154`；正式機 `https://ops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
+2026-10-07 起 OPS 走**自己那條** Cloudflare Tunnel（`ops`，connector 容器 `5151-ops-cloudflared`），
+不再挂在吉比的 `5151` tunnel 上——吉比的對外通道出事時，OPS 不受連坐。
 
 ## 一般使用者怎麼回饋
 
@@ -41,7 +43,13 @@ OPS_PRODUCT_ID=v3
 7. 評估結果是 **PROPOSE** 時，對提案按「核准開發」（Gate #1）
 8. Coding / QA / Staging 通過後，用 API 或後續畫面做 Gate #2 核准發布
 9. **正式機仍要走 Synology Container Manager 部署 v3**，OPS Phase 15 預設不會自己部署
-10. **更新 OPS 本身**走 `.github/workflows/deploy-ops-synology.yml`（確認字 `DEPLOY-OPS`，Synology 專用 OPS-only compose `docker-compose.ops.synology.yml`，只重建 `5151-ops`，版本化 release + rollback），不是 v3 的第四條路徑
+10. **更新 OPS 本身**（OPS-only，不是 v3 的第四條路徑）：
+    - **casa-nas（現行正式機）**：`git archive <SHA> ops docker-compose.ops.casaos.yml | ssh casa-nas "bash /tmp/deploy-ops-casaos.sh <SHA> <runtime-digest>"`
+      （腳本在 repo：`ops/scripts/deploy-ops-casaos.sh`；compose `docker-compose.ops.casaos.yml`；
+      project `5151-ops`；`releases/<SHA>` ＋ `current` symlink；runtime **釘 digest**；失敗自動回滚）
+    - **Synology（備用，尚未啟用）**：`.github/workflows/deploy-ops-synology.yml`（確認字 `DEPLOY-OPS`，
+      `docker-compose.ops.synology.yml`）。該機只有 release 目錄，**沒有跑著的 OPS 容器，也沒有 `ops.db`**，
+      所以它是「建好但沒上線」，別誤當成第二個正式入口。
 
 ## Webhook 通知
 

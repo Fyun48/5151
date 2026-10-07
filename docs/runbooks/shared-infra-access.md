@@ -2,7 +2,8 @@
 
 > 這份是**所有專案共用**的存取入口說明：兩台 NAS、Cloudflare Tunnel／Access、SSH 走法、資料庫、
 > 機密存放位置、以及「代理人可以代操作到哪」。
-> 新專案請先讀本檔 + `.cursor/rules/infra-access.mdc`，不要另開 tunnel、不要另開第二條通道。
+> 新專案請先讀本檔 + `.cursor/rules/infra-access.mdc`，**產品站**不要另開 tunnel、不要另開第二條通道。
+> （唯一例外：OPS 控制面走自己的 tunnel 與自己的 compose project，Owner 明示 2026-10-07，見 `AGENTS.md` 與本檔 §2.3。）
 >
 > 最後更新：2026-09-22（PG 切換完成後、CF SSH + service token 上線同日）
 
@@ -87,9 +88,17 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 > `Connection → SSH → Auth → Credentials`。`authorized_keys` 的註解用 `putty-owner-company` / `putty-owner-home`
 > 以便日後只撤銷某一台。
 
-### 2.3 其他網站入口（同一條 tunnel、同一台 v3 容器）
-- 公開站 `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`
-- OPS Console `https://ops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）
+### 2.3 網站入口（2026-10-07 起拆成兩條 tunnel）
+| 站點 | CF hostname | tunnel | connector 容器 | ingress service |
+|---|---|---|---|---|
+| 吉比 v3（產品站） | `https://jibbyrenth.reversalplay.me` | `5151`（`3adb90bf…`） | `591-tracker-tunnel`／`5151-cloudflared-A` | `http://127.0.0.1:25153`（HAProxy） |
+| OPS Console | `https://ops.reversalplay.me` | **`ops`（`53792c2f…`）** | **`5151-ops-cloudflared`**（project `5151-ops`） | `http://127.0.0.1:5154` |
+
+- **產品站**仍然只准用 `5151` 那條；OPS 的例外只給 OPS（理由與邊界見 `AGENTS.md`）。
+- OPS 那條的 token 走 `TUNNEL_TOKEN_FILE` 掛檔（casa-nas：`/mnt/Storage1/docker/5151-ops/secrets/ops-tunnel-token`，
+  owner `65532:65532` mode 400；備份在憑證庫 `cloudflare/ops-tunnel-token.txt`）。
+  **不准**改成寫進 argv（既存兩台吉比 connector 那樣做是歷史問題，不要複製）。
+- 發版／重建：`bash ops/scripts/deploy-ops-casaos.sh <git SHA> <runtime-digest>`（來源：`git archive <SHA> ops docker-compose.ops.casaos.yml` 走 stdin）。
 
 ## 3. Cloudflare 帳號資源（非機密，供查詢／代操作）
 

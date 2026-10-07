@@ -1,11 +1,18 @@
 # Cloudflare Tunnel connectors（5151 shadow／正式站）
 
-兩個**不同**的 tunnel，名稱很像、不要混用：
+# Cloudflare Tunnel connectors（5151 shadow／正式站／OPS 控制面）
+
+三條**不同**的 tunnel，名稱很像、不要混用：
 
 | tunnel | id | 誰加入 | ingress（指向） | 用途 |
 |---|---|---|---|---|
-| **`5151`**（正式站） | `3adb90bf-e31e-43ab-88af-5606b47fca01` | CasaOS `591-tracker-tunnel`、Synology `591-tracker-tunnel-b` | `jibbyrenth → http://127.0.0.1:25153`、`ops → http://127.0.0.1:5154` | **公開站入口** |
+| **`5151`**（正式站） | `3adb90bf-e31e-43ab-88af-5606b47fca01` | CasaOS `591-tracker-tunnel`、Synology `591-tracker-tunnel-b` | `jibbyrenth → http://127.0.0.1:25153` | **公開站入口** |
 | `5151-shadow-web`（測試） | `4c70b226-7a30-4186-936b-29cc819ac9fb` | CasaOS `5151-cloudflared-A`、Synology `5151-cloudflared-B` | `shadow-jibbyrenth → http://192.168.0.140:25153` | shadow 測試 hostname |
+| **`ops`**（控制面，2026-10-07 新增） | `53792c2f-8798-4492-9afa-6b0e18fdc079` | CasaOS `5151-ops-cloudflared`（project `5151-ops`） | `ops.reversalplay.me → http://127.0.0.1:5154` | OPS Console 專屬，**不被吉比連坐** |
+
+> ⚠️ 本檔原本只講「吉比」那兩條 tunnel。OPS 已在 2026-10-07 從 `5151` 迁走（owner 原则：控制面不该因單一專案故障而進不去），
+> token 也改用 `TUNNEL_TOKEN_FILE` 掛檔（本檔列出的三台 connector 仍是 argv 明文，屬既存問題，**新服務不要複製**）。
+> 詳見 `docs/runbooks/shared-infra-access.md` §2.3 與 `docs/handoffs/20261007-ops-domain-and-isolation-audit.md`。
 
 為什麼「兩個 connector」是必要的：connector 用 `network_mode: host`，ingress 的 `127.0.0.1`
 是**該台主機自己**。所以每台要服務公開站的主機，都要有 (1) 一個加入 `5151` 的 connector
