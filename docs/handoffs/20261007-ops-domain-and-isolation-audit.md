@@ -102,3 +102,35 @@ a-3 拆 repo 等有第二個專案真的入驻 OPS 時再動，避免現在就�
   再補 v3 那三個 env（`OPS_INGEST_URL` 現在填 **`https://ops.reversalplay.me/ops/api/ingest/feedback`**）。
 - 目前 `v3` 訂閱的 capabilities：`feedback_copy: true`，其餘
   （`crm_sync`／`stats`／`cross_site_insight`／`followup_service`／`retain_after_exit`）**皆 false**。
+
+## 5. 執行紀錄（Owner 裁示「就照你建議的繼續」→ a-2 先、a-1 並行、a-3 延後）
+
+### 已完成
+| 項目 | 結果 |
+|---|---|
+| 域名 | `jibbyrentops.reversalplay.me` → **`ops.reversalplay.me`**（舊名 ingress 與 DNS 都已刪，不再留别名） |
+| OPS 專屬 tunnel | 新建 `ops`（id `53792c2f…`），`ops.reversalplay.me → http://127.0.0.1:5154`；吉比的 `5151`（`3adb90bf…`）現在只剩 `jibbyrenth`＋catch-all |
+| 對外通道容器 | 新容器 **`5151-ops-cloudflared`**（compose project `5151-ops`），token 走 `TUNNEL_TOKEN_FILE` 掛檔，**不在 argv** |
+| 來源與執行環境 | OPS 改由 `releases/<git SHA>/ops` ＋ `current` symlink 提供（只讀掛 `/app/ops`）；runtime **釘 digest** `abe3933e…`（＝搬遷前容器在跑的那個，所以執行環境零變動） |
+| 發版工具 | `docker-compose.ops.casaos.yml` ＋ `ops/scripts/deploy-ops-casaos.sh`（可重跑、`trap` 回滚、發版前後都驗） |
+| 尺規 | `test/deploy-ops-casaos.test.js` 13 條（含 YAML 真的 parse、順序檢查、token 歸屬） |
+| 現行正式版 | master `31d5919`（PR #632→#636 五支）；`console.html` 200、`/ops/api/feedback` 未登入 401、tunnel 註冊 4 條連線 |
+
+### 踩過的四個坑（都已寫回腳本＋尺規，不是只改文件）
+1. **API 的 hostname 不等於 DNS 記錄**：PUT ingress 成功但站點 `000`，要另外 `POST /zones/{Z}/dns_records` 建 CNAME `<tunnel-id>.cfargotunnel.com`。（lesson L-0204）
+2. **`${VAR:?message}` 的 message 含「冒號＋空格」會炸 YAML**：`yaml: line 19: mapping values are not allowed in this context`。
+   更糟的是腳本當時已先 `docker rm -f`，等於当场把 OPS 停掉約 30 秒（靠吉比 project 的舊定義回生）。
+   → 對策：值加引號；**`docker compose config -q` 移到摘容器之前**；尺規改用 YAML parser 真的解析。
+3. **`.env` 只寫值、漏鍵名**：下一次 `source` 時 shell 把整行 digest 當指令執行 → 腳本開頭就中止（所幸還在摘容器之前）。
+   → 對策：寫成 `OPS_RUNTIME_IMAGE=…`；source 前只收 `^[A-Za-z_][A-Za-z0-9_]*=` 行。
+4. **cloudflared 影像跑 uid 65532**：root:600 的 token 檔它讀不到，日誌一直 `Failed to read token file`，
+   容器 Up 但 CF 端 tunnel 永遠 inactive——此時搬 hostname 只會拿到 530。
+   → 對策：`chown 65532:65532` 目錄(700)與檔(400)，掛載 `:ro` 容器寫不進去；
+   發版結尾改驗日誌 `Registered tunnel connection`（且**不用** `--since` 窄窗口：容器沒重建時窗口必然為空，我也误判过一次）。
+
+### 尚未做／留給 Owner
+- **a-3（把 `ops/` 拆成獨立 repo／獨立 image）**：刻意延後。現在 OPS 已經有「自己的 tunnel＋自己的 compose project＋釘版來源」，
+  吉比 build 出錯不會再決定 OPS 重啟後的執行環境；拆 repo 的邊際收益要等第二個專案真的入驻才有實質意義。
+- **v3 → OPS 的回饋遞交管線仍沒啟用**（`ingested_feedback` 0 筆、`product_ingest_credential` 0 筆）。
+  要開需要：簽發 ingest credential，並在 `5151-web-A` 設 `OPS_FEEDBACK_DELIVERY=1`、`OPS_INGEST_URL`、`OPS_INGEST_SECRET` 後重啟 ⇒ **屬 Production 變更，需要 Owner 明確核准**（F-0001），金鑰值不進對話。
+- 搬遷後 Cookie 是 host-only（無 `Domain=`），Owner 需用新域名**重新登入一次**（設計如此，不是故障）。
