@@ -186,6 +186,15 @@ Owner 指示：**所有專案的帳號密碼／token 一律集中在共享目錄
 | OPS（`5151-ops`） | `OPS_INGEST_SECRET`、`OPS_SECRET_AT_REST_KEY` | casa `/mnt/Storage1/docker/5151-ops/app/.env`（600，發版腳本用 `set -a` source 後才交給 compose 插值） |
 | v3（跑 worker 迴圈的那個容器） | `OPS_FEEDBACK_DELIVERY=1`、`OPS_INGEST_URL`、`OPS_INGEST_SECRET` | casa `/mnt/Storage1/apps/5151/.env`（600）；repo 端只有 `${VAR:-}` 插值與「預設關閉」 |
 
+**為什麼值是放主機 `.env` 而不是 repo**（2026-10-07 查 `deploy-v3.yml` 實證）：吉比那條發版路用
+`appleboy/scp-action` 推 `source: v3/src, v3/public, docker-compose.yml, casaos-compose.yml, docker-compose.override.yml`
+到 `/mnt/Storage1/apps/5151`（`:281-287`）——`docker-compose.yml` **每次都被 repo 版覆寫**，所以 repo 端一定要留
+`${VAR:-}` 插值＋安全預設；而 `.env` **不在 source 清單、也沒有 `--delete`** ⇒ 留在 `.env` 的值不會被發版抹掉，
+`up -d` 又是跑在 NAS 上的 ssh script（`:313`），插值讀的就是主機 `.env`。
+（同檔 `:357`／`:405` 那兩行 `printf 'V3_IMAGE=…' > .env` 是**影子站** `/opt/5151-shadow/web-a`、
+`$HOME/5151-shadow/web-b` 的 `.env`，會被截寫成只剩 `V3_IMAGE` 一行——**別把交付鍵放那兩處**，
+要改用 `5151-worker` 那條路時得把它們寫進不日被覆檔的檔案。）
+
 兩把鑰匙的來源：`/home/cline/.secrets/ops/ingest-v3.env`（600）。**`OPS_SECRET_AT_REST_KEY` 換掉就等於
 讓已加密落庫的憑證解不开**（ingest 全部 401），所以要長期固定保存，備份時連這個檔一起備。
 
