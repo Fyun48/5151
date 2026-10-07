@@ -4140,6 +4140,11 @@
         <p class="hint">分享連結的點閱與 CTA 統計，只記你自己的連結。</p>
         <div id="shareStatsBody">載入中…</div>
       </section>
+      <section class="share-stats-panel" id="sponsorCodePanel" hidden>
+        <h3>我的贊助代碼</h3>
+        <p class="hint">贊助吉比時把代碼貼在付款頁的留言／備註欄，系統會自動把這筆贊助記到你名下並開通贊助會員權益。</p>
+        <div id="sponsorCodeBody">載入中…</div>
+      </section>
     </div>
   </section>
   <div id="siteNotice" class="site-notice" hidden>
@@ -9015,7 +9020,7 @@
         history.replaceState({}, "", `${location.pathname}${location.search}`);
       }
       if (view === "listings") loadDemandExposure().catch(() => {});
-      if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); loadMyShareStats().catch(() => {}); }
+      if (view === "post") { loadMineSelfListings().then(() => { if (ownerMatchingOn) loadAggregateDemand(); }).catch(() => {}); loadMediaLibrary().catch(() => {}); loadMyShareStats().catch(() => {}); loadSponsorCodePanel().catch(() => {}); }
       if (view === "me") loadWishOfferBlocks().catch(() => {});
       if (view === "qa") loadHelpQa();
       if (view === "notify") {
@@ -9774,6 +9779,54 @@
       loadListingTools().catch(() => {});
       const overlayList = $("ownerOverlayList");
       if (overlayList) overlayList.innerHTML = rows.length ? rows.map((item) => ownerCardHtml(item)).join("") : `<div class="empty">尚未刊登。</div>`;
+    }
+    async function loadSponsorCodePanel() {
+      const panel = $("sponsorCodePanel");
+      const body = $("sponsorCodeBody");
+      if (!panel || !body || isGuest) {
+        if (panel) panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      body.innerHTML = `<p class="muted">載入中…</p>`;
+      const render = (code, expiresAt) => {
+        const when = expiresAt ? String(expiresAt).replace("T", " ").slice(0, 16) : "";
+        body.innerHTML = code
+          ? `<p class="share-stat"><span class="num">${esc(code.code)}</span><span class="lab">你的贊助代碼</span></p>
+             <p class="muted">${when ? `有效至 ${esc(when)}（UTC）· ` : ""}一次性使用，付款後自動失效。</p>
+             <div class="row"><button type="button" class="ghost" id="sponsorCodeCopy">複製代碼</button></div>`
+          : `<p class="muted">你目前沒有有效代碼。</p>
+             <div class="row"><button type="button" class="primary" id="sponsorCodeIssue">產生代碼</button></div>`;
+        const copyBtn = $("sponsorCodeCopy");
+        if (copyBtn) copyBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(code.code);
+            copyBtn.textContent = "已複製";
+          } catch {
+            copyBtn.textContent = code.code;
+          }
+        });
+        const issueBtn = $("sponsorCodeIssue");
+        if (issueBtn) issueBtn.addEventListener("click", async () => {
+          issueBtn.disabled = true;
+          const res = await fetch("/api/me/support/code", { method: "POST" }).catch(() => null);
+          const data = res ? await res.json().catch(() => ({})) : {};
+          if (res && res.ok && data.code) render(data, data.expiresAt);
+          else body.innerHTML = `<p class="muted">${esc(data?.error || "無法產生代碼，請稍後再試")}</p>`;
+        });
+      };
+      try {
+        const res = await fetch("/api/me/support/code");
+        if (res.status === 401 || res.status === 409) {
+          panel.hidden = true;
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "讀取贊助代碼失敗");
+        render(data.code || null, data.code?.expiresAt);
+      } catch {
+        panel.hidden = true;
+      }
     }
     function shareStatCell(label, value) {
       return `<div class="share-stat"><span class="num">${esc(value)}</span><span class="lab">${esc(label)}</span></div>`;

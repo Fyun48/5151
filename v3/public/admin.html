@@ -1102,6 +1102,13 @@
           <p class="hint">近 7 日分享連結的點閱、CTA 與新建立連結。數字為彙總，不含租客聯絡資料。</p>
           <div id="listingShareStats"><p class="muted">載入中…</p></div>
         </section>
+        <section class="card">
+          <h3>贊助連動（Phase 3）</h3>
+          <p class="hint">四個 flag 全預設關；開啟後才會走代碼歸因與 webhook 對帳。金鑰只讀容器環境變數，未設定時 webhook 回 501 不介入。</p>
+          <div id="entitlementFlags"><p class="muted">載入中…</p></div>
+          <h3>人工對帳佇列（近 30 日）</h3>
+          <div id="entitlementQueue"><p class="muted">載入中…</p></div>
+        </section>
       </div>
       <div id="rental-templates" class="admin-panel" data-admin-page="rental/templates">
         <section class="card">
@@ -2778,6 +2785,67 @@
         if (msg) msg.textContent = error.message;
       }
     }
+    async function loadSponsorEntitlementAdmin() {
+      const flagsBox = $("entitlementFlags");
+      const queueBox = $("entitlementQueue");
+      if (!flagsBox && !queueBox) return;
+      const FLAG_LABELS = {
+        codeAttribution: "代碼歸因（會員可產生 JIBBY 代碼、出站帶代碼）",
+        autoEntitlement: "對帳成功自動開通贊助會員（D1）",
+        apiPoll: "API 輪詢對帳（預留，尚未實作 tick）",
+        webhook: "webhook 對帳（需環境變數金鑰）",
+      };
+      try {
+        const res = await fetch("/api/admin/support/entitlement", { cache: "no-store" });
+        if (!res.ok) throw new Error("讀取失敗");
+        const data = await res.json();
+        const flags = data.flags || {};
+        const rules = data.rules || {};
+        if (flagsBox) {
+          flagsBox.innerHTML = Object.keys(FLAG_LABELS).map((key) => `
+            <label class="row"><input type="checkbox" data-flag="${key}" ${flags[key] ? "checked" : ""}> ${escapeHtml(FLAG_LABELS[key])}</label>`).join("") + `
+            <div class="row" style="margin-top:8px">
+              <label>單筆門檻 <input type="number" id="entMinAmount" value="${Number(rules.minAmountTWD) || 100}" style="width:80px"></label>
+              <label>累計天數 <input type="number" id="entWindowDays" value="${Number(rules.windowDays) || 30}" style="width:60px"></label>
+              <label>效期天數 <input type="number" id="entDurationDays" value="${Number(rules.durationDays) || 30}" style="width:60px"></label>
+              <label class="row"><input type="checkbox" id="entRevoke" ${rules.revokeOnRefund ? "checked" : ""}> 退款自動撤銷</label>
+            </div>
+            <div class="row"><button type="button" class="primary" id="entSave">儲存設定</button><span class="muted" id="entSaveMsg"></span></div>`;
+          const save = $("entSave");
+          if (save) save.addEventListener("click", async () => {
+            const nextFlags = {};
+            flagsBox.querySelectorAll("input[data-flag]").forEach((input) => { nextFlags[input.dataset.flag] = input.checked; });
+            const nextRules = {
+              minAmountTWD: Number($("entMinAmount")?.value) || 100,
+              windowDays: Number($("entWindowDays")?.value) || 30,
+              durationDays: Number($("entDurationDays")?.value) || 30,
+              revokeOnRefund: Boolean($("entRevoke")?.checked),
+            };
+            const put = await fetch("/api/admin/support/entitlement", {
+              method: "PUT", headers: { "content-type": "application/json" },
+              body: JSON.stringify({ flags: nextFlags, rules: nextRules }),
+            });
+            const msg = $("entSaveMsg");
+            if (msg) msg.textContent = put.ok ? "已儲存" : "儲存失敗";
+          });
+        }
+        if (queueBox) {
+          const qres = await fetch("/api/admin/support/entitlement/queue?days=30", { cache: "no-store" });
+          const qdata = qres.ok ? await qres.json() : { items: [] };
+          const items = Array.isArray(qdata.items) ? qdata.items : [];
+          queueBox.innerHTML = items.length ? items.map((row) => `
+            <div class="catalog-list" style="padding:6px 0">
+              <b>${escapeHtml(String(row.receivedAt || "").replace("T", " ").slice(0, 16))}</b>
+              · ${escapeHtml(row.provider || "?")} · NT$${Number(row.amount) || 0}
+              · ${row.entitled ? "已開通" : row.userId ? `已匹配會員 #${row.userId}（未開通）` : "未匹配（人工）"}
+              ${row.message ? `· 留言：${escapeHtml(String(row.message).slice(0, 60))}` : ""}
+            </div>`).join("") : `<p class="muted">近 30 日沒有進帳記錄。</p>`;
+        }
+      } catch {
+        if (flagsBox) flagsBox.innerHTML = `<p class="muted">讀取失敗</p>`;
+        if (queueBox) queueBox.innerHTML = `<p class="muted">讀取失敗</p>`;
+      }
+    }
     async function loadListingShareStats() {
       const box = $("listingShareStats");
       if (!box) return;
@@ -4301,7 +4369,7 @@
       if (me.role !== "admin") { location.replace("/"); return; }
       meEmail = me.email || "";
       $("who").textContent = meEmail;
-      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadRentalOps(), loadListingShareStats(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
+      await Promise.all([loadMembers(), loadMail(), loadOauth(), loadSponsor(), loadAds(), loadBroadcasts(), loadAnnouncements(), loadCommsAdmin(), loadMaps(), loadHelpQa(), loadWishConditions(), loadRentalCatalog(), loadRentalMatchRules(), loadRentalOps(), loadListingShareStats(), loadSponsorEntitlementAdmin(), loadLegalCopy(), loadContentCms(), loadListingImports(), loadSpirit(), loadHousing(), loadCrawlSources(), loadSystemCrawl(), loadBrand(), loadFeedback(), typeof loadSupportAdmin === "function" ? loadSupportAdmin() : Promise.resolve()]);
       adminFormsReady = true;
       IA.finishPageLoad(IA.currentPageId());
       $("brandForm").onsubmit = async (ev) => {

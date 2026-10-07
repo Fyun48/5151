@@ -478,6 +478,7 @@ import {
   setSponsorEntitlementRulesAsync,
   issueMemberSupportCodeAsync,
   currentMemberSupportCodeAsync,
+  listEntitlementQueueAsync,
 } from "./sponsorEntitlementAsync.js";
 import { buildSponsorOutbound } from "./sponsorEntitlement.js";
 import { handleSponsorEntitlementWebhookAsync } from "./sponsorEntitlementWebhook.js";
@@ -1910,6 +1911,15 @@ app.put("/api/admin/support/entitlement", requireAdminApi, async (req, res) => {
   const flags = req.body?.flags !== undefined ? await setSponsorEntitlementFlagsAsync(req.body.flags, {}) : await getSponsorEntitlementFlagsAsync({});
   const rules = req.body?.rules !== undefined ? await setSponsorEntitlementRulesAsync(req.body.rules, {}) : await getSponsorEntitlementRulesAsync({});
   res.json({ flags, rules });
+});
+
+app.get("/api/admin/support/entitlement/queue", requireAdminApi, async (req, res) => {
+  try {
+    const days = Number(req.query?.days) || 30;
+    res.json(await listEntitlementQueueAsync({ days }, {}));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "無法讀取對帳佇列" });
+  }
 });
 
 function auditReq(req, action, target, before, after) {
