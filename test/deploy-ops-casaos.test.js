@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,8 +22,35 @@ function service(src, name) {
 
 test("ops service 一律由 env 釘 digest，不准 :latest", () => {
   const ops = service(compose, "5151-ops");
-  assert.match(ops, /image: \$\{OPS_RUNTIME_IMAGE:\?[^)]*\}/);
-  assert.doesNotMatch(ops, /image:\s*ghcr\.io\/fyun48\/5151:latest/);
+  assert.match(ops, /image:\s*"?\$\{OPS_RUNTIME_IMAGE:\?[^)]*\}"?/);
+  assert.doesNotMatch(ops, /image:\s*"?ghcr\.io\/fyun48\/5151:latest"?/);
+});
+
+test("compose 檔必須能真的解析（regex 抓不到的 YAML 錯誤曾当场停掉 OPS）", () => {
+  // 2026-10-07：`${VAR:?message}` 的 message 含「冒號＋空格」→ YAML 當成巢狀 mapping，
+  // 而腳本已在 `docker rm -f` 之後才炸，OPS 直接停機。所以尺規要真的 parse，不只是字串比對。
+  const parsed = JSON.parse(
+    execFileSync("python3", ["-c", "import sys,yaml,json;print(json.dumps(yaml.safe_load(sys.stdin.read())))"], {
+      input: compose, encoding: "utf8",
+    })
+  );
+  const svc = parsed.services["5151-ops"];
+  assert.equal(svc.container_name, "5151-ops");
+  assert.match(svc.image, /\$\{OPS_RUNTIME_IMAGE:\?/);
+  assert.deepEqual(svc.ports, ["127.0.0.1:5154:5154"]);
+  assert.equal(svc.environment.PRODUCTION_RELEASE_ALLOW_LIVE, "0");
+  assert.equal(parsed.services["ops-cloudflared"].network_mode, "host");
+  assert.equal(parsed.services["ops-cloudflared"].environment.TUNNEL_TOKEN_FILE, "/run/secrets/ops-tunnel-token");
+});
+
+test("發版腳本要先解析 compose，才准摘除現有容器", () => {
+  const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
+  const configAt = code.indexOf("config -q");
+  const rmAt = code.indexOf("docker rm -f 5151-ops");
+  assert.ok(configAt > -1, "缺少 compose config -q 事前驗證");
+  assert.ok(rmAt > -1, "找不到摘除容器的步驟");
+  assert.ok(configAt < rmAt, "順序錯了：必須先 config -q 再 docker rm -f");
+  assert.match(code, /尚未摘除任何容器/);
 });
 
 test("ops 原始碼走 releases/<SHA> 的 current symlink，不再是相對目錄手動複製", () => {
