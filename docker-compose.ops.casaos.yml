@@ -32,6 +32,12 @@ services:
       COOKIE_SECURE: "1"
       # 預設禁止 Production release live mutation；Owner 明確開啟才允許（與 synology 版一致）。
       PRODUCTION_RELEASE_ALLOW_LIVE: "0"
+      # v3 站內頁 feedback 交付（ingest）憑證：兩把**必須成對**，值只放主機端、不入 repo。
+      # 只設 OPS_INGEST_SECRET 而缺 OPS_SECRET_AT_REST_KEY 時，OPS 開機會在
+      # ensureLegacyIngestSecret() → requireSecretAtRestKey() 直接 throw（503）⇒ 容器起不來。
+      # OPS_SECRET_AT_REST_KEY 換掉就等于讓已加密落庫的憑證解不开（ingest 全變 401），要長期固定保存。
+      OPS_INGEST_SECRET: "${OPS_INGEST_SECRET:-}"
+      OPS_SECRET_AT_REST_KEY: "${OPS_SECRET_AT_REST_KEY:-}"
     volumes:
       # 資料維持原地不动（本次只搬「碼從哪裡來」與「誰負責對外通道」，不搬 DB）。
       - ${OPS_CASAOS_DATA_ROOT:-/DATA/AppData/5151-ops}:/data
