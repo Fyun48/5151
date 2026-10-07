@@ -30,8 +30,18 @@ const ENRICH_COOLDOWN_MS = 20_000;
 const TRANSIENT_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
 const SOURCE_LIMITED_BACKOFF_MS = 12 * 60 * 60_000;
 const PARSE_FAIL_BACKOFF_MS = 24 * 60 * 60_000;
+// `pending_missing`：頁面抓到了、也解析對了，但 evaluateHpPrep 仍判 PREP_PENDING
+// （2026-10-07 正式站實況几乎都是設備欄位 `facility` 補不齐：1090／2504 列的
+// facility_status=`not_provided` 而 facility_basis=`inferred`，被 facilityComplete 拒收，
+// 而 allowVisible 的 facilityPartial 例外又只給「已經 display_ready=1」的房源 ⇒ 死鎖）。
+// 這種重試不會因為多跑幾次就變比較可能成功，所以**不能**走 transient 的 60s→5m→15m 階梯：
+// 實測同一筆最多被重試 386 次、每 15 分鐘打一次，而整張 listing_prep 的 display_ready 仍是 0／2504。
+// 6 小時是刻意保留「來源後來補上設備資料」的觀察窗口，又不至於變成無意義的高頻打站。
+const PENDING_MISSING_BACKOFF_MS = 6 * 60 * 60_000;
 const CLAIMABLE_STATUSES = ["queued", "failed", "source_limited", "parse_failed"];
-const SOURCE_PAUSE_CLASSES = ["transient", "source_limited"];
+// 這裡的語意其實是「哪些 last_error_class 的 next_retry_at 要当真鎖住」（sourceBackoffActive 用）。
+// 新類別一定要進這個清單，否則 6h 退避會被 claim 當無效、下一輪立刻抢回去，反而打得更兇。
+const SOURCE_PAUSE_CLASSES = ["transient", "source_limited", "pending_missing"];
 
 export function ensureListingPrepSchema(conn) {
   conn.exec(`
@@ -401,8 +411,22 @@ export function claimEnrichJobs(conn, { limit = 6 } = {}, now = Date.now()) {
 function backoffMs(errorClass, attempt) {
   if (errorClass === "source_limited") return SOURCE_LIMITED_BACKOFF_MS;
   if (errorClass === "parse_failed") return PARSE_FAIL_BACKOFF_MS;
+  if (errorClass === "pending_missing") return PENDING_MISSING_BACKOFF_MS;
   const idx = Math.min(Math.max(attempt - 1, 0), TRANSIENT_BACKOFF_MS.length - 1);
   return TRANSIENT_BACKOFF_MS[idx];
+}
+
+// job 最終的 last_error_class。抽成獨立函式是因為這裡的語意很容易寫錯：
+// `failed` 有兩種完全不同的原因——「來源暫時出錯」（該走 60s→5m→15m 階梯）與
+// 「頁面抓到了、欄位就是缺」（重試不會有差別，見 PENDING_MISSING_BACKOFF_MS 的說明）。
+// 呼叫點只有一個（processOneEnrichJob 尾端的 finishJobDriver），fetch／parse 真的失敗那幾條
+// 路徑在它之前就 return 了、自帶 "transient"，所以這邊看到 failed 時一定是已经拿到評估結果。
+export function enrichErrorClass(jobStatus, evalResult) {
+  if (jobStatus === "succeeded") return "";
+  if (jobStatus === "parse_failed") return "parse_failed";
+  if (jobStatus === "source_limited") return "source_limited";
+  if (evalResult && evalResult.status === PREP_PENDING) return "pending_missing";
+  return "transient";
 }
 
 // finishJob() 的判斷部分（sync 與 async 共用）。leaked 狀態一律以「最新列的 run_seq／request_seq」
@@ -787,7 +811,7 @@ export async function processOneEnrichJob(conn, helpers, job, {
   await finishJobDriver(conn, job, {
     status: jobStatus === "failed" && evalResult.missing.length ? "failed" : jobStatus,
     error: evalResult.withholdReason || "",
-    errorClass: jobStatus === "succeeded" ? "" : (jobStatus === "parse_failed" ? "parse_failed" : (jobStatus === "source_limited" ? "source_limited" : "transient")),
+    errorClass: enrichErrorClass(jobStatus, evalResult),
     missing: evalResult.missing,
     timings,
   });
