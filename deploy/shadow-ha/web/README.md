@@ -27,7 +27,7 @@ Synology (SYNOLOGY_HOST=192.168.0.220)
 └─ 5151-cloudflared-B    shadow 測試 tunnel 的 connector
 ```
 
-> **公開入口（`jibbyrenth`）＝ tunnel `5151`（`3adb90bf-e31e-43ab-88af-5606b47fca01`）
+> **公開入口（`jibbyrenth`）＝ tunnel `5151-b`（`f36d61e6-bc8a-4535-8187-d0e34b2111c9`；2026-10-07 因舊 token 外流改走新條，舊 `5151` 已刪）
 > → `http://127.0.0.1:25153` → 各主機自己的 HAProxy → roundrobin web-a／web-b。**
 > 兩台主機各有一個 connector 加入這條 tunnel，所以**任一主機整台掛掉都還有入口**。
 > 2026-09-24 入口層演練：停掉 CasaOS 的 `591-tracker-tunnel` 約 30 秒，公開站 **32/32 次全部 200**

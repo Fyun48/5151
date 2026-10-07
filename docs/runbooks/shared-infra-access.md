@@ -88,17 +88,38 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 > `Connection → SSH → Auth → Credentials`。`authorized_keys` 的註解用 `putty-owner-company` / `putty-owner-home`
 > 以便日後只撤銷某一台。
 
-### 2.3 網站入口（2026-10-07 起拆成兩條 tunnel）
-| 站點 | CF hostname | tunnel | connector 容器 | ingress service |
-|---|---|---|---|---|
-| 吉比 v3（產品站） | `https://jibbyrenth.reversalplay.me` | `5151`（`3adb90bf…`） | `591-tracker-tunnel`／`5151-cloudflared-A` | `http://127.0.0.1:25153`（HAProxy） |
-| OPS Console | `https://ops.reversalplay.me` | **`ops`（`53792c2f…`）** | **`5151-ops-cloudflared`**（project `5151-ops`） | `http://127.0.0.1:5154` |
+### 2.3 網站入口（2026-10-07 起：三條 tunnel、四台 connector）
 
-- **產品站**仍然只准用 `5151` 那條；OPS 的例外只給 OPS（理由與邊界見 `AGENTS.md`）。
-- OPS 那條的 token 走 `TUNNEL_TOKEN_FILE` 掛檔（casa-nas：`/mnt/Storage1/docker/5151-ops/secrets/ops-tunnel-token`，
-  owner `65532:65532` mode 400；備份在憑證庫 `cloudflare/ops-tunnel-token.txt`）。
-  **不准**改成寫進 argv（既存兩台吉比 connector 那樣做是歷史問題，不要複製）。
-- 發版／重建：`bash ops/scripts/deploy-ops-casaos.sh <git SHA> <runtime-digest>`（來源：`git archive <SHA> ops docker-compose.ops.casaos.yml` 走 stdin）。
+| 站點 | CF hostname | tunnel（現行 id） | connector 容器 | ingress service |
+|---|---|---|---|---|
+| 吉比 v3（產品站） | `https://jibbyrenth.reversalplay.me` | **`5151-b`**（`f36d61e6…`） | casa `591-tracker-tunnel` ＋ syn `591-tracker-tunnel-b` | 各該台本機 `http://127.0.0.1:25153`（＝該台 HAProxy） |
+| 吉比 shadow（測試入口） | `https://shadow-jibbyrenth.reversalplay.me` | **`5151-shadow-web-b`**（`7d50bfb7…`） | casa `5151-cloudflared-A` ＋ syn `5151-cloudflared-B` | `http://192.168.0.140:25153`（固定指 casa 的 HAProxy） |
+| OPS Console | `https://ops.reversalplay.me` | **`ops`**（`53792c2f…`） | casa `5151-ops-cloudflared`（project `5151-ops`） | `http://127.0.0.1:5154` |
+
+- **產品站**照舊「一站一條 tunnel」，不准再另開；**OPS 的例外只給 OPS**（Owner 明示 2026-10-07：控制面不因單一專案故障而進不去）。
+- **四台 connector 一律用 `TUNNEL_TOKEN_FILE` 掛檔（唯讀），不准把 token 寫進容器 command line。**
+  舊寫法 `command: tunnel run --token …` 會讓任何有 docker 權限的身分用 `docker inspect`／`ps` 直接讀到 token；
+  2026-10-07 已全部改掉（連同因此外洩的兩條 tunnel 都換新、舊的已刪除）。
+- token 檔位置與權限（**值只寫進憑證庫，不進 repo／對話**）：
+
+  | 用途 | 主機路徑 | owner／mode | 憑證庫檔名 |
+  |---|---|---|---|
+  | `5151-b`（吉比公開站） | casa `/mnt/Storage1/docker/591-tracker-tunnel/secrets/token` | `65532:65532`／目錄 700、檔 400 | `cloudflare/tunnel-5151-token.txt` |
+  | `5151-b`（吉比公開站） | syn `/var/services/homes/tori/5151-shadow/cloudflared-public/secrets/token` | `tori:users`／700、400（容器以 `user: 1026:100` 跑） | 同上（一份兩台） |
+  | `5151-shadow-web-b` | casa `/mnt/Storage1/docker/5151-cloudflared-A/secrets/token` | `65532:65532`／700、400 | `cloudflare/tunnel-5151-shadow-web-token.txt` |
+  | `5151-shadow-web-b` | syn `/var/services/homes/tori/5151-shadow/cloudflared/secrets/token` | `tori:users`／700、400（`user: 1026:100`） | 同上（一份兩台） |
+  | `ops` | casa `/mnt/Storage1/docker/5151-ops/secrets/ops-tunnel-token` | `65532:65532`／700、400 | `cloudflare/ops-tunnel-token.txt` |
+
+  ⚠️ Synology 上 tori **沒有免密 sudo**，不能 `chown 65532` → 改讓容器以 tori 自己跑（`user:`），
+  這樣 token 檔可以維持 0400，不用放寬成世界可讀。CasaOS 有 root，直接 chown 給影像 uid `65532`。
+  **目錄也要能進**（只 chown 檔、留目錄 700 root 會 `Failed to read token file`）。
+
+- 要換 token（或 rotate 端點無權限時）的**零中斷順序**：
+  ① 建新 tunnel ＋寫好 ingress；② 新 token 先讓**過渡 connector** 註冊上去（兩台都要有連線，用 API 的 `connections` 確認＝2）；
+  ③ 才 PATCH DNS CNAME 到新 id（`<new-tunnel-id>.cfargotunnel.com`；**ingress 裡寫 hostname 不等於會建 DNS 記錄**）；
+  ④ 驗證公網 200；⑤ 把正式 connector 換成新 token、拆掉過渡；⑥ **刪除舊 tunnel**（外洩的舊 token 才真的作廢）。
+  先搬 connector 再搬 DNS 會造成一輪混合 200／530（CF 邊緣沿用舊 CNAME 快取），本次實測約 1～2 分鐘自己退；
+  依上面 ② 的順序做就不會發生。
 
 ## 3. Cloudflare 帳號資源（非機密，供查詢／代操作）
 
