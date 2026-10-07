@@ -187,11 +187,13 @@ capability 宣告（寫進 `SPONSOR_PROVIDER_CAPABILITIES`）：`{ supportsPrefi
 | 1 | 「全部」**不顯示已瀏覽過**的物件（＝未看過且未特別關注） | `personalFlags.js listingMatchesListFilter()` 的 `all` 分支＋`index.html` 同名前端篩（兩邊必須同語意） |
 | 2 | 原「未瀏覽」鈕改為「**已瀏覽**」，只列看過的 | 篩選鈕 `data-filter="viewed"`；`unseen` 分支保留給後端統計用 |
 | 3 | 會員／贊助會員**不顯示**「同屋源更新」與「疑似同屋源」篩選鈕 | `.guest-filter` class＋`body:not(.role-guest) .guest-filter{display:none}` |
-| 4 | 一頁筆數：**行動版 10、電腦版 25**（含同源） | `listPageSize()`（`matchMedia("(max-width: 767px)")`），走 `LIST_PAGE_SIZE=25`／`MOBILE_LIST_PAGE_SIZE=10`；訪客與會員同一套 |
+| 4 | 一頁筆數：**行動版 10、電腦版 25**（含同源） | `listPageSize()` 沿用全站既有的 `isCoarsePointer()`（`(pointer: coarse), (max-width: 767px)`）判定行動版，走 `LIST_PAGE_SIZE=25`／`MOBILE_LIST_PAGE_SIZE=10`；訪客與會員同一套（一頁幾筆是裝置問題，不是權限問題） |
 | 5 | 會員／贊助會員**不顯示**「物件連結失效」回報鈕（訪客本來就看不到→實際全站移除） | 卡片 `btn-report-gone` 移除；`sameHouseGoneBtn()` 回空字串 |
 | 6 | 「特別關注」與「已隱藏」可**一鍵全部清除** | 新路由 `POST /api/me/listings/clear-flags`（`{kind:"watched"\|"hidden"}`）；核心 `personalFlags.js clearUserListingFlags()`（同步／PG 共用白名單 `CLEARABLE_FLAG_COLUMNS`）；UI 按鈕只在切到該篩選時出現，含 `confirm()` |
 
-**兩個設計判斷（記下來免得日後被當 bug 改回去）**
+**三個設計判斷（記下來免得日後被當 bug 改回去）**
+- 規則 3／2 的鈕被 CSS 藏起來時，**不能讓畫面卡在那個篩選上**：`setGuestMode()` 會在會員帶著 `same_source`／`suspected`、或訪客帶著 `viewed` 時把篩選退回「全部」，否則使用者會看到一張「找不到鈕、也退不出來」的空清單。
+
 - 規則 1 的篩選**必須在後端做**，不能只在前端藏：第 4 點把一頁壓到 10/25 筆後，若前端再過濾就會「翻一頁只剩 3 筆」。
 - 規則 6 的清除**只歸零 `watched`／`hidden` 與對應時間戳**，同一列的另一個旗標若還有值就保留該列；`kind` 走白名單，絕不把外部字串拼進 SQL。
 
