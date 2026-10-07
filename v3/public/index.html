@@ -4895,8 +4895,10 @@
     const MOBILE_LIST_PAGE_SIZE = 10;
     // 需求：行動版一頁 10 筆、電腦版一頁 25 筆（含同源）。訪客與會員共用同一套，
     // 因為「一頁顯示幾筆」是裝置問題，不是權限問題。
+    // 用全站既有的 isCoarsePointer()（觸控＝行動版）而不是另立一條寬度斷點，
+    // 免得同一個網站出現兩種「什麼叫手機版」的定義。
     function listPageSize() {
-      return window.matchMedia("(max-width: 767px)").matches ? MOBILE_LIST_PAGE_SIZE : LIST_PAGE_SIZE;
+      return isCoarsePointer() ? MOBILE_LIST_PAGE_SIZE : LIST_PAGE_SIZE;
     }
     let guestFilterTimer = 0;
     let sources = [];

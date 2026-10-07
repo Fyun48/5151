@@ -52,7 +52,7 @@ test("filter chips follow the 2026-10-07 rules (viewed chip, member-hidden same-
 test("list page size is 10 on mobile and 25 on desktop", () => {
   assert.match(html, /const LIST_PAGE_SIZE = 25;/);
   assert.match(html, /const MOBILE_LIST_PAGE_SIZE = 10;/);
-  assert.match(html, /function listPageSize\(\) \{[\s\S]*?max-width: 767px[\s\S]*?MOBILE_LIST_PAGE_SIZE : LIST_PAGE_SIZE/);
+  assert.match(html, /function listPageSize\(\) \{[\s\S]*?isCoarsePointer\(\) \? MOBILE_LIST_PAGE_SIZE : LIST_PAGE_SIZE/);
   // 一頁筆數改由 listPageSize() 決定，不能再有寫死的舊常數被拿去用。
   assert.doesNotMatch(html, /GUEST_LIST_PAGE_SIZE/);
 });
