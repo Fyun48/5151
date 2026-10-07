@@ -134,3 +134,17 @@ a-3 拆 repo 等有第二個專案真的入驻 OPS 時再動，避免現在就�
 - **v3 → OPS 的回饋遞交管線仍沒啟用**（`ingested_feedback` 0 筆、`product_ingest_credential` 0 筆）。
   要開需要：簽發 ingest credential，並在 `5151-web-A` 設 `OPS_FEEDBACK_DELIVERY=1`、`OPS_INGEST_URL`、`OPS_INGEST_SECRET` 後重啟 ⇒ **屬 Production 變更，需要 Owner 明確核准**（F-0001），金鑰值不進對話。
 - 搬遷後 Cookie 是 host-only（無 `Domain=`），Owner 需用新域名**重新登入一次**（設計如此，不是故障）。
+
+### 操作注意（本次故意**沒改**吉比的 compose）
+吉比的 `/mnt/Storage1/apps/5151/docker-compose.yml` 裡**仍然留著 `5151-ops` 這個 service**（實查 3 處字串），
+但容器已改由獨立 project `5151-ops` 擁有。所以：
+
+- 若有人對吉比 project 跑 `docker compose up -d`（整站重建的常見手勢），Docker 會因
+  `container_name` 衝突而**報錯失敗**——這是 fail-closed、看得见，不會靜悄悄把 OPS 改回舊定義（好事）。
+- 要重建 OPS 只用這一條：
+  `bash ops/scripts/deploy-ops-casaos.sh <git SHA> [runtime-digest 或 -]`
+  （或 `docker compose -p 5151-ops -f /mnt/Storage1/docker/5151-ops/app/current/docker-compose.ops.casaos.yml up -d`）
+- 我**刻意不去刪**吉比 compose 裡的 ops service：那份檔在 NAS 上是髒的／有 override，
+  動它等於動吉比的發版路徑（超出這次授權）。下次要收尾時再單獨開 PR 處理，並同步 `test/v3-compose.test.js`。
+- 舊碼來源 `/mnt/Storage1/apps/5151/ops`（11MB／243 檔）**保留未刪**，是回滚備援；
+  確認新轨跑穩一段後可另行處置（不要在還沒備份 `releases/` 之前就删）。
