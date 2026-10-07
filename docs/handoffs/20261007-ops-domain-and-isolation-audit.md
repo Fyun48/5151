@@ -114,7 +114,7 @@ a-3 拆 repo 等有第二個專案真的入驻 OPS 時再動，避免現在就�
 | 來源與執行環境 | OPS 改由 `releases/<git SHA>/ops` ＋ `current` symlink 提供（只讀掛 `/app/ops`）；runtime **釘 digest** `abe3933e…`（＝搬遷前容器在跑的那個，所以執行環境零變動） |
 | 發版工具 | `docker-compose.ops.casaos.yml` ＋ `ops/scripts/deploy-ops-casaos.sh`（可重跑、`trap` 回滚、發版前後都驗） |
 | 尺規 | `test/deploy-ops-casaos.test.js` 13 條（含 YAML 真的 parse、順序檢查、token 歸屬） |
-| 現行正式版 | master `31d5919`（PR #632→#636 五支）；`console.html` 200、`/ops/api/feedback` 未登入 401、tunnel 註冊 4 條連線 |
+| 現行正式版 | 最終 master `b4638c3`（共 8 支 PR #632→#639）；`console.html` 200、`/ops/api/feedback` 未登入 401、tunnel 最後一條事件＝註冊成功（4 條連線） |
 
 ### 踩過的四個坑（都已寫回腳本＋尺規，不是只改文件）
 1. **API 的 hostname 不等於 DNS 記錄**：PUT ingress 成功但站點 `000`，要另外 `POST /zones/{Z}/dns_records` 建 CNAME `<tunnel-id>.cfargotunnel.com`。（lesson L-0204）
@@ -148,3 +148,14 @@ a-3 拆 repo 等有第二個專案真的入驻 OPS 時再動，避免現在就�
   動它等於動吉比的發版路徑（超出這次授權）。下次要收尾時再單獨開 PR 處理，並同步 `test/v3-compose.test.js`。
 - 舊碼來源 `/mnt/Storage1/apps/5151/ops`（11MB／243 檔）**保留未刪**，是回滚備援；
   確認新轨跑穩一段後可另行處置（不要在還沒備份 `releases/` 之前就删）。
+
+### 追補：最後兩條也是我自己寫錯的檢查（都已鎖進尺規）
+| # | 失誤 | 現象 | 教訓 |
+|---|---|---|---|
+| 5 | `case` 少了尾 `*` | `[FAIL] 最後一條事件不是註冊成功（實際：… Registered tunnel connection connIndex=3 …）` | bash 的 case pattern 是**錨定全字串**；`*"文字")` 變成「必須以它結尾」。檢查寫錯時 `trap` 仍會回滚，正式服務沒停在壞狀態（實測 current 退回 f43a7be、console=200）→ 「工具誤判」與「環境故障」要分開讀 |
+| 6 | 只驗「歷史有沒有註冊過」 | 先成功、後來 token 壞會被掩蓋 | 改成看**最後一條事件**（`grep -E "A\|B" \| tail -1`），並將「帶尾 `*`」與「不帶尾 `*` 的寫法」都寫成斷言 |
+
+**現行正式版**：`b4638c3a736463b4385b4238b46e2004f17aef84`（＝ 合併 PR #639 後的 master）。
+本次一共 8 支 PR：#632（獨立 compose／釘版／TUNNEL_TOKEN_FILE）、#633（YAML 冒號＋先解析再摘容器）、
+#634（.env 鍵名）、#635（token 交給容器 uid／驗註冊）、#636（註冊字串與時間窗）、#637（文件同步）、
+#638（改看最後一條事件）、#639（case 錨定修正）。
