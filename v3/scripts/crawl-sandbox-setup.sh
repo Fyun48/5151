@@ -18,6 +18,13 @@ SANDBOX_DATA="${SANDBOX_DATA:-/mnt/Storage1/docker_data/5151-crawl-sandbox}"
 SANDBOX_DB="${SANDBOX_DB:-crawl_sandbox}"
 SECRETS_FILE="${SECRETS_FILE:-/home/cline/.secrets/postgres/5151-crawl-sandbox.env}"
 REPRO_ENV="${REPRO_ENV:-/home/cline/.secrets/postgres/5151-live-repro.env}"
+#   ⚠️ **那台 repro PG（還有旁邊的 prb-repro-haproxy）是 2026-09-27 的 `docker run` 手工孤兒，不是殘留垃圾**：
+#     · 沙盒與 `v3/test/*-live-pg.test.js` 連的就是 `192.168.0.220:15434`，**刪掉 = 沙盒與 live-PG 測試全部失效**。
+#     · 現況 `restart=no` ⇒ Synology 一重機這兩台不會自己回來（届时沙盒會连不上，先 docker start 即可）。
+#     · `prb-repro-haproxy` 的設定檔原本**只存在容器內**（用 docker cp 塞進去、沒有掛載）；2026-10-07 已救出副本，
+#       兩台的可重建來源（含既有 volume 的 external 指名）在 syn：
+#       `/var/services/homes/tori/rebuild/prb-repro-{pg,haproxy}/docker-compose.yml`（只補來源，**未重建**）。
+#     · 記錄全文見 `/home/cline/INFRA-INVENTORY.md`「孤兒容器的可重建來源」與「續二十一」。
 
 [ -f "$SECRETS_FILE" ] || { echo "缺少 $SECRETS_FILE（沙盒的 PG 連線字串，見 .secrets/INDEX.md）" >&2; exit 1; }
 [ -f "$REPRO_ENV" ] || { echo "缺少 $REPRO_ENV（建立沙盒庫需要隔離 PG 的管理連線）" >&2; exit 1; }
