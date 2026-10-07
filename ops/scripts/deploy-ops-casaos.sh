@@ -29,7 +29,13 @@ fail() { echo "[ops-casaos][FAIL] $*" >&2; exit 1; }
 
 # --- 解析 runtime image：'-' 表示沿用目前容器在跑的那個 digest ----------------------------
 command -v docker >/dev/null 2>&1 || fail "找不到 docker（本腳本只能在 casa-nas 上跑）"
-if [ -f "$ENV_FILE" ]; then set -a; . "$ENV_FILE"; set +a; fi
+if [ -f "$ENV_FILE" ]; then
+  # 只收 KEY=VALUE 行：2026-10-07 實測踩到舊版寫壞的 .env（只寫值、漏寫鍵名），
+  # source 時 shell 把整行 digest 當成指令執行 → 「No such file or directory」，腳本開頭就中止。
+  _tmpenv=$(mktemp)
+  grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" > "$_tmpenv" 2>/dev/null || true
+  set -a; . "$_tmpenv"; set +a; rm -f "$_tmpenv"
+fi
 if [ "$RUNTIME_IMAGE_ARG" = "-" ]; then
   [ -n "${OPS_RUNTIME_IMAGE:-}" ] || fail "第二參數傳 '-' 但 $ENV_FILE 內沒有 OPS_RUNTIME_IMAGE"
 else
@@ -115,8 +121,11 @@ fi
 
 log "切換 current: ${PREV_SHA:-（尚無）} → $DEPLOY_SHA"
 flip "$DEPLOY_SHA"; FLIPPED=1
-printf '%s\n' "$OPS_RUNTIME_IMAGE" > "$ENV_FILE.tmp"
-[ -f "$ENV_FILE" ] && grep -vE '^OPS_RUNTIME_IMAGE=' "$ENV_FILE" >> "$ENV_FILE.tmp" || true
+# 寫 .env 一定要帶鍵名（`OPS_RUNTIME_IMAGE=`）；只寫值會讓下一次 source 把 digest 當指令執行。
+printf 'OPS_RUNTIME_IMAGE=%s\n' "$OPS_RUNTIME_IMAGE" > "$ENV_FILE.tmp"
+if [ -f "$ENV_FILE" ]; then
+  grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" 2>/dev/null | grep -vE '^OPS_RUNTIME_IMAGE=' >> "$ENV_FILE.tmp" || true
+fi
 mv "$ENV_FILE.tmp" "$ENV_FILE"; chmod 600 "$ENV_FILE" || true
 
 # --- 起容器（只起需要的服務）------------------------------------------------------------

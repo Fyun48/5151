@@ -43,6 +43,15 @@ test("compose 檔必須能真的解析（regex 抓不到的 YAML 錯誤曾当场
   assert.equal(parsed.services["ops-cloudflared"].environment.TUNNEL_TOKEN_FILE, "/run/secrets/ops-tunnel-token");
 });
 
+test("寫 .env 要帶鍵名，source 前要過濾成 KEY=VALUE 行", () => {
+  // 2026-10-07 實測：舊版把整行只寫 digest 的 .env 直接 source，shell 拿它當指令執行
+  // → 「No such file or directory」，腳本在碰任何容器之前就中止（所幸 fail-closed，OPS 沒被打掉）。
+  const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.match(code, /printf 'OPS_RUNTIME_IMAGE=%s\\n'/);
+  assert.match(code, /grep -E '\^\[A-Za-z_\]\[A-Za-z0-9_\]\*='/);
+  assert.doesNotMatch(code, /^printf '%s\\n' "\$OPS_RUNTIME_IMAGE" > "\$ENV_FILE\.tmp"/m);
+});
+
 test("發版腳本要先解析 compose，才准摘除現有容器", () => {
   const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
   const configAt = code.indexOf("config -q");
