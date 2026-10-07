@@ -55,9 +55,13 @@ test("db has alive_checked_at column and markListingAlive helper", () => {
   assert.match(db, /export function markListingAlive/);
 });
 
-test("frontend: report-gone button + handler; logout under account; offline zone removed", () => {
+test("frontend: report-gone button removed (handler retained); logout under account; offline zone removed", () => {
   const html = read("public/index.html");
-  assert.match(html, /data-report-gone="\$\{id\}"/);
+  // Owner 2026-10-07：會員與贊助會員不再顯示「物件連結失效」回報鈕；訪客本來就看不到
+  // → 全站不再產生那颗钮（卡片与同屋源面板两处都拿掉）。
+  assert.doesNotMatch(html, /data-report-gone="\$\{id\}"/);
+  assert.doesNotMatch(html, /data-report-gone="\$\{peer\.post_id\}"/);
+  // 但 API 路由与点选处理仍保留（日后若要还给管理员，不用重接线）。
   assert.match(html, /dataset\.reportGone/);
   assert.match(html, /report-gone`/);
   assert.match(html, /id="meLogoutBtn"/);

@@ -88,12 +88,27 @@ const settings = {
   excludeLowFloors: false,
   excludeRooftop: false,
 };
-const args = { userId: uid, settings, filter: "all", sort: "newest", limit: 50 };
+const args = { userId: uid, settings, sort: "newest", limit: 50 };
 
 // A: the SQLite pipeline (default sqliteDecorationProvider).
-const pipeline = listListings(args);
+// Owner 2026-10-07：「全部」不再包含已瀏覽的物件，而 591301 正是被標記 viewed 的那一張
+// （它同時掛著 591303 的 same_house bundle，是 peers/extras 預載唯一的覆蓋來源）。
+// 所以這裡跑「全部＋已瀏覽」兩條清單再取聯集：覆蓋面不縮，也順帶把新篩選語意鎖進測試。
+const allCards = listListings({ ...args, filter: "all" }).listings;
+const viewedCards = listListings({ ...args, filter: "viewed" }).listings;
+const pipeline = { listings: [...allCards, ...viewedCards] };
 // 591303 was personally merged into 591301, so it must NOT be its own card - it travels in
 // 591301's same_house bundle (which exercises the peers/extras preload too).
+assert.deepEqual(
+  allCards.map((r) => Number(r.post_id)).sort((a, b) => a - b),
+  [591302],
+  "已瀏覽的 591301 不該再出現在「全部」",
+);
+assert.deepEqual(
+  viewedCards.map((r) => Number(r.post_id)).sort((a, b) => a - b),
+  [591301],
+  "「已瀏覽」要能撈回 591301（含它的 same_house bundle）",
+);
 assert.equal(
   pipeline.listings.length,
   2,
