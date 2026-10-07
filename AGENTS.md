@@ -41,9 +41,11 @@ workflow（build → predeploy → deploy）。Gitea 時代的內容已在同日
 NAS、Cloudflare Tunnel／Access、SSH 走法、PG 連線、機密位置與代理人可操作範圍一律看
 `docs/runbooks/shared-infra-access.md`，並遵守 `.cursor/rules/infra-access.mdc`。
 禁止**產品站**另開 tunnel／第二條通道；公網 SSH 埠（54722／58722）在自動化改走 CF 前不得關閉。
-OPS 控制面依上節例外走自己的 tunnel（`5151-ops-cloudflared`，token 以 `TUNNEL_TOKEN_FILE` 掛檔，
-**不准**把 token 寫進容器 command line — 現行 `591-tracker-tunnel`／`5151-cloudflared-A` 那樣做是既存問題，
-不要複製）。
+OPS 控制面依上節例外走自己的 tunnel（`5151-ops-cloudflared`）。
+**所有 connector（含吉比四台）一律用 `TUNNEL_TOKEN_FILE` 掛檔、映像釘 digest**；
+**不准**把 token 寫進容器 command line（`docker inspect`／`ps` 就讀得到）。
+2026-10-07 因為舊做法外洩，吉比兩條 tunnel 已整條換新（`5151-b`／`5151-shadow-web-b`，舊 id 已刪除），
+程序與零中斷順序見 `docs/handoffs/20261007-tunnel-token-rotation.md`。
 
 ## 本機開發
 

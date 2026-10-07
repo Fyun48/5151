@@ -54,10 +54,16 @@ services:
 
   cloudflared:
     profiles: ["tunnel"]
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
     container_name: 591-tracker-tunnel
     restart: unless-stopped
     network_mode: host
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    # token 不進 argv（`docker inspect`／`ps` 看得到）：改掛檔、唯讀。
+    # 2026-10-07：這條 tunnel 因舊 token 外流已換成新的 `5151-b`（id f36d61e6…），舊 `5151` 已刪除。
+    volumes:
+      - /mnt/Storage1/docker/591-tracker-tunnel/secrets:/run/secrets:ro
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/token
+    command: tunnel --no-autoupdate run
     depends_on:
       - 591-tracker-v3

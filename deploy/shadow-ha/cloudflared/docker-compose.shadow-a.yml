@@ -1,0 +1,23 @@
+name: 5151-cloudflared-a
+
+# shadow 測試入口 `shadow-jibbyrenth.reversalplay.me` 的第一個 connector（CasaOS）。
+# 走**獨立**的 shadow tunnel：現行 `5151-shadow-web-b`／7d50bfb7-d463-468a-98a5-aa056cefe59e
+# （舊 `5151-shadow-web`／4c70b226… 因 token 外流已於 2026-10-07 刪除，DNS 已改指新條）。
+# ingress 寫 `http://192.168.0.140:25153`（CasaOS 的 HAProxy），所以兩台的 connector 都能送達。
+#
+# ⚠️ 這台在 2026-10-07 之前是 `docker run` 手動起的——**查無重建方式**，違反作業規則六
+#    （「不要出現沒有 compose 標籤、沒人知道怎麼重建的容器」）。這份檔就是補上的來源，
+#    主機上放 `/mnt/Storage1/docker/5151-cloudflared-A/docker-compose.yml`。
+#    重建：`docker compose -f docker-compose.shadow-a.yml up -d`（在 CasaOS 上，路徑見上）
+services:
+  5151-cloudflared-A:
+    container_name: 5151-cloudflared-A
+    image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    restart: unless-stopped
+    network_mode: host
+    # token 不進 argv：掛檔、唯讀（CasaOS 有 root，可直接 chown 給影像 uid 65532）
+    volumes:
+      - /mnt/Storage1/docker/5151-cloudflared-A/secrets:/run/secrets:ro
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/token
+    command: tunnel --no-autoupdate run

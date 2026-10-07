@@ -1,0 +1,23 @@
+name: 5151-cloudflared-b
+
+# shadow 測試入口 `shadow-jibbyrenth.reversalplay.me` 的第二個 connector（Synology）。
+# 同一條 shadow tunnel：`5151-shadow-web-b`／7d50bfb7-d463-468a-98a5-aa056cefe59e。
+# 與公開站那條（`5151-b`／f36d61e6…，見 docker-compose.public-b.yml）**不要混用**：
+# 兩條 tunnel 的 ingress 不同，拿錯 token 會讓入口出現 530。
+#
+# ⚠️ 2026-10-07 前也是 `docker run` 手動起的（查無重建方式）→ 依規則六補這份檔。
+#    主機上放 `/var/services/homes/tori/5151-shadow/cloudflared/docker-compose.yml`。
+# 這台 tori 沒有免密 sudo，無法 chown 給影像 uid 65532 ⇒ 改用 `user: "1026:100"`，
+# 讓 token 檔維持 0400／目錄 0700（比世界可讀嚴）。
+services:
+  5151-cloudflared-B:
+    container_name: 5151-cloudflared-B
+    image: cloudflare/cloudflared@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
+    user: "1026:100"
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/services/homes/tori/5151-shadow/cloudflared/secrets:/run/secrets:ro
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/token
+    command: tunnel --no-autoupdate run
