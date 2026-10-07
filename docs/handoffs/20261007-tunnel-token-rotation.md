@@ -100,17 +100,29 @@ SQLite 會與 casa 分岔（這裡 `ops.db` 最後寫入 2026-09-19）、無 com
 ① CF 端替 `ops` tunnel 加第二台 connector（指 syn 的 `5154`）或調整 ingress；
 ② OPS 的儲存要從 SQLite 改成共用（SQLite 不能兩處同寫），否則兩台各收各的 feedback。
 
-### 還沒做（老實列）
-- 其他專案還有 **9 台**容器把 tunnel token 放在 **argv**（`docker inspect .Config.Cmd` 掃得）：
-  casa `cf-ssh-casa`、`mock-briapi-tunnel`；syn `qwendsh-cloudflared`（**這個 GUI 的入口**）、`cf-ssh-tori`、
-  `cline-cloudflared`、`estoregv-cloudflared`、`jgitea-tunnel`、`ecpapi-tunnel`、`mock-briapi-tunnel`。
-  另有 **3 台**是把 token 放在 **env**（`Config.Env`，`docker inspect` 一樣看得到）：
-  casa `bnplloan-api-1`（`CLOUDFLARE_TUNNEL_TOKEN`）、syn `ecpapi`、syn `yfe-cloudflared`（`TUNNEL_TOKEN`）。
-  改法照本檔 §2/§3 逐台做（改一台驗一台），但換 secret 有各站中斷風險，**需各案 Owner 授權**。
-- 吉比 NAS 上 `.env` 的 `TUNNEL_TOKEN=` **已移除**（先確認 0 處引用，備份 `.env.bak-rmtoken-*`；
-  值隨舊 tunnel 刪除已作廢，但檔名留在備份清單裡，日後要清就一起清）。
-- 憑證庫快照已重抓：`apps/containers-env-casaos.txt`（舊檔留 `.bak-20261007T1005Z`）＋新增
-  `apps/containers-env-synology.txt`；5151 的四台 connector 與 `5151-ops-cloudflared` 在快照中只剩
-  `TUNNEL_TOKEN_FILE` 路徑。`INDEX.md` 已同步標注（含別專案仍存的 token 值，避免下位誤讀）。
-- OPS 那边的 `${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}` 預設仍是 `:latest`（可被覆寫）；
-  發版腳本只對 **runtime 映像**硬擋 `:latest`，**tunnel 映像**沒擋 → 要完全釘死就在 `.env` 補 digest。
+### 還沒做（老實列）：其他專案的 12 台 token 位置
+吉比自己的四台已改完（argv 命中 0）。**其餘 12 台屬於別的專案**，改造＝重啟該專案的對外通道
+＝該案 Production 動作，**不在這次授權內**。2026-10-07 全量重掃（`docker ps` 逐台比對
+`.Config.Cmd` 與 `Config.Env`，已含先前被我省略的一台）：**argv 9 台／env 3 台**。
+
+| 容器（主機） | 形態 | 來源（compose 檔／孤兒） |
+|---|---|---|
+| `cf-ssh-casa`（casa） | argv | **孤兒** → 已補 `/mnt/Storage1/docker/cf-ssh-casa/docker-compose.yml` |
+| `mock-briapi-tunnel`（casa） | argv | `/mnt/Storage1/apps/mbriapi/docker-compose.yml` |
+| `qwendsh-cloudflared`（syn，**本 GUI 入口**） | argv | `/volume1/homes/tori/qwendsh/service/compose/docker-compose.yml` |
+| `estoregv-cloudflared`（syn） | argv | `…/repos/estoregv/deploy/synology/docker-compose.yml` |
+| `cline-cloudflared`（syn） | argv | `…/cline-server/project/docker-compose.yml` |
+| `jgitea-tunnel`（syn） | argv | **孤兒** → 已補 `/var/services/homes/tori/rebuild/jgitea-tunnel/docker-compose.yml` |
+| `ecpapi-tunnel`（syn） | argv | `/volume1/docker/ecpapi/docker-compose.yml` |
+| `mock-briapi-tunnel`（syn） | argv | `/volume1/docker/mbriapi/docker-compose.yml` |
+| `cf-ssh-tori`（syn） | argv | **孤兒** → 已補 `/var/services/homes/tori/rebuild/cf-ssh-tori/docker-compose.yml` |
+| `bnplloan-api-1`（casa） | env `CLOUDFLARE_TUNNEL_TOKEN` | `/mnt/Storage1/apps/bnplloan/docker-compose.yml` |
+| `ecpapi`（syn） | env `TUNNEL_TOKEN` | `/volume1/docker/ecpapi/docker-compose.yml` |
+| `yfe-cloudflared`（syn） | env `TUNNEL_TOKEN` | `/var/services/homes/tori/apps/yourfavorestore/docker-compose.synology.yml` |
+
+三台孤兒的**重建來源已補齊並實測可用**（用臨時同名 connector 驗，`Registered tunnel connection`、
+`Failed to read token file` 0 次、跑完即刪、現行容器 `StartedAt` 未變）；细节與套用指令在
+`/home/cline/INFRA-INVENTORY.md` 的「孤兒容器的可重建來源」節。這 12 台的 token **都沒有外洩過**
+（外洩的是吉比那兩條，已整條輪替），所以只需要「換擺放位置」，不需要換 secret；
+env 形态風險也比 argv 低（`docker inspect` 看得到，但 `ps aux` 看不到）。
+

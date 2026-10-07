@@ -85,6 +85,20 @@ test("替換 tunnel 的零中斷順序要寫進 runbook（下次照做，不要�
   assert.match(rb, /目錄也要能進|目錄 700/);
 });
 
+test("交接檔 §6：其他專案 12 台的來源都要有交代（三台孤兒要已補重建檔）", () => {
+  const t = readFileSync(path.join(ROOT, "docs/handoffs/20261007-tunnel-token-rotation.md"), "utf8");
+  assert.match(t, /argv 9 台／env 3 台/, "要寫明確數（argv／env 分开算）");
+  for (const p of [
+    "/mnt/Storage1/docker/cf-ssh-casa/docker-compose.yml",
+    "/var/services/homes/tori/rebuild/cf-ssh-tori/docker-compose.yml",
+    "/var/services/homes/tori/rebuild/jgitea-tunnel/docker-compose.yml",
+  ]) {
+    assert.ok(t.includes(p), `孤兒 ${p} 沒在文件裡標出重建來源`);
+  }
+  assert.match(t, /不在這次授權內|該案 Production/, "要寫明改造別人專案需逐案核准");
+});
+
+
 // 這條檢查的是「本機憑證庫」而非 repo 內容，所以在沒有憑證庫的環境（CI／新 clone）自動跳過，
 // 但在這台機器上它是真的會紅——拿到新憑證沒更新 INDEX 就違反作業規則一.3。
 const SECRETS_INDEX = process.env.SECRETS_INDEX || "/home/cline/.secrets/INDEX.md";
