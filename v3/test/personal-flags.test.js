@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ensurePersonalSchema } from "../src/personalSchema.js";
 import {
   anyoneWatched,
+  clearUserListingFlags,
   copyUserFlagsForRelist,
   ensureUser,
   listingIsMainListAffiliate,
@@ -191,4 +192,52 @@ test("overlayRowsPersonal uses per-user flag map", () => {
   const rows = overlayRowsPersonal([{ post_id: 5, title: "x", match_verdict: "" }, { post_id: 6, title: "y", match_verdict: "" }], loadFlagMap(db, uid));
   assert.equal(rows[0].viewed, 1);
   assert.equal(rows[1].viewed, 0);
+});
+
+// Owner 2026-10-07：「全部」= 未看過且未特別關注；看過的改走「已瀏覽」。
+test("list filter: all excludes viewed, viewed returns only viewed", () => {
+  const base = { offline: 0, offline_confirmed: 0, match_verdict: "", match_level: "", last_event: "" };
+  const fresh = { ...base, watched: 0, hidden: 0, viewed: 0 };
+  const seen = { ...base, watched: 0, hidden: 0, viewed: 1 };
+  const watched = { ...base, watched: 1, hidden: 0, viewed: 0 };
+  const watchedSeen = { ...base, watched: 1, hidden: 0, viewed: 1 };
+  assert.equal(listingMatchesListFilter(fresh, "all"), true);
+  assert.equal(listingMatchesListFilter(seen, "all"), false, "看過的不再出現在全部");
+  assert.equal(listingMatchesListFilter(watched, "all"), false);
+  assert.equal(listingMatchesListFilter(watchedSeen, "all"), false);
+  assert.equal(listingMatchesListFilter(seen, "viewed"), true);
+  assert.equal(listingMatchesListFilter(fresh, "viewed"), false);
+  assert.equal(listingMatchesListFilter(watchedSeen, "viewed"), true, "看過且關注也要在已瀏覽找得到");
+});
+
+// 「全部清除」：只歸零指定欄位，另一欄仍保留（列不會被誤刪）。
+test("clearUserListingFlags clears only the requested flag and keeps the other", () => {
+  const db = memoryDb();
+  const alice = ensureUser(db, "alice@example.com");
+  const bob = ensureUser(db, "bob@example.com");
+  db.prepare("INSERT INTO listings(post_id) VALUES (101)").run();
+  db.prepare("INSERT INTO listings(post_id) VALUES (102)").run();
+
+  setUserListingFlags(db, alice, 101, { watched: true, hidden: true, viewed: true, watch_note: "要看" });
+  setUserListingFlags(db, alice, 102, { watched: true });
+  setUserListingFlags(db, bob, 101, { watched: true, hidden: true });
+
+  assert.equal(clearUserListingFlags(db, "watched", alice), 2, "只清自己的兩筆");
+  const mine = db.prepare("SELECT post_id, watched, hidden, watched_at FROM user_listing_flags WHERE user_id = ? ORDER BY post_id").all(alice);
+  assert.deepEqual(mine.map((r) => [r.post_id, r.watched, r.hidden]), [[101, 0, 1], [102, 0, 0]], "hidden 保留、watched 歸零");
+  assert.equal(mine[0].watched_at, null, "時間戳要一起清掉");
+
+  const other = db.prepare("SELECT watched FROM user_listing_flags WHERE user_id = ? AND post_id = 101").get(bob);
+  assert.equal(other.watched, 1, "別人的資料不能被動到");
+
+  assert.equal(clearUserListingFlags(db, "hidden", alice), 1);
+  const after = db.prepare("SELECT watched, hidden FROM user_listing_flags WHERE user_id = ? AND post_id = 101").get(alice);
+  assert.equal(after.hidden, 0);
+});
+
+test("clearUserListingFlags rejects unknown kinds and empty users", () => {
+  const db = memoryDb();
+  assert.throws(() => clearUserListingFlags(db, "post_id; DROP TABLE user_listing_flags", 7), (err) => err.status === 400 && err.code === "BAD_FLAG_KIND");
+  assert.throws(() => clearUserListingFlags(db, "viewed", 7), (err) => err.code === "BAD_FLAG_KIND");
+  assert.equal(clearUserListingFlags(db, "watched", 0), 0, "沒有 uid 就什麼都不做");
 });

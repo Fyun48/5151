@@ -19,7 +19,12 @@ import {
 // setFlags() 在 db.js（personalFlags.js 只有 setUserListingFlags 等底層函式）。
 // 2026-09-26 這裡曾誤寫成從 personalFlags.js 匯入，離線測試沒涵蓋本模組所以 CI 沒抓到，
 // 是 build-production-image 的隔離 smoke 測試擋下來的（模組匯入錯誤會讓服務起不來）。
-import { hideMany as hideManySync, setFlags as setFlagsSync } from "./db.js";
+import {
+  CLEARABLE_FLAG_COLUMNS,
+  clearListingFlagsByUser as clearListingFlagsByUserDb,
+  hideMany as hideManySync,
+  setFlags as setFlagsSync,
+} from "./db.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
 import { WRITE_PATH_SQL } from "./repository/writePath.js";
 import { watchLimitForActor, watchLimitMessage } from "./watchLimits.js";
@@ -184,6 +189,34 @@ export async function hideMany(ids, userId, options = {}) {
 export async function hideManyAsync(ids, userId, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") return hideManySync(ids, userId);
   return hideMany(ids, userId, options);
+}
+
+// db.js clearListingFlagsByUser() 的 PG 分支：整批歸零 watched／hidden 與其時間戳。
+// 欄位名一律由白名單決定（不從外部字串拼進 SQL），與同步版共用 CLEARABLE_FLAG_COLUMNS。
+export async function clearListingFlagsByUser(kind, userId, options = {}) {
+  const column = CLEARABLE_FLAG_COLUMNS[String(kind)];
+  if (!column) {
+    const err = new Error("不支援的清除類型");
+    err.status = 400;
+    err.code = "BAD_FLAG_KIND";
+    throw err;
+  }
+  const exec = options.exec || (await pgExec(options));
+  const uid = await resolveUserId(exec, userId);
+  const rows = await exec(
+    `UPDATE user_listing_flags SET ${kind} = 0, ${column} = NULL WHERE user_id = $1 AND ${kind} = 1`,
+    [uid],
+  );
+  const count = Array.isArray(rows) ? Number(rows[0]?.changes ?? rows.rowCount ?? 0) || 0 : 0;
+  return { count, stats: await listingStatsAsync({ userId: uid }, options) };
+}
+
+export async function clearListingFlagsByUserAsync(kind, userId, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    // 同步路徑沿用 db.js 的入口（會自己解析預設使用者並附帶 stats），避免兩份 SQL。
+    return clearListingFlagsByUserDb(kind, userId);
+  }
+  return clearListingFlagsByUser(kind, userId, options);
 }
 
 // ── 讀取（`loadFlags()`／`loadFlagMap()`）────────────────────────────────────

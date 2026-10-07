@@ -504,7 +504,7 @@ import { servePublicMemberMedia } from "./memberMedia.js";
 import { CITIES } from "./regions.js";
 import { mailConfigured, sendMail } from "./mail.js";
 import { getMemberMailBundleAsync, getMemberMailSettingsAsync, saveMemberMailSettingsAsync } from "./memberMailAsync.js";
-import { hideManyAsync } from "./personalFlagsAsync.js";
+import { hideManyAsync, clearListingFlagsByUserAsync } from "./personalFlagsAsync.js";
 // 第九十批補回 `getSystemCrawlAsync` 等三支：`/api/admin/system-crawl` 還在呼叫它們
 // （少了 import 就是 ReferenceError → HTML 500）。
 import {
@@ -4949,6 +4949,19 @@ app.get("/api/listings/:id/history", async (req, res) => {
     return;
   }
   res.json({ listing, history: await sourceHistoryAsync(listing.source_key, uid) });
+});
+
+// 「全部清除」特別關注／已隱藏：整批歸零指定旗標，只影響呼叫者自己的資料。
+app.post("/api/me/listings/clear-flags", async (req, res) => {
+  try {
+    const session = requireMember(req, res);
+    if (!session) return;
+    const kind = String(req.body?.kind || "");
+    const result = await clearListingFlagsByUserAsync(kind, session.userId, {});
+    res.json({ kind, count: result.count, stats: result.stats });
+  } catch (error) {
+    res.status(error.status || 400).json({ error: error.message || "無法清除標記", code: error.code || "" });
+  }
 });
 
 app.post("/api/listings/:id/flags", async (req, res) => {

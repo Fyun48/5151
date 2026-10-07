@@ -6239,7 +6239,7 @@ node v3/scripts/route-data-map.mjs
 | SQLite | 95 | **0** |
 | MIXED | — | **0** |
 | 無直接DB | — | **18** |
-| PG | 22 | **290** |
+| PG | 22 | **291** |
 | **缺口（SQLite＋MIXED）** | — | **0** |
 
 > 📌 這張表現在**由測試守住**（`v3/test/route-data-map.test.js` 的最後一條會解析它與尺規的

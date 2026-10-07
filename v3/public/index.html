@@ -2778,6 +2778,9 @@
     .owner-list { display: grid; gap: 10px; margin-top: 12px; }
     body:not(.role-admin) .admin-only { display: none !important; }
     body.role-admin .member-only { display: none !important; }
+    body:not(.role-guest) .guest-filter { display: none !important; }
+    /* 「已瀏覽」要有帳號才有意義：瀏覽史記在會員身上，訪客一律查得到 0 筆。 */
+    body.role-guest .needs-account { display: none !important; }
     #excludeMapWrap { margin: 8px 0; width: 100%; min-height: 240px; }
     #excludeMap { width: 100%; height: 240px; border-radius: 12px; border: 1px solid var(--line); }
     .box-list { display: grid; gap: 8px; margin: 8px 0; }
@@ -3591,12 +3594,16 @@
           <input type="text" id="q" class="list-search" placeholder="搜尋標題 / 地址 / 編號 / 備註" />
           <div class="chip-row" data-chip-row="filter">
           <button class="chip on" data-filter="all">全部</button>
-          <button class="chip" data-filter="unseen">未瀏覽</button>
+          <button class="chip needs-account" data-filter="viewed">已瀏覽</button>
           <button class="chip" data-filter="watched" title="一般會員最多 6 筆，贊助會員最多 15 筆">特別關注</button>
-          <button class="chip" data-filter="same_source">同屋源更新</button>
-          <button class="chip" data-filter="suspected">疑似同屋源</button>
+          <button class="chip guest-filter" data-filter="same_source">同屋源更新</button>
+          <button class="chip guest-filter" data-filter="suspected">疑似同屋源</button>
           <button class="chip" data-filter="hidden">已隱藏</button>
           </div>
+          <p class="chip-row" id="flagClearRow" hidden>
+            <button type="button" class="ghost" id="clearWatchedBtn" hidden>清除全部特別關注</button>
+            <button type="button" class="ghost" id="clearHiddenBtn" hidden>清除全部已隱藏</button>
+          </p>
           <div class="chip-row" id="watchViewRow" hidden role="group" aria-label="特別關注：要不要看暫離或已下架的物件">
           <button type="button" class="chip" data-watch-view="pending" aria-pressed="false">物件暫離</button>
           <button type="button" class="chip" data-watch-view="confirmed" aria-pressed="false">已下架</button>
@@ -4884,8 +4891,13 @@
     let listHasMore = false;
     let lastRevision = 0;
     let revisionSynced = false;
-    const LIST_PAGE_SIZE = 80;
-    const GUEST_LIST_PAGE_SIZE = 40;
+    const LIST_PAGE_SIZE = 25;
+    const MOBILE_LIST_PAGE_SIZE = 10;
+    // 需求：行動版一頁 10 筆、電腦版一頁 25 筆（含同源）。訪客與會員共用同一套，
+    // 因為「一頁顯示幾筆」是裝置問題，不是權限問題。
+    function listPageSize() {
+      return window.matchMedia("(max-width: 767px)").matches ? MOBILE_LIST_PAGE_SIZE : LIST_PAGE_SIZE;
+    }
     let guestFilterTimer = 0;
     let sources = [];
     let sort = "newest";
@@ -5120,6 +5132,43 @@
         ? `已達特別關注上限（${SPONSOR_MAX_WATCHED} 筆）。請先取消一筆再加。`
         : `已達特別關注上限（${MEMBER_MAX_WATCHED} 筆）。贊助會員可到 ${SPONSOR_MAX_WATCHED} 筆，請先取消一筆再加。`;
     }
+    // 「全部清除」只在使用者切到特別關注／已隱藏時出現，避免平常畫面多兩顆危險按鈕。
+    function paintFlagClearRow() {
+      const row = $("flagClearRow");
+      if (!row) return;
+      const watchBtn = $("clearWatchedBtn");
+      const hideBtn = $("clearHiddenBtn");
+      const onWatched = filter === "watched";
+      const onHidden = filter === "hidden";
+      row.hidden = !(onWatched || onHidden);
+      if (watchBtn) watchBtn.hidden = !onWatched;
+      if (hideBtn) hideBtn.hidden = !onHidden;
+    }
+
+    async function clearFlagsByKind(kind) {
+      const label = kind === "watched" ? "特別關注" : "已隱藏";
+      if (!window.confirm(`確定要清除全部${label}嗎？此動作無法復原。`)) return;
+      const btn = kind === "watched" ? $("clearWatchedBtn") : $("clearHiddenBtn");
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch("/api/me/listings/clear-flags", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "清除失敗");
+        if (data.stats) renderStats(data.stats);
+        flash(`已清除 ${Number(data.count) || 0} 筆${label}`);
+        await loadList({ force: true, keep: false });
+      } catch (error) {
+        flash(error?.message || "清除失敗，請稍後再試", { alert: true });
+      } finally {
+        if (btn) btn.disabled = false;
+        paintFlagClearRow();
+      }
+    }
+
     function paintWatchChip() {
       const chip = document.querySelector('[data-filter="watched"]');
       if (!chip) return;
@@ -6347,8 +6396,7 @@
       if (key === "suspected") return Boolean(item.match_level) && !confirmed && !dup && !hidden;
       // 「物件暫離」（pending）留在一般列表（灰階）；只有「已下架」才排除。
       if (dup || confirmed || hidden) return false;
-      if (key === "all") return !watched;
-      if (key === "unseen") return !viewed;
+      if (key === "all") return !watched && !viewed;
       if (key === "viewed") return viewed;
       if (key === "watched") return watched;
       if (key === "same_source") {
@@ -6527,7 +6575,7 @@
       if (state.wholeFloorOnly) params.set("wholeFloorOnly", "1");
       if (state.workAddress) params.set("workAddress", String(state.workAddress));
       if (Number(state.commuteKm) > 0) params.set("commuteKm", String(state.commuteKm));
-      params.set("limit", String(GUEST_LIST_PAGE_SIZE));
+      params.set("limit", String(listPageSize()));
       return params;
     }
 
@@ -6546,6 +6594,14 @@
       document.body.classList.toggle("role-guest", isGuest);
       document.documentElement.classList.toggle("no-session", isGuest);
       document.documentElement.classList.toggle("has-session", !isGuest);
+      // 鈕被藏起來時，不能讓畫面卡在「那顆鈕」的篩選上（會變成看不到鈕也退不出來的空清單）：
+      // 「已瀏覽」要帳號才有資料；「同屋源／疑似同屋源」是訪客限定鈕（會員已被拿掉）。
+      const hiddenForViewer = (isGuest && filter === "viewed")
+        || (!isGuest && (filter === "same_source" || filter === "suspected"));
+      if (hiddenForViewer) {
+        filter = "all";
+        document.querySelectorAll("[data-filter]").forEach((b) => b.classList.toggle("on", b.dataset.filter === "all"));
+      }
       if ($("loginBtn")) $("loginBtn").hidden = !isGuest;
       if ($("registerBtn")) $("registerBtn").hidden = !isGuest;
       if ($("logoutBtn")) $("logoutBtn").hidden = isGuest;
@@ -7313,13 +7369,14 @@
       $("stats").innerHTML = [
         ["全部", st.total],
         ["有電梯", st.elevator],
-        ["未瀏覽", st.unseen],
+        ["未看過", st.unseen],
         ["特別關注", st.watched],
         ["已隱藏", st.hidden],
         ["疑似同源", st.suspected],
       ].map(([k, v]) => `<div class="stat"><b>${v || 0}</b><span>${k}</span></div>`).join("");
       paintWatchChip();
       paintWatchViewRow();
+      paintFlagClearRow();
     }
 
     function formatCostWhen(iso) {
@@ -7426,9 +7483,9 @@
       if (!peer?.post_id || Number(peer.post_id) === Number(item?.post_id)) return "";
       return `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`;
     }
+    // Owner 2026-10-07：會員與贊助會員都不再顯示「物件連結失效」回報鈕（訪客本來就看不到）。
     function sameHouseGoneBtn(peer) {
-      if (isGuest || !sameHousePeerLive(peer)) return "";
-      return `<button type="button" class="ghost same-split-btn btn-report-gone" data-report-gone="${peer.post_id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>`;
+      return "";
     }
     function sameHousePanel(item) {
       const house = sameHouseOf(item);
@@ -8081,7 +8138,6 @@
             ${item.watched || draftWatch.has(String(id)) ? "" : `<button type="button" class="ghost btn-card-action btn-hide" data-hidden="${id}">${item.hidden ? "取消隱藏" : "不再顯示"}</button>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
-            ${!isGuest && item.source !== "self" && !item.offline && !item.offline_confirmed ? `<button type="button" class="ghost btn-card-action btn-report-gone" data-report-gone="${id}" title="打開後若發現此物件連結已失效／不存在，可回報；系統會主動再確認一次">物件連結失效</button>` : ""}
             ${item.source === "self" ? `<a class="ghost" href="/p/${encodeURIComponent(id)}" target="_blank" rel="noopener" style="padding:0 14px;border-radius:999px">站內頁</a>` : ""}
           </div>
           ${sameHousePanel(item)}
@@ -8407,8 +8463,8 @@
       const append = options.append === true;
       const loadedCount = listCache.length;
       const fetchLimit = append
-        ? LIST_PAGE_SIZE
-        : Math.min(500, Math.max(LIST_PAGE_SIZE, options.keep && loadedCount ? loadedCount : 0));
+        ? listPageSize()
+        : Math.min(500, Math.max(listPageSize(), options.keep && loadedCount ? loadedCount : 0));
       const fetchOffset = append ? listOffset : 0;
       const cursorParam = append && listCursor
         ? `&cursor=${encodeURIComponent(JSON.stringify(listCursor))}`
@@ -13147,6 +13203,7 @@
         btn.classList.add("on");
         filter = btn.dataset.filter;
         paintWatchViewRow();
+        paintFlagClearRow();
         persistSearchState();
         const preview = previewListForFilter(filter);
         loadList({
@@ -13156,6 +13213,9 @@
         });
       };
     });
+
+    $("clearWatchedBtn")?.addEventListener("click", () => clearFlagsByKind("watched"));
+    $("clearHiddenBtn")?.addEventListener("click", () => clearFlagsByKind("hidden"));
 
     document.querySelectorAll("[data-watch-view]").forEach((btn) => {
       btn.onclick = () => {

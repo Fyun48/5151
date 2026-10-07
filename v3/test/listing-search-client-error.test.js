@@ -23,7 +23,7 @@ test('member search failure preserves the visible results, counters, filters and
     watchNoteBusy:()=>false,setListBusy:()=>{},canFilterSources:()=>false,
     listCache:[{post_id:42}],lastStats:{matched:9},listHasMore:true,listOffset:50,listCursor:{id:42},
     settings:{priceMax:18000},filter:'all',kinds:[],sources:[],sort:'newest',viewDistricts:new Set(['中山區']),
-    LIST_PAGE_SIZE:50,performance,$:()=>({value:'保留查詢'}),
+    LIST_PAGE_SIZE:50,listPageSize:()=>50,performance,$:()=>({value:'保留查詢'}),
     renderStats:()=>paints++,renderDistrictChips:()=>paints++,renderList:()=>paints++,
     // 第八十九批：`loadList()` 改走 `readApi()`（非 JSON 要換成看得懂的訊息，而不是
     // `Unexpected token '<'`）⇒ 夾具要提供同一份 readApi 與 `text()`。
@@ -50,7 +50,7 @@ test('member search 遇到 HTML 回應（proxy／HTML 500）顯示看得懂的�
     watchNoteBusy:()=>false,setListBusy:()=>{},canFilterSources:()=>false,
     listCache:[{post_id:42}],lastStats:{matched:9},listHasMore:true,listOffset:50,listCursor:{id:42},
     settings:{priceMax:18000},filter:'all',kinds:[],sources:[],sort:'newest',viewDistricts:new Set(['中山區']),
-    LIST_PAGE_SIZE:50,performance,$:()=>({value:'保留查詢'}),
+    LIST_PAGE_SIZE:50,listPageSize:()=>50,performance,$:()=>({value:'保留查詢'}),
     renderStats:()=>paints++,renderDistrictChips:()=>paints++,renderList:()=>paints++,
     readApi,
     fetch:async()=>({ok:false,status:500,text:async()=>'<!DOCTYPE html><html><body>Internal Server Error</body></html>'}),
