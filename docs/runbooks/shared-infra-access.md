@@ -169,6 +169,16 @@ Owner 指示：**所有專案的帳號密碼／token 一律集中在共享目錄
 
 ### 5.2 v3 → OPS 交付（feedback ingest）的兩把鑰匙：成對要求與開通程序（2026-10-07）
 
+> **現況：已開通（2026-10-07 19:10）**。證據：OPS 端 `product_ingest_credential` 有 1 列
+> `product_id=v3 / label=legacy-env / status=active`（`secret` 欄是 `v1:` 開頭的**加密 blob**，長度 107）；
+> v3 端 `591-tracker-v3` 日誌出現「Ops feedback 遞送已啟用：每 15000ms 一次 → …/ops/api/ingest/feedback」；
+> 正式 PG `feedback_outbox` 唯一那筆（2026-09-10 的測試回饋）已從 `pending` 轉 `sent`；
+> OPS `ingested_feedback` 出現 `id=1, product=v3, source=v3, kind=other, trust=untrusted`（2026-10-07T11:10:17Z）。
+> 未帶簽章打 ingest 端點仍 401；三站（jibbyrenth／shadow／ops）公網都 200。
+> **代價記錄**：開通要重建 `591-tracker-v3`（現行承擔 worker 迴圈的那個），會中斷正在跑的爬蟲輪次；
+> 實測重啟後開機輪正常重新排程（`略過：busy` 是「本輪還在跑」的正常語意，不是卡死）。
+
+
 **要設什麼**
 
 | 端 | 變數 | 值放哪裡（一律不入 repo） |

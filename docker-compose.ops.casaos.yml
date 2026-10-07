@@ -12,7 +12,7 @@
 # 建立／重建（可重跑）：`bash ops/scripts/deploy-ops-casaos.sh <SHA> <runtime-digest>`
 # 需要的 `.env`（同目錄，600，不進 git）：
 #   OPS_RUNTIME_IMAGE=ghcr.io/fyun48/5151@sha256:…
-#   OPS_TUNNEL_IMAGE=cloudflare/cloudflared:…（可省略，預設 latest）
+#   OPS_TUNNEL_IMAGE=cloudflare/cloudflared@sha256:0aa26e28…（可省略；預設已釘同一個 digest）
 services:
   5151-ops:
     container_name: 5151-ops
@@ -47,7 +47,9 @@ services:
   ops-cloudflared:
     # OPS 專屬 tunnel：吉比的 cloudflared（591-tracker-tunnel）出事時，OPS 的對外入口不受影響。
     container_name: 5151-ops-cloudflared
-    image: "${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}"
+    # tunnel 映像也釘 digest（預設＝casa 這台目前實際在跑的 2026.8.2）；:latest 讓「下一次吉比 build」
+    # 決定 OPS 對外通道重啟後拿到什麼東西，違反「OPS 不被單一專案連坐」的原則。
+    image: "${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38}"
     restart: unless-stopped
     # 127.0.0.1:5154 是「宿主」的 loopback，bridge 模式連不到，因此與既存做法一樣用 host 網路。
     network_mode: host

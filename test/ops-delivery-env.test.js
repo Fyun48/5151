@@ -58,3 +58,13 @@ test("遞送迴圈確實掛在 worker 角色（說明文字不得過度承諾）
   const compose = read("docker-compose.yml");
   assert.match(compose.slice(compose.indexOf("  591-tracker-v3:"), compose.indexOf("  cloudflared:")), /未設 APP_ROLE|all/, "要註明本服務是 all 角色＝現行實際的 worker");
 });
+
+// ⑤ OPS 的對外通道也不准被 :latest 牽動（與 runtime 同一條原則）
+test("OPS compose／發版腳本：tunnel 映像預設釘 digest 且拒 :latest", () => {
+  const compose = read("docker-compose.ops.casaos.yml");
+  assert.doesNotMatch(compose, /OPS_TUNNEL_IMAGE:-cloudflare\/cloudflared:latest/, "預設不能是 :latest");
+  assert.match(compose, /OPS_TUNNEL_IMAGE:-cloudflare\/cloudflared@sha256:[0-9a-f]{64}/, "預設要釘 digest");
+  const script = read("ops/scripts/deploy-ops-casaos.sh");
+  assert.match(script, /OPS_TUNNEL_IMAGE 必須釘 digest/, "腳本缺 tunnel 映像檢查");
+  assert.doesNotMatch(script, /OPS_TUNNEL_IMAGE:-cloudflare\/cloudflared:latest/, "腳本不該把預設放成 :latest");
+});

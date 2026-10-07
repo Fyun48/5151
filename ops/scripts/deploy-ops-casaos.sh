@@ -65,6 +65,15 @@ case "$OPS_RUNTIME_IMAGE" in
   *"@sha256:"[0-9a-f]*) ;;
   *) fail "OPS_RUNTIME_IMAGE 必須釘 digest（收到的是形如 '$OPS_RUNTIME_IMAGE'；:latest 一律拒絕）" ;;
 esac
+# tunnel 映像同樣拒 :latest（2026-10-07：OPS 的對外通道不該被 :latest 牽動）。
+if [ -n "${OPS_TUNNEL_IMAGE:-}" ]; then
+  case "$OPS_TUNNEL_IMAGE" in
+    *"@sha256:"[0-9a-f]*) ;;
+    *) fail "OPS_TUNNEL_IMAGE 必須釘 digest（收到 '$OPS_TUNNEL_IMAGE'；:latest 一律拒絕）" ;;
+  esac
+  export OPS_TUNNEL_IMAGE
+fi
+
 log "runtime image = ${OPS_RUNTIME_IMAGE%@sha256:*}@sha256:$(printf %s "${OPS_RUNTIME_IMAGE#*@sha256:}" | cut -c1-12)…"
 
 # --- 前置檢查：token 檔要用掛檔，不能缺（缺了就不该把 OPS 的對外入口一起拆掉）------------
