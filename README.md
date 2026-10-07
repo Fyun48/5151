@@ -40,14 +40,14 @@ npm run start:v3
 公開網址：
 
 - 目前版：`https://jibbyrenth.reversalplay.me` → `127.0.0.1:5153`（5155 同一台 v3），資料 `/DATA/AppData/591-tracker-v3`
-- OPS：`https://jibbyrentops.reversalplay.me` → `127.0.0.1:5154`
+- OPS：`https://ops.reversalplay.me` → `127.0.0.1:5154`
 
 同一個 GitHub repo、同一張 Docker 映像、同一條 Cloudflare Tunnel。不必新開 GitHub 專案。
 
 Cloudflare Zero Trust → Networks → Tunnels → 現有 tunnel → Public Hostname：
 
 1. Subdomain `jibbyrenth`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5153`（5155 是同一容器別名）
-2. Subdomain `jibbyrentops`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5154`（OPS，獨立容器）
+2. Subdomain `ops`，Domain `reversalplay.me` → Type `HTTP`，URL `http://127.0.0.1:5154`（OPS，獨立容器）
 3. `a5151`／`b5151`／`c5151` 不再使用。
 
 CasaOS 上 `docker compose up`／應用只跑 v3。第一次請停掉舊容器：
@@ -69,7 +69,7 @@ SQLite 與設定會寫進 `DATA_DIR`（容器內預設 `/data`）。CasaOS 請�
 
 Linux 容器沒有 Windows 氣泡通知。預設用站內待看視窗與系統推播（PWA）。第一次若要鎖定畫面推播，可在資料目錄的 `auth.env` 放 `VAPID_PUBLIC_KEY`／`VAPID_PRIVATE_KEY`；沒填時容器會自行寫入 `vapid.json`。郵件與 Discord Webhook 仍是選用。
 
-Cloudflare Zero Trust 請為目前版加 Public Hostname：`jibbyrenth` → `http://127.0.0.1:5153`。OPS 為 `jibbyrentops` → `http://127.0.0.1:5154`。同一條 tunnel，不要另開第二條。不要再用 `c5151`。
+Cloudflare Zero Trust 請為目前版加 Public Hostname：`jibbyrenth` → `http://127.0.0.1:5153`。OPS 為 `ops` → `http://127.0.0.1:5154`。同一條 tunnel，不要另開第二條。不要再用 `c5151`。
 
 ### 正式 Production 部署（唯一路徑）
 
@@ -115,6 +115,6 @@ docker compose --profile tunnel up -d
 公開網址：
 
 - 目前版：`https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`
-- OPS：`https://jibbyrentops.reversalplay.me` → `http://127.0.0.1:5154`
+- OPS：`https://ops.reversalplay.me` → `http://127.0.0.1:5154`
 
 CasaOS 本機埠只綁 loopback。

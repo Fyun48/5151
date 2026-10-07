@@ -89,7 +89,7 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 
 ### 2.3 其他網站入口（同一條 tunnel、同一台 v3 容器）
 - 公開站 `https://jibbyrenth.reversalplay.me` → `http://127.0.0.1:5153`
-- OPS Console `https://jibbyrentops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）
+- OPS Console `https://ops.reversalplay.me` → `http://127.0.0.1:5154`（獨立容器，不是 v3）
 
 ## 3. Cloudflare 帳號資源（非機密，供查詢／代操作）
 

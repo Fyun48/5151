@@ -4,7 +4,7 @@
 
 | tunnel | id | 誰加入 | ingress（指向） | 用途 |
 |---|---|---|---|---|
-| **`5151`**（正式站） | `3adb90bf-e31e-43ab-88af-5606b47fca01` | CasaOS `591-tracker-tunnel`、Synology `591-tracker-tunnel-b` | `jibbyrenth → http://127.0.0.1:25153`、`jibbyrentops → http://127.0.0.1:5154` | **公開站入口** |
+| **`5151`**（正式站） | `3adb90bf-e31e-43ab-88af-5606b47fca01` | CasaOS `591-tracker-tunnel`、Synology `591-tracker-tunnel-b` | `jibbyrenth → http://127.0.0.1:25153`、`ops → http://127.0.0.1:5154` | **公開站入口** |
 | `5151-shadow-web`（測試） | `4c70b226-7a30-4186-936b-29cc819ac9fb` | CasaOS `5151-cloudflared-A`、Synology `5151-cloudflared-B` | `shadow-jibbyrenth → http://192.168.0.140:25153` | shadow 測試 hostname |
 
 為什麼「兩個 connector」是必要的：connector 用 `network_mode: host`，ingress 的 `127.0.0.1`
