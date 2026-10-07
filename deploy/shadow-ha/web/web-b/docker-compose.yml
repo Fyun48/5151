@@ -59,6 +59,11 @@ services:
       DATA_DIR: /data
       SESSION_SECRET: ${SESSION_SECRET:?shared across web nodes}
       DB_DRIVER: ${DB_DRIVER:-postgres}
+      # OPS 交付（本 service 是 worker 角色 ⇒ 遞送迴圈會跑；web 角色設了也不會啟動）。
+      # 現況：兩台都**沒有啟動**這個 profile（`--profile worker`），遞送由 `591-tracker-v3` 承担。
+      OPS_FEEDBACK_DELIVERY: ${OPS_FEEDBACK_DELIVERY:-0}
+      OPS_INGEST_URL: ${OPS_INGEST_URL:-}
+      OPS_INGEST_SECRET: ${OPS_INGEST_SECRET:-}
       PG_URL: ${PG_URL:?postgres://…@<haproxy>:25433/<db>}
       # 媒體 CDN（Cloudflare R2）：MEDIA_SERVE=r2 時，會員素材庫的「公開顯示檔」由 CDN 直送；
       # `_o.jpg`（未浮水印原圖）與身分自拍照永不外流。預設 local＝行為與以前完全相同。

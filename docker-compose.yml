@@ -10,6 +10,14 @@ services:
       # 2026-09-24：收回 5155 別名埠。公開入口自 2026-09-23 起走 HAProxy 25153，5155 只剩
       # deploy 的本機健康探測用途；探測已改用 5153（同一個容器埠），故不再發佈第二個埠。
     environment:
+      # v3 → OPS Console 的站內頁 feedback 交付。三個鍵要一起才有作用：
+      # 遞送迴圈只由 `startWorkerLoops()` 啟動（角色 worker／all），所以**設在 APP_ROLE=web 的
+      # 容器上不會跑**（2026-10-07 查實：公開站 web-A/web-B 是 web 角色，本服務未設 APP_ROLE＝all，
+      # 是現行實際承担 worker 迴圈的那一個）。值放主機端 `.env`（600），不入 repo。
+      # 預設 0／空 ⇒ 交付停用；feedback 仍照常寫進 feedback_outbox，使用者體驗不受影響。
+      OPS_FEEDBACK_DELIVERY: ${OPS_FEEDBACK_DELIVERY:-0}
+      OPS_INGEST_URL: ${OPS_INGEST_URL:-}
+      OPS_INGEST_SECRET: ${OPS_INGEST_SECRET:-}
       HOST: "0.0.0.0"
       PORT: "5153"
       DATA_DIR: /data

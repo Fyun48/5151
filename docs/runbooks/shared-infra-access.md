@@ -167,6 +167,72 @@ Owner 指示：**所有專案的帳號密碼／token 一律集中在共享目錄
 - 尚未納入：NAS 登入密碼、CF API token、CF Access client secret（見 §5 表與 `INDEX.md` 的「還沒拿到」）。
 - 引用機密時只寫**檔名與鍵名**（例：`/home/cline/.secrets/postgres/shadow-primary.env` 的 `PG_SUPER_PASSWORD`），不要把值貼進 repo／PR／對話。
 
+### 5.2 v3 → OPS 交付（feedback ingest）的兩把鑰匙：成對要求與開通程序（2026-10-07）
+
+**要設什麼**
+
+| 端 | 變數 | 值放哪裡（一律不入 repo） |
+|---|---|---|
+| OPS（`5151-ops`） | `OPS_INGEST_SECRET`、`OPS_SECRET_AT_REST_KEY` | casa `/mnt/Storage1/docker/5151-ops/app/.env`（600，發版腳本用 `set -a` source 後才交給 compose 插值） |
+| v3（跑 worker 迴圈的那個容器） | `OPS_FEEDBACK_DELIVERY=1`、`OPS_INGEST_URL`、`OPS_INGEST_SECRET` | casa `/mnt/Storage1/apps/5151/.env`（600）；repo 端只有 `${VAR:-}` 插值與「預設關閉」 |
+
+兩把鑰匙的來源：`/home/cline/.secrets/ops/ingest-v3.env`（600）。**`OPS_SECRET_AT_REST_KEY` 換掉就等於
+讓已加密落庫的憑證解不开**（ingest 全部 401），所以要長期固定保存，備份時連這個檔一起備。
+
+**兩個會靜默失效的坑（都查過源頭，不是猜）**
+
+1. **角色**：遞送迴圈由 `v3/src/server.js` 的 `startWorkerLoops()` 啟動，只在 `APP_ROLE=worker`／未設
+   （`all`）時跑。公開站的 `5151-web-A`／`5151-web-B` 是 `APP_ROLE=web` ⇒ **在它倆身上設這三個鍵不會有任何效果**。
+   現行實際承担 worker 迴圈的是 casa 的 `591-tracker-v3`（未設 `APP_ROLE`，`DB_DRIVER=postgres`、
+   `PG_URL` 指同一個 `5151_shadow`）；`deploy/shadow-ha/web/web-b` 裡的 `5151-worker`（`profiles: ["worker"]`）
+   **兩台都沒啟動**，要改用那條路時再把三個鍵填進它的 `.env`。
+2. **成對**：`OPS_INGEST_SECRET` 非空而 `OPS_SECRET_AT_REST_KEY` 缺席時，OPS 開機就在
+   `ensureLegacyIngestSecret() → issueCredential() → requireSecretAtRestKey()` throw（503）
+   ⇒ **OPS 容器起不來**。`ops/scripts/deploy-ops-casaos.sh` 已加攔截：只給一把就在「動 `current`／容器之前」fail，
+   並檢查 at-rest key 形狀（64 位 hex 或 43 位 base64url；形狀不對 OPS 會當成沒設）。
+
+**開通順序（先 OPS、再 v3，才不會白跑重試）**
+
+```bash
+# 0) 憑證：從共用庫取（不印值）
+S=/home/cline/.secrets/ops/ingest-v3.env
+
+# 1) OPS 端：把兩把寫進 .env（值直接從 S 取，不要在對話裡出現）
+ssh casa-nas 'install -m 600 /dev/null /mnt/Storage1/docker/5151-ops/app/.env.new'
+scp -q "$S" casa-nas:/tmp/ingest.env
+ssh casa-nas 'cp -a /mnt/Storage1/docker/5151-ops/app/.env /mnt/Storage1/docker/5151-ops/app/.env.bak-$(date +%Y%m%dT%H%M%SZ)
+  grep -v "^OPS_INGEST_SECRET=\|^OPS_SECRET_AT_REST_KEY=" /mnt/Storage1/docker/5151-ops/app/.env > /tmp/e1
+  grep -E "^OPS_" /tmp/ingest.env >> /tmp/e1; install -m 600 /tmp/e1 /mnt/Storage1/docker/5151-ops/app/.env; rm -f /tmp/e1 /tmp/ingest.env'
+
+# 2) 發 OPS（SHA 要用已合併、含新 compose 的那個；第二參數 '-' ＝沿用目前 digest）
+ssh casa-nas 'bash /path/to/repo/ops/scripts/deploy-ops-casaos.sh <merged-SHA> -'
+
+# 3) v3 端：三個鍵進 .env，再用 --no-deps 重建（比對 config-hash 前後＋image digest 前後）
+ssh casa-nas 'cd /mnt/Storage1/apps/5151 && cp -a .env .env.bak-$(date +%Y%m%dT%H%M%SZ)
+  printf "OPS_FEEDBACK_DELIVERY=1\nOPS_INGEST_URL=https://ops.reversalplay.me/ops/api/ingest/feedback\nOPS_INGEST_SECRET=…從本機憑證庫取…\n" >> .env
+  docker compose -f docker-compose.yml -f docker-compose.override.yml config -q
+  docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-deps --pull never 591-tracker-v3'
+```
+
+**驗證（可重跑）**
+
+```bash
+# OPS 是否有憑證列（只有 label/status，值不落 stdout）
+ssh casa-nas 'python3 - <<PY
+import sqlite3;c=sqlite3.connect("file:/DATA/AppData/5151-ops/ops.db?mode=ro",uri=True)
+print(c.execute("select id,product_id,label,status,length(secret) from product_ingest_credential").fetchall())
+print("ingested:",c.execute("select count(*) from ingested_feedback").fetchone()[0])
+PY'
+# v3 端：outbox 應該從 pending 轉 sent（遞送間隔預設 15s）
+ssh syn-nas 'docker exec -u postgres 5151-postgres-B psql -tA -F"|" -d 5151_shadow -c "select status,count(*) from feedback_outbox group by status"'
+# 交付狀態總覽（admin 介面讀的是 deliveryControl()：env_allowed／configured／local_stopped／effective）
+curl -s -o /dev/null -w '%{http_code}\n' https://ops.reversalplay.me/ops/api/ingest/feedback   # 未帶簽章＝401（正確）
+```
+
+**停掉／回滚**：`OPS_FEEDBACK_DELIVERY=0`（或本機 `settings.ops_feedback_stop=1`，不用重啟就能停送），
+或把 `.env` 還原成備份檔後重建。feedback 本身照樣寫進 `feedback_outbox`，**停遞送不影響使用者**。
+
+
 ## 6. 公網 SSH 埠現況（2026-09-22 更新）
 
 | 公網埠 | 狀態 | 說明 |

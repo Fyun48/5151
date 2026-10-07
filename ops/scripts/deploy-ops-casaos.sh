@@ -41,6 +41,25 @@ if [ "$RUNTIME_IMAGE_ARG" = "-" ]; then
 else
   OPS_RUNTIME_IMAGE="$RUNTIME_IMAGE_ARG"
 fi
+# --- OPS 交付憑證的成對檢查（2026-10-07）----------------------------------------------
+# OPS_INGEST_SECRET 非空時，OPS 開機一定會走 ensureLegacyIngestSecret() → issueCredential()
+# → requireSecretAtRestKey()；沒配 at-rest key 就會 throw（503）→ 容器起不來。
+# 所以「只給一把」必須在**還沒動 current／容器之前**就 fail，否則等于自己把 OPS 打掛。
+if [ -n "${OPS_INGEST_SECRET:-}" ] && [ -z "${OPS_SECRET_AT_REST_KEY:-}" ]; then
+  fail "設了 OPS_INGEST_SECRET 但缺 OPS_SECRET_AT_REST_KEY：兩把要成對（見 docker-compose.ops.casaos.yml 註解）"
+fi
+if [ -z "${OPS_INGEST_SECRET:-}" ] && [ -n "${OPS_SECRET_AT_REST_KEY:-}" ]; then
+  log "提醒：只有 OPS_SECRET_AT_REST_KEY、沒有 OPS_INGEST_SECRET ⇒ 交付維持停用（不會 seed 憑證）"
+fi
+# 形狀要對，否則 OPS 端 secretAtRestKey() 回 null（等同沒設）：32 bytes → hex64 或 base64url 43。
+if [ -n "${OPS_SECRET_AT_REST_KEY:-}" ]; then
+  printf '%s' "$OPS_SECRET_AT_REST_KEY" | grep -qE '^([0-9a-fA-F]{64}|[A-Za-z0-9_-]{43}=?)$' \
+    || fail "OPS_SECRET_AT_REST_KEY 形狀不對（要 64 位 hex 或 43 位 base64url），這樣 OPS 端會當成未設定"
+  if [ -f "$ENV_FILE" ] && [ "$(stat -c '%a' "$ENV_FILE")" != "600" ]; then
+    chmod 600 "$ENV_FILE" && log "$ENV_FILE 權限已收回 600（內容現在含憑證）"
+  fi
+fi
+
 export OPS_RUNTIME_IMAGE   # compose 的 ${OPS_RUNTIME_IMAGE:?} 只看 shell 環境（本腳本不走 --env-file，避免檔不存在就炸）
 case "$OPS_RUNTIME_IMAGE" in
   *"@sha256:"[0-9a-f]*) ;;
