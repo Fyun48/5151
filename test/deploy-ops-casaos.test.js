@@ -52,6 +52,22 @@ test("寫 .env 要帶鍵名，source 前要過濾成 KEY=VALUE 行", () => {
   assert.doesNotMatch(code, /^printf '%s\\n' "\$OPS_RUNTIME_IMAGE" > "\$ENV_FILE\.tmp"/m);
 });
 
+test("token 檔必須交給容器 uid（cloudflared 影像跑 65532，root:600 它讀不到）", () => {
+  // 2026-10-07 實測： chmod 600 留給 root 擁有 → 容器 Up 但日誌一直
+  // 「Failed to read token file: permission denied」，tunnel 永遠 inactive。
+  const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.match(code, /chown "\$\{OPS_TUNNEL_UID:-65532\}:\$\{OPS_TUNNEL_GID:-65532\}" "\$SECRET_DIR" "\$TOKEN_FILE"/);
+  assert.match(code, /chmod 400 "\$TOKEN_FILE"/);
+  assert.match(code, /chmod 700 "\$SECRET_DIR"/);
+});
+
+test("要驗 tunnel 真的註冊，不能只看容器 running", () => {
+  // 「容器 Up」不等於「對外通道可用」：token 讀不到時照樣 Up，hostname 搬過去只會 530。
+  const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
+  assert.match(code, /Registered a new connection/);
+  assert.match(code, /docker logs --since 90s 5151-ops-cloudflared/);
+});
+
 test("發版腳本要先解析 compose，才准摘除現有容器", () => {
   const code = script.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join("\n");
   const configAt = code.indexOf("config -q");

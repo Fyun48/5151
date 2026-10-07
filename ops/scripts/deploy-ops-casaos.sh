@@ -55,7 +55,16 @@ if [ ! -s "$TOKEN_FILE" ]; then
   log "! 找不到 $TOKEN_FILE（0 字节或不存在）→ 這輪只重建 5151-ops，不動 tunnel 服務"
   SKIP_TUNNEL=1
 else
-  chmod 600 "$TOKEN_FILE" || true
+  # cloudflared 影像以 uid 65532 執行，root:600 的 token 檔它讀不到
+  # （2026-10-07 實測：日誌一直刷「Failed to read token file: /run/secrets/ops-tunnel-token:
+  #   permission denied」，容器 Up 但 tunnel 永遠 inactive → hostname 搬過去會 530）。
+  # 對策：讓容器使用者擁有該檔與目錄（目錄 700、檔 400；掛載本身 :ro，容器寫不進去）。
+  mkdir -p "$SECRET_DIR"
+  chown "${OPS_TUNNEL_UID:-65532}:${OPS_TUNNEL_GID:-65532}" "$SECRET_DIR" "$TOKEN_FILE" \
+    || fail "無法將 $SECRET_DIR／token 檔交給容器 uid（cloudflared 讀不到就會一直連不上）"
+  chmod 700 "$SECRET_DIR"
+  chmod 400 "$TOKEN_FILE"
+  log "token 檔就緒（owner=${OPS_TUNNEL_UID:-65532} mode=400，目錄 700，未進 git）"
 fi
 
 # --- 收 tar（stdin）→ incoming → 驗證 → 才落到 releases/<SHA> ----------------------------
@@ -155,7 +164,16 @@ log "受保護端點 = $api_code ✔"
 if [ "$SKIP_TUNNEL" = 0 ]; then
   up=$(docker inspect -f '{{.State.Status}}' 5151-ops-cloudflared 2>/dev/null || echo absent)
   [ "$up" = "running" ] || fail "5151-ops-cloudflared 狀態=$up"
-  log "ops tunnel 容器 running ✔"
+  # 「容器 running」不等於「tunnel 連得上」：token 讀不到時容器照樣 Up，卻永遠不註冊，
+  # hostname 搬過去只會得到 530。所以要驗日誌裡的註冊行。
+  reg=""
+  for _ in 1 2 3 4 5 6; do
+    reg=$(docker logs --since 90s 5151-ops-cloudflared 2>&1 | grep -cE 'Registered a new connection|Connection number' || true)
+    [ "${reg:-0}" -ge 1 ] && break
+    sleep 3
+  done
+  [ "${reg:-0}" -ge 1 ] || fail "cloudflared 沒有出現「Registered a new connection」→ token 讀不到或 tunnel 名稱不對（先 docker logs 5151-ops-cloudflared）"
+  log "ops tunnel 已註冊連線（log 命中 $reg 行）✔"
 fi
 
 # --- 驗明真的在跑這版碼 ---------------------------------------------------------------
