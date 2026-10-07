@@ -71,17 +71,46 @@ for u in https://jibbyrenth.reversalplay.me/ https://jibbyrenth.reversalplay.me/
          https://shadow-jibbyrenth.reversalplay.me/api/health https://ops.reversalplay.me/console.html \
          https://ops.reversalplay.me/ops/api/feedback; do printf "%s %s\n" "$u" "$(curl -s -o /dev/null -w '%{http_code}' --max-time 12 "$u")"; done
 ```
-實測結果：argv token 命中 **0 台**；`jibbyrenth` 200、`/api/health` 200、`shadow-jibbyrenth/api/health` 200、
+實測結果：argv token 命中 **0 台**（且 5151 相關容器 `Config.Env` 內也只有 `TUNNEL_TOKEN_FILE` 路徑）；`jibbyrenth` 200、`/api/health` 200、`shadow-jibbyrenth/api/health` 200、
 `ops/console.html` 200、`ops/ops/api/feedback` 401（未登入，正確）。
 吉比容器 `591-tracker-v3`（project `591-tracker`）與 `5151-web-A`、`5151-ops`、`5151-ops-cloudflared` 狀態未變。
 
-## 6. 還沒做的（老實列）
-- 其餘 9 台 argv-token 容器（含 `qwendsh-cloudflared`＝這個 GUI 的入口、`cf-ssh-casa`／`cf-ssh-tori` SSH 閘道、
-  `estoregv`／`ecpapi`／`mock-briapi`／`jgitea`／`cline`）：**同一套寫法要改，但要分專案、逐台驗**，
-  而且換 token 等於要各專案的 Owner 授權。建議排一次「全系統 connector 掛檔」的專項，一次一台、每台驗公網。
-- 吉比 NAS 上 `.env` 的 `TUNNEL_TOKEN=` 是已作廢的舊值，我**尚未刪除該鍵**（怕有別處插值用到；實查吉比 compose
-  已不再引用）。下次收尾時用 `grep -rn 'TUNNEL_TOKEN' /mnt/Storage1/apps/5151` 確認後再刪，並留備份。
-- 憑證庫的 `apps/containers-env-casaos.txt`（各容器 env 快照）內含舊 token 值，**尚未重新擷取**；
-  舊值已隨 tunnel 刪除作廢，但快照該更新以免誤導。
-- OPS 的 `${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}` 預設仍是 `:latest`（可覆寫）；
-  要完全釘死就在 `.env` 寫入 digest（發版腳本已有「`:latest` 一律拒絕」的檢查只管 runtime 映像，未管 tunnel 映像）。
+## 6. 本輪四項建議的執行結果（含還沒做的）
+| 建議 | 狀態 | 證據 |
+|---|---|---|
+| ① 吉比 compose 裡殘留的 `5151-ops` 服務刪除 | **已做完**（PR #642，master `614e31a`） | NAS 渲染前後 `591-tracker-v3` JSON 逐欄位相同；`casaos-compose.yml` 描述改指向 `docker-compose.ops.casaos.yml`；尺規反轉成「吉比檔不得出現 `5151-ops:`／`5154`」 |
+| ② 同步 `.cursor/rules/infra-access.mdc` | **已做完**（同一 PR） | 規則 1 改成「只限**產品站**」＋写明 OPS 例外（`ops.reversalplay.me`、project `5151-ops`、`TUNNEL_TOKEN_FILE`）；尺規斷言 `產品站不要另開 tunnel` 存在且 `jibbyrentops` 不再出現 |
+| ③ Synology 那套「第二個 OPS」怎麼處置 | **已處置：停用留檔（可逆）** | 詳見下方「關於 syn 的第二個 OPS」 |
+| ④ 四台 connector 改掛檔＋輪替外洩 secret | **已做完** | argv token 命中 0 台；兩條舊 tunnel 已刪除；新 id `f36d61e6…`／`7d50bfb7…`；公網全 200 |
+
+### 關於 syn 的第二個 OPS（選項 ③）
+盤點時我**先誤判**成「只有 staged、沒在跑」，因為我用 `ss` 查 5154 有沒有聽——**Synology 沒有 `ss`**，
+永遠回空值。實查結果：`5151-ops` 從 2026-09-26 起一直在跑，是 `docker run` 建的孤兒（無 compose 標籤，
+違反規則六），映像釘 `ghcr.io/fyun48/5151@sha256:b8c28339…`、代碼 `app/current → releases/190072eb…`、
+只聽 `127.0.0.1:5154`，本機 health 200。**但公網從來到不了它**（tunnel `ops` 只有一台 connector 在 casa）。
+
+它的三個問題：代碼停在 9/23（之後 OPS 改了独立 tunnel、版本化來源、釘 digest 全部沒跟到）、
+SQLite 會與 casa 分岔（這裡 `ops.db` 最後寫入 2026-09-19）、無 compose 來源可重建。
+
+處置（**可逆、不刪資料**）：`docker stop 5151-ops && docker rename 5151-ops 5151-ops-stopped-20261007`，
+留檔說明寫在 `/volume1/docker/5151-ops/STANDBY-NOTE.md`（要重啟就用 repo 的 `docker-compose.ops.synology.yml`
+＋ 釘 digest，或 `docker start 5151-ops-stopped-20261007` 只看舊資料）。`data/`（`ops.db`、`auth.env`、
+`ops.session.secret`、`attachments/`）與 `app/releases/`（2 個 SHA）**原封不動**。
+**要做成真正的待命還缺兩件事，都要 Owner 決定**：
+① CF 端替 `ops` tunnel 加第二台 connector（指 syn 的 `5154`）或調整 ingress；
+② OPS 的儲存要從 SQLite 改成共用（SQLite 不能兩處同寫），否則兩台各收各的 feedback。
+
+### 還沒做（老實列）
+- 其他專案還有 **9 台**容器把 tunnel token 放在 **argv**（`docker inspect .Config.Cmd` 掃得）：
+  casa `cf-ssh-casa`、`mock-briapi-tunnel`；syn `qwendsh-cloudflared`（**這個 GUI 的入口**）、`cf-ssh-tori`、
+  `cline-cloudflared`、`estoregv-cloudflared`、`jgitea-tunnel`、`ecpapi-tunnel`、`mock-briapi-tunnel`。
+  另有 **3 台**是把 token 放在 **env**（`Config.Env`，`docker inspect` 一樣看得到）：
+  casa `bnplloan-api-1`（`CLOUDFLARE_TUNNEL_TOKEN`）、syn `ecpapi`、syn `yfe-cloudflared`（`TUNNEL_TOKEN`）。
+  改法照本檔 §2/§3 逐台做（改一台驗一台），但換 secret 有各站中斷風險，**需各案 Owner 授權**。
+- 吉比 NAS 上 `.env` 的 `TUNNEL_TOKEN=` **已移除**（先確認 0 處引用，備份 `.env.bak-rmtoken-*`；
+  值隨舊 tunnel 刪除已作廢，但檔名留在備份清單裡，日後要清就一起清）。
+- 憑證庫快照已重抓：`apps/containers-env-casaos.txt`（舊檔留 `.bak-20261007T1005Z`）＋新增
+  `apps/containers-env-synology.txt`；5151 的四台 connector 與 `5151-ops-cloudflared` 在快照中只剩
+  `TUNNEL_TOKEN_FILE` 路徑。`INDEX.md` 已同步標注（含別專案仍存的 token 值，避免下位誤讀）。
+- OPS 那边的 `${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}` 預設仍是 `:latest`（可被覆寫）；
+  發版腳本只對 **runtime 映像**硬擋 `:latest`，**tunnel 映像**沒擋 → 要完全釘死就在 `.env` 補 digest。
