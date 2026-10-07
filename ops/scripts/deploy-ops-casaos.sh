@@ -88,9 +88,21 @@ rollback() {
         docker compose -p "$COMPOSE_PROJECT" -f docker-compose.ops.casaos.yml up -d 2>&1 | tail -2 ) || true
   fi
   log "退出碼 $rc（未留下半成品：current=$(basename "$(readlink -f "$CURRENT" 2>/dev/null || echo none)")）"
+  if [ -z "$PREV_SHA" ] && ! docker inspect 5151-ops >/dev/null 2>&1; then
+    log "! 這是第一次搬 project：沒有前版可自动回滚，而且 5151-ops 目前不存在。"
+    log "! 手工回生（用吉比 project 的舊定義，資料與代碼都還在原位）："
+    log "!   cd /mnt/Storage1/apps/5151 && docker compose up -d 5151-ops"
+  fi
   exit $rc
 }
 trap rollback EXIT
+
+# --- 先解析驗證，才准摘容器 ---------------------------------------------------------------
+# 2026-10-07 實測教訓：compose 的 YAML 錯誤（`${VAR:?msg}` 的 msg 含「冒號＋空格」）是在
+# `docker rm -f 5151-ops` 之後才爆，等於当场把 OPS 停住。解析放前面，壞檔就根本不會動到現有容器。
+docker compose -p "$COMPOSE_PROJECT" -f "$RELEASES/$DEPLOY_SHA/docker-compose.ops.casaos.yml" config -q >/dev/null 2>&1 \
+  || fail "新 compose 檔解析失敗 → 中止，**尚未摘除任何容器**，目前 OPS 仍舊在跑"
+log "compose config -q 通過 ✔（还没动现有容器）"
 
 # --- 舊容器若是吉比 project（591-tracker）建的，先摘掉同名容器 ---------------------------
 if docker inspect 5151-ops >/dev/null 2>&1; then

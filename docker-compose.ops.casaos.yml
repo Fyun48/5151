@@ -16,7 +16,11 @@
 services:
   5151-ops:
     container_name: 5151-ops
-    image: ${OPS_RUNTIME_IMAGE:?OPS_RUNTIME_IMAGE is required（必須是 @sha256: digest）}
+    # 值一律加引號：`${VAR:?message}` 的 message 若含「冒號＋空格」，YAML 會當成巢狀 mapping。
+    # 2026-10-07 實測踩到：`yaml: line 19: mapping values are not allowed in this context`，
+    # 而當時已經執行過 `docker rm -f 5151-ops` → 当场把 OPS 停住。故腳本改成
+    # 「先用 `docker compose config -q` 解析過，才准摘容器」（見 deploy-ops-casaos.sh）。
+    image: "${OPS_RUNTIME_IMAGE:?OPS_RUNTIME_IMAGE is required（must be a @sha256 digest）}"
     restart: unless-stopped
     ports:
       - "127.0.0.1:5154:5154"
@@ -37,7 +41,7 @@ services:
   ops-cloudflared:
     # OPS 專屬 tunnel：吉比的 cloudflared（591-tracker-tunnel）出事時，OPS 的對外入口不受影響。
     container_name: 5151-ops-cloudflared
-    image: ${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}
+    image: "${OPS_TUNNEL_IMAGE:-cloudflare/cloudflared:latest}"
     restart: unless-stopped
     # 127.0.0.1:5154 是「宿主」的 loopback，bridge 模式連不到，因此與既存做法一樣用 host 網路。
     network_mode: host
