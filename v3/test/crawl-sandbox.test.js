@@ -147,4 +147,10 @@ test("接線：compose 不發佈埠、用同一顆映像、掛載 repo 的 src�
   const setup = read("v3/scripts/crawl-sandbox-setup.sh");
   assert.match(setup, /SANDBOX_PG_URL/, "沙盒庫連線字串只能來自 secrets");
   assert.match(setup, /pg-integration-setup\.mjs/, "schema 要用既有的鏡射腳本，不要自己寫一份");
+  // 2026-10-07：那台 repro PG 是 docker-run 孤兒但**有人在依賴**，標頭必須寫明不能當垃圾刪。
+  assert.match(setup, /不是殘留垃圾|不是垃圾/, "要寫明 prb-repro-pg 是在跑的依賴");
+  assert.match(setup, /192\.168\.0\.220:15434/, "要寫明沙盒連線用的 host:port");
+  assert.match(setup, /live-pg\.test\.js/, "要點名 live-PG 測試也用同一顆");
+  assert.match(setup, /rebuild\/prb-repro-\{pg,haproxy\}|rebuild\/prb-repro-/, "要留下可重建來源的路徑");
+  assert.match(setup, /restart=no/, "要老實寫出現況（重機不會自己回來）");
 });
