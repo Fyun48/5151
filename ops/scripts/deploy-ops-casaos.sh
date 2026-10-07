@@ -176,7 +176,7 @@ if [ "$SKIP_TUNNEL" = 0 ]; then
     sleep 3
   done
   case "$last_evt" in
-    *"Registered tunnel connection") log "ops tunnel 最後一條事件是註冊成功 ✔" ;;
+    *"Registered tunnel connection"*) log "ops tunnel 最後一條事件是註冊成功 ✔" ;;
     *) fail "cloudflared 最後一條事件不是註冊成功（實際：${last_evt:-（日誌無相關行）}）→ token 讀不到或 tunnel 不對" ;;
   esac
 fi
