@@ -68,7 +68,10 @@ test("要驗 tunnel 真的註冊，不能只看容器 running", () => {
   // ② 不能用窄時間窗：容器沒被重建時 `--since 90s` 必然為空 → 誤判發版失敗
   // ③ 要看「最後一條事件」而不是「歷史有沒有」：否則先成功、後來壞會被掩蓋
   assert.match(code, /grep -E "Registered tunnel connection\|Failed to read token file" \| tail -1/);
-  assert.match(code, /\*"Registered tunnel connection"\) log /);
+  // ④ bash 的 case pattern 是「錨定全字串」：少尾 * 就變成「必須以它結尾」。
+  //    真日誌那行後面還有 ` connIndex=…`，所以少了尾 * 會永遠不匹配（我踩過，被自己的檢查誤殺）。
+  assert.match(code, /\*"Registered tunnel connection"\*\) log /);
+  assert.doesNotMatch(code, /\*"Registered tunnel connection"\) /);
   assert.match(code, /\*\) fail "cloudflared 最後一條事件不是註冊成功/);
   assert.doesNotMatch(code, /Registered a new connection/);
   assert.doesNotMatch(code, /docker logs --since \d+s 5151-ops-cloudflared/);
