@@ -6,7 +6,7 @@
 完整藍圖見 [`BLUEPRINT.md`](BLUEPRINT.md)；短表見 [`PLAN.md`](PLAN.md)；現況對照見 [`INVENTORY.md`](INVENTORY.md)。  
 v3 外掛／預算熔斷／進階比對見 [`../v3/PLAN-integrations.md`](../v3/PLAN-integrations.md)。
 
-Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `https://jibbyrentops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
+Console：本機 `http://127.0.0.1:5154`；正式機走同一條 Tunnel → `https://ops.reversalplay.me`（容器只綁 `127.0.0.1:5154`）。
 
 ## 一般使用者怎麼回饋
 
