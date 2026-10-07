@@ -532,6 +532,7 @@ import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client5
 import { probeListingAliveBySource } from "./probe.js";
 import { PROBE_ALIVE, PROBE_GONE, PROBE_INCONCLUSIVE, classifyListingProbeWrite } from "./probeOutcomes.js";
 import { processListingEnrichBatch, wakeListingEnrichWorker, WATCH_PRIORITY } from "./listingEnrichQueue.js";
+import { enrichClockConfig, startListingEnrichClock } from "./listingEnrichClock.js";
 // 2.3b 第二段：入列與點擊複查走 driver-aware 版本（PG 模式才不會寫到本機 SQLite）。
 import { enqueueListingEnrichAsync, requestClickRefreshAsync } from "./listingEnrichQueueAsync.js";
 import { deliveryConfigFromEnv, startDeliveryLoop } from "./opsDelivery.js";
@@ -978,11 +979,18 @@ function listingEnrichHelpersWithEvents() {
   };
 }
 
-function kickListingEnrich() {
+function kickListingEnrich({ limit = 4, stats = null } = {}) {
   return wakeListingEnrichWorker(() =>
-    processListingEnrichBatch(db, listingEnrichHelpersWithEvents(), { limit: 4 }).catch((error) => {
-      console.warn("5168 補抓失敗：", error.message);
-    }),
+    processListingEnrichBatch(db, listingEnrichHelpersWithEvents(), { limit })
+      .then((result) => {
+        // stats 只給時鐘讀（要拿得到「本輪真的嘗試了幾筆」才能判斷要不要退避）；
+        // 事件 kick 不傳 stats ⇒ 行為與改動前完全一致。
+        if (stats) stats.attempted += Number(result?.attempted) || 0;
+        return result;
+      })
+      .catch((error) => {
+        console.warn("5168 補抓失敗：", error.message);
+      }),
   );
 }
 
@@ -5456,6 +5464,22 @@ function startWorkerLoops() {
       startDeliveryLoop(opsDeliveryDb(), opsDelivery, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
     }
     console.log(`Ops feedback 遞送已啟用：每 ${opsDelivery.intervalMs}ms 一次 → ${opsDelivery.url}`);
+  }
+  // listing_enrich 時鐘：這支佇列原本**只靠事件**才被叫（關注 houseprice、爬蟲輪次結束、
+  // 點通知導向），沒事件就不消化 ⇒ 2026-10-07 實測 8759 筆 queued、每小時只處理 20～36 筆。
+  // 這裡只加「按期叫一次」，每輪筆數與事件版同量級（預設 4），退避照既有的走
+  // （transient 60s→5m→15m、parse_failed 24h、source_limited 12h），**不動 claim 語意**。
+  // 關掉：LISTING_ENRICH_CLOCK=0（回到只有事件 kick 的舊行為）。
+  const enrichClock = enrichClockConfig(process.env);
+  if (enrichClock.enabled) {
+    startListingEnrichClock(async ({ tickLimit }) => {
+      const stats = { attempted: 0 };
+      await kickListingEnrich({ limit: tickLimit, stats });
+      return stats.attempted;
+    }, enrichClock, { log: (tag, info) => console.log(tag, JSON.stringify(info)) });
+    console.log(
+      `listing_enrich 時鐘已啟用：每 ${enrichClock.intervalMs}ms 一輪、每輪最多 ${enrichClock.tickLimit} 筆（關掉：LISTING_ENRICH_CLOCK=0）`,
+    );
   }
   // 三支 5 分鐘 tick：PG 模式走 async 入口（讀寫 PG），其餘保持同步版（讀寫本機 SQLite）。
   if (resolveDbDriver() === "postgres") {
