@@ -280,7 +280,8 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /listMoreBtn/);
   assert.match(html, /loadList\(\{ append: true, keep: true, silent: false, busyText: "正在載入更多…" \}\)/);
   assert.match(html, /function mergeAppendedListings/);
-  assert.match(html, /LIST_PAGE_SIZE = 80/);
+  assert.match(html, /LIST_PAGE_SIZE = 25/);
+  assert.match(html, /MOBILE_LIST_PAGE_SIZE = 10/);
   assert.match(html, /data-kit-furnish/);
   assert.match(html, /\.kit-furnish/);
   assert.match(html, /aria-describedby/);

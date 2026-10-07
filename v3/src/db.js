@@ -429,6 +429,7 @@ import {
 import {
   adminEmailForUser,
   anyoneWatched as anyoneWatchedOn,
+  clearUserListingFlags,
   copyUserFlagsForRelist as copyUserFlagsForRelistOn,
   ensureUser as ensureUserOn,
   listingMatchesListFilter,
@@ -5045,6 +5046,18 @@ export function hideMany(ids, userId) {
     throw error;
   }
   return { count: list.length, stats: stats(undefined, uid) };
+}
+
+// 「全部清除」：一次把某個會員的 watched（特別關注）或 hidden（已隱藏）整批取消。
+// 只歸零指定欄位與其時間戳，另一欄若仍有值就保留那一列（同 setUserListingFlags 的語意）。
+// kind 只接受 watched／hidden，其餘一律丟錯——避免有人從路由帶任意欄位名進來。
+// 核心與白名單都在 personalFlags.js（同步／PG／單測共用同一份語意）。
+export { CLEARABLE_FLAG_COLUMNS } from "./personalFlags.js";
+
+export function clearListingFlagsByUser(kind, userId) {
+  const uid = resolveUserId(userId);
+  const count = clearUserListingFlags(db, kind, uid);
+  return { count, stats: stats(undefined, uid) };
 }
 
 export function markListingOffline(postId) {

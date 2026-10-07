@@ -303,8 +303,7 @@ export function listingIsMainListAffiliate(row, filter) {
   return true;
 }
 
-export function listingMatchesListFilter(row, filter) {
-  if (listingIsMainListAffiliate(row, filter)) return false;
+export function listingMatchesListFilter(row, filter) {  if (listingIsMainListAffiliate(row, filter)) return false;
   const hidden = Number(row?.hidden) === 1;
   const watched = Number(row?.watched) === 1;
   const viewed = Number(row?.viewed) === 1;
@@ -318,11 +317,33 @@ export function listingMatchesListFilter(row, filter) {
   if (filter === "watched") return watched;
   // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
   if (dup || confirmed || hidden) return false;
-  if (filter === "all") return !watched;
+  // Owner 2026-10-07：「全部」= 未看過且未特別關注；看過的物件改由「已瀏覽」清單查。
+  if (filter === "all") return !watched && !viewed;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;
   if (filter === "same_source") {
     return ["same_source", "update", "price_drop", "title_update"].includes(row?.last_event);
   }
   return true;
+}
+
+// 「全部清除」特別關注／已隱藏的核心（吃 db handle，方便用記憶體夾具單測）。
+// 只歸零指定欄位與它的時間戳；另一欄若仍有值，那一列會保留（與 setUserListingFlags 的語意一致）。
+// kind 只接受 watched／hidden，欄位名一律走白名單，不從外部字串拼進 SQL。
+export const CLEARABLE_FLAG_COLUMNS = Object.freeze({ watched: "watched_at", hidden: "hidden_at" });
+
+export function clearUserListingFlags(conn, kind, userId) {
+  const column = CLEARABLE_FLAG_COLUMNS[String(kind)];
+  if (!column) {
+    const err = new Error("不支援的清除類型");
+    err.status = 400;
+    err.code = "BAD_FLAG_KIND";
+    throw err;
+  }
+  const uid = Number(userId) || 0;
+  if (!uid) return 0;
+  const info = conn.prepare(
+    `UPDATE user_listing_flags SET ${kind} = 0, ${column} = NULL WHERE user_id = ? AND ${kind} = 1`,
+  ).run(uid);
+  return Number(info?.changes) || 0;
 }

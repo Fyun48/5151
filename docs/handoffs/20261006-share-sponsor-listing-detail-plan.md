@@ -139,10 +139,16 @@ capability 宣告（寫進 `SPONSOR_PROVIDER_CAPABILITIES`）：`{ supportsPrefi
 
 ---
 
-## 4. 需求③：通用物件公開內頁（對齊 591／租租通的資訊架構）
+## 4. 需求③：站內刊登物件公開內頁（對齊 591／租租通的資訊架構）
+
+> **2026-10-07 Owner 校正（範圍收斂）**：本節原寫「通用內頁、站內刊登與外部物件共用」是**誤解**。
+> 真正的需求是：**只有透過自家「有房刊登」的物件**才需要這個內頁版面；
+> 外部來源（591／樂屋…）的物件**不做我們的版本**——它們的詳細內容以原站為準。
+> 因此「站內頁」按鈕只在 `source === "self"` 的卡片出現（PR #629）。
+> `/p/:id` 路由本身保留（分享連結、OG 預覽仍需可達），但一般找房列表不再對外部物件暴露入口。
 
 ### 4.1 定位
-- 新建通用公開內頁：**路由 `/p/:id`＋新頁 `v3/public/detail.html`**，站內刊登與外部物件共用。
+- 新建公開內頁：**路由 `/p/:id`＋新頁 `v3/public/detail.html`**；**入口只給站內刊登物件**（見上方校正）。
 - **不動**既有 `/l/:id`＋`listing.html`（`public-share-page.test.js` 有靜態斷言綁它）；分享連結的正式落地頁改指 `/p/:id?ref=<shareToken>`。`/go/:id` 維持「已登入標記已瀏覽＋302 原站」的原語意。
 - 對齊的是**資訊架構與決策欄位**，不是 591 的視覺：沿用 Quiet Luxury token、租金 tabular 最大、無 Hero、無玻璃擬態。
 
@@ -173,6 +179,23 @@ capability 宣告（寫進 `SPONSOR_PROVIDER_CAPABILITIES`）：`{ supportsPrefi
 - 分享/贊助流程原型（`share-panel-proto.html`、`sponsor-flow-proto.html`） likewise 0 違規、無橫向溢出；文案無禁用字、含自願性說明。原型內的 API 名稱（例 `/api/share/create`）僅供視覺溝通，**正式契約以 `evidence/tmp-planning/backend-spec.md` 為準**。
 
 ---
+
+### 4.6 找房列表篩選邏輯（2026-10-07 Owner 指定，六點）
+
+| # | 規則 | 實作位置 |
+|---|---|---|
+| 1 | 「全部」**不顯示已瀏覽過**的物件（＝未看過且未特別關注） | `personalFlags.js listingMatchesListFilter()` 的 `all` 分支＋`index.html` 同名前端篩（兩邊必須同語意） |
+| 2 | 原「未瀏覽」鈕改為「**已瀏覽**」，只列看過的 | 篩選鈕 `data-filter="viewed"`；`unseen` 分支保留給後端統計用 |
+| 3 | 會員／贊助會員**不顯示**「同屋源更新」與「疑似同屋源」篩選鈕 | `.guest-filter` class＋`body:not(.role-guest) .guest-filter{display:none}` |
+| 4 | 一頁筆數：**行動版 10、電腦版 25**（含同源） | `listPageSize()` 沿用全站既有的 `isCoarsePointer()`（`(pointer: coarse), (max-width: 767px)`）判定行動版，走 `LIST_PAGE_SIZE=25`／`MOBILE_LIST_PAGE_SIZE=10`；訪客與會員同一套（一頁幾筆是裝置問題，不是權限問題） |
+| 5 | 會員／贊助會員**不顯示**「物件連結失效」回報鈕（訪客本來就看不到→實際全站移除） | 卡片 `btn-report-gone` 移除；`sameHouseGoneBtn()` 回空字串 |
+| 6 | 「特別關注」與「已隱藏」可**一鍵全部清除** | 新路由 `POST /api/me/listings/clear-flags`（`{kind:"watched"\|"hidden"}`）；核心 `personalFlags.js clearUserListingFlags()`（同步／PG 共用白名單 `CLEARABLE_FLAG_COLUMNS`）；UI 按鈕只在切到該篩選時出現，含 `confirm()` |
+
+**三個設計判斷（記下來免得日後被當 bug 改回去）**
+- 規則 3／2 的鈕被 CSS 藏起來時，**不能讓畫面卡在那個篩選上**：`setGuestMode()` 會在會員帶著 `same_source`／`suspected`、或訪客帶著 `viewed` 時把篩選退回「全部」，否則使用者會看到一張「找不到鈕、也退不出來」的空清單。
+
+- 規則 1 的篩選**必須在後端做**，不能只在前端藏：第 4 點把一頁壓到 10/25 筆後，若前端再過濾就會「翻一頁只剩 3 筆」。
+- 規則 6 的清除**只歸零 `watched`／`hidden` 與對應時間戳**，同一列的另一個旗標若還有值就保留該列；`kind` 走白名單，絕不把外部字串拼進 SQL。
 
 ## 5. 共用硬約束（三需求都適用）
 1. 新功能只做 v3；Production 部署一律 Owner 手動核准，agent 不得觸發。
