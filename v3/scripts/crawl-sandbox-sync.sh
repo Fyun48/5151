@@ -17,6 +17,12 @@ SANDBOX_DIR="${SANDBOX_DIR:-/mnt/Storage1/apps/5151-sandbox}"
 SANDBOX_DATA="${SANDBOX_DATA:-/mnt/Storage1/docker_data/5151-crawl-sandbox}"
 CONTAINER="${CONTAINER:-5151-crawl-sandbox}"
 ROUNDS="${SANDBOX_ROUNDS:-0}"
+# 可選：把額外環境帶進「手動測試輪」，用來故意製造條件。例：
+#   SANDBOX_EXTRA_ENV="CRAWL_EXTERNAL_PHASE_MAX_MINUTES=3"  ⇒ 每家外站只有 3 分鐘階段預算，
+#   這樣才看得到「預算用盡 ⇒ 這一輪這家算 partial、不算失敗」那條路（正常 10 分鐘 Sandbox 跑不满）。
+EXTRA_ENV="${SANDBOX_EXTRA_ENV:-}"
+env_args=""
+for _kv in $EXTRA_ENV; do env_args="$env_args -e $_kv"; done
 
 # $1 = 排程器狀態（0 停用／1 啟用）。重建容器並印出容器狀態＋實際生效的排程器值。
 compose_recreate() {
@@ -42,7 +48,7 @@ if [ "$ROUNDS" != "0" ]; then
   trap restore_scheduler EXIT
 
   echo "[sync] 立刻跑 $ROUNDS 輪（--rounds $ROUNDS）並等它結束"
-  ssh "$SANDBOX_HOST" "docker exec $CONTAINER node scripts/crawl-sandbox.mjs --rounds $ROUNDS --json | tail -$ROUNDS"
+  ssh "$SANDBOX_HOST" "docker exec$env_args $CONTAINER node scripts/crawl-sandbox.mjs --rounds $ROUNDS --json | tail -$ROUNDS"
   echo "[sync] 最近報告："
   ssh "$SANDBOX_HOST" "tail -$ROUNDS '$SANDBOX_DATA/crawl-sandbox.jsonl'"
 

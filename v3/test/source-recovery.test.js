@@ -523,7 +523,7 @@ test("watcher：還在冷卻期的來源這一輪要跳過，並在輪次結果�
   // 這一條刻意盯「用純函式而不是行內運算式」：2026-09-30 沙盒第一輪就是因為行內用到
   // try 區塊內的 `batches` 而 `ReferenceError`（文字斷言看不到作用域，整合測試才看得到）。
   assert.match(src, /noteSourceRound\(source, successful, sourceErrors, sourceRoundBlocked\(batches\), applicable, partial\);/);
-  assert.match(src, /let batches = \[\];\n    try \{\n      batches = await run\(\);/);
+  assert.match(src, /let batches = \[\];[\s\S]{0,520}?try \{\s*\n\s*batches = phaseBudgetMs > 0\s*\n\s*\? await withBudget\(run, phaseBudgetMs,/, "batches 一定要宣告在 try 外面，而且 try 的第一行就要把批次接起來（階段用巢状 withBudget）；写在 try 里面会在 catch 拿到 ReferenceError");
 });
 
 test("不適用：這一輪沒有可抓行政區的來源不算失敗、也不可以擋住完成紀錄（第九十六批追加）", async () => {
@@ -623,7 +623,7 @@ test("partial 的輪次不算失敗也不算恢復（狀態原封不動）", asy
   // watcher 也要標記 partial（否則這一組會被誤記成已完成）。
   const watcherSrc = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
   assert.match(watcherSrc, /batch\.partial !== true\) successful\.add\(batch\.searchUrl\)/);
-  assert.match(watcherSrc, /const partial = batches\.some\(\(batch\) => batch\?\.partial === true\);/);
+  assert.match(watcherSrc, /const partial = (?:phaseTimedOut \|\| )?batches\.some\(\(batch\) => batch\?\.partial === true\);/);
 });
 
 test("每輪上限要平均分給每個 job（後面的 job 不能被前面的吃光）＋輪詢要推進", async () => {

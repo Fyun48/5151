@@ -114,6 +114,75 @@ select key, value from settings where key = 'crawlScheduleV1';
   1. **每家外站一輪的工作量太大**（93 頁／家）⇒ 要做「每輪上限：只跑前 N 個行政區或前 M 頁，下一輪接」（上面 (c) 的結論）。
      另查 `rakuya` 在 PG 模式呼叫 `repairRakuyaScopes(db, jobs)` 讀本機 SQLite 這條（與時效無關，是正確性）。
   2. 信義 503 與 5168 403 是**真擋台**（沙盒與正式站都遇到），輪轉解決不了，要另案。
-  3. 租租通／好房網在正式站 `lastError` 是**空字串**（沙盒卻抓得到資料）——輪轉上線後先看它們會不會自己活過來，
+  3. ✅ 已做（PR #652）：租租通／好房網在正式站 `lastError` 是**空字串**（沙盒卻抓得到資料）——輪轉上線後先看它們會不會自己活過來，
      如果還是不行，查它們自己的錯誤為什麼沒文字（診斷盲點）。
-  4. `/p/<不存在的 id>` 回 200 的 soft-404。
+  4. ✅ 已做（PR #652）：`/p/<不存在的 id>` 回 200 的 soft-404 改成 404（存在但 hidden 仍 200，那是沒拍的產品決定）。
+
+---
+
+## （d）2026-10-08 下午：第 2 件做实了——「每家階段預算＝本輪剩餘時間」
+
+### 先講我上午那句「一輪只排一家就不會爆預算」是錯的
+
+發版（`sha256:e1c316c9…`，04:58:12Z 起來）後的第一輪實測：
+
+| 時間（UTC） | 事件 | 證據 |
+|---|---|---|
+| 04:59 | `外站輪轉：本輪排 houseprice｜延後 hbhousing,sinyi,ddroom,housefun` | 容器日誌 |
+| 05:00:36→05:13:51 | **591 一個人就花 13 分**（556 筆 `last_seen_at` 落在這個區間） | `select source, count(*), min/max(last_seen_at) from listings` |
+| 05:14→05:38 | 5168 一家跑了約 **27 分、零落地**（`houseprice` 在 04:58 之後沒有任何一筆） | 同上 |
+| 05:38 | `這輪抓取超過 40 分鐘沒結束，已自動放棄` | 容器日誌 |
+
+⇒ 輪轉把「五家」變「一家」是**必要但不夠**：一家就能吃光整輪。
+所以第 2 件的正解不是「砍行政區數量」，而是**給每一家在這一輪的時間上限，上限綁在「這一輪還剩多少」**。
+
+### 做了什麼（commit `a267875`，PR 見下）
+
+1. `externalRotation.js` 新增純函式 `externalPhaseBudgetMs({ remainingMs, env })`：
+   上限預設 10 分（`CRAWL_EXTERNAL_PHASE_MAX_MINUTES`，夾在 3〜20），
+   但 `min(上限, 本輪剩餘 − 2 分收尾)`；剩餘不足 3 分 ⇒ 回 **0**，語意是「這一輪不碰外站」（全部延後）。
+   留那 2 分鐘是因為 2026-09-24 `rotateCoveringJobs` 那批學到的：**整輪爆掉時 591 已完成的覆蓋紀錄也不會落地**。
+2. `watcher.js` 的 `collectExternal(source, label, run, phaseBudgetMs)` 用**巢状 `withBudget`** 包外站階段
+   （`crawlExecution.js` 的 context 是 `AsyncLocalStorage`，所以巢状會暫時取代內層 signal，來源的逐頁
+   `isCrawlCancelled()` 就會在我們自己的deadline到時停手）。`catch` 的第一行仍是
+   `if (isCrawlCancelled()) throw error;`——**整輪**被砍/被取代要立刻往上丟（AGENTS 第三條）；
+   只有「外層沒取消、錯誤看起來是我們自己的 abort」才算階段用盡 ⇒ `partial`。
+3. `crawlSourceStreaks.js` 新增 `lastAttemptAt`：**成功／失敗／不適用／只跑一半四條分支都蓋章**，
+   `externalSourceStaleness` 改看 `max(lastAttemptAt, lastSuccessAt, lastFailureAt)`。
+   少了這個章，被預算停手的家會永遠看起來「從沒被排過」，下一輪還是它 ⇒ 等於回到寫死順序。
+   完全沒排到的家仍然**逐字不變**（延後≠失敗，有尺規釘死）。
+4. 測試注入點 `options.externalPhaseBudgetMs`（跟 `hbPostJson` 同一套 fake 做法）。
+
+### 證據
+
+**離線**（截斷這條路只能這樣驗，詳見下節沙盒說明）：
+`crawl-round-integration.test.js` 用「400ms 階段預算＋會睡 2.5 秒的 fake」跑真的 `runWatch`：
+該家被標 `partial:true`、輪次錯誤寫著「階段預算…用盡」、streak `fails` 不增加、`lastAttemptAt` 有蓋章、
+**整輪照常收尾不擲錯**。
+存儲層另有測試釘住「四條分支都蓋章＋沒排到的家逐字不變」。
+
+**變異**：`mutation-check.mjs` 新增 `EXTERNALROT_MUTATIONS` 13 條（排序方向、三個 staleness 鍵、
+每輪家數上限、階段預算的 min/cap/收尾餘裕、巢状 withBudget、吞取消、partial 標記、`!phaseMs` 的 break、
+`phaseMs` 有沒有傳进去）→ **13/13 KILLED**；另外把 5 條因這包改動而失效的舊錨點重新釘到新形狀，
+`crawl-source-streaks 15/15`、`source-recovery 31/31`、`crawl-round-integration 3/3` 都全接到。
+
+**沙盒（真來源）**：見（e）。
+
+### 兩個我自己的失誤（記在這裡，不要重犯）
+
+- 用 python 的 `s[i:j]` 切片重寫 `from:`/`to:` 時，把 `const ROUNDINT_MUTATIONS = [` 整段吃掉：
+  檔案 `node --check` 照過、執行才 `ReferenceError`，而 dispatch 落到**別套**變異，
+  於是我看到一排 `SURVIVED 拆開／票選…` 差點當成這包的成績。教訓：改長檔一律**逐行比對**、
+  改完立刻 grep 符號還在不在（`grep -c ROUNDINT_MUTATIONS` 應該 ≥2）。
+- `pkill -f "npm test"` 的 pattern 也 match 到我自己那條 bash（指令裡含這四个字）⇒ 自我 SIGTERM。
+  要停就按 pid，或用 `[n]pm test` 這種 bracket 寫法。
+
+### （e）沙盒真來源這一條路的實測，以及一筆**假缺陷**
+
+沙盒 `5151-crawl-sandbox`（casa-nas，隔離庫 `crawl_sandbox`，同一顆映像）：
+
+| 串 | 條件 | 結果 |
+|---|---|---|
+| 第三串 | `SANDBOX_EXTRA_ENV="CRAWL_EXTERNAL_PHASE_MAX_MINUTES=3"`，2 輪 | 輪 1（05:53:24→06:07:51，786s→866s 含第二輪排隊）`jobs=6 fetched=2159 timed_out=false`；`591 6/6`、`houseprice 0/6`。**截斷沒發生**：5168 在沙盒約 2 分鐘就因為被擋而**自己停工**（`lastError='5168 三芝區 第 2 頁 [FETCH_BLOCKED]…'`），輪不到我們的 3 分鐘上限。但這輪驗證了記帳語意：`houseprice.lastAttemptAt` 有蓋章、`fails` 從 12 沒有增加、**四家延後的家逐字不變** |
+| 第四串 | `SANDBOX_EXTRA_ENV="CRAWL_TICK_BUDGET_MINUTES=12"`（這個名稱在沙盒沒生效，`budget_ms` 仍是 2400000） | `jobs=0` 空轉，無證據價值。⚠️ 這一輪的 `error` 欄位出現 `batches is not defined`——是**我把 mutation-check 跟沙盒同步同時跑**造成的：變異工具在這一刻把 `let batches = []` 故意挪進 `try`（那正是它要造的變異），同步腳本把「變異中」的 worktree 複製過去。**不是程式缺陷**：本地用 `jobs: []` 重跑真 `runWatch` 得到的是正常防護錯誤「請先選行政區或貼上至少一組 591 搜尋網址」。教訓：**變異跑完之前不要同步沙盒**（兩者都會動 `v3/src`） |
+| 第五串 | 先把 `hbhousing` 的 streak **從隔離庫刪掉**（⇒「從未排過」＝最餓），再配 3 分鐘上限跑 2 輪 | 輪 1（06:34:22→06:47:26，784s）`jobs=6 fetched=1821 timed_out=false`；`591 6/6`、**`hbhousing covered 0/6、fails 0、last_error 空`**——這形狀只有「我們自己停手 ⇒ partial/applicable 跳過」才會出現（正常失敗會 `fails+1`、會被擋停工會留 `lastError`）⇒ **真來源上打到了截断路径**；輪 2 要看的是「換人」（住商已被蓋章，不該再被排到） |
