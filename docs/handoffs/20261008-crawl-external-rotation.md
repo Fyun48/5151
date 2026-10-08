@@ -73,8 +73,30 @@
 另外四家照樣等死——**跟原本的寫死順序一樣糟，只是換了人質**。所以排序改成
 「上次被排到」＝ `max(lastSuccessAt, lastFailureAt)`，排過就讓位。
 
-**(c) 修正版（`max(lastSuccessAt, lastFailureAt)`）兩輪實測**
-（待填：本節由 `SANDBOX_ROUNDS=2` 第二串補上，要看到的是「兩輪排到不同的家」）
+**(c) 修正版：跑整輪沒跑出報告，所以改拿「真 streak」直接問選擇（不打網路）**
+第二串 `SANDBOX_ROUNDS=2` 用修正版同步後開跑（03:33Z），591 照常落地（1935 筆，到 03:42Z），
+但**整輪跑了 47 分鐘都沒寫出本輪報告**——沙盒那條路是有接 `withBudget` 的（`v3/scripts/crawl-sandbox.mjs:153`），
+正常應該 40 分鐘就回報 `timed_out=true`（上面第 15 輪就是這樣）。我 TERM 掉那輪，同步腳本的 trap
+已把排程還原（`CRAWL_SANDBOX_SCHEDULER=1`，實查確認）。
+**嫌疑最大的就是 `rakuya` 那段**：依修正版的选择，這一輪排的正是 `rakuya`（它 `lastSuccessAt`／`lastFailureAt` 全空＝從未排過），
+而 `collectExternal("rakuya", ...)` 在抓取前會先跑 `repairRakuyaScopes(db, jobs)`——`db` 是本機 SQLite，
+`watcher.js` 自己那段註解早就寫過「PG 模式下讀本機 SQLite 會拿到別台的舊頁碼」。
+**這一條我沒有順手改**（它跟輪轉是兩件事），列為下一件要查：为什么砍不下去＋rakuya 在 PG 模式的讀寫是否合法。
+
+因為拿不到「整輪報告」，我改用同一顆容器、同一份真實 streak 直接問輪轉會排誰（不碰網路）：
+```
+   hbhousing   fails=95   上次被排到=10-08T03:18 ｜上次成功=從未
+   sinyi       fails=94   上次被排到=10-08T01:09 ｜上次成功=從未
+   houseprice  fails=12   上次被排到=10-07T19:15 ｜上次成功=10-01T01:21
+   ddroom      fails=94   上次被排到=10-08T01:09 ｜上次成功=從未
+   housefun    fails=94   上次被排到=10-08T01:09 ｜上次成功=從未
+   rakuya      fails=-    上次被排到=從未        ｜上次成功=從未
+新政策本輪排   : rakuya
+新政策本輪延後 : houseprice,sinyi,ddroom,housefun,hbhousing
+舊政策本輪排   : hbhousing（沙盒連三輪都排到它，因為它永遠不會成功）
+```
+正式站 `rakuya` 是關著的（`settings.crawlSources` 實查 `enabled:false`），所以正式站第一輪會排 `houseprice`，
+而昨晚連三輪霸榜的 `hbhousing` 被擠到最後 ⇒ 「排過就讓位」這條在真實資料上生效。
 
 ## 5. 上線後要看什麼（合併 ≠ 生效）
 ```sql
@@ -89,5 +111,9 @@ select key, value from settings where key = 'crawlScheduleV1';
   `超過 40 分鐘沒結束，已自動放棄` 的次數應該明顯下降（一輪變成 591 的 6 組＋1 家外站）。
 * **退路**：`CRAWL_EXTERNAL_SOURCES_PER_RUN=5` 就回到「幾乎每輪全跑」的舊行為（不用改 code）；
   整包退回就是 revert 這顆 commit。
-* 還沒處理（下一件）：信義 503 與 5168 403 是**用真 IP 的擋台**（沙盒與正式站都遇到），
-  要靠輪轉解決不了；`/p/<不存在的 id>` 回 200 的 soft-404 也還沒動。
+* 還沒處理（下一件，依序）：
+  1. **`rakuya` 那段為什麼讓整輪砍不下去**（上面 (c)；含 `repairRakuyaScopes(db, jobs)` 在 PG 模式讀本機 SQLite）。
+  2. 信義 503 與 5168 403 是**真擋台**（沙盒與正式站都遇到），輪轉解決不了，要另案。
+  3. 租租通／好房網在正式站 `lastError` 是**空字串**（沙盒卻抓得到資料）——輪轉上線後先看它們會不會自己活過來，
+     如果還是不行，查它們自己的錯誤為什麼沒文字（診斷盲點）。
+  4. `/p/<不存在的 id>` 回 200 的 soft-404。
