@@ -5212,8 +5212,11 @@
       const items = (Array.isArray(item?.furnish_items) ? item.furnish_items : [])
         .filter((name) => !/^(天然瓦斯|陽台|共用陽台)$/.test(String(name || "")));
       const facilityStatus = String(item?.facility_status || "");
+      // not_provided 代表這些項目是**我們從內文推估**的（basis=inferred），不是來源寫的；
+      // 列成事実會誤導看房的人，所以要標一下。
+      const facilityInferred = facilityStatus === "not_provided";
       const tip = items.length
-        ? items.join("、")
+        ? items.join("、") + (facilityInferred ? "（推估：來源未提供設備欄位，由刊登內文判斷）" : "")
         : facilityStatus === "absent"
           ? "來源明確沒有設備"
           : facilityStatus === "not_provided" || Number(item?.kit_fetched) === 1

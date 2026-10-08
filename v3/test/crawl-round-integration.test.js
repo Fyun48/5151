@@ -121,3 +121,53 @@ test("階段預算用盡：這家算 partial（不算失敗）、要蓋 lastAtte
   assert.ok(String(streaks.hbhousing?.lastAttemptAt || "") , "排過就要蓋章，下一輪輪轉才會換人");
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key='crawlScheduleV1'").get().n, 1);
 });
+
+test("591 覆蓋階段到點停手：未跑完的縣市不算失敗、不記完成，整輪照樣收尾", async () => {
+  // 這一包（第 2 件的另一半）的實測依據：2026-10-08 07:12Z 那輪，591 一個人從
+  // 07:13:52 跑到 07:42:31（29 分、1561 筆），外站只剩 7.5 分可用，整輪 07:52:08 才收進預算。
+  // 所以 591 段落也要有上限。這裡用「三個覆蓋條件＋每頁睡 120ms＋階段上限 150ms」
+  // 把這條路跑出**行為級**證據（不是只比對原始碼文字）。
+  const db = sqliteHandle();
+  db.exec("DELETE FROM settings; DELETE FROM listings; DELETE FROM crawl_covers; DELETE FROM user_settings; DELETE FROM users;");
+  // 覆蓋階段的完成記錄是 per-user 的（`user_settings`），沒有使用者列會撞到 FK。
+  // saveSettings 落在 defaultUserId()（這顆臨時庫裡是 1），所以要用 id 1，
+  // 否則 user_settings 的 user_id 沒有對應的 users 列，會撞到 FOREIGN KEY。
+  db.prepare("INSERT INTO users(id,email,role,created_at) VALUES (?,?,?,?)").run(1, "covering@example.test", "admin", new Date().toISOString());
+  db.prepare("INSERT INTO settings(key,value) VALUES (?,?)").run("crawlSources", JSON.stringify({ sources: [
+    { id: "591", enabled: true },
+    { id: "hbhousing", enabled: false },
+    { id: "sinyi", enabled: false },
+    { id: "houseprice", enabled: false },
+    { id: "ddroom", enabled: false },
+    { id: "housefun", enabled: false },
+  ] }));
+  db.prepare("INSERT INTO settings(key,value) VALUES (?,?)").run("hasBaseline", JSON.stringify({ value: true }));
+
+  const jobs = [1, 2, 3].map((section) => ({
+    regionId: 1, sectionIds: [section], priceMin: 0, priceMax: 0,
+    searchUrl: `https://rent.591.com.tw/?city=1&section=${section}`,
+  }));
+  const startedAt = Date.now();
+  const result = await runWatch({
+    jobs,
+    memberRequirements: [],
+    includeSystem: false,
+    skipHeavyGeo: true,
+    silent: true,
+    fetchPage: async () => { await new Promise((resolve) => setTimeout(resolve, 120)); return { total: 0, items: [] }; },
+    coveringPhaseDeadlineMs: startedAt + 150,
+  });
+
+  assert.equal(result.error, undefined, "到點停手不可以把整輪弄成錯誤");
+  const message = (result.errors || []).join("｜");
+  assert.match(message, /591 覆蓋階段到點停手（本輪 3 個縣市，只跑完 [12] 個）/, `要有停手訊息且明确没跑完：${message}`);
+  assert.match(message, /不會被記成完成，這一輪也不記成失敗/);
+
+  const { streaks } = await readCrawlSourceStreaksAsync({ driver: "sqlite" });
+  const round = streaks["591"] || {};
+  assert.equal(round.fails, 0, `只跑一半不是失敗，fails 不該累積（實際 ${round.fails}）`);
+  assert.ok(round.lastAttemptAt, "排過了就要蓋 lastAttemptAt，否則下一輪還會排在最前面");
+  assert.notEqual(round.lastError, undefined, "狀態要存在");
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM listings").get()).n, 0, "空頁不该憑空造出房源");
+  assert.ok(Date.now() - startedAt < 20_000, "停手要真的停，不能把三個縣市都跑完");
+});

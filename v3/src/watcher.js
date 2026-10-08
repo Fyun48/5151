@@ -51,7 +51,7 @@ import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./
 import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
-import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
+import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL, coveringPhaseDeadlineMs } from "./crawlPolicy.js";
 // 外站跨輪輪轉（一輪只排一家、最久沒成功的先；延後不記失敗）。政策與理由寫在該檔檔首。
 import { pickExternalSources, externalSourcesPerRun, externalPhaseBudgetMs } from "./externalRotation.js";
 import { noteConsecutiveTimeout, withBudget } from "./crawlWatchdog.js";
@@ -765,6 +765,10 @@ export async function runWatch(options = {}) {
     });
   };
   const fetchOptions = {
+    // 測試注入點（跟 `hbPostJson` 同一套做法）：`fetchListings` 內部是
+    // `typeof options.fetchPage === "function" ? options.fetchPage : 真的抓頁`，
+    // 所以沒傳時行為完全不變。有它才能離線驗「591 覆蓋階段到點停手」這條路。
+    fetchPage: options.fetchPage,
     minBuildingFloors: Number(settings.minBuildingFloors) || 0,
     excludeKeywords: settings.excludeKeywords,
     excludeBoxes: settings.excludeBoxes,
@@ -780,7 +784,21 @@ export async function runWatch(options = {}) {
     const sourceErrors = [];
     sourceSuccess.push({ source: "591", urls: successful });
     let consecutiveTimeouts = 0;
+    // 591 覆蓋階段的時間上限（理由寫在 crawlPolicy.js：實測地板是 591，不是外站）。
+    // 只在「兩個覆蓋條件之間」檢查，不在半頁中停 ⇒ 已抓到的頁面照樣落地、照樣記完成。
+    const coveringExecution = currentCrawlExecution();
+    const coveringRemainingMs = coveringExecution?.deadline ? coveringExecution.deadline - Date.now() : 0;
+    const coveringDeadline = Number(options.coveringPhaseDeadlineMs) > 0
+      ? Number(options.coveringPhaseDeadlineMs)
+      : coveringPhaseDeadlineMs({ remainingMs: coveringRemainingMs, env: process.env });
+    let coveringTimedOut = false;
     for (const job of jobs) {
+      if (coveringDeadline && Date.now() >= coveringDeadline) {
+        coveringTimedOut = true;
+        errors.push(`591 覆蓋階段到點停手（本輪 ${jobs.length} 個縣市，只跑完 ${successful.size} 個）`
+          + "，其餘留到下一輪——未跑完的覆蓋條件不會被記成完成，這一輪也不記成失敗");
+        break;
+      }
       try {
         const result = await fetchListings(job.searchUrl, pages, fetchOptions);
         throwIfCrawlCancelled();
@@ -802,7 +820,7 @@ export async function runWatch(options = {}) {
         }
       }
     }
-    noteSourceRound("591", successful, sourceErrors, false, true);
+    noteSourceRound("591", successful, sourceErrors, false, true, coveringTimedOut);
   }
 
   async function collectExternal(source, label, run, phaseBudgetMs = 0) {

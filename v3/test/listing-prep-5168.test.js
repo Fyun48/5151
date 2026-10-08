@@ -15,6 +15,7 @@ import {
   FIELD_PARSE_FAILED,
   FIELD_PROVIDED,
   mergeHpListingFields,
+  PREP_PENDING,
   PREP_READY,
   PREP_SOURCE_LIMITED,
 } from "../src/listingPrep.js";
@@ -156,8 +157,16 @@ test("evaluateHpPrep is ready for street+coords+rental floor+checked facilities;
     fetched: true,
     detailRecognized: true,
   });
-  assert.equal(inferred.displayReady, false);
-  assert.ok(inferred.missing.includes("facility"));
+  // 2026-10-08 決定：5168 不提供設施欄位，由內文**推估**（basis=inferred）要算完整。
+  // 原本推估不算 ⇒ `display_ready` 長期 0/2504，`hpDisplayReadySql()`（只對 houseprice 生效）
+  // 把這一家的物件整批擋在搜尋之外。
+  // 但推估仍要留兩條痕跡：`missing_fields` 照樣記 facility（管理端看得到缺口、queue 决定要不要補抓），
+  // `facility_basis` 照樣存 inferred（前端 `kitLine()` 據此標示「推估」）。
+  assert.equal(inferred.facility.basis, "inferred", "basis 仍要留 inferred，前端才有東西可以標示「推估」");
+  assert.match(inferred.facility.reason, /inferred/, "reason 也要留痕（查「哪些物件的設備是推估的」用這兩欄）");
+  assert.equal(inferred.displayReady, true, "唯一缺口是推估設施 ⇒ 放行展示（正式站 5297 筆卡在這裡）");
+  assert.equal(inferred.status, PREP_PENDING, "狀態仍是 pending：缺欄位記帳與重試車道不動");
+  assert.ok(inferred.missing.includes("facility"), "missing_fields 仍要記 facility，別把推估當實測");
 });
 
 test("evaluateHpPrep withholds when rental floor is missing or only building height", () => {
@@ -1168,7 +1177,10 @@ test("S4 source geo correction without local version writes; address change with
   }
 });
 
-test("S5 first incomplete facility response still withholds display", () => {
+// 2026-10-08 決定改這裡：設施「推估／只拿到一部分」不再擋展示，但**狀態要留 source_limited**
+// （queue 下一輪繼續補抓）。原本這條測試驗的是「第一次不完全就Hide」，現在驗的是
+// 「不完全也可以展示，但不准結案」。
+test("S5 first incomplete facility response shows but does not close the case", () => {
   const first = evaluateHpPrep(hpListing({
     tags: "[]",
     has_natural_gas: 0,
@@ -1178,8 +1190,10 @@ test("S5 first incomplete facility response still withholds display", () => {
     detailRecognized: true,
     facilityPartial: true,
   });
-  assert.equal(first.displayReady, false);
-  assert.equal(first.missing.includes("facility"), true);
+  assert.equal(first.displayReady, true, "部分設施回應不再擋展示（2026-10-08 決定）");
+  assert.equal(first.status, PREP_PENDING, "狀態仍走 pending_missing 車道（386 次重試事故鎖的規則，不能動）");
+  assert.equal(first.withholdReason, "facility");
+  assert.equal(first.facility.basis, "inferred", "basis 留痕，前端才能標示「推估」");
 });
 
 test("S5 ready listing keeps confirmed facilities after a partial response then a full one", async () => {
@@ -1236,7 +1250,13 @@ test("S5 ready listing keeps confirmed facilities after a partial response then 
   assert.equal(Number(afterPartial.has_natural_gas), 1);
   const prep = getListingPrep(conn, listing.post_id);
   assert.equal(Number(prep.display_ready), 1);
-  assert.match(String(prep.missing_fields), /facility/);
+  // 2026-10-08 決定之後，缺口訊號從 `missing_fields` 搬到 `facility_basis` + `withhold_reason`
+  // （推估不再算 missing；補抓照樣由 `source_limited` + `facility_partial` 驅動）。
+  // 已經就緒過的房源遇到「部分」設施回應：原本就會落到 source_limited（繼續補抓），
+  // 2026-10-08 的決定只動展示、不動這條 ⇒ 這裡維持 source_limited，但 display_ready 要是 1。
+  assert.equal(String(prep.prep_status || ""), "source_limited", "已就緒＋部分回應仍留 source_limited，queue 會再補抓");
+  assert.match(String(prep.withhold_reason || ""), /facility/);
+  assert.equal(String(prep.facility_basis || ""), "inferred", "basis 要留痕，前端才有東西標示「推估」");
 
   conn.prepare("UPDATE listing_enrich_jobs SET next_retry_at = ? WHERE post_id = ?")
     .run(new Date(Date.now() - 1000).toISOString(), listing.post_id);

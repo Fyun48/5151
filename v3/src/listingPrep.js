@@ -156,11 +156,15 @@ export function evaluateHpPrep(listing, meta = {}) {
   if (!detailRecognized) missing.push("detail");
   if (!address.usable) missing.push("address");
   if (floor.status !== FIELD_PROVIDED) missing.push("floor");
-  if (![FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status) || facility.basis === "inferred") {
+  if (![FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)
+    || facility.basis === "inferred") {
     missing.push("facility");
   }
   let status = PREP_PENDING;
   let withholdReason = "";
+  // 「推估」在**完整性**這個定義上仍然不算完整（保持原樣）：缺欄位的記帳與 queue 重試
+  // 分類是 386 次重試事故之後鎖住的規則（見 listing-enrich-pending-missing.test.js），不能動。
+  // 它不再擋展示 ⇒ 見下方 `facilityOnlyGap`。
   const facilityComplete = [FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)
     && facility.basis !== "inferred";
   // 已就緒房源遇到部分設備回應：保留展示，記錄缺漏並重試；首次不完整仍不展示。
@@ -174,6 +178,7 @@ export function evaluateHpPrep(listing, meta = {}) {
     status = PREP_READY;
     missing.length = 0;
     withholdReason = "";
+
   } else if (keepVisible && meta.facilityPartial === true && missing.includes("facility")) {
     status = PREP_SOURCE_LIMITED;
     withholdReason = facility.reason || "facility_partial";
@@ -186,10 +191,26 @@ export function evaluateHpPrep(listing, meta = {}) {
       withholdReason = address.reason || "source_limited";
     }
   }
+  // 2026-10-08 決定：5168 不提供設施欄位，我們由內文**推估**（`basis === "inferred"`）。
+  // 原本這樣一律不能展示 ⇒ `hpDisplayReadySql()`（只對 houseprice 生效）把這一家的物件整批擋在搜尋外；
+  // 正式站現在有 5297 筆的 `missing_fields` 就只有 `facility`（`facility_status=not_provided`、
+  // `facility_basis=inferred` 共 5569 筆），全部卡在這條政策上。
+  // 所以：**其他必要條件都齊、唯一缺口是推估的設施 ⇒ 放行展示**。
+  // 但「缺欄位」的記帳與 queue 重試分類維持原樣（仍記 `missing_fields=facility`、
+  // 仍是 `pending_missing`／`source_limited` 車道，事故 L-02xx 鎖的規則不動）。
+  // `facility_basis` 照樣存 "inferred" ⇒ 前端 `kitLine()` 據此標示「推估」，不假裝是來源實測。
+  // 通知不會暴增：`watcher.js` 的 `onFirstReady` 只對 `first_seen_at` 兩小時內的物件發事件。
+  const facilityOnlyGap = missing.length === 1 && missing[0] === "facility"
+    && identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED;
+
   if (status === PREP_PENDING && missing.length) withholdReason = withholdReason || missing.join(",");
   return {
     status,
-    displayReady: status === PREP_READY || keepVisible,
+    // 2026-10-08 決定：設施是「推估」或「只拿到一部分」都不再擋展示。
+    // 但部分回應要繼續讓 queue 補抓 ⇒ 狀態仍留 PREP_SOURCE_LIMITED（見上面那條分支），
+    // 只有「來源根本沒有這個欄位」才會走到 PREP_READY 並結案。
+    // 2026-10-08 決定（見上）：唯一缺口是推估設施時照樣展示。
+    displayReady: status === PREP_READY || keepVisible || facilityOnlyGap,
     identity,
     detailRecognized,
     address,
