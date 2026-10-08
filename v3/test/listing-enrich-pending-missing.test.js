@@ -96,7 +96,7 @@ test("processOneEnrichJob 的結尾改用 enrichErrorClass（舊寫法已被淘�
 });
 
 // --- 5. 規則死鎖的現場還原（說明為什麼這事必須分開處理）--------------------
-test("來源沒提供設備且是推估時，評估結果仍判 pending（缺欄位，不是網路失敗）", () => {
+test("來源沒提供設備且是推估時，評估結果仍判 pending（缺欄位記帳不動，只放行展示）", () => {
   const listing = {
     post_id: 900001, source: "houseprice", source_id: "hp1", url: "https://example.test/hp1",
     title: "測試", price: "20000", price_num: 20000, address: "台北市士林區天玉街9巷3號",
@@ -108,7 +108,9 @@ test("來源沒提供設備且是推估時，評估結果仍判 pending（缺欄
   });
   // 抓到了（fetched:true、沒有 parseFailed），但 facility 仍進 missing ⇒ 這種筆以前每 15 分鐘打一次。
   assert.equal(evalResult.status, prepMod.PREP_PENDING);
-  assert.equal(evalResult.displayReady, false);
+  // 2026-10-08 決定：唯一缺口是「推估的設施」時**可以展示**（正式站 5297 筆卡在這裡），
+  // 但缺欄位記帳與重試車道維持原樣 ⇒ 下面 `pending_missing` 那條斷言才是本檔存在的理由。
+  assert.equal(evalResult.displayReady, true, "推估設施不再擋展示（記帳與重試車道不動）");
   assert.ok(evalResult.missing.includes("facility"), "此情境 facility 應仍在缺漏清單內");
   assert.equal(enrich.enrichErrorClass("failed", evalResult), "pending_missing");
 });

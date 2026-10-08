@@ -15,6 +15,7 @@ import {
   FIELD_PARSE_FAILED,
   FIELD_PROVIDED,
   mergeHpListingFields,
+  PREP_PENDING,
   PREP_READY,
   PREP_SOURCE_LIMITED,
 } from "../src/listingPrep.js";
@@ -163,8 +164,9 @@ test("evaluateHpPrep is ready for street+coords+rental floor+checked facilities;
   // `facility_basis` 照樣存 inferred（前端 `kitLine()` 據此標示「推估」）。
   assert.equal(inferred.facility.basis, "inferred", "basis 仍要留 inferred，前端才有東西可以標示「推估」");
   assert.match(inferred.facility.reason, /inferred/, "reason 也要留痕（查「哪些物件的設備是推估的」用這兩欄）");
-  assert.equal(inferred.displayReady, true, "推估算完整 ⇒ 可以展示（不再整批被 5168 的關卡擋掉）");
-  assert.ok(!inferred.missing.includes("facility"), "不再算缺漏：正式站有 5297 筆的 missing_fields 只有 facility，就是被這關擋著");
+  assert.equal(inferred.displayReady, true, "唯一缺口是推估設施 ⇒ 放行展示（正式站 5297 筆卡在這裡）");
+  assert.equal(inferred.status, PREP_PENDING, "狀態仍是 pending：缺欄位記帳與重試車道不動");
+  assert.ok(inferred.missing.includes("facility"), "missing_fields 仍要記 facility，別把推估當實測");
 });
 
 test("evaluateHpPrep withholds when rental floor is missing or only building height", () => {
@@ -1189,8 +1191,8 @@ test("S5 first incomplete facility response shows but does not close the case", 
     facilityPartial: true,
   });
   assert.equal(first.displayReady, true, "部分設施回應不再擋展示（2026-10-08 決定）");
-  assert.equal(first.status, PREP_SOURCE_LIMITED, "但狀態要留 source_limited，queue 才會繼續補抓");
-  assert.match(first.withholdReason, /facility_partial/);
+  assert.equal(first.status, PREP_PENDING, "狀態仍走 pending_missing 車道（386 次重試事故鎖的規則，不能動）");
+  assert.equal(first.withholdReason, "facility");
   assert.equal(first.facility.basis, "inferred", "basis 留痕，前端才能標示「推估」");
 });
 
@@ -1250,8 +1252,10 @@ test("S5 ready listing keeps confirmed facilities after a partial response then 
   assert.equal(Number(prep.display_ready), 1);
   // 2026-10-08 決定之後，缺口訊號從 `missing_fields` 搬到 `facility_basis` + `withhold_reason`
   // （推估不再算 missing；補抓照樣由 `source_limited` + `facility_partial` 驅動）。
-  assert.equal(String(prep.prep_status || ""), "source_limited", "狀態要留 source_limited，queue 才會再補抓");
-  assert.match(String(prep.withhold_reason || ""), /facility_partial/);
+  // 已經就緒過的房源遇到「部分」設施回應：原本就會落到 source_limited（繼續補抓），
+  // 2026-10-08 的決定只動展示、不動這條 ⇒ 這裡維持 source_limited，但 display_ready 要是 1。
+  assert.equal(String(prep.prep_status || ""), "source_limited", "已就緒＋部分回應仍留 source_limited，queue 會再補抓");
+  assert.match(String(prep.withhold_reason || ""), /facility/);
   assert.equal(String(prep.facility_basis || ""), "inferred", "basis 要留痕，前端才有東西標示「推估」");
 
   conn.prepare("UPDATE listing_enrich_jobs SET next_retry_at = ? WHERE post_id = ?")
