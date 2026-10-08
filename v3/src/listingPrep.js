@@ -156,13 +156,23 @@ export function evaluateHpPrep(listing, meta = {}) {
   if (!detailRecognized) missing.push("detail");
   if (!address.usable) missing.push("address");
   if (floor.status !== FIELD_PROVIDED) missing.push("floor");
-  if (![FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status) || facility.basis === "inferred") {
+  // 2026-10-08 決定（跟上面 `facilityComplete` 同一件事）：由內文**推估**設施不再算缺漏。
+  // 正式站 `listing_prep` 現在有 5297 筆的 `missing_fields` 只有 `facility`
+  // （`facility_status=not_provided`、`facility_basis=inferred` 共 5569 筆），就是被這行擋著。
+  // 缺口訊號不會消失：`facility_basis` 仍存 "inferred"、`facility.reason` 仍是
+  // `facility_partial_inferred`／`facility_not_provided`，要查「哪些物件的設備是推估的」用這兩欄。
+  if (![FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)) {
     missing.push("facility");
   }
   let status = PREP_PENDING;
   let withholdReason = "";
-  const facilityComplete = [FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status)
-    && facility.basis !== "inferred";
+  // 2026-10-08 決定：5168 根本不提供設施欄位，我們是由內文**推估**（`basis === "inferred"`）。
+  // 原本「推估」不算完整 ⇒ `display_ready` 一直是 0/2504，這一家的物件被這道關卡整批擋在
+  // 搜尋之外（`hpDisplayReadySql()` 只對 houseprice 生效，所以受影響的就是這一批）。
+  // 現在推估算完整，但 `listing_prep.facility_basis` 照樣記 "inferred"，
+  // 前端（`kitLine()`）要拿它標示「推估」，不要假裝是來源實測；
+  // 通知端不會暴增：`onFirstReady` 只对 `first_seen_at` 兩小時內的物件發事件。
+  const facilityComplete = [FIELD_PROVIDED, FIELD_ABSENT, FIELD_NOT_PROVIDED].includes(facility.status);
   // 已就緒房源遇到部分設備回應：保留展示，記錄缺漏並重試；首次不完整仍不展示。
   const facilityOk = facilityComplete || (alreadyReady && meta.facilityPartial === true && meta.facilityAbsent !== true);
   const keepVisible = alreadyReady && identity && detailRecognized && address.usable
@@ -170,10 +180,19 @@ export function evaluateHpPrep(listing, meta = {}) {
   if (parseFailed && missing.includes("detail")) {
     status = PREP_PARSE_FAILED;
     withholdReason = "detail_parse_failed";
-  } else if (identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED && facilityOk && !missing.includes("facility")) {
+  } else if (identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED && facilityOk
+    && !missing.includes("facility") && meta.facilityPartial !== true) {
+    // ^^^ `facilityPartial !== true`：來源只回了一部分設施時**不要結案**，
+    //     狀態留在 source_limited 讓 queue 繼續補抓；展示由 `facilityPartialDisplay` 放行。
     status = PREP_READY;
     missing.length = 0;
     withholdReason = "";
+  } else if (meta.facilityPartial === true && identity && detailRecognized && address.usable
+    && floor.status === FIELD_PROVIDED && facilityOk) {
+    // 來源只回了「一部分」設施：其他必要條件都齊 ⇒ **可以展示**（見 facilityPartialDisplay），
+    // 但狀態留 source_limited，queue 下一輪還會補抓，別把沒拿全的資料當成結案。
+    status = PREP_SOURCE_LIMITED;
+    withholdReason = facility.reason || "facility_partial";
   } else if (keepVisible && meta.facilityPartial === true && missing.includes("facility")) {
     status = PREP_SOURCE_LIMITED;
     withholdReason = facility.reason || "facility_partial";
@@ -186,10 +205,16 @@ export function evaluateHpPrep(listing, meta = {}) {
       withholdReason = address.reason || "source_limited";
     }
   }
+  // 「部分設施回應」的展示例外（上面決定）：其他必要條件都齊了，只差設施沒拿全。
+  const facilityPartialDisplay = status === PREP_SOURCE_LIMITED && meta.facilityPartial === true;
+
   if (status === PREP_PENDING && missing.length) withholdReason = withholdReason || missing.join(",");
   return {
     status,
-    displayReady: status === PREP_READY || keepVisible,
+    // 2026-10-08 決定：設施是「推估」或「只拿到一部分」都不再擋展示。
+    // 但部分回應要繼續讓 queue 補抓 ⇒ 狀態仍留 PREP_SOURCE_LIMITED（見上面那條分支），
+    // 只有「來源根本沒有這個欄位」才會走到 PREP_READY 並結案。
+    displayReady: status === PREP_READY || keepVisible || facilityPartialDisplay,
     identity,
     detailRecognized,
     address,
