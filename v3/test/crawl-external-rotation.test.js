@@ -24,6 +24,10 @@ import {
   externalPhaseBudgetMs,
   rankExternalSources,
 } from "../src/externalRotation.js";
+import { coveringPhaseDeadlineMs } from "../src/crawlPolicy.js";
+
+// watcher 的原始碼：這一支管的是「輪次政策」，結構尺規跟文字一樣重要。
+const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
 
 const NOW = Date.parse("2026-10-08T01:00:00.000Z");
 const TASKS = ["hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"]
@@ -192,4 +196,36 @@ test("watcher 要真的把階段預算包進去，而且整輪取消時不可以
   assert.match(src, /if \(!phaseMs\) \{[\s\S]{0,320}?break;\s*\n\s*\}/, "不夠時間時這一家以後全部延後（不是硬跑也不是記失敗）");
   assert.match(src, /await collectExternal\(task\.id, task\.label, task\.invoke, phaseMs\);/);
   assert.match(src, /Number\(options\.externalPhaseBudgetMs\) > 0/, "要有測試用的注入點（不然離線測不到這條路）");
+});
+
+// ── 591 覆蓋階段的時間上限（2026-10-08）───────────────────────────────────
+// 外站有每家預算之後，正式站實測證明地板是 591：07:12 那輪 591 一個人從 07:13:52 跑到
+// 07:42:31（29 分鐘、1561 筆），外站只剩 7.5 分可用，整輪 07:52:08 才收進預算。
+// 所以 591 段落不能吃整輪，只能吃「本輪剩餘時間的一個比例」，而且要**在兩個覆蓋條件之間**停。
+test("coveringPhaseDeadlineMs：比例與上限取小、留 2 分收尾、太少就不設限", () => {
+  const MIN = 60_000;
+  const at = 1_000_000;
+  const f = (remainingMs, env = {}) => coveringPhaseDeadlineMs({ now: at, remainingMs, env });
+  assert.equal((f(40 * MIN) - at) / MIN, 20, "剩 40 分：55% 是 22 分，但被 20 分上限夾住");
+  assert.equal(Math.round((f(25 * MIN) - at) / MIN * 10) / 10, 12.7, "剩 25 分：(25-2)*55% = 12.65 分");
+  assert.equal(f(6 * MIN), 0, "剩 6 分：算出來不到 5 分 ⇒ 回 0＝不設限（這一輪本來就快結束）");
+  assert.equal(f(0), 0, "拿不到 deadline ⇒ 不設限，不要憑空造上限");
+  assert.equal(f(-1), 0, "負值同理");
+  assert.equal((f(40 * MIN, { CRAWL_COVERING_PHASE_SHARE: "80" }) - at) / MIN, 20, "調高比例還是要被 20 分上限夾住");
+  assert.equal((f(40 * MIN, { CRAWL_COVERING_PHASE_MAX_MINUTES: "900" }) - at) / MIN, 20.9, "上限惡值夾回 30 分 ⇒ 由 55% 決定");
+  assert.equal((f(40 * MIN, { CRAWL_COVERING_PHASE_SHARE: "1" }) - at) / MIN, 11.4, "比例惡值夾回 30% ⇒ (40-2)×30% = 11.4 分");
+});
+
+test("591 段落要在「兩個覆蓋條件之間」停，並把這一輪標成 partial（不是失敗）", () => {
+  const block = src.slice(src.indexOf('if (want591 && !cooling.has("591"))'), src.indexOf('async function collectExternal'));
+  assert.ok(block.length > 500 && block.includes('for (const job of jobs) {'), "要能找到 591 那個逐縣市的迴圈");
+  assert.match(block, /const coveringDeadline = Number\(options\.coveringPhaseDeadlineMs\) > 0/, "要有測試注入點");
+  assert.match(block, /coveringPhaseDeadlineMs\(\{ remainingMs: coveringRemainingMs, env: process\.env \}\)/, "沒注入時要用「本輪剩餘時間」換算");
+  // 停手點一定要在迴圈開頭、try 之前：在半頁中間停會丢掉已經抓到的頁面。
+  const stopAt = block.indexOf("if (coveringDeadline && Date.now() >= coveringDeadline)");
+  const tryAt = block.indexOf("      try {", stopAt);
+  assert.ok(stopAt > 0 && tryAt > stopAt, "檢查要在 try 之前（兩個覆蓋條件之間），不可以在半頁中停");
+  assert.match(block, /coveringTimedOut = true;[\s\S]{0,260}?break;/, "到點要 break，並把 coveringTimedOut 立起來");
+  assert.match(block, /未跑完的覆蓋條件不會被記成完成/, "日誌要講清楚：這是續跑，不是失敗，也不會被誤記成完成");
+  assert.match(block, /noteSourceRound\("591", successful, sourceErrors, false, true, coveringTimedOut\);/, "要帶進 partial 語意");
 });

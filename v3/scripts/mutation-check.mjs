@@ -4637,6 +4637,77 @@ const EXTERNALROT_MUTATIONS = [
     to: "    await collectExternal(task.id, task.label, task.invoke);",
     expect: "watcher 要真的把階段預算包進去",
   },
+  {
+    name: "到點不停手（591 可以吃完整輪，外站就餓死）",
+    file: "v3/src/watcher.js",
+    from: "      if (coveringDeadline && Date.now() >= coveringDeadline) {",
+    to: "      if (coveringDeadline && false) {",
+    expect: "591 段落要在",
+  },
+  {
+    name: "停手了但不記 coveringTimedOut（會被當成失敗輪）",
+    file: "v3/src/watcher.js",
+    from: "        coveringTimedOut = true;",
+    to: "        coveringTimedOut = coveringTimedOut;",
+    expect: "591 段落要在",
+  },
+  {
+    name: "591 的輪次記錄不再帶 partial",
+    file: "v3/src/watcher.js",
+    from: "noteSourceRound(\"591\", successful, sourceErrors, false, true, coveringTimedOut);",
+    to: "noteSourceRound(\"591\", successful, sourceErrors, false, true);",
+    expect: "591 段落要在",
+  },
+  {
+    name: "抽掉測試注入點（這條路就沒辦法離線驗）",
+    file: "v3/src/watcher.js",
+    from: "    const coveringDeadline = Number(options.coveringPhaseDeadlineMs) > 0",
+    to: "    const coveringDeadline = Number(0) > 0",
+    expect: "591 段落要在",
+  },
+  {
+    name: "不算本輪剩餘時間（上限變成憑空）",
+    file: "v3/src/watcher.js",
+    from: "coveringPhaseDeadlineMs({ remainingMs: coveringRemainingMs, env: process.env })",
+    to: "coveringPhaseDeadlineMs({ remainingMs: 0, env: process.env })",
+    expect: "591 段落要在",
+  },
+  {
+    name: "不留 2 分鐘收尾餘裕（整輪就會被外層砍掉）",
+    file: "v3/src/crawlPolicy.js",
+    from: "const usable = Math.max(0, remaining - COVERING_PHASE_TAIL_MS);",
+    to: "const usable = Math.max(0, remaining);",
+    expect: "coveringPhaseDeadlineMs",
+  },
+  {
+    name: "上限不夾（591 又可以吃整輪）",
+    file: "v3/src/crawlPolicy.js",
+    from: "const phase = Math.min(usable * (share / 100), capMs);",
+    to: "const phase = usable * (share / 100);",
+    expect: "coveringPhaseDeadlineMs",
+  },
+  {
+    name: "比例不夾範圍",
+    file: "v3/src/crawlPolicy.js",
+    from: "const share = clampInt(env?.CRAWL_COVERING_PHASE_SHARE, COVERING_PHASE_SHARE_DEFAULT, COVERING_PHASE_SHARE_MIN, COVERING_PHASE_SHARE_MAX);",
+    to: "const share = Number(env?.CRAWL_COVERING_PHASE_SHARE) || COVERING_PHASE_SHARE_DEFAULT;",
+    expect: "coveringPhaseDeadlineMs",
+  },
+  {
+    name: "少於 5 分也照設限（快結束的輪次會被咬死）",
+    file: "v3/src/crawlPolicy.js",
+    from: "if (phase < COVERING_PHASE_MIN_MS) return 0;",
+    to: "if (phase < 0) return 0;",
+    expect: "coveringPhaseDeadlineMs",
+  },
+  {
+    name: "拿不到 deadline 時憑空造一個上限",
+    file: "v3/src/crawlPolicy.js",
+    from: "if (!Number.isFinite(remaining) || remaining <= 0) return 0;",
+    to: "if (!Number.isFinite(remaining) || remaining <= 0) return now + 60_000;",
+    expect: "coveringPhaseDeadlineMs",
+  },
+
 ];
 
 // 整輪整合測試（2026-09-30，第九十六批）：讓 runWatch 真的跑一輪。

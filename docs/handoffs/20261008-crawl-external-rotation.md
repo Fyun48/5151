@@ -219,3 +219,40 @@ select key, value from settings where key = 'crawlScheduleV1';
 **591 的覆蓋階段也要有「佔本輪預算的比例」上限**，超收就標 `partial` 讓下一輪續跑——
 現在 591 是 6 個 covering job × 每 job 逐頁抓，頁數政策在 `crawlPolicy.js`，停手點要在 `runWatch` 的 591 段落，
 而且要留意 `rotateCoveringJobs`（2026-09-24 那批）已經有「一輪跑不完就下一輪續」的骨架，可以沿用。
+
+## （g）第 1 件（下一包）：591 覆蓋階段也要有上限
+
+**為什麼必要**（都是正實站的數字，不是推測）：外站有每家預算之後，發版後第一輪 591 一個人就
+`07:13:52 → 07:42:31`（**29 分、1561 筆**），外站階段只分到 `40 − 30 = 10` 分再扣 2 分收尾＝7.5 分，
+整輪 `07:52:08` 才收進預算（差一點點就又爆）。上一輪對照組：591 只花 13 分（556 筆）
+⇒ **591 的耗時随當輪覆蓋條件的負载大幅変動**，不能假設它跑得完。
+
+**做法**（跟外站那半一致，但停手點不同）：
+* `crawlPolicy.js` 新增純函式 `coveringPhaseDeadlineMs({ now, remainingMs, env })`：
+  上限＝`min(（本輪剩餘 − 2 分收尾）× 55%, 20 分)`，**算出來不到 5 分就不設限**（回 0），
+  `remainingMs` 拿不到也不設限（不憑空造上限把輪次咬死）。
+  環境變數：`CRAWL_COVERING_PHASE_SHARE`（30〜80）、`CRAWL_COVERING_PHASE_MAX_MINUTES`（5〜30）。
+* `watcher.js` 的 591 段落只在**兩個覆蓋條件之間**檢查（不在半頁中停）：已經抓到的頁面
+  照樣落地、照樣記完成；到點就 `break` 並把 `coveringTimedOut` 立起來。
+* 輪次記錄改成 `noteSourceRound("591", successful, sourceErrors, false, true, coveringTimedOut)`
+  ⇒ 用既有的 `partial` 語意：**不累加 `fails`**（第 2 件加的 `lastAttemptAt` 仍會蓋章），
+  未跑完的縣市**不會被記成完成**（`completeCoveringPlan` 只吃 `successful`），下一輪照樣排進去。
+* 新增測試注入點 `fetchPage: options.fetchPage`（`client591.fetchListings` 本來就支援
+  `typeof options.fetchPage === "function"`，沒傳完全不變）與 `coveringPhaseDeadlineMs`，
+  讓「到點停手」這條路可以離線跑**真 `runWatch`**（三個覆蓋條件 × 每頁睡 120ms × 上限 150ms）。
+
+**臨時庫小坑**（整合測要建使用者）：覆蓋階段的完成記錄是 per-user 的，`saveSettings` 落在
+`defaultUserId()`（臨時庫裡是 **1**）；只插 id 101 的使用者會撞到 `user_settings` 的
+`FOREIGN KEY constraint failed`。
+
+**變異**：`EXTERNALROT_MUTATIONS` 從 13 條擴到 **23 條**（新增的 10 條覆盖：到點不停手、
+停了但不記 `coveringTimedOut`、輪次記錄不带 `partial`、抽掉注入點、不看本輪剩餘時間、
+拔掉 2 分收尾餘裕、上限不夾、比例不夾、少於 5 分也設限、拿不到 deadline 憑空造上限）。
+
+⚠️ **踩到兩次、都記进 agent-brain**：
+1. `mutation-check.mjs` 的判定是 `killed = failingNames(out).some(n => n.includes(m.expect))`
+   ⇒ **沒寫 `expect` 的條目永遠算 SURVIVED**，跟我測得嚴不嚴無關（我一开始以為是尺規没接到，
+   手動套同一條變異才證明測試是紅的）。新條目**一定要带 `expect`**，而且要正好是失敗測試名的子字串。
+2. 我用「只重組陣列區間」的方式寫回 `mutation-check.mjs`，把前後 6291 行**整段寫掉**
+   （`node --check` 仍然過，因為剩下的片段本身合法）。已 `git checkout` 還原，改成
+   `s[:j] + entries + s[j:]` 的定點插入，並用「行數＋符號引用次數＋`--check-anchors-only`」三重確認。
