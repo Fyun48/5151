@@ -4157,8 +4157,8 @@ const CRAWLSTREAK_MUTATIONS = [
   {
     name: "恢復成功不歸零（失敗輪數只增不減，來源永遠回不到嚴格）",
     file: "v3/src/crawlSourceStreaks.js",
-    from: "      next[id] = { ...prev, fails: 0, lastSuccessAt: at, blockedUntil: \"\" };",
-    to: "      next[id] = { ...prev, lastSuccessAt: at, blockedUntil: \"\" };",
+    from: "      next[id] = { ...prev, fails: 0, lastSuccessAt: at, lastAttemptAt: at, blockedUntil: \"\" };",
+    to: "      next[id] = { ...prev, lastSuccessAt: at, lastAttemptAt: at, blockedUntil: \"\" };",
     expect: "恢復成功立刻歸零",
   },
   {
@@ -4517,14 +4517,14 @@ const SRCRECOVERY2_MUTATIONS = [
   {
     name: "partial 的輪次照樣累積失敗（把上限當成來源壞掉）",
     file: "v3/src/crawlSourceStreaks.js",
-    from: "    if (round?.partial === true) { partial.push(id); continue; }",
+    from: "    if (round?.partial === true) { next[id] = { ...prev, lastAttemptAt: at }; partial.push(id); continue; }",
     to: "    if (false) { partial.push(id); continue; }",
     expect: "partial 的輪次不算失敗",
   },
   {
     name: "不適用的輪次照樣累積失敗（5168 在非台北／新北的縣市被誤記成連續失敗）",
     file: "v3/src/crawlSourceStreaks.js",
-    from: "    if (round?.applicable === false) { notApplicable.push(id); continue; }",
+    from: "    if (round?.applicable === false) { next[id] = { ...prev, lastAttemptAt: at }; notApplicable.push(id); continue; }",
     to: "    if (false) { notApplicable.push(id); continue; }",
     expect: "不適用：這一輪沒有可抓行政區的來源",
   },
@@ -4538,9 +4538,104 @@ const SRCRECOVERY2_MUTATIONS = [
   {
     name: "watcher 不再標記 applicable（不適用的來源被當成失敗輪）",
     file: "v3/src/watcher.js",
-    from: "    const applicable = batches.some((batch) => batch?.applicable !== false);\n    const partial = batches.some((batch) => batch?.partial === true);\n    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable, partial);",
-    to: "    const partial = batches.some((batch) => batch?.partial === true);\n    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), true, partial);",
+    from: "    const applicable = batches.some((batch) => batch?.applicable !== false);\n    const partial = phaseTimedOut || batches.some((batch) => batch?.partial === true);\n    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable, partial);",
+    to: "    const partial = phaseTimedOut || batches.some((batch) => batch?.partial === true);\n    noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), true, partial);",
     expect: "watcher：還在冷卻期的來源",
+  },
+];
+
+// 外站輪轉＋每家階段預算（2026-10-08）：排序鍵、上限、以及 watcher 的接線。
+const EXTERNALROT_MUTATIONS = [
+  {
+    name: "排序方向反了（最新排過的家排最前面）",
+    file: "v3/src/externalRotation.js",
+    from: "    if (left !== right) return left > right ? -1 : 1;",
+    to: "    if (left !== right) return left < right ? -1 : 1;",
+    expect: "餓的排前面",
+  },
+  {
+    name: "staleness 不看 lastAttemptAt（被預算停手的家會永遠霸榜）",
+    file: "v3/src/externalRotation.js",
+    from: "  const times = [streak?.lastAttemptAt, streak?.lastSuccessAt, streak?.lastFailureAt]",
+    to: "  const times = [streak?.lastSuccessAt, streak?.lastFailureAt]",
+    expect: "餓的定義要看 lastAttemptAt",
+  },
+  {
+    name: "從未排過的家回 0（不是無窮大 ⇒ 新來源永遠排在最後）",
+    file: "v3/src/externalRotation.js",
+    from: "  if (!times.length) return Number.POSITIVE_INFINITY;",
+    to: "  if (!times.length) return 0;",
+    expect: "餓的排前面",
+  },
+  {
+    name: "每輪家數上限從 6 收成 1（環境變數調不动）",
+    file: "v3/src/externalRotation.js",
+    from: "export const EXTERNAL_SOURCES_PER_RUN_MAX = 6;",
+    to: "export const EXTERNAL_SOURCES_PER_RUN_MAX = 1;",
+    expect: "挑本輪要跑的",
+  },
+  {
+    name: "perRun 不再夹到上限（調大就可以一轮跑全部家）",
+    file: "v3/src/externalRotation.js",
+    from: "  const cap = Math.min(Math.max(Number(perRun) || 1, 1), EXTERNAL_SOURCES_PER_RUN_MAX);",
+    to: "  const cap = Math.max(Number(perRun) || 1, 1);",
+    expect: "挑本輪要跑的",
+  },
+  {
+    name: "時間不夠也照跑外站（回 0 那條被拔掉 ⇒ 輪尾沒有餘裕收尾）",
+    file: "v3/src/externalRotation.js",
+    from: "  if (available < EXTERNAL_PHASE_MIN_MS) return 0;",
+    to: "  if (false) return 0;",
+    expect: "階段預算：綁在本輪剩餘時間上",
+  },
+  {
+    name: "每家上限不做 clamp（環境調成 99 分就等于沒有預算）",
+    file: "v3/src/externalRotation.js",
+    from: "  const minutes = envInt(env?.CRAWL_EXTERNAL_PHASE_MAX_MINUTES, EXTERNAL_PHASE_MAX_MINUTES_DEFAULT, 3, 20);",
+    to: "  const minutes = Number(env?.CRAWL_EXTERNAL_PHASE_MAX_MINUTES) || EXTERNAL_PHASE_MAX_MINUTES_DEFAULT;",
+    expect: "階段預算：綁在本輪剩餘時間上",
+  },
+  {
+    name: "不扣收尾餘裕（拿剩餘時間当全部可用）",
+    file: "v3/src/externalRotation.js",
+    from: "  const available = remaining - EXTERNAL_PHASE_SAFETY_MS;",
+    to: "  const available = remaining;",
+    expect: "階段預算：綁在本輪剩餘時間上",
+  },
+  {
+    name: "watcher 不用巢状 withBudget（階段預算變成摆设）",
+    file: "v3/src/watcher.js",
+    from: "        ? await withBudget(run, phaseBudgetMs, `${label}這一輪的外站階段`)",
+    to: "        ? await run()",
+    expect: "watcher 要真的把階段預算包進去",
+  },
+  {
+    name: "watcher 吞掉整輪取消（階段錯誤冒充取消，取消不再立刻停手）",
+    file: "v3/src/watcher.js",
+    from: "      if (isCrawlCancelled()) throw error;",
+    to: "      if (false) throw error;",
+    expect: "watcher 要真的把階段預算包進去",
+  },
+  {
+    name: "階段用盡不標 partial（會被記成連續失敗）",
+    file: "v3/src/watcher.js",
+    from: "    const partial = phaseTimedOut || batches.some((batch) => batch?.partial === true);",
+    to: "    const partial = batches.some((batch) => batch?.partial === true);",
+    expect: "watcher 要真的把階段預算包進去",
+  },
+  {
+    name: "時間不夠時不 break（继续排下一家）",
+    file: "v3/src/watcher.js",
+    from: "    if (!phaseMs) {",
+    to: "    if (false) {",
+    expect: "watcher 要真的把階段預算包進去",
+  },
+  {
+    name: "collectExternal 不帶 phaseMs（等於每家沒上限）",
+    file: "v3/src/watcher.js",
+    from: "    await collectExternal(task.id, task.label, task.invoke, phaseMs);",
+    to: "    await collectExternal(task.id, task.label, task.invoke);",
+    expect: "watcher 要真的把階段預算包進去",
   },
 ];
 
@@ -4549,8 +4644,8 @@ const ROUNDINT_MUTATIONS = [
   {
     name: "batches 宣告在 try 裡面（noteSourceRound 用到時 ReferenceError，整輪在收集階段炸掉）",
     file: "v3/src/watcher.js",
-    from: "    let batches = [];\n    try {\n      batches = await run();",
-    to: "    try {\n      const batches = await run();",
+    from: "    let batches = [];\n    try {\n      batches = phaseBudgetMs > 0\n        ? await withBudget(run, phaseBudgetMs, `${label}這一輪的外站階段`)\n        : await run();",
+    to: "    try {\n      let batches = phaseBudgetMs > 0\n        ? await withBudget(run, phaseBudgetMs, `${label}這一輪的外站階段`)\n        : await run();",
     expect: "runWatch 真的跑完一輪",
   },
   {
@@ -6047,7 +6142,7 @@ const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATION
   : /crawl-source-streaks/.test(testFile) ? CRAWLSTREAK_MUTATIONS
   : /source-recovery/.test(testFile) ? [...SRCRECOVERY_MUTATIONS, ...SRCRECOVERY2_MUTATIONS]
   : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
-  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
+  : /crawl-external-rotation/.test(testFile) ? EXTERNALROT_MUTATIONS  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS

@@ -53,9 +53,9 @@ import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
 // 外站跨輪輪轉（一輪只排一家、最久沒成功的先；延後不記失敗）。政策與理由寫在該檔檔首。
-import { pickExternalSources, externalSourcesPerRun } from "./externalRotation.js";
-import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
-import { throwIfCrawlCancelled } from "./crawlExecution.js";
+import { pickExternalSources, externalSourcesPerRun, externalPhaseBudgetMs } from "./externalRotation.js";
+import { noteConsecutiveTimeout, withBudget } from "./crawlWatchdog.js";
+import { currentCrawlExecution, isCrawlCancelled, throwIfCrawlCancelled } from "./crawlExecution.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
@@ -805,16 +805,22 @@ export async function runWatch(options = {}) {
     noteSourceRound("591", successful, sourceErrors, false, true);
   }
 
-  async function collectExternal(source, label, run) {
+  async function collectExternal(source, label, run, phaseBudgetMs = 0) {
     const successful = new Set();
     const sourceErrors = [];
     sourceSuccess.push({ source, urls: successful });
     // ⚠️ 一定要宣告在 try 外面：`noteSourceRound(...)` 在 try/catch 之後要用它，
     // 寫在 try 裡面會是 `ReferenceError: batches is not defined`（2026-09-30 沙盒第一輪就抓到，
     // 當時的 watcher 測試只比對原始碼文字，抓不到這種作用域錯誤）。
+    // `phaseTimedOut` 只在「這一家這一階段的預算用盡」時成立 ⇒ 這一輪對這家是「只跑了一半」，
+    // **不是失敗**：走既有的 `partial` 語意（`applySourceRound` 看到 partial/applicable=false 就整條跳過，
+    // 不累加 fails），但還是會蓋 `lastAttemptAt` 的章，所以下一輪輪轉會換人、這家不會霸榜。
+    let phaseTimedOut = false;
     let batches = [];
     try {
-      batches = await run();
+      batches = phaseBudgetMs > 0
+        ? await withBudget(run, phaseBudgetMs, `${label}這一輪的外站階段`)
+        : await run();
       throwIfCrawlCancelled();
       // 「沒有可抓的行政區」的批次（`applicable: false`）不進 collected、也不算成功，
       // 但要讓這一輪知道「這個來源這一輪不適用」，才不會被誤記成失敗。
@@ -835,13 +841,22 @@ export async function runWatch(options = {}) {
         }
       }
     } catch (error) {
-      throwIfCrawlCancelled();
-      errors.push(`${label} → ${error.message}`);
-      sourceErrors.push(error.message);
+      // 整輪被砍／被新的一輪取代 ⇒ 立刻停手，逐頁 fail-soft 不可以吞掉取消（AGENTS 第三條）。
+      if (isCrawlCancelled()) throw error;
+      const abortedByOurOwnBudget = error?.code === "TIMEOUT" || error?.name === "TimeoutError"
+        || error?.name === "AbortError" || /abort/i.test(String(error?.message || ""));
+      if (abortedByOurOwnBudget) {
+        phaseTimedOut = true;
+        errors.push(`${label}：這一輪給這家的階段預算 ${Math.max(1, Math.round(phaseBudgetMs / 60000))} 分鐘用盡，先停手`
+          + "（算「只跑了一半」，不算失敗；下一輪換一家，這家的 fails 不會一直累加）");
+      } else {
+        errors.push(`${label} → ${error.message}`);
+        sourceErrors.push(error.message);
+      }
     }
     // 這一批是不是「被擋到停工」：只要有任一批次回報 blocked，就當這一家這一輪被擋。
     const applicable = batches.some((batch) => batch?.applicable !== false);
-    const partial = batches.some((batch) => batch?.partial === true);
+    const partial = phaseTimedOut || batches.some((batch) => batch?.partial === true);
     noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable, partial);
   }
 
@@ -896,7 +911,21 @@ export async function runWatch(options = {}) {
     { perRun: externalSourcesPerRun(process.env), cooling },
   );
   for (const task of externalRotation.running) {
-    await collectExternal(task.id, task.label, task.invoke);
+    // 階段預算綁在「這一輪還剩多少」上（留 2 分鐘給輪尾收尾；不足 3 分鐘就整輪不碰外站）。
+    // 2026-10-08 實測：一輪一家還是爆過預算——591 花 13 分鐘，5168 一家花掉 27 分鐘且零落地。
+    const execution = currentCrawlExecution();
+    const remainingMs = execution?.deadline ? execution.deadline - Date.now() : 0;
+    // `options.externalPhaseBudgetMs` 是測試用的注入點（跟 `hbPostJson` 同一套做法）：
+    // 離線測試要跑「階段預算用盡」這條路，等 3 分鐘實在是太慢。
+    const phaseMs = Number(options.externalPhaseBudgetMs) > 0
+      ? Number(options.externalPhaseBudgetMs)
+      : externalPhaseBudgetMs({ remainingMs, env: process.env });
+    if (!phaseMs) {
+      console.log(`外站輪轉：這一輪剩 ${Math.max(0, Math.round(remainingMs / 1000))} 秒，不夠跑一家外站（至少 3 分鐘）`
+        + `｜${externalRotation.running.length} 家全數延後（不算失敗，下一輪優先）`);
+      break;
+    }
+    await collectExternal(task.id, task.label, task.invoke, phaseMs);
   }
   if (externalRotation.deferred.length) {
     console.log(

@@ -154,7 +154,7 @@ test("watcher 接線：每個來源帶 id、逐輪記錄的位置、warning 進�
     assert.match(src, new RegExp(`"${id}"`), `watcher 必須認得來源 ${id}`);
   }
   assert.match(src, /sourceSuccess\.push\(\{ source: "591", urls: successful \}\)/);
-  assert.match(src, /async function collectExternal\(source, label, run\)/);
+  assert.match(src, /async function collectExternal\(source, label, run(?:, phaseBudgetMs = 0)?\)/);
   // 逐輪記錄必須在收集階段之後、`!collected.length` 之前（全部來源都失敗的輪次也要累積）。
   const recordAt = src.indexOf("sourcePolicy = await recordCrawlSourceRoundAsync({ rounds: sourceRounds, at: nowIso() });");
   const emptyAt = src.indexOf("if (!collected.length) {");
@@ -291,4 +291,21 @@ test("失敗的輪次一定要留下可讀的原因：覆蓋不足但零錯誤�
   assert.equal(applied.streaks.ddroom.fails, 119);
   assert.notEqual(applied.streaks.ddroom.lastError, "", "fails 累加了就必須有原因文字（這次的洞就是這裡是空字串）");
   assert.match(applied.streaks.ddroom.lastError, /覆蓋 0\/6/);
+});
+
+// 輪轉排序靠 lastAttemptAt（上次被排到），所以「不算失敗的三條分支」也要蓋章：
+// partial（只跑一半／階段預算用盡）與 applicable=false（這一輪沒有可抓的行政區）。
+// 不蓋章的後果是這家永遠看起來「從沒被排過」，每一輪都被排在最前面，等於回到寫死順序。
+test("不算失敗的兩條分支也要蓋 lastAttemptAt，且不碰 fails／lastError", () => {
+  const at = "2026-10-08T06:00:00.000Z";
+  const before = { x: normalizeSourceStreak({ fails: 4, lastError: "HTTP 403", lastFailureAt: "2026-10-01T00:00:00.000Z" }) };
+  const partial = applySourceRound(before, [{ source: "x", covered: 2, total: 6, errors: [], error: "", partial: true }], { at });
+  assert.equal(partial.streaks.x.fails, 4, "只跑一半不算失敗");
+  assert.equal(partial.streaks.x.lastError, "HTTP 403", "原本的錯誤樣本要留著");
+  assert.equal(partial.streaks.x.lastAttemptAt, at, "排過了就要蓋章，下一輪才不會再排它");
+  const notApplicable = applySourceRound(before, [{ source: "x", covered: 0, total: 6, errors: [], applicable: false }], { at });
+  assert.equal(notApplicable.streaks.x.fails, 4, "沒有可抓的行政區也不算失敗");
+  assert.equal(notApplicable.streaks.x.lastAttemptAt, at, "這條也要蓋章");
+  const untouched = applySourceRound(before, [], { at });
+  assert.deepEqual(untouched.streaks.x, before.x, "這一輪完全沒排到的家：逐字不變（延後≠失敗的核心不變量）");
 });

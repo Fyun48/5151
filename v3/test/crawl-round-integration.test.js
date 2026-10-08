@@ -92,3 +92,32 @@ test("runWatch：來源被擋到停工時，輪次要標記 blocked 並記下冷
   assert.ok(streaks.hbhousing.blockedUntil, `被擋到停工要記冷卻期，實際 ${JSON.stringify(streaks.hbhousing)}`);
   assert.ok(Date.parse(streaks.hbhousing.blockedUntil) > Date.now() - 1000, "冷卻期必須是未來時間");
 });
+
+// 2026-10-08：一家外站就能吃光整輪（實測 591 花 13 分鐘、5168 一家花 27 分鐘零落地，
+// 整輪 40 分鐘被砍）。所以现在每家有自己的「階段預算」，用盡時這一輪對這家是
+// 「只跑了一半」（partial），**不可以**被記成連續失敗，也不可以讓整輪跟著爆。
+// 這條用注入的 400ms 預算＋會睡 2.5 秒的 fake，把同一條路跑成離線測試。
+test("階段預算用盡：這家算 partial（不算失敗）、要蓋 lastAttemptAt、整輪照樣收尾", async () => {
+  const db = seed();
+  const jobs = [{ regionId: 1, sectionIds: [8], priceMin: 0, priceMax: 0, searchUrl: "https://example.test/hb-1" }];
+  const result = await runWatch({
+    jobs,
+    memberRequirements: [],
+    includeSystem: false,
+    skipHeavyGeo: true,
+    silent: true,
+    externalPhaseBudgetMs: 400,
+    hbPostJson: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      return HB_FIXTURE;
+    },
+  });
+  const hb = (result.sources || []).find((row) => row.source === "hbhousing");
+  assert.ok(hb, "hbhousing 要出現在這一輪的來源記錄裡（partial 也要有記錄，才蓋得到章）");
+  assert.equal(hb.partial, true, `階段預算用盡要標成 partial，實際 ${JSON.stringify(hb)}`);
+  assert.match(result.errors.join("｜"), /階段預算[\s\S]{0,40}用盡/, "日誌要看得懂是我們的預算停的手，不是對方擋");
+  const { streaks } = await readCrawlSourceStreaksAsync();
+  assert.equal(streaks.hbhousing?.fails, 0, "partial 不可以累加 fails（否則三家會變成『連續失敗 117 輪』那種假案情）");
+  assert.ok(String(streaks.hbhousing?.lastAttemptAt || "") , "排過就要蓋章，下一輪輪轉才會換人");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key='crawlScheduleV1'").get().n, 1);
+});

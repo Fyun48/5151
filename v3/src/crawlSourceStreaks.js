@@ -41,6 +41,9 @@ export function normalizeSourceStreak(row) {
   return {
     fails: Math.max(0, Math.trunc(Number(row?.fails) || 0)),
     lastError: String(row?.lastError || "").slice(0, SOURCE_ERROR_SAMPLE_MAX),
+    // 「上次被排到」的時刻（2026-10-08）：成功、失敗、不適用、只跑一半都要蓋章。
+    // 輪轉排序靠它，所以延後≠失敗的家不會被蓋章，下一輪照樣優先。
+    lastAttemptAt: String(row?.lastAttemptAt || ""),
     lastFailureAt: String(row?.lastFailureAt || ""),
     lastSuccessAt: String(row?.lastSuccessAt || ""),
     // 第九十六批：被擋而停工的來源要「記住冷卻到什麼時候」，下一輪才不會一開頭就去撞同一面牆。
@@ -115,15 +118,17 @@ export function applySourceRound(streaks, rounds, options = {}) {
     const id = String(round?.source || "");
     if (!id) continue;
     // 「這一輪這個來源沒有可抓的行政區」⇒ 不算成功、也不算失敗，狀態原封不動。
-    if (round?.applicable === false) { notApplicable.push(id); continue; }
+    // `prev` 要先取到：下面三個「不算失敗」的分支也要蓋章（lastAttemptAt），
+    // 否則輪轉排序會以為這家從沒被排過，每一輪都把它排在最前面。
+    const prev = next[id] || normalizeSourceStreak();
+    if (round?.applicable === false) { next[id] = { ...prev, lastAttemptAt: at }; notApplicable.push(id); continue; }
     // 「這一輪只抓了一部分行政區」（到達每輪上限）⇒ 同樣不動狀態：
     // 這不是來源壞掉，只是把剩下的輪詢到下一輪（第九十七批）。
-    if (round?.partial === true) { partial.push(id); continue; }
-    const prev = next[id] || normalizeSourceStreak();
+    if (round?.partial === true) { next[id] = { ...prev, lastAttemptAt: at }; partial.push(id); continue; }
     if (isCoveredRound(round)) {
       // 恢復成功立刻歸零（照舊從嚴）；最後錯誤樣本留著當歷史，不影響判定。
       if (prev.fails > 0) recovered.push(id);
-      next[id] = { ...prev, fails: 0, lastSuccessAt: at, blockedUntil: "" };
+      next[id] = { ...prev, fails: 0, lastSuccessAt: at, lastAttemptAt: at, blockedUntil: "" };
       continue;
     }
     const fails = prev.fails + 1;
@@ -133,6 +138,7 @@ export function applySourceRound(streaks, rounds, options = {}) {
     next[id] = {
       ...prev,
       fails,
+      lastAttemptAt: at,
       lastFailureAt: at,
       lastError: sourceRoundErrorText(round, prev.lastError).slice(0, SOURCE_ERROR_SAMPLE_MAX),
       // 這一輪因為被擋而停工 ⇒ 記下冷卻到什麼時候；否則保留原本的值（下一輪若還在冷卻就跳過）。

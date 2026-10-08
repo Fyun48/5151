@@ -50,7 +50,7 @@ export function externalSourcesPerRun(env = process.env) {
  * 排過就得讓位（哪怕失敗），从未被排到（兩個時間都空）⇒ 無限舊，排最前。
  */
 export function externalSourceStaleness(streak, now = Date.now()) {
-  const times = [streak?.lastSuccessAt, streak?.lastFailureAt]
+  const times = [streak?.lastAttemptAt, streak?.lastSuccessAt, streak?.lastFailureAt]
     .map((raw) => Date.parse(String(raw ?? "").trim()))
     .filter((at) => Number.isFinite(at));
   if (!times.length) return Number.POSITIVE_INFINITY;
@@ -81,6 +81,32 @@ export function rankExternalSources(tasks = [], streaks = {}, { now = Date.now()
  * - deferred：本輪延後的（**不算失敗**，下一輪會因為更餓而排前面）
  * - cooling：還在冷卻期、這輪根本不碰的
  */
+
+/**
+ * 一家外站在「這一輪」最多可以花多少時間（2026-10-08 加）。
+ *
+ * 為什麼還要有這個：輪轉把「一輪五家」變成「一輪一家」之後，正式站實測仍然爆預算——
+ * 2026-10-08 05:39Z 那一輪：591 花 13 分鐘（05:00:36→05:13:51、556 筆），
+ * 接著 `houseprice` 一個家跑了約 27 分鐘、一筆都沒落地，整輪就在 40 分鐘被砍。
+ * ⇒ 「一家就能吃光整輪」。所以階段預算要綁在**這一輪還剩多少**上，不是固定值。
+ *
+ * 回傳 0 的語意是「這一輪別再跑外站了」（外站全部延後，不算失敗），
+ * 這樣 591 已經完成的覆蓋紀錄才留有餘裕落地（這是 2026-09-24 rotateCoveringJobs 那批學到的）。
+ */
+export const EXTERNAL_PHASE_MAX_MINUTES_DEFAULT = 10;
+export const EXTERNAL_PHASE_MIN_MS = 180_000;        // 少於 3 分鐘乾脆別開工（開了也跑不完一家）
+export const EXTERNAL_PHASE_SAFETY_MS = 120_000;     // 留 2 分鐘讓輪尾的收尾能落地
+
+export function externalPhaseBudgetMs({ remainingMs = 0, env = process.env } = {}) {
+  const minutes = envInt(env?.CRAWL_EXTERNAL_PHASE_MAX_MINUTES, EXTERNAL_PHASE_MAX_MINUTES_DEFAULT, 3, 20);
+  const cap = minutes * 60_000;
+  const remaining = Number(remainingMs);
+  if (!Number.isFinite(remaining) || remaining <= 0) return cap;   // 沒有外層 context（手動跑一輪）⇒ 用上限
+  const available = remaining - EXTERNAL_PHASE_SAFETY_MS;
+  if (available < EXTERNAL_PHASE_MIN_MS) return 0;
+  return Math.min(cap, available);
+}
+
 export function pickExternalSources(tasks = [], streaks = {}, {
   perRun = EXTERNAL_SOURCES_PER_RUN_DEFAULT,
   cooling = new Set(),

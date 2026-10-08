@@ -21,6 +21,7 @@ import {
   externalSourceStaleness,
   externalSourcesPerRun,
   pickExternalSources,
+  externalPhaseBudgetMs,
   rankExternalSources,
 } from "../src/externalRotation.js";
 
@@ -114,9 +115,14 @@ test("挑本輪要跑的：running／deferred 分開，冷卻期的家兩邊都�
 
 test("watcher.js 真的走輪轉，舊的寫死呼叫不能再復活", async () => {
   const src = readFileSync(fileURLToPath(new URL("../src/watcher.js", import.meta.url)), "utf8");
-  assert.match(src, /import \{ pickExternalSources, externalSourcesPerRun \} from "\.\/externalRotation\.js";/);
+  assert.match(src, /import \{[^}]*pickExternalSources[^}]*externalPhaseBudgetMs[^}]*\} from "[^"]*externalRotation\.js";/, "watcher 要 import 輪轉與階段預算（少一個就是接線沒做完）");
   assert.match(src, /const externalRotation = pickExternalSources\(/);
-  assert.match(src, /for \(const task of externalRotation\.running\) \{\s*\n\s*await collectExternal\(task\.id, task\.label, task\.invoke\);/);
+  const runLoop = src.slice(src.indexOf("for (const task of externalRotation.running)"), src.indexOf("if (externalRotation.deferred.length)"));
+  assert.ok(runLoop.length > 40 && runLoop.includes("await collectExternal(task.id, task.label, task.invoke, phaseMs);"),
+    "排到的家要照順序跑，而且一定要帶上階段預算 phaseMs（少了它＝每家沒有上限，一家就能吃光整輪）");
+  assert.ok(/const phaseMs = Number\(options\.externalPhaseBudgetMs\) > 0[\s\S]{0,220}externalPhaseBudgetMs\(\{ remainingMs, env: process\.env \}\)/.test(runLoop),
+    "階段預算要取「注入值」與「本輪剩餘時間」兩者，測試才可以打 fake 時間");
+  assert.ok(runLoop.includes("if (!phaseMs) {"), "不夠時間時要有整輪不碰外站的分支");
   // 舊寫死順序（六家各自一個 if ＋直接呼叫 fetchXCoveringListings）必須消失
   for (const id of ["hbhousing", "sinyi", "houseprice", "ddroom", "housefun"]) {
     assert.doesNotMatch(src, new RegExp(`if \\(want\\w+ && !cooling\\.has\\("${id}"\\)\\)`), `${id} 不該再被寫死排程`);
@@ -139,11 +145,51 @@ test("watcher.js 真的走輪轉，舊的寫死呼叫不能再復活", async () 
 test("延後的家在 rounds 缺席時，streak 原樣保留（不歸零、不累加 fails）", async () => {
   const { applySourceRound } = await import("../src/crawlSourceStreaks.js");
   const before = {
-    ddroom: { fails: 117, lastError: "", lastFailureAt: "2026-10-08T00:28:50.426Z", lastSuccessAt: "", blockedUntil: "" },
-    hbhousing: { fails: 3, lastError: "x", lastFailureAt: "2026-10-01T00:00:00.000Z", lastSuccessAt: "2026-10-08T00:00:00.000Z", blockedUntil: "" },
+    ddroom: { fails: 117, lastError: "", lastAttemptAt: "", lastFailureAt: "2026-10-08T00:28:50.426Z", lastSuccessAt: "", blockedUntil: "" },
+    hbhousing: { fails: 3, lastError: "x", lastAttemptAt: "", lastFailureAt: "2026-10-01T00:00:00.000Z", lastSuccessAt: "2026-10-08T00:00:00.000Z", blockedUntil: "" },
   };
   const at = "2026-10-08T01:00:00.000Z";
   const applied = applySourceRound(before, [{ source: "hbhousing", covered: 6, total: 6, errors: [] }], { at });
   assert.deepEqual(applied.streaks.ddroom, before.ddroom, "這一輪沒排到 ddroom，它的 streak 必須逐字不變");
   assert.equal(applied.streaks.hbhousing.lastSuccessAt, at, "有排到的才該更新");
+});
+
+// 2026-10-08 正式站實測：輪轉成「一輪一家」之後還是爆過預算（591 花 13 分鐘，
+// 5168 一家花 27 分鐘且零落地，整輪 40 分鐘被砍）⇒ 每家要有「本輪剩餘時間」綁定的階段預算。
+test("階段預算：綁在本輪剩餘時間上，留 2 分鐘收尾；不足 3 分鐘就整輪不碰外站", () => {
+  const MIN = 60_000;
+  assert.equal(externalPhaseBudgetMs({ remainingMs: 0 }) / MIN, 10, "沒有外層 context（手動跑一輪）⇒ 用上限 10 分");
+  assert.equal(externalPhaseBudgetMs({ remainingMs: 30 * MIN }) / MIN, 10, "剩很多 ⇒ 還是上限 10 分，不是把整輪給一家");
+  assert.equal(externalPhaseBudgetMs({ remainingMs: 8 * MIN }) / MIN, 6, "剩 8 分 ⇒ 扣掉 2 分鐘收尾 = 6 分");
+  assert.equal(externalPhaseBudgetMs({ remainingMs: 2.5 * MIN }), 0, "剩不到 3 分鐘 ⇒ 0（這一輪別再跑外站）");
+  assert.equal(externalPhaseBudgetMs({ remainingMs: -5 }) / MIN, 10, "負值是「拿不到 deadline」，不是「沒時間」");
+  assert.equal(externalPhaseBudgetMs({ env: { CRAWL_EXTERNAL_PHASE_MAX_MINUTES: "3" } }) / MIN, 3);
+  assert.equal(externalPhaseBudgetMs({ env: { CRAWL_EXTERNAL_PHASE_MAX_MINUTES: "99" } }) / MIN, 20, "上限要釘死，不然調成 99 分就等于沒有預算");
+  assert.equal(externalPhaseBudgetMs({ env: { CRAWL_EXTERNAL_PHASE_MAX_MINUTES: "0" } }) / MIN, 3, "0 不合法，收斂到最小 3 分");
+});
+
+test("餓的定義要看 lastAttemptAt：剛被排過（哪怕是部分完成）就要讓位", () => {
+  const at = Date.parse("2026-10-08T06:00:00.000Z");
+  const justPartial = { lastAttemptAt: "2026-10-08T05:59:00.000Z", lastSuccessAt: "", lastFailureAt: "" };
+  const neverTouched = {};
+  assert.equal(Math.round(externalSourceStaleness(justPartial, at) / 1000), 60, "部分完成也算排過");
+  assert.ok(externalSourceStaleness(neverTouched, at) > externalSourceStaleness(justPartial, at));
+  const TWO = [{ id: "hbhousing", label: "hbhousing", enabled: true, invoke: () => [] },
+    { id: "ddroom", label: "ddroom", enabled: true, invoke: () => [] }];
+  const pick = pickExternalSources(TWO, {
+    hbhousing: { lastAttemptAt: "2026-10-08T05:59:00.000Z", lastFailureAt: "2026-10-01T00:00:00.000Z" },
+    ddroom: { lastAttemptAt: "2026-10-08T04:00:00.000Z" },
+  }, { perRun: 1, now: at });
+  assert.equal(pick.running[0].id, "ddroom", "ddroom 上次被排到比較久（连 hbhousing 有舊的 lastFailureAt 也不該贏）");
+});
+
+test("watcher 要真的把階段預算包進去，而且整輪取消時不可以被誤判成「只跑一半」", () => {
+  const watcherSrc = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
+  const src = watcherSrc;
+  assert.match(src, /batches = phaseBudgetMs > 0\s*\n\s*\? await withBudget\(run, phaseBudgetMs,/, "外站階段要用巢状的 withBudget（context 是 AsyncLocalStorage，巢状才接得掉）");
+  assert.match(src, /if \(isCrawlCancelled\(\)\) throw error;/, "catch 第一行要先讓「整輪取消」往上丟（AGENTS 第三條）");
+  assert.match(src, /const partial = phaseTimedOut \|\| batches\.some/, "階段用盡要走 partial 語意＝不算失敗");
+  assert.match(src, /if \(!phaseMs\) \{[\s\S]{0,320}?break;\s*\n\s*\}/, "不夠時間時這一家以後全部延後（不是硬跑也不是記失敗）");
+  assert.match(src, /await collectExternal\(task\.id, task\.label, task\.invoke, phaseMs\);/);
+  assert.match(src, /Number\(options\.externalPhaseBudgetMs\) > 0/, "要有測試用的注入點（不然離線測不到這條路）");
 });
