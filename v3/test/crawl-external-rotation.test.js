@@ -109,3 +109,18 @@ test("watcher.js 真的走輪轉，舊的寫死呼叫不能再復活", async () 
   // streaks 要真的被留下來當排序輸入（只拿它算 cooling 就會回到寫死順序）
   assert.match(src, /let sourceStreaks = \{\};[\s\S]{0,120}?sourceStreaks = streaks \|\| \{\};/);
 });
+
+// 政策的另一半在存儲層：延後的家這一輪「不出現在 rounds」，
+// `applySourceRound` 必須原樣保留它的 streak（不歸零、也不累加 fails）。
+// 少這條，輪轉就會被誤實成「連續失敗」而裝上冷卻期，整個改動适得其反。
+test("延後的家在 rounds 缺席時，streak 原樣保留（不歸零、不累加 fails）", async () => {
+  const { applySourceRound } = await import("../src/crawlSourceStreaks.js");
+  const before = {
+    ddroom: { fails: 117, lastError: "", lastFailureAt: "2026-10-08T00:28:50.426Z", lastSuccessAt: "", blockedUntil: "" },
+    hbhousing: { fails: 3, lastError: "x", lastFailureAt: "2026-10-01T00:00:00.000Z", lastSuccessAt: "2026-10-08T00:00:00.000Z", blockedUntil: "" },
+  };
+  const at = "2026-10-08T01:00:00.000Z";
+  const applied = applySourceRound(before, [{ source: "hbhousing", covered: 6, total: 6, errors: [] }], { at });
+  assert.deepEqual(applied.streaks.ddroom, before.ddroom, "這一輪沒排到 ddroom，它的 streak 必須逐字不變");
+  assert.equal(applied.streaks.hbhousing.lastSuccessAt, at, "有排到的才該更新");
+});

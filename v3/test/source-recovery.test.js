@@ -507,9 +507,12 @@ test("watcher：還在冷卻期的來源這一輪要跳過，並在輪次結果�
   const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
   assert.match(src, /const cooling = new Set\(\);/);
   assert.match(src, /if \(isSourceCoolingDown\(row\)\) cooling\.add\(id\);/);
-  for (const source of ["591", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"]) {
-    assert.match(src, new RegExp(`cooling\\.has\\("${source}"\\)`), `${source} 要有冷卻判斷`);
-  }
+  assert.match(src, /cooling\.has\("591"\)/, "591 仍要就地冷卻判斷（它不参与外站輪轉）");
+  // 2026-10-08：六家外站的冷卻判斷改由輪轉統一處理（`cooling` 傳進 `pickExternalSources`，
+  // 冷卻中的家既不進 running 也不進 deferred ⇒ 不會被誤記成失敗輪）。
+  // 這條行為現在由 crawl-external-rotation.test.js 用真的純函式驗，不再是比對文字。
+  assert.match(src, /\{ perRun: externalSourcesPerRun\(process\.env\), cooling \}/, "外站的冷卻名單要傳進輪轉，不能漏");
+  assert.match(src, /const externalTasks = \[[\s\S]{0,2200}?id: "rakuya"[\s\S]{0,900}?\];/, "六家都要留在輪轉清單裡（少一家就是悄悄停擺）");
   // 讀不到狀態時不可以讓整輪掛掉。
   assert.match(src, /const \{ streaks \} = await readCrawlSourceStreaksAsync\(\);/);
   assert.match(src, /catch \{\n    cooling\.clear\(\);\n  \}/);
