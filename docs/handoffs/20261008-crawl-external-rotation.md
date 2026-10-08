@@ -186,3 +186,36 @@ select key, value from settings where key = 'crawlScheduleV1';
 | 第三串 | `SANDBOX_EXTRA_ENV="CRAWL_EXTERNAL_PHASE_MAX_MINUTES=3"`，2 輪 | 輪 1（05:53:24→06:07:51，786s→866s 含第二輪排隊）`jobs=6 fetched=2159 timed_out=false`；`591 6/6`、`houseprice 0/6`。**截斷沒發生**：5168 在沙盒約 2 分鐘就因為被擋而**自己停工**（`lastError='5168 三芝區 第 2 頁 [FETCH_BLOCKED]…'`），輪不到我們的 3 分鐘上限。但這輪驗證了記帳語意：`houseprice.lastAttemptAt` 有蓋章、`fails` 從 12 沒有增加、**四家延後的家逐字不變** |
 | 第四串 | `SANDBOX_EXTRA_ENV="CRAWL_TICK_BUDGET_MINUTES=12"`（這個名稱在沙盒沒生效，`budget_ms` 仍是 2400000） | `jobs=0` 空轉，無證據價值。⚠️ 這一輪的 `error` 欄位出現 `batches is not defined`——是**我把 mutation-check 跟沙盒同步同時跑**造成的：變異工具在這一刻把 `let batches = []` 故意挪進 `try`（那正是它要造的變異），同步腳本把「變異中」的 worktree 複製過去。**不是程式缺陷**：本地用 `jobs: []` 重跑真 `runWatch` 得到的是正常防護錯誤「請先選行政區或貼上至少一組 591 搜尋網址」。教訓：**變異跑完之前不要同步沙盒**（兩者都會動 `v3/src`） |
 | 第五串 | 先把 `hbhousing` 的 streak **從隔離庫刪掉**（⇒「從未排過」＝最餓），再配 3 分鐘上限跑 2 輪 | 輪 1（06:34:22→06:47:26，784s）`jobs=6 fetched=1821 timed_out=false`；`591 6/6`、**`hbhousing covered 0/6、fails 0、last_error 空`**——這形狀只有「我們自己停手 ⇒ partial/applicable 跳過」才會出現（正常失敗會 `fails+1`、會被擋停工會留 `lastError`）⇒ **真來源上打到了截断路径**；輪 2 要看的是「換人」（住商已被蓋章，不該再被排到） |
+
+### （f）合併＋發版後的正式站收據（`master=0201924`，映像 `sha256:9a3a0a1767…`，07:11:43Z 起來）
+
+**輪轉真的會換人**（兩輪的日誌）：
+```
+外站輪轉：本輪排 houseprice｜延後 hbhousing,sinyi,ddroom,housefun（不算失敗，下一輪優先）
+外站輪轉：本輪排 hbhousing｜延後 sinyi,ddroom,housefun,houseprice（不算失敗，下一輪優先）
+```
+**streak 的記帳**（`settings.crawlScheduleV1.sourceStreaks`，`at` 是輪次開始時刻）：
+
+| 家 | `lastAttemptAt` | `fails` | `lastError` |
+|---|---|---|---|
+| 591 | 07:52:08 | 0 | （成功，空） |
+| houseprice | 07:13:52（第一輪排到） | 32 | `5168 三芝區 第 1 頁 [FETCH_BLOCKED]…` |
+| hbhousing | 07:52:08（第二輪排到） | 119→120 | **`覆蓋 2/6，但這一輪沒有任何錯誤回報（比抓取失敗更可能是…）`** |
+| ddroom / housefun / sinyi | （無＝這輪沒排到） | 119 | 維持原值 |
+
+`lastError` 空字串那個 15 天查不起來的洞，現在會自己寫一句話了（#652 那包）。soft-404 也即時驗過：
+`/p/22113055`（真實 `post_id`）→ **200／56.9 KB**；`/p/99999999`、`/p/abc` → **404**；`/` 與 `/api/health` → 200。
+（顺手記一下：`/p/:id` 查的是 `listings.post_id`（bigint），清單裡**沒有** `id` 欄位。）
+
+**時間都在 591 身上，第 2 件還沒做完。** 這兩輪的分解：
+
+| 輪 | 591 階段 | 外站階段 | 結局 |
+|---|---|---|---|
+| 04:58Z（只有輪轉、還沒階段預算） | 05:00:36→05:13:51（13 分、556 筆） | 5168 約 27 分、零落地 | **40 分被砍** |
+| 07:12Z（階段預算上線） | 07:13:52→**07:42:31（29 分、1561 筆）** | 只剩 `9.5−2=7.5` 分可用 → 07:50 停手 | **07:52:08 收在預算內**，`超過 40 分鐘` 這段期間 **0 次** |
+
+⇒ 階段預算把這一輪救回來（靠的就是那 2 分鐘收尾餘裕），但**地板是 591**：它一個階段就能吃掉 29 分。
+下一包要做的（同一個問題的另一半）：
+**591 的覆蓋階段也要有「佔本輪預算的比例」上限**，超收就標 `partial` 讓下一輪續跑——
+現在 591 是 6 個 covering job × 每 job 逐頁抓，頁數政策在 `crawlPolicy.js`，停手點要在 `runWatch` 的 591 段落，
+而且要留意 `rotateCoveringJobs`（2026-09-24 那批）已經有「一輪跑不完就下一輪續」的骨架，可以沿用。
