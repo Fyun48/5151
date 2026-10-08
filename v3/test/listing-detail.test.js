@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   buildPublicListingDetailResponse,
   isPublicListingDetail,
+  listingPageHttpStatus,
   publicListingContact,
   publicListingDetailView,
   similarPublicListings,
@@ -265,4 +266,22 @@ test("server.js：/api/public/listings/:id/detail 與 /similar 已註冊、公�
   assert.match(server, /app\.get\("\/api\/public\/listings\/:id\/similar"/);
   const auth = readFileSync(new URL("../src/auth.js", import.meta.url), "utf8");
   assert.match(auth, /p\.startsWith\("\/p\/"\)/);
+});
+
+// 2026-10-08：修 soft-404。以前 /p/<查無此 id> 也回 200，搜尋引擎與我們的分頁統計
+// 都分不清「壞連結」跟「正常頁」。狀態碼抽成純函式，路由只接它。
+test("listingPageHttpStatus：查無此 id ⇒ 404；存在（含 hidden）⇒ 200，產品決定未拍的不順手改", () => {
+  assert.equal(listingPageHttpStatus({ id: 0, exists: false }), 404, "/p/abc、/p/0 這種連問都不用問");
+  assert.equal(listingPageHttpStatus({ id: NaN, exists: false }), 404);
+  assert.equal(listingPageHttpStatus({ id: 999999, exists: false }), 404, "資料庫查無此筆 ⇒ 404");
+  assert.equal(listingPageHttpStatus({ id: 123, exists: true }), 200, "查得到就 200（hidden 也是查得到，維持舊行為）");
+});
+
+test("/p/:id 的路由要真的把狀態碼送出去（不能算一算又丟掉）", () => {
+  const route = server.slice(server.indexOf('app.get("/p/:id"'), server.indexOf('// 站內刊登公開分享頁'));
+  assert.ok(route.length > 0 && route.length < 3000, "要能切出 /p/:id 這段路由");
+  assert.match(route, /let status = listingPageHttpStatus\(\{ id \}\);/, "先依 id 決定初值（非數字就是 404）");
+  assert.match(route, /status = listingPageHttpStatus\(\{ id, exists: Boolean\(listing\) \}\);/, "查無此筆要改寫成 404");
+  assert.match(route, /res\.status\(status\)\.type\("html"\)\.send\(html\);/, "狀態碼要真的送出去，頁面仍回同一份 HTML");
+  assert.doesNotMatch(route, /res\.type\("html"\)\.send\(html\);/, "不可以再回到「不管怎樣都 200」");
 });
