@@ -52,6 +52,8 @@ import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
 import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL } from "./crawlPolicy.js";
+// 外站跨輪輪轉（一輪只排一家、最久沒成功的先；延後不記失敗）。政策與理由寫在該檔檔首。
+import { pickExternalSources, externalSourcesPerRun } from "./externalRotation.js";
 import { noteConsecutiveTimeout } from "./crawlWatchdog.js";
 import { throwIfCrawlCancelled } from "./crawlExecution.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
@@ -707,8 +709,10 @@ export async function runWatch(options = {}) {
   // 第九十六批 B：開工前先看哪些來源還在冷卻期（上一輪被擋到停工）。
   // 讀不到就當作沒有（維持原本行為，不讓診斷狀態擋住整輪）。
   const cooling = new Set();
+  let sourceStreaks = {};
   try {
     const { streaks } = await readCrawlSourceStreaksAsync();
+    sourceStreaks = streaks || {};
     for (const [id, row] of Object.entries(streaks || {})) {
       if (isSourceCoolingDown(row)) cooling.add(id);
     }
@@ -841,52 +845,64 @@ export async function runWatch(options = {}) {
     noteSourceRound(source, successful, sourceErrors, sourceRoundBlocked(batches), applicable, partial);
   }
 
-  if (wantHb && !cooling.has("hbhousing")) {
-    await collectExternal("hbhousing", "住商", () => fetchHbCoveringListings(jobs, {
+  // 2026-10-08：外站改成跨輪輪轉（理由與算式見 `externalRotation.js` 檔首）。
+  // 原本六家是**寫死順序依序跑**，但每家一輪要跑幾十個行政區×頁面、單頁逾時上限 8 秒，
+  // 40 分鐘預算跑不完 5 家 ⇒ 排在後面的家每輪都被自己的取消訊號打死：正式站實測
+  // 租租通／好房網 `fails=117`、`lastSuccessAt` 從未成功、`last_seen_at` 停在 2026-09-22。
+  // 現在一輪只排 `CRAWL_EXTERNAL_SOURCES_PER_RUN` 家（預設 1），最久沒成功的先；
+  // **延後不是一種失敗**（不對它呼叫 `noteSourceRound`），下一輪它會因為更餓而排前面。
+  const externalTasks = [
+    { id: "hbhousing", label: "住商", enabled: wantHb, invoke: () => fetchHbCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postJson: options.hbPostJson,
-    }));
-  }
-  if (wantSinyi && !cooling.has("sinyi")) {
-    await collectExternal("sinyi", "信義", () => fetchSinyiCoveringListings(jobs, {
+    }) },
+    { id: "sinyi", label: "信義", enabled: wantSinyi, invoke: () => fetchSinyiCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.sinyiPostForm,
-    }));
-  }
-  if (wantHp && !cooling.has("houseprice")) {
-    await collectExternal("houseprice", "5168", () => fetchHpCoveringListings(jobs, {
+    }) },
+    { id: "houseprice", label: "5168", enabled: wantHp, invoke: () => fetchHpCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       getHtml: options.hpGetHtml,
       hasGeo: listingHasTrustedGeo,
-    }));
-  }
-  if (wantDd && !cooling.has("ddroom")) {
-    await collectExternal("ddroom", "租租通", () => fetchDdCoveringListings(jobs, {
+    }) },
+    { id: "ddroom", label: "租租通", enabled: wantDd, invoke: () => fetchDdCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       getJson: options.ddGetJson,
-    }));
-  }
-  if (wantHf && !cooling.has("housefun")) {
-    await collectExternal("housefun", "好房網", () => fetchHfCoveringListings(jobs, {
+    }) },
+    { id: "housefun", label: "好房網", enabled: wantHf, invoke: () => fetchHfCoveringListings(jobs, {
       ...fetchOptions,
       pages: hbPages,
       postForm: options.hfPostForm,
-    }));
+    }) },
+    { id: "rakuya", label: "樂屋網", enabled: wantRakuya, invoke: async () => {
+      repairRakuyaScopes(db, jobs);
+      // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼
+      const startPages = await getRakuyaPageCursorsAsync();
+      return fetchRakuyaCoveringListings(jobs, {
+        ...fetchOptions,
+        pages: hbPages,
+        fetchText: options.rakuyaFetchText,
+        startPages,
+      });
+    } },
+  ];
+  const externalRotation = pickExternalSources(
+    externalTasks.filter((task) => task.enabled),
+    sourceStreaks,
+    { perRun: externalSourcesPerRun(process.env), cooling },
+  );
+  for (const task of externalRotation.running) {
+    await collectExternal(task.id, task.label, task.invoke);
   }
-  if (wantRakuya && !cooling.has("rakuya")) {
-    repairRakuyaScopes(db, jobs);
-    // 抓取游標與其他節點同源；PG 模式下讀本機 SQLite 會拿到別台的舊頁碼（重抓或跳頁）。
-    const startPages = await getRakuyaPageCursorsAsync();
-    await collectExternal("rakuya", "樂屋網", () => fetchRakuyaCoveringListings(jobs, {
-      ...fetchOptions,
-      pages: hbPages,
-      fetchText: options.rakuyaFetchText,
-      startPages,
-    }));
+  if (externalRotation.deferred.length) {
+    console.log(
+      `外站輪轉：本輪排 ${externalRotation.running.map((task) => task.id).join(",") || "（無）"}`
+      + `｜延後 ${externalRotation.deferred.map((task) => task.id).join(",")}（不算失敗，下一輪優先）`,
+    );
   }
 
   // 第九十二批：**先**把這一輪的來源成敗寫進 `crawlScheduleV1.sourceStreaks`，再決定誰會阻擋完成紀錄。
