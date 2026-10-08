@@ -342,3 +342,105 @@ displayReady: status === PREP_READY || keepVisible || facilityOnlyGap,
 `display_ready` 過濾（`db.js:3650 .filter((peer) => peer.display_ready)`），資料本身在 5168
 的頁面就是公開的；關掉它只是把「同一個房東還在別處刊登」這個消費者最需要的警示藏起來。
 ⇒ 決定：**保持可見，不再加默認關閉**；要加的是「這是推測同屋源」的措辭（下一包，屬 UI 文案）。
+
+## (i) 第 3、4 步：5168「推估」實機檢查、同屋源措辭，與 rakuya 查證（2026-10-08 夜）
+
+Owner 19:12「好的 請執行」之後接著說「先做第 3 步和第 4 步」⇒ 這節是結果。
+
+### 怎麼測的（可重跑）
+
+1. 複製本機開發庫，用**副本**起站，不髒 `data-v3/`、不碰正式站：
+   `cp data-v3/v3.db /tmp/ui5168-db/v3.db` ⇒ `PORT=5153 DATA_DIR=/tmp/ui5168-db node v3/src/server.js`
+2. 塞兩筆 fixture：一筆 5168（`listing_prep.facility_status=not_provided`、`facility_basis=inferred`、
+   `display_ready=1`，推估項目 `["洗衣機","沙發","冷氣"]`）＋一筆同電話的 591。
+3. ⚠️ **一定要補 `settings(crawlSources)`**（見 L-0304）：副本沒有這筆時 `getCrawlSources()` 走預設值，
+   非預設開啟的來源會被列表的 `COALESCE(source,'591') NOT IN (disabled)` 整家擋掉，
+   跟 `hpDisplayReadySql` 無關——我先前誤以為是展示閘門的問題，白查了一輪。
+4. chrome-devtools 量 computed style／元素尺寸；a11y-wcag MCP 跑 axe-core（WCAG 2.2 AA）。
+
+### 檢查結果：推估標示本身沒問題
+
+| 項目 | 375px | 768px | 1440px |
+| --- | --- | --- | --- |
+| tooltip 文字 | 洗衣機、沙發、冷氣（推估：來源未提供設備欄位，由刊登內文判斷） | 同左 | 同左 |
+| tooltip 寬度 | 依 `min(280px,100%)` | 280px | 280px |
+| 對比 | `#1c1917` on `#f3f6f5` = **16.08:1**（AA/AAA 皆過） | 同左 | 同左 |
+| 「此屋家俱家電狀態」按鈕 | **112×44px**（≥44 ✓） | 同左 | 同左 |
+| 橫向溢出 | 無 | 無 | 無 |
+
+順帶把兩件事查清楚（都是**先前說法不準**的地方）：
+
+- 訪客在 `/`（訪客搜尋列表，不需登入）**就會**看到 kitLine 與其推估尾碼；`kit-tip` 用
+  `role="tooltip"` ＋ `aria-describedby` ＋ `aria-expanded`，不是只靠 `title` 的 hover 提示，
+  所以手機上點得開、報讀器讀得到。
+- ⚠️ 我一度寫「`/p/:id` 上的『設備與家具家電』是來源自己的內文，不是我們渲染的」——**這句話是錯的**，
+  下一小節才是查證後的結論（`detail.html:594` 確實是我們自己渲染的區塊）。
+  教訓：看到 innerText 裡有這串字不能就說是來源內容，要回到程式裡找渲染點。
+
+### 修掉的兩件事
+
+1. **錯字**：卡片上 4 處「同源屋件」（同檔另有 12 處都寫「同屋源」）⇒ 統一為「同屋源物件」
+   （費用欄小標題）與「同屋源第N則」（同屋群標籤）；「第首則」不是自然中文 ⇒ 改「第1則」。
+   設計文件 `design-system/property-platform/pages/listings.md` 跟著改。
+2. **既有 a11y 違規**：無照片卡片的佔位「暫無」用 `--muted`(#6f6a64) 疊在 `--line`(#e4dfd6)
+   只有 **4.04:1**（12px 粗體需 4.5:1）⇒ 改用既有 token `--ink`（**13.18:1**），沒有發明新色（F-0039）。
+   修完 axe：**1 違規 → 0 違規**。並加兩條結構規則釘住，做過反向變異（改回 `--muted` 就紅）。
+
+### 第 4 步查證：repairRakuyaScopes（結論＝潛在、目前不發作，未改碼）
+
+- `v3/src/rakuya.js:355` 的 `repairRakuyaScopes(conn, jobs)` 用 `conn.prepare(...)`（同步 SQLite API），
+  呼叫端 `v3/src/watcher.js:915` 傳的是 `db`，而 `db` 在 `v3/src/db.js:504` 是
+  `guardCrawlSqlite(new DatabaseSync(DATA_DIR/v3.db))`（8716 行 `export { db }`）
+  ⇒ **PG 模式下它讀寫的是容器內本機 SQLite，修好的 search_key 不會進正式庫**；
+  同一個 invoke 區塊下面已有註解承認這個模式（`getRakuyaPageCursorsAsync()` 就是为此做的 async 版），
+  但這隻函式沒有 async 版。
+-  blast radius：正式站 `settings.crawlSources` 裡 `rakuya.enabled=false`，且
+  `select count(*) from listings where source='rakuya'` = **0** ⇒ 這條路徑現在根本不會跑到。
+- 測試只有 SQLite 形狀（`v3/test/source-recovery.test.js:102`）⇒ PG 路徑無覆蓋。
+- 處置：要修就要做 driver-aware 的 async 版＋PG 測試，不是幾行的事 ⇒ 列為獨立任務，這包不動。
+
+### 驗證總數
+
+- `index-script.test.js` 46/46；鄰座四套（contact-refresh、listing-prep-5168、
+  listing-enrich-pending-missing、decoration-data）57/57。
+- 反向變異：`--ink` 改回 `--muted` ⇒ 轉紅（45/1）✓ 改回 ⇒ 46/0 ✓
+- 全量 `npm test`（committed clean tree）：見本包 PR 留言與 INFRA-INVENTORY 續二十七。
+- 本包沒動 fetch／頁碼／重試／暫停／政策／預算 ⇒ 依 AGENTS 規則不需要沙盒報告。
+
+### 這包的教訓（已進 agent-brain）
+
+- L-0260（早就存在，我當場重犯）：`pkill -f` 的樣式會命中自己的命令列，把這道 shell 收掉。
+- L-0301：v3 開發伺服器對 `public/` 靜檔有進程內快取，改 CSS 後要**重啟**才驗證得到。
+- L-0302：`node -e '...'` 裡面再出現單引號字串會把外層引號剪斷，變成「安靜什麼都沒做」。
+- L-0304：拿 `v3.db` 副本起站要先補 `settings(crawlSources)`，否則整個來源在列表消失。
+
+### (i-2) 實機檢查真正抓到的缺陷：訪客詳情頁把推估設備照抄、完全沒標示
+
+查證順序（這才是實機檢查的價值，程式碼閱讀當時放過了）：
+
+1. `v3/public/detail.html:594` 有 `renderSection("amenities", "設備與家具家電", renderAmenities(d))`
+   ⇒ 這塊是**我們渲染的**，不是來源內文（我先前判錯，上面已更正）。
+2. `renderAmenities` 的資料來自 `d.equipment`，而 `v3/src/listingDetailPublic.js:42` 的
+   `equipmentList(listing)` 直接讀 `listing.furnish_items` ⇒ **跟會員卡片那組推估項目是同一份資料**。
+3. 打正式站驗證（唯讀）：`/api/public/listings/2460196475/detail` 回 `equipment=['洗衣機']`、
+   `2443976477` 回 `['沙發','洗衣機']`，而 payload **根本沒有 `facility_status`／`facility_basis`**
+   （`grep -c facility_status v3/public/detail.html` = 0）⇒ 訪客在詳情頁看到推估設備，卻沒有任何標示。
+
+修法（最小、不發明樣式）：
+
+- `listingDetailPublic.js`：把 `facility_status` 放進訪客 body（`decorateListingLite` 已經用
+  `hpPrepFields(row, provider)` 把它掛在列上，PG 與 SQLite 走同一顆裝飾器，所以**不用新增查詢**）。
+- `detail.html` `renderAmenities`：`d.facility_status === "not_provided"` 時，在設備格子後面接一行
+  `<p class="state-note">推估：來源未提供設備欄位，由刊登內文判斷</p>`（沿用既有類別；
+  該類別是 `--muted` #6f6a64 疊 `--paper` #faf8f4 = **5.05:1**，14px 正文過 AA ✓）。
+- 測試：`listing-detail.test.js` 新增兩條（欄位會帶出來、非推估時不虛構；以及 `renderAmenities`
+  的結構規則釘住那段文字與接法）。
+
+實機驗證（本機副本＋fixture，`/p/2455242611`）：375px 下三個設備磚（洗衣機／沙發／冷氣）
+下方出現該行說明 ✓ axe（WCAG 2.2 AA）**0 違規** ✓ 無橫向溢出 ✓ 截圖 `/tmp/detail375.png`。
+套件：listing-detail + listing-detail-parity + public-share-page + client-houseprice + index-script
+＝ **88/88 綠**；全量 `npm test`（含這包兩個 commit）＝ 3714 tests／3618 pass／0 fail／96 skipped，
+與基線相同。
+
+踩過的坑（已進 agent-brain）：正字元裡寫 `/</div>'/` 會在 `<` 前面就被 `/` 截斷 ⇒ SyntaxError；
+要逃脫成 `/<\/div>'/`。

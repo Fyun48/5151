@@ -285,3 +285,26 @@ test("/p/:id 的路由要真的把狀態碼送出去（不能算一算又丟掉�
   assert.match(route, /res\.status\(status\)\.type\("html"\)\.send\(html\);/, "狀態碼要真的送出去，頁面仍回同一份 HTML");
   assert.doesNotMatch(route, /res\.type\("html"\)\.send\(html\);/, "不可以再回到「不管怎樣都 200」");
 });
+
+// ---- 5168 推估設備在訪客詳情頁的標示（2026-10-08 實機檢查發現漏標） ----
+
+test("publicListingDetailView：把 listing_prep 的 facility_status 帶進訪客欄位", () => {
+  const inferred = publicListingDetailView(
+    decoratedListing({ source: "houseprice", facility_status: "not_provided" }), 5001, { loggedIn: false },
+  );
+  assert.equal(inferred.facility_status, "not_provided");
+  assert.ok(Array.isArray(inferred.equipment) && inferred.equipment.length > 0, "設備項目照樣給，只是要標明是推估");
+
+  const plain = publicListingDetailView(decoratedListing(), 5001, { loggedIn: false });
+  assert.equal(plain.facility_status, null, "來源本來就有設備欄位時，不要虛構 not_provided");
+});
+
+test("detail.html：推估設備要在訪客詳情頁標示（沿用既有 .state-note，不發明新樣式）", () => {
+  const html = readFileSync(new URL("../public/detail.html", import.meta.url), "utf8");
+  const start = html.indexOf("function renderAmenities");
+  const body = html.slice(start, html.indexOf("function renderTransport", start));
+  assert.ok(start > 0, "renderAmenities 要在 detail.html 裡");
+  assert.match(body, /d\.facility_status === "not_provided"/);
+  assert.match(body, /class="state-note"[^<]*推估：來源未提供設備欄位，由刊登內文判斷/);
+  assert.match(body, /<\/div>' \+ inferred;/, "推估說明要接在設備格子後面，不能擋掉項目本身");
+});

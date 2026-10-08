@@ -294,6 +294,10 @@ test("member profiles cap districts and include usable ping in notify copy", () 
   assert.match(html, /focusout/);
   assert.match(html, /function placeKitTip/);
   assert.match(html, /function closeKitTips/);
+  // 封面佔位文字疊在 --line（#e4dfd6）底色上：--muted 只有 4.04:1（12px 粗體需 4.5:1）不合格，
+  // 2026-10-08 實測改用既有 --ink（13.18:1）。這兩條釘住不要被人改回 --muted。
+  assert.match(html, /\.item-cover \.cover-ph \{[\s\S]{0,400}?color: var\(--ink\)/);
+  assert.doesNotMatch(html, /\.item-cover \.cover-ph \{[\s\S]{0,400}?color: var\(--muted\)/);
   assert.match(html, /<\/div>\s*\$\{kitLine\(item, id\)\}/);
   assert.match(html, /\["floor", "樓層", \(row\) => floorDisplay\(row\)\]/);
   assert.doesNotMatch(html, /floorDisplay\(row\) \|\| String\(row\.floor_name/);
@@ -768,7 +772,7 @@ test("self listing form and in-site detail stay on this site", () => {
   assert.doesNotMatch(html, /model_score/);
   assert.match(html, /data-same-toggle/);
   assert.match(html, /費用變更/);
-  assert.match(html, /同源屋件第首則/);
+  assert.match(html, /同屋源第1則/);
   assert.match(html, /function sameHousePeerRole/);
   assert.match(html, /function sameHousePriceList/);
   assert.match(html, /same-house-prices/);
@@ -838,15 +842,15 @@ test("source chips stay hidden unless admin or sponsor", () => {
   assert.match(server, /authorizedListingSources\(req\.query\.sources/);
 });
 
-test("same-house peer role labels use 同源屋件第N則 ordering", () => {
+test("same-house peer role labels use 同屋源第N則 ordering", () => {
   const html = pub("index.html");
   const start = html.indexOf("function sameHousePeerRole");
   const end = html.indexOf("function sameHouseFeeDiff");
   assert.ok(start > 0 && end > start);
   const fns = new Function(`${html.slice(start, end)}; return { sameHousePeerRole };`)();
-  assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同源屋件第首則");
-  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate" }, 2), "同源屋件第2則");
-  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同源屋件第3則（已下架）");
+  assert.equal(fns.sameHousePeerRole({ title: "主標" }, { role: "primary" }), "同屋源第1則");
+  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate" }, 2), "同屋源第2則");
+  assert.equal(fns.sameHousePeerRole({}, { role: "affiliate", offline: true }, 3), "同屋源第3則（已下架）");
 });
 
 test("search settings city personalization and optimistic unwatch are wired", () => {
