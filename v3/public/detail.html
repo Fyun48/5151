@@ -514,7 +514,7 @@
         const eq = Array.isArray(d.equipment) ? d.equipment.filter(Boolean) : [];
         if (!eq.length) return '<p class="section-empty">尚無此項資訊</p>';
         // 來源本身沒有設備欄位時，這些項目是我們從刊登內文推估的（facility_status=not_provided）⇒ 必須標示。
-        const inferred = d.facility_status === "not_provided"
+        const inferred = d.facilityStatus === "not_provided"
           ? '<p class="state-note">推估：來源未提供設備欄位，由刊登內文判斷</p>'
           : "";
         return '<div class="amenity-grid">' + eq.map((n) => '<div class="amenity">' + amenityIcon(n) + '<span>' + esc(n) + '</span></div>').join("") + '</div>' + inferred;

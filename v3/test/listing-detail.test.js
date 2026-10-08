@@ -292,11 +292,11 @@ test("publicListingDetailView：把 listing_prep 的 facility_status 帶進訪�
   const inferred = publicListingDetailView(
     decoratedListing({ source: "houseprice", facility_status: "not_provided" }), 5001, { loggedIn: false },
   );
-  assert.equal(inferred.facility_status, "not_provided");
+  assert.equal(inferred.facilityStatus, "not_provided");
   assert.ok(Array.isArray(inferred.equipment) && inferred.equipment.length > 0, "設備項目照樣給，只是要標明是推估");
 
   const plain = publicListingDetailView(decoratedListing(), 5001, { loggedIn: false });
-  assert.equal(plain.facility_status, null, "來源本來就有設備欄位時，不要虛構 not_provided");
+  assert.equal(plain.facilityStatus, null, "來源本來就有設備欄位時，不要虛構 not_provided");
 });
 
 test("detail.html：推估設備要在訪客詳情頁標示（沿用既有 .state-note，不發明新樣式）", () => {
@@ -304,7 +304,7 @@ test("detail.html：推估設備要在訪客詳情頁標示（沿用既有 .stat
   const start = html.indexOf("function renderAmenities");
   const body = html.slice(start, html.indexOf("function renderTransport", start));
   assert.ok(start > 0, "renderAmenities 要在 detail.html 裡");
-  assert.match(body, /d\.facility_status === "not_provided"/);
+  assert.match(body, /d\.facilityStatus === "not_provided"/);
   assert.match(body, /class="state-note"[^<]*推估：來源未提供設備欄位，由刊登內文判斷/);
   assert.match(body, /<\/div>' \+ inferred;/, "推估說明要接在設備格子後面，不能擋掉項目本身");
 });

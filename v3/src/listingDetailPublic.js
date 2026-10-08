@@ -166,7 +166,7 @@ export function publicListingDetailView(listing, id, { loggedIn = false } = {}) 
     equipment: equipmentList(listing),
     // 詳情頁要能標示「這些設備是我們推估的」：decorateListingLite 已把 listing_prep 的
     // facility_status 掛在列上（PG 與 SQLite 走同一顆裝飾器），這裡只是把它帶出去。
-    facility_status: String(listing?.facility_status || "").trim() || null,
+    facilityStatus: String(listing?.facility_status || "").trim() || null,
     description: String(listing?.self_body || listing?.body || "").trim() || null,
     status: statusOf(listing),
     updatedAt: String(listing?.last_seen_at || listing?.refresh_time || listing?.first_seen_at || "").trim() || null,
