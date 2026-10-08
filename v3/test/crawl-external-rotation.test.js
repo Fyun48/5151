@@ -41,10 +41,10 @@ test("每輪排幾家：預設 1，可用環境變數調寬，但不會變成 0 
   assert.equal(externalSourcesPerRun(undefined), 1);
 });
 
-test("餓的排前面：從未成功 > 最久沒成功 > 最近有成功；同分維持目錄順序", () => {
+test("餓的排前面：從未排過 > 最久沒被排到 > 最近排過的（失敗也算排過）；同分維持目錄順序", () => {
   const streaks = {
     hbhousing: { lastSuccessAt: new Date(NOW - 2 * 3600_000).toISOString() },
-    // 沒有任何 lastSuccessAt ⇒ 从未成功，視為無限舊（這正是租租通／好房網的實況）
+    // 一直失敗，但剛剛才被排到 ⇒ 這一輪要讓位（lastFailureAt 就是「上次被排到」的證據）
     ddroom: { fails: 117, lastFailureAt: new Date(NOW - 60_000).toISOString(), lastSuccessAt: "" },
     sinyi: { lastSuccessAt: new Date(NOW - 30 * 24 * 3600_000).toISOString() },
     houseprice: { lastSuccessAt: new Date(NOW - 10 * 3600_000).toISOString() },
@@ -52,12 +52,35 @@ test("餓的排前面：從未成功 > 最久沒成功 > 最近有成功；同�
     rakuya: { lastSuccessAt: new Date(NOW - 5 * 3600_000).toISOString() },
   };
   const ids = rankExternalSources(TASKS, streaks, { now: NOW }).map((task) => task.id);
-  assert.deepEqual(ids.slice(0, 2), ["ddroom", "housefun"], "從未成功的兩家要排最前，且兩者同分時按目錄順序");
-  assert.deepEqual(ids.slice(2), ["sinyi", "houseprice", "rakuya", "hbhousing"], "其餘依最後成功時間由舊到新");
-  assert.ok(Number.isFinite(externalSourceStaleness({ lastSuccessAt: new Date(NOW - 3600_000).toISOString() }, NOW)));
+  assert.deepEqual(ids, ["housefun", "sinyi", "houseprice", "rakuya", "hbhousing", "ddroom"],
+    "從未排過的先；其餘按上次被排到（成功／失敗取較大者）由舊到新；剛失敗過的退到最後");
+  assert.equal(externalSourceStaleness({}, NOW), Number.POSITIVE_INFINITY, "沒有任何時間欄＝無限餓");
+  assert.ok(Number.isFinite(externalSourceStaleness({ lastFailureAt: new Date(NOW - 3600_000).toISOString() }, NOW)));
 });
 
-test("排序只看最後成功時間：失敗很多次但剛成功過的，要排在很久沒成功的後面", () => {
+// 沙盒實測抓到的設計錯誤（2026-10-08 連兩輪都只排到 hbhousing）：
+// 用「最後成功時間」排序時，永遠抓不通的家永遠最餓 ⇒ 每輪都吃掉那個名額，
+// 其他家照樣等死——跟改動前的寫死順序一樣糟，只是換了人質。
+test("回歸：連續幾輪要輪到不同的家，永遠失敗的那家不能霸占每一輪", () => {
+  const streaks = {};
+  for (const task of TASKS) {
+    streaks[task.id] = { fails: 0, lastError: "", lastFailureAt: "", lastSuccessAt: "", blockedUntil: "" };
+  }
+  // 六家都「從未排過」→ 同分，依目錄順序；之後每排一家就把它踢到最後。
+  const chosen = [];
+  for (let round = 0; round < 6; round += 1) {
+    const at = NOW + round * 3600_000;
+    const pick = pickExternalSources(TASKS, streaks, { perRun: 1, now: at });
+    const id = pick.running[0].id;
+    chosen.push(id);
+    streaks[id] = { ...streaks[id], lastFailureAt: new Date(at).toISOString() };
+  }
+  assert.equal(new Set(chosen).size, chosen.length, `六輪應輪到六個不同的家，實際 ${chosen.join(",")}`);
+  assert.deepEqual(chosen, ["hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "rakuya"],
+    "同分按目錄順序輪轉；排過（哪怕失敗）就排到最後，六輪剛好六家");
+});
+
+test("剛排過就要讓位：失敗次數多寡不給優先權，15 天沒被排到的家比較重要", () => {
   const streaks = {
     hbhousing: { fails: 117, lastFailureAt: new Date(NOW).toISOString(), lastSuccessAt: new Date(NOW - 2 * 3600_000).toISOString() },
     ddroom: { fails: 0, lastFailureAt: "", lastSuccessAt: new Date(NOW - 15 * 24 * 3600_000).toISOString() },

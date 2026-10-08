@@ -12,8 +12,8 @@
 // 政策（這一檔負責的決策，全部可測）：
 // 1. 一輪只排 `CRAWL_EXTERNAL_SOURCES_PER_RUN` 家（預設 1）。粗估 591 那 6 組×12 頁
 //    加上一家外站剛好落在 40 分鐘預算內；五家輪流 ⇒ 每家約 5 輪（約 2 小時）排到一次。
-// 2. 排序用**最久沒成功先跑**：`lastSuccessAt` 缺（從未成功）視為無限舊，排最前；
-//    其餘依 `lastSuccessAt` 越舊越前面；同分維持傳入順序（目錄順序），確保可重現。
+// 2. 排序用**最久沒被排過先跑**（上次成功／上次失敗取較大者），失敗也要讓位，
+//    否則永遠失敗的那家會把每一輪都吃掉；从未被排到 ⇒ 無限舊，排最前；同分按目錄順序。
 // 3. 還在冷卻期的家（被擋到停工，`isSourceCoolingDown`）**整輪排除**，不進 running 也不進 deferred。
 // 4. 延後（deferred）**不是一種失敗**：呼叫端不對它呼叫 `noteSourceRound`，
 //    所以不會累加 `fails`、不會誤裝冷卻期。這是整個改動的重點，不要「順手」記一筆。
@@ -40,13 +40,21 @@ export function externalSourcesPerRun(env = process.env) {
   );
 }
 
-/** streak.lastSuccessAt 距 now 多久（毫秒）；從未成功 ⇒ 無限舊（排最前）。 */
+/**
+ * 這一輪「誰最該被排到」＝最久沒被排過的家。
+ *
+ * ⚠️ 2026-10-08 沙盒實測教的一課：**不能**用 `lastSuccessAt` 排序。
+ * 用最後成功時間的話，一個永遠抓不通的家會永遠是「最餓的」，於是每輪都排它、
+ * 另外幾家照樣等死——把原本的 starvation 換了個人質而已（沙盒連兩輪都只排到 `hbhousing`）。
+ * 所以要取 `lastSuccessAt` 與 `lastFailureAt` 的**較大者**＝「上次被排到的時刻」：
+ * 排過就得讓位（哪怕失敗），从未被排到（兩個時間都空）⇒ 無限舊，排最前。
+ */
 export function externalSourceStaleness(streak, now = Date.now()) {
-  const raw = String(streak?.lastSuccessAt ?? "").trim();
-  if (!raw) return Number.POSITIVE_INFINITY;
-  const at = Date.parse(raw);
-  if (!Number.isFinite(at)) return Number.POSITIVE_INFINITY;
-  return Math.max(0, now - at);
+  const times = [streak?.lastSuccessAt, streak?.lastFailureAt]
+    .map((raw) => Date.parse(String(raw ?? "").trim()))
+    .filter((at) => Number.isFinite(at));
+  if (!times.length) return Number.POSITIVE_INFINITY;
+  return Math.max(0, now - Math.max(...times));
 }
 
 /**
