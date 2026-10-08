@@ -487,6 +487,7 @@ import { getSiteSettingAsync } from "./settingsKvAsync.js";
 import { rentAmount } from "./listingCost.js";
 import {
   buildPublicListingDetailResponse,
+  listingPageHttpStatus,
   isPublicListingDetail,
   listingDetailOgDescription,
   listingDetailOgTitle,
@@ -4063,19 +4064,23 @@ app.get("/api/public/listings/:id/similar", async (req, res) => {
 });
 
 // 公開內頁：從快取範本注入 OG meta（title/description/url/canonical/og:image 首圖）。
-// 物件不存在或 hidden 也回頁面（前端顯示 empty 態），但 OG 用品牌 fallback。
+// 物件不存在或 hidden 也回同一份頁面（前端顯示 empty 態），但 OG 用品牌 fallback。
 // 注入失敗 fail-soft：回原始範本內容，不得 500。
 app.get("/p/:id", async (req, res) => {
   const id = Number(req.params.id) || 0;
   const base = publicBaseUrlEnv() || publicBaseUrl(req);
   const template = LISTING_DETAIL_TEMPLATE || LISTING_SHARE_TEMPLATE;
   let html = template;
+  // 狀態碼先按「id 是不是個正整數」定（/p/abc、/p/0 這種連問都不用問 ⇒ 404）；
+  // 有 id 但查無此筆時在下面改寫成 404，查得到但 hidden 維持 200（產品決定未拍）。
+  let status = listingPageHttpStatus({ id });
   try {
     let title = "吉比租房物件追蹤";
     let description = "租房物件追蹤，租金、格局、交通與聯絡方式一次看齊。";
     let image = absoluteAssetUrl("/brand/mark.png", base);
     if (id) {
       const listing = await getListingAsync(id);
+      status = listingPageHttpStatus({ id, exists: Boolean(listing) });
       if (listing && isPublicListingDetail(listing, id)) {
         title = listingDetailOgTitle(listing) || title;
         description = listingDetailOgDescription(listing) || description;
@@ -4085,9 +4090,9 @@ app.get("/p/:id", async (req, res) => {
     const meta = buildListingShareOgMeta({ title, description, image, url: `${base}/p/${id}` });
     html = injectListingShareMeta(template, meta, title);
   } catch {
-    // fail-soft：注入失敗回原始範本
+    // fail-soft：注入失敗回原始範本（DB 讀不到時 status 保持 200，不要把我們的故障說成「找不到物件」）
   }
-  res.type("html").send(html);
+  res.status(status).type("html").send(html);
 });
 
 // 站內刊登公開分享頁：從快取範本注入 OG meta（供 LINE／Threads／FB 爬蟲預覽）後回傳。

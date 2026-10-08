@@ -33,6 +33,8 @@ const {
   blockingCrawlSources,
   isCoveredRound,
   jobCoveredByBlockingSources,
+  normalizeSourceStreak,
+  sourceRoundErrorText,
   sourceRoundWarnings,
   toleratedCrawlSources,
 } = await import("../src/crawlSourceStreaks.js");
@@ -270,4 +272,23 @@ test("政策鏈：連續失敗 3 輪之後，覆蓋完成紀錄才真的寫得�
     }, options);
   }
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM crawl_covers").get().n, 0, "沒有放行政策時就是原本的凍結狀態");
+});
+
+// 2026-10-08：正式站租租通／好房網 fails=119 而 lastError 是空字串 ⇒ 「記了失敗卻講不出原因」
+// 這種輪次要在存儲層就被強迫留下一句人話，否則下一次還是得靠猜。
+test("失敗的輪次一定要留下可讀的原因：覆蓋不足但零錯誤回報時，用覆蓋數字湊一句", () => {
+  assert.match(
+    sourceRoundErrorText({ covered: 3, total: 6, error: "" }),
+    /覆蓋 3\/6.*沒有任何錯誤回報/,
+    "covered<total 又沒有任何錯誤文字時，不可以回空字串");
+  assert.equal(sourceRoundErrorText({ covered: 0, total: 0, error: "" }), "",
+    "total=0 是「這一輪不適用」的形狀，不該硬湊一句（上層會走 applicable=false）");
+  assert.equal(sourceRoundErrorText({ covered: 3, total: 6, error: "住商 中正區 第 1 頁 [23]" }),
+    "住商 中正區 第 1 頁 [23]", "有真的錯誤時照用原文，不被我的句子蓋掉");
+  const at = "2026-10-08T05:00:00.000Z";
+  const before = normalizeSourceStreak({ fails: 118, lastError: "" });
+  const applied = applySourceRound({ ddroom: before }, [{ source: "ddroom", covered: 0, total: 6, errors: [], error: "" }], { at });
+  assert.equal(applied.streaks.ddroom.fails, 119);
+  assert.notEqual(applied.streaks.ddroom.lastError, "", "fails 累加了就必須有原因文字（這次的洞就是這裡是空字串）");
+  assert.match(applied.streaks.ddroom.lastError, /覆蓋 0\/6/);
 });

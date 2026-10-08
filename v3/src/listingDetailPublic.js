@@ -91,6 +91,22 @@ function mrtOf(listing) {
 
 // ---- 公開可見性：與 `listingShare.js` 的 `listingIsPublicRow` 同一套規則（hidden／站內 self_status）----
 
+/**
+ * `/p/:id` 該回什麼 HTTP 狀態（2026-10-08 加，修 soft-404）。
+ *
+ * 之前不管 id 存不存在都回 200：查無此物件時，搜尋引擎與爬蟲拿到的是「有頁面但內容是空的」，
+ * 我們的分頁統計也分不清「壞連結」跟「正常頁」。規則很窄，只動「事實上是查無此 id」這一案：
+ *   - id 不是正整數 ⇒ 404（這連問都不用問）
+ *   - 查無該筆 ⇒ 404
+ *   - 查得到但 hidden／不對公開顯示 ⇒ **維持 200**（這是最後一個還沒拍的產品決定，不要順手改）
+ * 頁面本身照舊回同一份 HTML（前端一樣顯示它那套 empty 訊息），只有狀態碼變。
+ */
+export function listingPageHttpStatus({ id = 0, exists = false } = {}) {
+  if (!(Number(id) > 0)) return 404;
+  if (!exists) return 404;
+  return 200;
+}
+
 export function isPublicListingDetail(listing, id) {
   if (!listing) return false;
   if (Number(listing?.hidden) === 1) return false;
