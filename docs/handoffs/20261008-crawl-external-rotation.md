@@ -444,3 +444,18 @@ Owner 19:12「好的 請執行」之後接著說「先做第 3 步和第 4 步�
 
 踩過的坑（已進 agent-brain）：正字元裡寫 `/</div>'/` 會在 `<` 前面就被 `/` 截斷 ⇒ SyntaxError；
 要逃脫成 `/<\/div>'/`。
+
+### (i-3) 後段：詳情頁漏標的修法、改名、以及上線後量到的輪次訊號
+
+* 詳情頁（`/p/:id`，也就是分享出去的同一頁）補上推估標示 ⇒ PR **#656**（squash `b51590c`）；
+  隨後把欄位改名成 `facilityStatus` 以符合該 payload 的 camelCase 慣例 ⇒ PR **#657**（squash `2867b45`）。
+* 發版：build `37782444154` ⇒ digest `sha256:44f05e13…f7304` ⇒ predeploy `37782648716`（綠）⇒ deploy `37782976470`（成功）。
+* 上線實測：`/api/public/listings/2460196475/detail` 回 `equipment=['洗衣機']`＋`facilityStatus='not_provided'`；
+  production 375×812 axe（WCAG 2.2 AA）`/` 與 `/p/2460196475` 各 **0 違規**。
+* 測試：CI `Tests`＋`Tests (PostgreSQL integration)` 全綠；本地全量 `npm test`（committed clean tree）
+  ＝ **3716 tests／3620 pass／0 fail／96 skipped**（基線 3714／3618，+2 為這次新增的兩條詳情頁規則）。
+* ⚠️ 上線後量到「輪次 40 分鐘預算被砍」變常態（近 1 小時 4 輪，部署前 0 輪），
+  但健康計數未被灌水、覆蓋與 5168 自愈都還在前進。診斷、證據與明天該做的事另外寫在
+  `docs/handoffs/20261009-crawl-round-budget.md`（重點：不是覆蓋上限的程式寫錯，
+  而是覆蓋提前讓路後，慢速失敗的外站把 20 分鐘吃光 ⇒ 外站也需要階段預算；
+  另外 `errors[]` 只在輪次收尾時才寫出，輪被砍時「到點停手」這條訊號會整批遺失）。
