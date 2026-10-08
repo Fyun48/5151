@@ -256,3 +256,89 @@ select key, value from settings where key = 'crawlScheduleV1';
 2. 我用「只重組陣列區間」的方式寫回 `mutation-check.mjs`，把前後 6291 行**整段寫掉**
    （`node --check` 仍然過，因為剩下的片段本身合法）。已 `git checkout` 還原，改成
    `s[:j] + entries + s[j:]` 的定點插入，並用「行數＋符號引用次數＋`--check-anchors-only`」三重確認。
+
+## (h) 第 1 件（591 覆蓋階段上限）與第 2 件（5168 設施推估）
+
+### 591 覆蓋階段的時間上限（`4683d80`）
+
+正式站 07:12Z 那輪的分解把地板暴露了：591 一個人 07:13:52→07:42:31＝**29 分鐘**（1561 筆
+`last_seen_at` 落在這段），外站階段只分到 `40 − 29 − 2 = 9` 分。同一天 04:58Z 那輪 591 只花
+13 分（556 筆）⇒ **591 的耗時依當輪負载大幅変動，不能假設它跑得完**。
+
+* `crawlPolicy.coveringPhaseDeadlineMs({now, remainingMs, env})`＝
+  `min((本輪剩餘 − COVERING_PHASE_TAIL_MS 120s) × share%, cap)`；
+  `CRAWL_COVERING_PHASE_SHARE` 預設 55（夾 30〜80）、`CRAWL_COVERING_PHASE_MAX_MINUTES`
+  預設 20（夾 5〜30）；**拿不到本輪剩餘時間 ⇒ 回 0（不設限）**，不憑空造上限把輪次咬死。
+* `watcher.js` 只在**兩個覆蓋條件之間**檢查（不在半頁中停：已抓到的頁面照樣落地、照樣記完成），
+  到點 `break` 並立 `coveringTimedOut`，輪次記錄 `noteSourceRound("591", …, true, coveringTimedOut)`
+  ⇒ `partial` 的語意是「**不累加 fails**、仍蓋 `lastAttemptAt`」，未跑完的縣市由
+  `successful` 規則保證不會被記成完成，下一輪照樣排進去。
+* 注入點 `options.coveringPhaseDeadlineMs` ＋ `fetchPage: options.fetchPage`
+  （`fetchListings` 本來就支援 `typeof options.fetchPage === "function"`，沒傳行為不變），
+  所以這條路可以**離線跑真 `runWatch`**：3 個覆蓋條件 × 每頁 120ms × 上限 150ms ⇒
+  驗到停手訊息、`fails` 不增加、`lastAttemptAt` 有蓋章、整輪照常收尾、0 筆落地。
+* 變異 23/23 KILLED（`crawl-external-rotation`，其中 10 條是這包新加的）。
+  **教訓：`mutation-check.mjs` 的每一條一定要有 `expect`（要能在失敗的測試名稱裡出現的子字串），
+  少了它一律回報 SURVIVED**——我這次 10 條全被誤判成「測試不夠嚴」，實查是工具用法錯。
+
+沙盒（casa-nas／`crawl_sandbox`／同一顆映像）`SANDBOX_ROUNDS=2
+SANDBOX_EXTRA_ENV="CRAWL_COVERING_PHASE_MAX_MINUTES=3"`：
+
+| 輪 | 時間（UTC） | 秒 | jobs | fetched | completed | timed_out | 591 | 外站 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 09:34:19→09:49:02 | 883 | 6 | 2749 | 19 | false | **6/6 fails 0** | hbhousing 2/6 fails 1 |
+
+* ⚠️ **這一串沙盒沒有打到 591 截斷**：沙盒只有 19 筆覆蓋條件、資料又是當天剛跑過的，
+  591 階段約 3 分鐘就 `6/6` 跑完 ⇒ 3 分上限「剛好好夠」。函式本身在容器內單獨驗過
+  （`env=3、剩 39 分 → 3 分；拿不到剩餘 → 0`）。截斷的行為級證據在離線真 `runWatch` 那條；
+  正式站 29 分鐘才是這條上限要綁的實况。
+* 順帶證到 #652：`hbhousing covered 2/6` 且**沒有任何頁面錯誤**時 `lastError` 現在會自己寫一句話
+  （以前是空字串，15 天查不出原因）。
+* `covers_max_last_run_at` 有前進（09:10:44 → 09:49:02）⇒ 覆蓋完成記錄沒被這改動擋住。
+
+### 5168 設施「推估」不再擋展示（`6a123f1`＋`5bc3059`）
+
+正式站 `listing_prep` 現況（只讀查得）：
+
+| `display_ready=0` 卡在 | 筆數 |
+|---|---|
+| `withhold_reason=facility`（`facility_status=not_provided`、`facility_basis=inferred`） | **5297** |
+| `detail,address,floor,facility`（`not_fetched`，還沒補抓） | 3678 |
+| `detail,floor,facility` | 1171 |
+| `coords_missing` | 144 |
+
+`facility_basis=inferred` 合計 5569 筆 ⇒ 這 5297 筆不是資料壞，是政策把「來源根本不提供設施欄位、
+我們由內文推估」定義成不完整；而 `hpDisplayReadySql()` 只對 `source='houseprice'` 生效，
+擋住的正好是這一家。
+
+**最終實作（只動展示，其他全部不動）**：
+
+```js
+const facilityOnlyGap = missing.length === 1 && missing[0] === "facility"
+  && identity && detailRecognized && address.usable && floor.status === FIELD_PROVIDED;
+displayReady: status === PREP_READY || keepVisible || facilityOnlyGap,
+```
+
+* `facilityComplete` 維持「推估不算完整」、`missing_fields` 照樣記 `facility`、
+  `status` 照樣 `pending` ⇒ `enrichErrorClass` 仍回 `pending_missing`，queue 繼續補抓。
+* 缺口訊號不消失：`facility_basis=inferred`＋`facility.reason` 是「這是推估的」的正字標記
+  （要查就查這兩欄，不要用 `missing_fields`）。
+* 前端 `kitLine()`：`facility_status === "not_provided"` 的項目尾端加
+  「（推估：來源未提供設備欄位，由刊登內文判斷）」⇒ 推估的天然氣／陽台不會被當成來源實測。
+* 通知不會暴增：`watcher.js` 的 `onFirstReady` 只對 `first_seen_at` 兩小時內的物件發事件
+  （既有防護），5297 筆舊資料轉可展示時不會各發一則「新物件」。
+
+**踩到的坑（一定要看）**：我第一版把「推估」從 `missing_fields` 裡拿掉、還新增一條
+`source_limited` 分支，企圖一併改掉結案語意。`npm test` 全套立刻紅了一條——
+`listing-enrich-pending-missing.test.js`（「來源沒提供設備且是推估時仍判 pending」）：
+那條測試是 **5168 一個間歇性 403 造成 386 次重試** 事故後鎖住的規則，
+`pending_missing` 必須留在「`next_retry_at` 要当真鎖住」的清單裡。
+⇒ 教訓：**「能不能展示」與「缺欄位怎麼記帳／怎麼重試」是兩件事，放寬前者不要把後者一起改掉**；
+而且這種越界只有**全套**抓得出來（相鄰四套 101/101 全綠也照樣漏）。改回來之後
+四套 101/101 綠，`outcome` 仍照 `displayReady` 記（既有定義，不另改）。
+
+**訪客看到同屋源 chips**：原建議是「默認關閉」，盤點後我**改變建議**——
+`/api/public/listings/:id/similar`（`app.get` 那條）本來就是訪客可見，同屋候选名單已用
+`display_ready` 過濾（`db.js:3650 .filter((peer) => peer.display_ready)`），資料本身在 5168
+的頁面就是公開的；關掉它只是把「同一個房東還在別處刊登」這個消費者最需要的警示藏起來。
+⇒ 決定：**保持可見，不再加默認關閉**；要加的是「這是推測同屋源」的措辭（下一包，屬 UI 文案）。
