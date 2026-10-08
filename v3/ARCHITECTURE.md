@@ -3,7 +3,7 @@
 線上：
 
 - v1／v2：已拆除，不再啟動容器。歷史庫 `591.db`／`v2.db` 可只讀掛給 v3 匯入
-- 本目錄：容器聽 5153；`https://jibbyrenth.reversalplay.me` → `127.0.0.1:5153`（5155 同一容器），資料 `data-v3/v3.db`。不要再用 `https://c5151.reversalplay.me/`
+- 本目錄：容器聽 5153；`https://jibbyrenth.reversalplay.me` → `127.0.0.1:5153`（5155 同一容器）。正式站唯一業務庫是 PostgreSQL（primary 在 syn-nas `5151-postgres-B`／db `5151_shadow`，casa `5151-postgres-A` 為 hot standby，HAProxy 25433 rw／25434 ro，無自動 failover）。**本機 SQLite 尚未退場**：`v3/src/db.js:504` 在 import 時仍無條件開啟 `data-v3/v3.db`（未走 driver gate）；爬蟲主寫入已全在 PG（本機 `listings` 今天 0 筆），但 `v3/src/watcher.js:1084` 仍走同步 `copyUserFlags()`（`db.js:897`）孤島寫本機，且多處 PG 成功後鏡射回寫本機（`selfListingsAsync.js:229/253/308/327`、`listingImportAsync.js:148/321/363/408`、`siteContentAsync.js:235/252`、`rentalNotifyPrefsAsync.js:160/164/233`、`demandAsync.js:702`、`memberConsentsAsync.js:126/137`、`geoCacheAsync.js:96`）。退場步驟 4（對帳）→7（移除 SQLite）尚未完成，見 `docs/handoffs/20261008-sqlite-exit-gap.md`。不要再用 `https://c5151.reversalplay.me/`
 
 之後功能只做這份。畫面上的產品名仍是「吉比租房物件追蹤」，版本只在頁尾寫 `ver. 3.57`。
 

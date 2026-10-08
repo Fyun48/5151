@@ -3,6 +3,13 @@
 Shadow 環境（Phase 19）。與正式 v3 / 5151-ops 完全隔離：獨立 container name、
 獨立 port、獨立 volume、獨立 database。**不切換、不停任何正式 container。**
 
+> **⚠️ 現況（2026-10-08）——「Shadow」是歷史命名，內容已是正式站業務庫**：
+> - 庫名仍叫 `5151_shadow`，但它是**正式站的業務庫**（primary `5151-postgres-B`，casa
+>   `5151-postgres-A` 是 hot standby），不是與正式站隔離的影子站。
+> - 兩台各有自己的 HAProxy：CasaOS `5151-haproxy`、Synology `5151-haproxy-B`
+>   （下方「實際佈署只有 CasaOS 一台」那句已過時；拓撲見 `web/README.md`）。
+> - 容器 `5151-crawler` 已 Exited 約兩週；實際在跑的爬蟲是 `591-tracker-v3`。
+
 ## 網路拓撲（兩台 NAS 同一內網）
 
 ```
@@ -23,7 +30,7 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
   （2026-09-20 由 A→B 手動 failover 後定案；程序見 `docs/runbooks/postgres-manual-failover.md`。）
 - 角色是**狀態**不是設定：promote 之後兩個節點的資料目錄各自記住自己的角色，
   `docker restart` 不會改變角色；要換回來得再走一次 failover。
-- 實際佈署只有 **CasaOS 一台** `5151-haproxy`（Synology 沒有第二份）。
+- 實際佈署只有 **CasaOS 一台** `5151-haproxy`（Synology 沒有第二份）。**（過時：2026-10-08 起兩台各有 HAProxy，Synology 是 `5151-haproxy-B`，見開頭「現況」與 `web/README.md`。）**
 - web 對外埠是 **25153**（container 15153）：同一台的 Web-A 已經佔用主機 `15153`，
   HAProxy 若也綁 15153 會 `address already in use`。
 

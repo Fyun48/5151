@@ -5,7 +5,7 @@
 > 新專案請先讀本檔 + `.cursor/rules/infra-access.mdc`，**產品站**不要另開 tunnel、不要另開第二條通道。
 > （唯一例外：OPS 控制面走自己的 tunnel 與自己的 compose project，Owner 明示 2026-10-07，見 `AGENTS.md` 與本檔 §2.3。）
 >
-> 最後更新：2026-09-22（PG 切換完成後、CF SSH + service token 上線同日）
+> 最後更新：2026-10-08（§4 修正「舊 SQLite 現已不再寫入」的過時說法，補上唯讀驗證指令；內容另有 10-07 的 tunnel 輪替條目）
 
 ## 1. 主機總表
 
@@ -135,8 +135,39 @@ Host = CF hostname、Port `22`、Auto-login username 同上。
 |---|---|
 | 驅動 | `DB_DRIVER=postgres` |
 | 連線 | `PG_URL=postgres://…@192.168.0.140:25433/5151_shadow` |
-| 遷移來源 | 舊 SQLite `data-v3/v3.db`（2,017,228 rows；現已不再寫入） |
+| 遷移來源 | 舊 SQLite `data-v3/v3.db`（2,017,228 rows；遷移來源，**本機庫仍未退場**，見下方） |
 | 代理人測試憑證 | `~/.config/5151-pg.env`（600，`PG_TEST_URL` / `PG_TEST_STANDBY_URL`） |
+
+**⚠️ 舊 SQLite 尚未退場（2026-10-08 實測推翻「現已不再寫入」）。** 主業務讀寫已在 PG，但
+`v3/src/db.js:504` 在 import 時仍**無條件**開啟本機 `data-v3/v3.db`（未走 driver gate，約 75 個模組
+import `db.js`）。目前唯一還在產生新業務列的是 `user_listing_flags`（`v3/src/watcher.js:1084` →
+`db.js:897` 同步 `copyUserFlags()` 寫本機；本機今天 5 筆、最新 `2026-10-08T15:47:35Z`，PG 今天
+`hidden_at` 0 筆）；爬蟲主寫入已全在 PG（本機 `listings` 今天 0 筆）。另有多處 PG 成功後鏡射回寫本機
+（`selfListingsAsync.js:229/253/308/327`、`listingImportAsync.js:148/321/363/408`、
+`siteContentAsync.js:235/252`、`rentalNotifyPrefsAsync.js:160/164/233`、`demandAsync.js:702`、
+`memberConsentsAsync.js:126/137`、`geoCacheAsync.js:96`），且讀取仍 fail-open（`sqliteFallback.js`
+預設 `closed`＝讀取回退；三台未設 `PG_SQLITE_FALLBACK=strict`）。退場順序與缺口見
+`docs/handoffs/20261008-sqlite-exit-gap.md`。
+
+**可重跑的唯讀驗證**（判斷本機庫是否還在被開／被寫）：
+
+```bash
+# 1) 比對 -wal/-shm 與主檔 mtime（三台節點；主檔 mtime 可能停在舊日期，一定要連 -wal/-shm 一起看）
+ssh casa-nas 'for c in 591-tracker-v3 5151-web-A; do echo "== $c =="; docker exec $c sh -c "ls -l --time-style=full-iso /data/v3.db /data/v3.db-wal /data/v3.db-shm 2>/dev/null"; done'
+ssh syn-nas 'export PATH=/usr/local/bin:/bin:/usr/bin:$PATH; docker exec 5151-web-B sh -c "ls -l --time-style=full-iso /data/v3.db /data/v3.db-wal /data/v3.db-shm 2>/dev/null"'
+```
+
+```bash
+# 2) user_listing_flags 本機 vs PG 行數與最新時間戳（時間戳是 TEXT、ISO 字尾 Z，用字串字面值比較）
+ssh casa-nas 'docker exec 591-tracker-v3 node -e "const {DatabaseSync}=require(\"node:sqlite\");const d=new DatabaseSync(\"/data/v3.db\",{readOnly:true});console.log(JSON.stringify(d.prepare(\"SELECT COUNT(*) n, MAX(viewed_at) viewed, MAX(watched_at) watched, MAX(hidden_at) hidden FROM user_listing_flags\").get()))"'
+ssh syn-nas 'export PATH=/usr/local/bin:/bin:/usr/bin:$PATH; docker exec -i -u postgres 5151-postgres-B psql -tA -F"|" -d 5151_shadow -f -' <<'SQL'
+SELECT COUNT(*), MAX(viewed_at), MAX(watched_at), MAX(hidden_at) FROM user_listing_flags;
+SELECT COUNT(*) FROM user_listing_flags WHERE hidden_at >= '2026-10-08T00:00:00Z';
+SQL
+```
+
+（`settings` 表只有 `key`/`value` 兩欄、**沒有 `updated_at`**；PSQL 連線方式如上 `ssh syn-nas` 後的
+`docker exec -i -u postgres 5151-postgres-B psql -tA -F"|" -d 5151_shadow -f -`。）
 
 ## 5. 機密存放位置（**一律不得進版控**）
 
