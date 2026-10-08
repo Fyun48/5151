@@ -74,6 +74,30 @@ export function toleratedCrawlSources(streaks, options = {}) {
  *   `tolerated` 是「這一輪起不再阻擋完成紀錄」的來源（含先前就已達門檻的），
  *   `toleratedNow` 是這一輪才越過門檻的（用來產生一次性的 warning）。
  */
+/**
+ * 這一輪的「最後錯誤樣本」要怎麼寫（2026-10-08 加）。
+ *
+ * 實測到的洞：正式站租租通／好房網 `fails=119` 而 `lastError` 是**空字串**——
+ * 同一輪住商有 `第 N 頁 [23]…`、信義有 `[SOURCE_UNAVAILABLE]`、5168 有 `[FETCH_BLOCKED]`，
+ * 唯獨這兩家一句話都沒有。原因是 `round.error` 只來自「真的丟出／回報過的頁面錯誤」；
+ * 當一輪是 `covered < total` 但**沒有任何錯誤回報**（來源自己提前停工、只回部分行政區，
+ * 或抓到資料卻沒標成覆蓋），存下來的就是「失敗但原因不明」，15 天都查不出來。
+ *
+ * 所以：失敗的輪次**一定要有話可說**。本輪沒錯誤文字時，用覆蓋數字湊一句人類的話，
+ * 寧可句子粗一點，也不要留空字串讓下一個人（或下次的我）對著 fails=119 猜。
+ */
+export function sourceRoundErrorText(round = {}, fallback = "") {
+  const raw = String(round?.error || "").trim();
+  if (raw) return raw;
+  const covered = Math.max(0, Number(round?.covered) || 0);
+  const total = Math.max(0, Number(round?.total) || 0);
+  if (total > 0 && covered < total) {
+    return `覆蓋 ${covered}/${total}，但這一輪沒有任何錯誤回報`
+      + "（比抓取失敗更可能是這一輪只跑了部分行政區、或來源回資料卻沒記成覆蓋）";
+  }
+  return String(fallback || "");
+}
+
 export function applySourceRound(streaks, rounds, options = {}) {
   const at = String(options.at || new Date().toISOString());
   const threshold = Math.max(1, Math.trunc(Number(options.threshold) || SOURCE_FAILURE_ROUNDS_BEFORE_TOLERATED));
@@ -110,7 +134,7 @@ export function applySourceRound(streaks, rounds, options = {}) {
       ...prev,
       fails,
       lastFailureAt: at,
-      lastError: String(round?.error || prev.lastError || "").slice(0, SOURCE_ERROR_SAMPLE_MAX),
+      lastError: sourceRoundErrorText(round, prev.lastError).slice(0, SOURCE_ERROR_SAMPLE_MAX),
       // 這一輪因為被擋而停工 ⇒ 記下冷卻到什麼時候；否則保留原本的值（下一輪若還在冷卻就跳過）。
       blockedUntil: round?.blocked === true
         ? sourceBlockedUntil(at, Number(round?.cooldownMs) || undefined)
