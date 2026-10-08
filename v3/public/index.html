@@ -1109,7 +1109,8 @@
       height: 100%;
       align-items: center;
       justify-content: center;
-      color: var(--muted);
+      /* 佔位文字疊在 --line 底色上：用 --muted 只有 4.04:1（12px 粗體需 4.5:1）⇒ 改用既有 --ink（13.18:1）。 */
+      color: var(--ink);
       font-size: var(--text-xs, 12px);
       font-weight: 700;
       letter-spacing: 0.06em;
@@ -5714,7 +5715,7 @@
       return String(value ?? "").replace(/\s+/g, "").replace(/[()（），,、]/g, "").replace(/元\/月|元/g, "").toLowerCase();
     }
     function sameHouseIndexLabel(n) {
-      return n <= 1 ? "第首則" : `第${n}則`;
+      return n <= 1 ? "第1則" : `第${n}則`;
     }
     function sameHouseEntries(item) {
       const house = sameHouseOf(item);
@@ -5733,7 +5734,7 @@
       const bits = entries.map((entry, idx) => (
         `<span class="same-price-item${entry.mine ? " is-mine" : ""}">${esc(entry.src)}(${idx + 1}) ${entry.total ? entry.total.toLocaleString("zh-TW") : "—"}</span>`
       ));
-      return `<div class="same-house-prices"><span class="same-price-kicker">同源屋件</span>${bits.join(" · ")}</div>`;
+      return `<div class="same-house-prices"><span class="same-price-kicker">同屋源物件</span>${bits.join(" · ")}</div>`;
     }
 
     function applyViewFilters(items) {
@@ -7448,7 +7449,7 @@
       const found = entries.findIndex((entry) => entry.mine);
       const idxLabel = sameHouseIndexLabel((found < 0 ? 0 : found) + 1);
       const prefix = confirmed || item.match_level === "high" ? "" : "疑似 ";
-      let label = `${prefix}同源屋件${idxLabel}`;
+      let label = `${prefix}同屋源${idxLabel}`;
       if (house.cheaper_exists) label += " · 另有較便宜";
       const open = sameHouseIsOpen(item);
       const cls = confirmed || item.match_level === "high" ? "same" : "watch";
@@ -7469,10 +7470,10 @@
     }
 
     function sameHousePeerRole(item, peer, idx) {
-      if (peer?.role === "primary") return "同源屋件第首則";
+      if (peer?.role === "primary") return "同屋源第1則";
       const n = Number(idx) || 0;
-      const order = n <= 1 ? "第首則" : `第${n}則`;
-      const label = `同源屋件${order}`;
+      const order = n <= 1 ? "第1則" : `第${n}則`;
+      const label = `同屋源${order}`;
       return peer?.offline ? `${label}（已下架）` : label;
     }
     function sameHouseFeeDiff(item, peer) {
