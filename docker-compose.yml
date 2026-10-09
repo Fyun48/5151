@@ -30,6 +30,9 @@ services:
       # 見 docs/runbooks/postgres-cutover-day-checklist.md 步驟 5。
       DB_DRIVER: ${DB_DRIVER:-sqlite}
       PG_URL: ${PG_URL:-}
+      # 正式部署（DB_DRIVER=postgres）一律 strict：讀寫都不回退本機 SQLite（Owner :57/:60）。
+      # DB_DRIVER=sqlite 時這個值不參與決策，本機開發不受影響。
+      PG_SQLITE_FALLBACK: ${PG_SQLITE_FALLBACK:-strict}
       # 抓取輪次預算（分鐘）。2026-09-30（第九十一批）：正式站一輪「取頁 ＋ 落地」實測 25 分鐘上下，
       # 原本固定的 15 分鐘會在落地階段放棄 ⇒ 完成紀錄寫不進去、覆蓋條件每輪重跑。
       # 程式碼仍會逐批記錄完成（watcher.js），這裡只是把預算放寬到足以跑完。

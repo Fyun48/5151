@@ -36,6 +36,8 @@ services:
       TZ: Asia/Taipei
       # 沙盒必須走 PG（隔離庫）；`crawl-sandbox.mjs` 會拒絕 sqlite 模式。
       DB_DRIVER: postgres
+      # 沙盒與正式站同一條政策：讀寫都不回退本機 SQLite。
+      PG_SQLITE_FALLBACK: strict
       CRAWL_TICK_BUDGET_MINUTES: ${CRAWL_TICK_BUDGET_MINUTES:-40}
       CRAWL_SANDBOX_INTERVAL_MINUTES: ${CRAWL_SANDBOX_INTERVAL_MINUTES:-30}
       # 排程器開關：0 = 常駐模式只待命、不自動跑輪（手動跑輪時停用，避免與
