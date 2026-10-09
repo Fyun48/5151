@@ -7,8 +7,8 @@ set -u
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-# verify 的目標容器可用 PG_CONTAINER 覆寫（預設 standby = CasaOS 的 5151-postgres-A）。
-PG_CONTAINER="${PG_CONTAINER:-5151-postgres-A}"
+# verify 的目標容器可用 PG_CONTAINER 覆寫（預設 standby = Synology 的 5151-postgres-B）。
+PG_CONTAINER="${PG_CONTAINER:-5151-postgres-B}"
 
 echo "=== pg_is_in_recovery (should be t) ==="
 "${DOCKER}" exec "${PG_CONTAINER}" psql -U postgres -tAc "SELECT pg_is_in_recovery();"

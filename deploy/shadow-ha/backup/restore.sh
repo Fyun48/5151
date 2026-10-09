@@ -9,8 +9,8 @@ set -euo pipefail
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-# failover 後 primary 換人：用 PG_CONTAINER 指向「當下的 primary」容器（預設 Synology）。
-PG_CONTAINER="${PG_CONTAINER:-5151-postgres-B}"
+# failover 後 primary 換人：用 PG_CONTAINER 指向「當下的 primary」容器（預設 CasaOS）。
+PG_CONTAINER="${PG_CONTAINER:-5151-postgres-A}"
 
 DUMP="${1:?usage: restore.sh <dump-file>}"
 RESTORE_DB="${RESTORE_DB:-5151_restore_test}"

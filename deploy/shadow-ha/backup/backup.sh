@@ -11,8 +11,8 @@ DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
 # failover 後 primary 換人：用 PG_CONTAINER 指向「當下的 primary」容器
-# （預設 Synology 的 5151-postgres-B；primary 若在 CasaOS 請帶 5151-postgres-A）。
-PG_CONTAINER="${PG_CONTAINER:-5151-postgres-B}"
+# （預設 CasaOS 的 5151-postgres-A；primary 若回到 Synology 請帶 5151-postgres-B）。
+PG_CONTAINER="${PG_CONTAINER:-5151-postgres-A}"
 
 DB="${PG_DATABASE:-5151_shadow}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
