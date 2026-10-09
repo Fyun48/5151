@@ -106,6 +106,7 @@ export function startServers({ primaryPort = 0, standbyPort = 0, getState }) {
       } catch {
         line = "down\n"; // 讀狀態出錯也 fail-closed，絕不讓行程掛掉
       }
+      // HAProxy 讀完第一行就會 RST 連線；這個 handler 吞掉 ECONNRESET，避免行程被打掛。
       socket.on("error", () => {});
       socket.end(line);
     });
@@ -238,6 +239,13 @@ async function main() {
   // 資料庫固定用 postgres（不要連 5151_shadow，避免還原／redo 期間探測失敗造成誤判）。
   url.pathname = "/postgres";
 
+  // 日誌脱敏：任何輸出都不准出現 URI 或密碼（只出 host:port）。
+  const scrub = (text) => {
+    let s = String(text);
+    if (url.password) s = s.split(url.password).join("***");
+    return s;
+  };
+
   const cfg = {
     primaryPort: intEnv("PG_AGENT_PRIMARY_PORT", DEFAULT.primaryPort),
     standbyPort: intEnv("PG_AGENT_STANDBY_PORT", DEFAULT.standbyPort),
@@ -272,12 +280,6 @@ async function main() {
     standbyPort: cfg.standbyPort,
     getState: () => state,
   });
-
-  const scrub = (text) => {
-    let s = String(text);
-    if (url.password) s = s.split(url.password).join("***");
-    return s;
-  };
 
   async function pollOnce() {
     let error = null;
@@ -322,6 +324,14 @@ async function main() {
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+  // 兜底：HAProxy 讀完第一行就會 RST 連線，若任何 socket 漏掛 error handler 會以
+  // ECONNRESET 打掛行程。responder 是韌性元件，任何意外都只記 log、不退出。
+  process.on("uncaughtException", (err) => {
+    console.error(`${new Date().toISOString()} uncaughtException: ${scrub(err && err.stack ? err.stack : String(err))}`);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error(`${new Date().toISOString()} unhandledRejection: ${scrub(reason && reason.stack ? reason.stack : String(reason))}`);
+  });
 
   // 首次立即探測，之後每 intervalMs 一次（setTimeout 式迴圈，探測慢也不會重疊）。
   while (!shuttingDown) {

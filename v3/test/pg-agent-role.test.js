@@ -118,3 +118,36 @@ test("startServers: 每次連線即時讀 getState（角色翻轉後回報新狀
     await servers.close();
   }
 });
+
+test("startServers: 讀一行後立刻 RST（模擬 HAProxy）不讓行程掛掉、仍可繼續服務", async () => {
+  const servers = await startServers({
+    primaryPort: 0,
+    standbyPort: 0,
+    getState: () => ({ primary: "up", standby: "down" }),
+  });
+  try {
+    // HAProxy 讀完第一行就會 RST 連線；這裡讀到一行後立刻硬斷，模擬該行為。
+    await new Promise((resolve, reject) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port: servers.primaryPort });
+      socket.setEncoding("utf8");
+      socket.setTimeout(3000, () => {
+        socket.destroy();
+        reject(new Error("timeout waiting for line"));
+      });
+      socket.on("data", () => {
+        if (typeof socket.resetAndDestroy === "function") socket.resetAndDestroy();
+        else socket.destroy();
+        resolve();
+      });
+      socket.on("error", reject);
+    });
+
+    // 給 server 一點時間處理 RST，然後確認仍能服務新連線（沒被 ECONNRESET 打掛）。
+    await new Promise((r) => setTimeout(r, 100));
+    const again = await readAgentLine(servers.primaryPort);
+    assert.equal(again.line, "up\n");
+    assert.equal(again.ended, true);
+  } finally {
+    await servers.close();
+  }
+});
