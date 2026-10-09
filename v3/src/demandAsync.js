@@ -356,7 +356,8 @@ export async function expireOpenPostsAsync(run, now = new Date()) {
   const stamp = iso(now);
   // 本機 handle 也要跑一次：還沒搬完的讀取（以及讀取失敗時的回退）看的是它。
   // 這與 reportDemand 的隱藏同一個處置——PG 是真的來源，本機追上才不會兩個 store 不一致。
-  expireOpenPosts(sqliteHandle(), now);
+  // 開閘（沒有可用的 SQLite handle）時不跑本機鏡像。
+  if (sqliteHandleIsUsable(sqliteHandle())) expireOpenPosts(sqliteHandle(), now);
   if (isWishLifecycleExpiryEnabled()) {
     await run(EXPIRE_CONFIRM_SQL, EXPIRE_CONFIRM_PARAMS(stamp));
     await run(EXPIRE_PAUSE_SQL, EXPIRE_PAUSE_PARAMS(stamp, expireGraceCutoff(now)));

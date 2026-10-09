@@ -21,6 +21,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingsRepository } from "./repository/listings.js";
 import { getSettingsAsync } from "./settingsAsync.js";
+import { defaultUserIdAsync } from "./usersAsync.js";
 import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 
 // One pool for the process, shared with the list path and the write path.
@@ -43,7 +44,11 @@ export async function getListingAsync(postId, userId, options = {}) {
     // shape the decorators see is identical.
     const [row] = await repository.hydrate([id]);
     if (!row) return row;
-    const uid = deps.resolveUserId(userId);
+    // 同步 `resolveUserId(null)` 會走 `defaultUserId()` → `ensureUser()` 讀本機 users（開閘會拋）。
+    // 開閘時改用 PG 的 `defaultUserIdAsync()`（讀 PG users，行為與同步版同義：null/0 → 預設管理員）。
+    const uid = sqliteHandleIsUsable(sqliteHandle())
+      ? deps.resolveUserId(userId)
+      : (userId == null || !Number(userId) ? await defaultUserIdAsync({ ...options, exec }) : Number(userId));
     if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MEMBER_DETAIL, viewerId: uid })) {
       return undefined;
     }
