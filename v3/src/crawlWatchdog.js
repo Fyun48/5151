@@ -144,8 +144,9 @@ export function abortSignalTimeout(timeoutMs = LIST_FETCH_TIMEOUT_MS) {
   return signal;
 }
 
-export async function withBudget(work, timeoutMs, label = "這輪抓取", { signal: parentSignal } = {}) {
+export async function withBudget(work, timeoutMs, label = "這輪抓取", { signal: parentSignal, onTimeout } = {}) {
   const ms = Math.max(1, Number(timeoutMs) || TICK_BUDGET_MS);
+  const startedAt = Date.now();
   let timer;
   const err = () => {
     const error = new Error(humanTimeoutMessage(label, ms));
@@ -156,7 +157,7 @@ export async function withBudget(work, timeoutMs, label = "這輪抓取", { sign
   const controller = new AbortController();
   const signal = parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal;
   const timeoutError = err();
-  const context = { controller, signal, deadline: Date.now() + ms, timeoutError };
+  const context = { controller, signal, deadline: startedAt + ms, timeoutError };
   let onAbort;
   try {
     signal.throwIfAborted();
@@ -164,7 +165,14 @@ export async function withBudget(work, timeoutMs, label = "這輪抓取", { sign
       onAbort = () => reject(signal.reason);
       signal.addEventListener("abort", onAbort, { once: true });
     });
-    timer = setTimeout(() => controller.abort(timeoutError), ms);
+    // 到點停手：預算用盡時**先**寫一行「停在〈來源/階段〉」再取消。
+    // 若 clock 檢查（throwIfCrawlCancelled 的長同步段保護）已先 abort，這裡就不再重複寫。
+    timer = setTimeout(() => {
+      if (!controller.signal.aborted) {
+        if (typeof onTimeout === "function") onTimeout(Date.now() - startedAt);
+        controller.abort(timeoutError);
+      }
+    }, ms);
     return await Promise.race([
       withCrawlExecution(context, async () => {
         throwIfCrawlCancelled();
