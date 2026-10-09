@@ -3,6 +3,7 @@ import { coverToListUrl } from "./covering.js";
 import { bestMatch } from "./match.js";
 import { isSelfPhotoPublicUrl, SELF_PHOTO_MAX_BYTES, SELF_PHOTO_MAX_COUNT } from "./selfPhotos.js";
 import { isMemberMediaUrl } from "./memberMedia.js";
+import { bumpRevisionSafe } from "./dataRevision.js";
 import {
   SELF_BODY_TEMPLATES,
   SELF_DEPOSIT_OPTIONS,
@@ -1612,6 +1613,11 @@ export function hideSelfListing(db, postId, now = new Date()) {
   const row = getSelfRow(db, postId);
   if (!row) throw httpError("找不到這則站內刊登", 404);
   db.prepare(HIDE_SELF_LISTING_SQL).run(iso(now), row.post_id);
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(row.post_id) || 0,
+    eventType: "listing_hidden",
+  });
   try { listingOfferHook?.(db, { listingId: row.post_id, now }); } catch { /* offer sweep must not block hide */ }
   const until = banSelfPublisher(db, row.listed_by_user_id, now);
   return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };

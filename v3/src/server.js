@@ -598,6 +598,7 @@ import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
 import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
 import { auditFailureStats } from "./adminAuditHealth.js";
+import { revisionBumpFailureStats } from "./dataRevisionHealth.js";
 // 後台設定（郵件／OAuth／贊助／品牌）的 driver-aware 入口。寫入的兩個
 // （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
 // 第九十批補回 `getMailTemplatesAsync`：`queueSystemMailAsync()` 用它讀 PG 的範本
@@ -763,7 +764,14 @@ app.get("/api/health", (_req, res) => {
   // 完全隱形（序列落後造成，見 docs/handoffs/PG-IDENTITY-SEQUENCE-DEFECT-20260927.md）。
   // 契約仍然是「稽核失敗不得擋住管理操作」，所以 `ok` 不因此變成 false——
   // 但監控可以只看這一個數字。
-  res.json({ ok: true, version: APP_VERSION, audit_failures: auditFailureStats().failures });
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    audit_failures: auditFailureStats().failures,
+    // revision_bump_failures：data_revision bump 寫入的累計失敗數（訪客快取失效漏掉的直接原因）。
+    // 與 audit_failures 同一契約：bump 失敗不得擋住主寫入，但監控要看得到這個數字。
+    revision_bump_failures: revisionBumpFailureStats().failures,
+  });
 });
 
 app.get("/support", (_req, res) => {
