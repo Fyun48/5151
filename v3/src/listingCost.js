@@ -144,19 +144,33 @@ function namedMonthlySum(text, opts) {
   return parseNamedMonthlyFees(text, opts).reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 }
 
+// 額外月費是純函式（只讀 listing 欄位，欄位在請求內不變）；同一列在價格篩選、
+// 排序 rentSortValue、affiliate comparableRent、fit 評分會重複呼叫。WeakMap 以列物件為鍵
+// 快取，避免同一列反覆 JSON.parse(extra_fees)／parseNamedMonthlyFees，結果不變。
+const extraMonthlyAmountCache = new WeakMap();
 export function extraMonthlyAmount(listing = {}) {
+  if (listing && typeof listing === "object" && extraMonthlyAmountCache.has(listing)) {
+    return extraMonthlyAmountCache.get(listing);
+  }
   const rent = rentAmount(listing);
   const rows = parseJsonFees(listing.extra_fees);
   let fromRows = 0;
   for (const row of rows) {
     fromRows += feeRowMonthlyAmount(row, { rent });
   }
-  if (fromRows > 0) return fromRows;
-  const col = Number(listing.extra_fee);
-  if (Number.isFinite(col) && col > 0) return Math.round(col);
-  const fromText = namedMonthlySum(listing.extra_fee_text, { requireExtraHint: false });
-  if (fromText > 0) return fromText;
-  return namedMonthlySum(listingBlob(listing), { requireExtraHint: true });
+  let result;
+  if (fromRows > 0) result = fromRows;
+  else {
+    const col = Number(listing.extra_fee);
+    if (Number.isFinite(col) && col > 0) result = Math.round(col);
+    else {
+      const fromText = namedMonthlySum(listing.extra_fee_text, { requireExtraHint: false });
+      if (fromText > 0) result = fromText;
+      else result = namedMonthlySum(listingBlob(listing), { requireExtraHint: true });
+    }
+  }
+  if (listing && typeof listing === "object") extraMonthlyAmountCache.set(listing, result);
+  return result;
 }
 
 export function extraFeeRows(listing = {}) {

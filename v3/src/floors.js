@@ -31,19 +31,29 @@ export {
   toggleHousingKind,
 } from "./housingQuery.js";
 
+// 公開列表候選階段的熱路徑會對「同一列」反覆呼叫 tagText／listingFilterHay（
+// passesDisplayFilters 裡 isRooftopAddition 與 isAtOrBelowFirstFloor 各算一次 hay，
+// matchesHousingKind 的 listingHasElevator 又算一次）。tags 是 JSON 字串，每算一次就
+// JSON.parse 一次；用 WeakMap 以列物件為鍵快取，同一列只 parse／組字一次，結果不變。
+const tagTextCache = new WeakMap();
 function tagText(listing) {
+  if (tagTextCache.has(listing)) return tagTextCache.get(listing);
   let tags = listing.tags;
-  if (tags == null || tags === "[]") return "";
-  if (typeof tags === "string") {
-    try {
-      tags = JSON.parse(tags);
-    } catch {
-      tags = [];
+  let text = "";
+  if (!(tags == null || tags === "[]")) {
+    if (typeof tags === "string") {
+      try {
+        tags = JSON.parse(tags);
+      } catch {
+        tags = [];
+      }
     }
+    text = (Array.isArray(tags) ? tags : [])
+      .map((item) => (typeof item === "string" ? item : item?.name || item?.value || ""))
+      .join(" ");
   }
-  return (Array.isArray(tags) ? tags : [])
-    .map((item) => (typeof item === "string" ? item : item?.name || item?.value || ""))
-    .join(" ");
+  tagTextCache.set(listing, text);
+  return text;
 }
 
 /** 建築樣式以型態欄／標籤為準；標題不看「大樓」，避免「社區垃圾大樓」誤判。 */
@@ -232,8 +242,12 @@ export function matchesListingSources(listing, sources) {
   return keys.includes(listingSourceKey(listing));
 }
 
+const filterHayCache = new WeakMap();
 export function listingFilterHay(listing) {
-  return `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${listing?.address || ""} ${tagText(listing)}`;
+  if (filterHayCache.has(listing)) return filterHayCache.get(listing);
+  const hay = `${listing?.floor_name || ""} ${listing?.title || ""} ${listing?.kind_name || ""} ${listing?.address || ""} ${tagText(listing)}`;
+  filterHayCache.set(listing, hay);
+  return hay;
 }
 
 export function isRooftopAddition(listing) {
