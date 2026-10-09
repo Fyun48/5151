@@ -87,11 +87,11 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
 }
 
 // db.js listingsNeedingAliveCheck(): the listings the offline sweep should probe next.
-export function needingAliveCheckAsync({ excludeIds = [], limit = 20 } = {}, options = {}) {
+export function needingAliveCheckAsync({ excludeIds = [], limit = 20, now = new Date(), visibleDays = 7 } = {}, options = {}) {
   return scan(
     options,
-    (exec, deps) => selectAliveCheckCandidates(exec, { deps, excludeIds, limit }),
-    () => listingsNeedingAliveCheck({ excludeIds, limit }),
+    (exec, deps) => selectAliveCheckCandidates(exec, { deps, excludeIds, limit, now, visibleDays }),
+    () => listingsNeedingAliveCheck({ excludeIds, limit, now, visibleDays }),
   );
 }
 

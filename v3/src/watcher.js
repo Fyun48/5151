@@ -1131,7 +1131,10 @@ export async function runWatch(options = {}) {
   }
 
   await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true, ...options });
-  const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 20 });
+  // 下架掃描每輪探測上限：可見優先後，41,418 筆從未探測的可見物件按 ~3.5k/天約要 12 天才掃完。
+  // 每筆只多 400ms，20 → 40 讓每輪多 ~8 秒（相對整輪 ~25 分鐘預算可忽略），把首輪掃完時間砍半到
+  // ~6 天；skipHeavyGeo 的輕量路徑維持 12，不加重那條路徑。
+  const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 40 });
 
   const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });
   for (const row of pendingFees) {

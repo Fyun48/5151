@@ -5200,16 +5200,22 @@ export function touchListingChecked(postId) {
 // the SQLite functions that use them, and are published through crawlerReadsBuildContext() so the
 // PostgreSQL path (repository/crawlerScans.js) runs the SAME text - a scan that drifts between
 // drivers would make the crawler work on one store and the site read another.
-export function aliveCheckScanQuery() {
+// 可見優先：2026-10-08 實測，原本「未檢查先排 + 最舊 last_seen 先排」讓 800 筆候選窗口
+// 100% 落在 9/01-9/03 那批（近 7 天可見的 0 筆），以 3.5k/天的探測速率要 48 天才輪到
+// 使用者真正看得到的 4.1 萬筆 ⇒ 下架偵測永遠慢一步。這裡先按「近 visibleDays 天有再看到」
+// 分層，層內再維持原本的「未檢查先、最舊先」，所以舊料不會被永久餓死，只是排到可見料之後。
+export function aliveCheckScanQuery({ now = new Date(), visibleDays = 7 } = {}) {
+  const cutoff = new Date(now.getTime() - Math.max(1, Number(visibleDays) || 7) * 86400000).toISOString();
   return {
     sql: `SELECT post_id FROM listings
        WHERE IFNULL(hidden, 0) = 0 AND IFNULL(offline, 0) = 0
          AND ${sqlNotSelfSource()}
        ORDER BY ${sqlWatchedFirst()},
+                CASE WHEN last_seen_at IS NOT NULL AND last_seen_at != '' AND last_seen_at >= ? THEN 0 ELSE 1 END,
                 CASE WHEN last_checked_at IS NULL THEN 0 ELSE 1 END,
                 IFNULL(last_checked_at, last_seen_at) ASC
        LIMIT 800`,
-    params: [],
+    params: [cutoff],
   };
 }
 
@@ -5226,8 +5232,8 @@ export function pickAliveCheckRows(rows, { excludeIds = [], limit = 20 } = {}) {
   return out;
 }
 
-export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20 } = {}) {
-  const { sql, params } = aliveCheckScanQuery();
+export function listingsNeedingAliveCheck({ excludeIds = [], limit = 20, now = new Date(), visibleDays = 7 } = {}) {
+  const { sql, params } = aliveCheckScanQuery({ now, visibleDays });
   // node:sqlite hands back null-prototype objects while node-postgres returns plain ones; copying
   // keeps both drivers' rows the same shape for callers and parity tests (the same reasoning as
   // the BIGINT parsing in dbDriverPostgres.js).

@@ -5,9 +5,9 @@
 // piece that made a loop idle in DB_DRIVER=postgres mode: it would look for work in an empty
 // SQLite store and do nothing. The statement text and the JS post-filter come from the dependency
 // bundle db.js publishes as crawlerReadsBuildContext(), so both drivers scan identically.
-export async function selectAliveCheckCandidates(exec, { deps, excludeIds = [], limit = 20 } = {}) {
+export async function selectAliveCheckCandidates(exec, { deps, excludeIds = [], limit = 20, now = new Date(), visibleDays = 7 } = {}) {
   const context = deps || {};
-  const { sql, params } = context.aliveCheckScanQuery();
+  const { sql, params } = context.aliveCheckScanQuery({ now, visibleDays });
   const rows = await exec(sql, params);
   return context.pickAliveCheckRows(rows, { excludeIds, limit });
 }
