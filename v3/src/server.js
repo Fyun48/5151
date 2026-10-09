@@ -528,7 +528,7 @@ import { listingStatsAsync } from "./listingStatsAsync.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
-import { getCachedPublicListings } from "./publicListings.js";
+import { getCachedPublicListings, resolveGuestCacheNamespace } from "./publicListings.js";
 import { buildDemoStateAsync } from "./demo.js";
 import { backfillAddressGeo, backfillIncompleteAddresses, backfillListingCoords, backfillListingMrt, backfillListingRoutes, flushPendingNotifications, isWatchIntervalPending, listingEnrichHelpers, runWatch } from "./watcher.js";
 import { LIST_PAGE_SIZE, isListingGoneError, probeListingAlive } from "./client591.js";
@@ -922,7 +922,7 @@ app.get("/api/public/listings", async (req, res) => {
     const listed = await getCachedPublicListings(query, () => searchPublicListingsAsync({
       ...query,
       settings: publicSearchSettings(query),
-    }), { namespace: resolveDbDriver() === "postgres" ? null : "sqlite:guest:v2" });
+    }), { namespace: await resolveGuestCacheNamespace({ driver: resolveDbDriver() }) });
     res.setHeader("Cache-Control", "public, max-age=15");
     res.json({
       listings: listed.listings,

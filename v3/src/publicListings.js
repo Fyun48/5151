@@ -42,8 +42,10 @@ export function publicListingsCacheSize() {
 }
 
 export function getCachedPublicListings(query, load, { namespace = "sqlite:guest:v2" } = {}) {
-  // PG revision writes are currently best-effort, so they cannot safely identify
-  // a cache generation. Until that contract is durable, PG passes namespace:null.
+  // `namespace: null` means "never hit, never write" (fail-closed) — the caller
+  // must still serve the freshly-loaded payload. PostgreSQL resolves a real
+  // generation (pg:guest:v${revision}) via resolveGuestCacheNamespace(); when the
+  // revision cannot be read the caller passes null here.
   const key = namespace == null ? null : `${namespace}:${normalizePublicQuery(query)}`;
   const now = Date.now();
   const hit = key == null ? null : cache.get(key);
@@ -65,4 +67,59 @@ export function getCachedPublicListings(query, load, { namespace = "sqlite:guest
   // Cache only resolved success. A rejected request must remain an error and
   // must not leave a Promise or an empty result in the public cache.
   return result && typeof result.then === "function" ? result.then(remember) : remember(result);
+}
+
+/**
+ * Guest-cache namespace (generation). In SQLite the namespace is the long-lived
+ * `sqlite:guest:v2` (verbatim, #674). In PostgreSQL the durable `data_revision`
+ * change-log is the generation: `pg:guest:v${MAX(id)}`. When a write bumps the
+ * revision the namespace changes, so the next guest request is a guaranteed miss
+ * against the previous generation's entries.
+ *
+ * A `null` namespace means "never hit, never write" (fail-closed) — the caller
+ * must still serve the freshly-loaded payload.
+ */
+export function guestCacheNamespace({ driver = "sqlite", revision = null } = {}) {
+  if (driver === "postgres") {
+    if (revision == null) return null;
+    const n = Number(revision);
+    if (!Number.isFinite(n)) return null;
+    return `pg:guest:v${n}`;
+  }
+  return "sqlite:guest:v2";
+}
+
+/**
+ * Resolve the guest-cache namespace for the current driver. PostgreSQL reads
+ * `MAX(id)` from `data_revision` (native PG read, no SQLite mirror) and uses it
+ * as the generation; any failure to read the revision is fail-closed to `null`
+ * (miss + no write) instead of serving a stale or empty payload.
+ *
+ * The heavy PG modules are loaded lazily so the pure cache module (and its unit
+ * tests) stays free of a `db.js` import at module-load time.
+ */
+export async function resolveGuestCacheNamespace({ driver = "sqlite", readRevision = null } = {}) {
+  if (driver !== "postgres") return "sqlite:guest:v2";
+  let revision;
+  try {
+    if (readRevision) {
+      revision = await readRevision();
+    } else {
+      const { currentRevisionAsync } = await import("./dataRevisionAsync.js");
+      const { sharedPgDriver } = await import("./pgSharedDriver.js");
+      const { toPostgresSql } = await import("./sqlDialect.js");
+      const pgDriver = await sharedPgDriver();
+      // Native PG executor: reuses currentRevisionAsync()'s CURRENT_REVISION_SQL and
+      // `Number(row?.n) || 0` normalisation while bypassing the SQLite-mirror schema
+      // prep (which is unavailable under PG_NO_SQLITE_OPEN=1). strict ⇒ no SQLite fallback.
+      const exec = async (sql, params = []) => {
+        const res = await pgDriver.query(toPostgresSql(sql), params);
+        return { rows: res.rows, rowCount: Number(res.rowCount) || 0 };
+      };
+      revision = await currentRevisionAsync({ driver: "postgres", exec, strict: true });
+    }
+  } catch {
+    revision = null; // fail-closed
+  }
+  return guestCacheNamespace({ driver: "postgres", revision });
 }
