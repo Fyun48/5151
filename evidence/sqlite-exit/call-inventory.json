@@ -1,11 +1,27 @@
 {
-  "generated": "2026-10-09T14:10:00+08:00",
-  "package": "budgetguard-pg-native",
-  "scope": "budget store（provider／budget 切面）",
+  "generated": "2026-10-09T16:45:00+08:00",
+  "package": "budget-usable-handle",
+  "scope": "budget store（provider／budget 切面）：可用 handle 判準 ＋ executeWithProvider 不再因缺 handle 而 fallback",
   "driver": "postgres",
   "gate": "PG_NO_SQLITE_OPEN=1",
   "schema_version": 1,
   "entries": [
+    {
+      "file": "v3/src/sqliteHandle.js",
+      "line": 19,
+      "symbol": "sqliteHandleIsUsable(handle)",
+      "pg_reachable": true,
+      "disposition": "removed",
+      "note": "本包新增：單一『可用 handle』判準（null/undefined/帶 DSH_NO_OPEN_MARKER 的 proxy ⇒ false；真 DatabaseSync ⇒ true），完全不碰 SQLite。"
+    },
+    {
+      "file": "v3/src/db.js",
+      "line": 525,
+      "symbol": "createNoOpenSqliteProxy()（加 DSH_NO_OPEN_MARKER）",
+      "pg_reachable": true,
+      "disposition": "guarded",
+      "note": "本包新增：開閘 proxy 加不可枚舉 Symbol marker，供 sqliteHandleIsUsable 辨識；既有拋錯行為逐字不變。"
+    },
     {
       "file": "v3/src/budgetGuardAsync.js",
       "line": 74,
@@ -20,7 +36,7 @@
       "symbol": "ensureBudgetPgNativeSchema(pgDriver)",
       "pg_reachable": true,
       "disposition": "removed",
-      "note": "本包新增；純 PG 原生 DDL＋setval 序號對齊，完全不碰 SQLite。"
+      "note": "首包新增；純 PG 原生 DDL＋setval 序號對齊，完全不碰 SQLite。"
     },
     {
       "file": "v3/src/budgetGuardAsync.js",
@@ -28,7 +44,7 @@
       "symbol": "ensureBudgetStoreOnce(pgDriver, sqliteDb)",
       "pg_reachable": true,
       "disposition": "guarded",
-      "note": "原先 sqliteDb 缺席就 throw；改為：有 sqliteDb 走鏡射（行為不變）、沒有就走 budgetPgSchema 原生路徑。"
+      "note": "本包把 `if (sqliteDb)`（truthy）改為 `sqliteHandleIsUsable(sqliteDb)`：真 DatabaseSync 走鏡射（行為不變）、開閘 proxy（帶 marker）／null 走 budgetPgSchema 原生路徑。"
     },
     {
       "file": "v3/src/budgetGuard.js",
@@ -44,15 +60,15 @@
       "symbol": "getBoundBudgetDb()",
       "pg_reachable": true,
       "disposition": "pending",
-      "note": "回傳綁定的 SQLite handle；PG_NO_SQLITE_OPEN 下回 null。"
+      "note": "回傳綁定的 SQLite handle；PG_NO_SQLITE_OPEN 下回 null。budget store 路（budgetStore/executeWithProvider）已在本包解耦不再依賴它，但 distance_matrix（route.js googleDirections）仍靠它回 null 判斷走 raw 路，留待後續切面。"
     },
     {
       "file": "v3/src/budgetStore.js",
       "line": 53,
       "symbol": "budgetStore({ sqliteDb, options })",
       "pg_reachable": true,
-      "disposition": "pending",
-      "note": "handle = sqliteDb || getBoundBudgetDb()。PG 模式下 handle 為 null 時現在已可安全進 PG 原生 schema init（本包解掉的點）；但取得 handle 的來源仍是 SQLite。"
+      "disposition": "guarded",
+      "note": "本包把 handle 選取從 `sqliteDb || getBoundBudgetDb()` 改為 `sqliteHandleIsUsable(sqliteDb) ? sqliteDb : getBoundBudgetDb()`：帶 marker 的 proxy／null 不再被當 handle 使用，PG 模式走原生。"
     },
     {
       "file": "v3/src/db.js",
@@ -60,15 +76,15 @@
       "symbol": "bindBudgetDb(db)（開機時）",
       "pg_reachable": true,
       "disposition": "pending",
-      "note": "包在 if (!PG_NO_SQLITE_OPEN) 內；開閘時不綁，仍會讓依賴 getBoundBudgetDb() 的消費端拿到 null。本包不動。"
+      "note": "包在 if (!PG_NO_SQLITE_OPEN) 內；開閘時不綁，getBoundBudgetDb() 回 null。budget store 消費端已在本包解耦（見 executeWithProvider 條目）；bindBudgetDb 本身不動。"
     },
     {
       "file": "v3/src/providers/executeWithProvider.js",
       "line": 55,
-      "symbol": "executeWithProvider({ db, ... })：database = db || getBoundBudgetDb()",
+      "symbol": "executeWithProvider({ db, ... })：無 handle 時不再無腦 fallback",
       "pg_reachable": true,
-      "disposition": "pending",
-      "note": "database 為 null 時直接 fallback()（第 58 行），不會進到 budget store。這是 provider 呼叫切面、非本包範圍，仍為 PG_NO_SQLITE_OPEN 的殘餘 blocker（沙盒抓取輪因此不會真的寫 budget）。"
+      "disposition": "guarded",
+      "note": "本包把 `if (!database || typeof actionWithProvider !== \"function\") return fallback()` 拆開：缺 handle 只有在 sqlite driver 才 fallback；PG 模式照常進 loadEnabled→reserve→settle（走 PG 原生）。"
     }
   ]
 }
