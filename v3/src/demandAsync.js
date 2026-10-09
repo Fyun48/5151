@@ -184,6 +184,8 @@ async function withFallback(options, { write = false }, runPostgres, runSqlite) 
     return await runPostgres(exec);
   } catch (error) {
     if (!sqliteFallbackAllowed(options, { write })) throw error;
+    // 開閘（沒有可用的 SQLite handle）時不回退同步 SQLite 版：把 PG 的原始錯誤往上丟（#678 同形）。
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     return runSqlite();
   }
 }
@@ -246,7 +248,7 @@ export async function reportDemandAsync(userId, input = {}, options = {}) {
     if (hide) {
       // 先寫 PG（真的來源），再讓本機 handle 追上，這樣兩個讀取路徑看到一致的狀態。
       await applyReportHideEffectsAsync(run, kind, id, now);
-      applyReportHideEffects(sqliteHandle(), kind, id, now);
+      if (sqliteHandleIsUsable(sqliteHandle())) applyReportHideEffects(sqliteHandle(), kind, id, now);
     }
     return { ok: true, hidden: hide };
   }, () => reportDemandSync(sqliteHandle(), userId, input));
@@ -317,7 +319,7 @@ export async function closeDemandPostAsync(userId, postId, opts = {}, options = 
     const now = new Date();
     // 先寫 PG（真的來源），再讓本機 handle 追上；理由與 `reportDemandAsync` 的隱藏相同。
     await applyClosedPostEffectsAsync(run, id, now);
-    applyClosedPostEffects(sqliteHandle(), id, now);
+    if (sqliteHandleIsUsable(sqliteHandle())) applyClosedPostEffects(sqliteHandle(), id, now);
     // 同上：同步版回傳整則許願房，這裡只回最小封包，理由與 `addDemandReplyAsync()` 相同。
     return { ok: true, id, status: "closed" };
   }, () => closeDemandPostSync(sqliteHandle(), userId, postId, opts));
@@ -710,7 +712,7 @@ export async function updateWishRoomAsync(userId, postId, input = {}, options = 
     // PG 的行政區索引也要維護（同步版的 `writeRow()` 只維護本機那一份）。
     await syncDemandMatchDistrictsAsync(run, row.id);
     // 本機 handle 追上（`writeRow()` 內含 `syncDemandMatchDistricts()`，那一支吃 handle）。
-    writeRow(sqliteHandle(), row.id, fields, extra);
+    if (sqliteHandleIsUsable(sqliteHandle())) writeRow(sqliteHandle(), row.id, fields, extra);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => updateWishRoomSync(sqliteHandle(), userId, postId, input));
 }
@@ -740,7 +742,7 @@ export async function publishWishRoomAsync(userId, postId, input = {}, options =
     } catch (error) {
       rethrowActiveLimit(error);
     }
-    applyPublishInPlace(sqliteHandle(), row, fields, now);
+    if (sqliteHandleIsUsable(sqliteHandle())) applyPublishInPlace(sqliteHandle(), row, fields, now);
     await syncDemandMatchDistrictsAsync(run, row.id);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => publishWishRoomSync(sqliteHandle(), userId, postId, input));
@@ -777,7 +779,7 @@ export async function reopenWishRoomAsync(userId, postId, options = {}) {
     } catch (error) {
       rethrowActiveLimit(error);
     }
-    applyReopenInPlace(sqliteHandle(), row, fields, now);
+    if (sqliteHandleIsUsable(sqliteHandle())) applyReopenInPlace(sqliteHandle(), row, fields, now);
     await syncDemandMatchDistrictsAsync(run, row.id);
     return getDemandPostAsync(row.id, { viewerId: uid }, nested(options, run));
   }, () => reopenWishRoomSync(sqliteHandle(), userId, postId));
@@ -822,6 +824,8 @@ export async function assertMatureAccountAsync(run, uid, now, actionLabel) {
 // **不能**讓使用者的刊登失敗：撞到既有 id 之類的情況只記一筆警告（`expired`／`aggregated`
 // 那些還沒搬完的讀取看的是本機，所以還是要盡量追上）。
 function mirrorInsertLocal(id, uid, fields, status, now, isolation) {
+  // 開閘（沒有可用的 SQLite handle）時不執行本機鏡像；PG 才是來源，鏡像失敗不得擋刊登。
+  if (!sqliteHandleIsUsable(sqliteHandle())) return;
   try {
     insertRow(sqliteHandle(), uid, fields, status, now, {
       ...(isolation || {}),
@@ -879,11 +883,11 @@ async function recoverCreateRaceAsync(tx, uid, now, options, fields, asDraft, or
     if (asDraft) {
       const extra = { updated_at: iso(now) };
       await tx(WRITE_ROW_SQL, writeRowParams(draftId, fields, extra));
-      writeRow(sqliteHandle(), draftId, fields, extra);
+      if (sqliteHandleIsUsable(sqliteHandle())) writeRow(sqliteHandle(), draftId, fields, extra);
     } else {
       const row = one((await tx(POST_OWNER_ROW_SQL, [draftId])).rows);
       await applyPublishInPlaceAsync(tx, row, fields, now);
-      applyPublishInPlace(sqliteHandle(), row, fields, now);
+      if (sqliteHandleIsUsable(sqliteHandle())) applyPublishInPlace(sqliteHandle(), row, fields, now);
     }
     return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
   }
@@ -903,7 +907,7 @@ async function createDemandPostAsync(tx, uid, input, now, options, fields, asDra
     if (draftId) {
       const extra = { updated_at: iso(now) };
       await tx(WRITE_ROW_SQL, writeRowParams(draftId, fields, extra));
-      writeRow(sqliteHandle(), draftId, fields, extra);
+      if (sqliteHandleIsUsable(sqliteHandle())) writeRow(sqliteHandle(), draftId, fields, extra);
       return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
     }
     const id = await insertRowAsync(tx, uid, fields, "draft", now, isolation);
@@ -914,7 +918,7 @@ async function createDemandPostAsync(tx, uid, input, now, options, fields, asDra
   if (draftId) {
     const row = one((await tx(POST_OWNER_ROW_SQL, [draftId])).rows);
     await applyPublishInPlaceAsync(tx, row, fields, now);
-    applyPublishInPlace(sqliteHandle(), row, fields, now);
+    if (sqliteHandleIsUsable(sqliteHandle())) applyPublishInPlace(sqliteHandle(), row, fields, now);
     return getDemandPostAsync(draftId, { viewerId: uid }, nested(options, tx));
   }
   const id = await insertRowAsync(tx, uid, fields, "open", now, isolation);

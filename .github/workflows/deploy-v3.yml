@@ -363,8 +363,13 @@ jobs:
             IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
             A_DIR=/opt/5151-shadow/web-a
             if [ ! -f "$A_DIR/docker-compose.yml" ]; then echo "A_GROUP_SKIPPED reason=no_compose"; exit 0; fi
-            printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" > "$A_DIR/.env"
-            chmod 600 "$A_DIR/.env"
+            A_ENV="$A_DIR/.env"
+            cp -p "$A_ENV" "$A_ENV.bak"
+            A_MODE="$(stat -c '%a' "$A_ENV")"
+            if grep -q '^V3_IMAGE=' "$A_ENV"; then sed -i "s|^V3_IMAGE=.*|V3_IMAGE=${IMAGE_PIN}|" "$A_ENV"; else printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" >> "$A_ENV"; fi
+            chmod "$A_MODE" "$A_ENV"
+            if [ "$(grep -c '^V3_IMAGE=' "$A_ENV")" != "1" ]; then echo "V3_IMAGE must be exactly one line"; exit 1; fi
+            grep -Fqx "V3_IMAGE=${IMAGE_PIN}" "$A_ENV" || { echo "V3_IMAGE value mismatch"; exit 1; }
             docker pull "$IMAGE_PIN"
             cd "$A_DIR"
             RENDERED="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["5151-web-A"]["image"])')"
@@ -411,8 +416,13 @@ jobs:
             B_DIR="$HOME/5151-shadow/web-b"
             DOCKER=/usr/local/bin/docker
             if [ ! -f "$B_DIR/docker-compose.yml" ]; then echo "B_GROUP_SKIPPED reason=no_compose dir=$B_DIR"; exit 0; fi
-            printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" > "$B_DIR/.env"
-            chmod 600 "$B_DIR/.env"
+            B_ENV="$B_DIR/.env"
+            cp -p "$B_ENV" "$B_ENV.bak"
+            B_MODE="$(stat -c '%a' "$B_ENV")"
+            if grep -q '^V3_IMAGE=' "$B_ENV"; then sed -i "s|^V3_IMAGE=.*|V3_IMAGE=${IMAGE_PIN}|" "$B_ENV"; else printf 'V3_IMAGE=%s\n' "$IMAGE_PIN" >> "$B_ENV"; fi
+            chmod "$B_MODE" "$B_ENV"
+            if [ "$(grep -c '^V3_IMAGE=' "$B_ENV")" != "1" ]; then echo "V3_IMAGE must be exactly one line"; exit 1; fi
+            grep -Fqx "V3_IMAGE=${IMAGE_PIN}" "$B_ENV" || { echo "V3_IMAGE value mismatch"; exit 1; }
             "$DOCKER" pull "$IMAGE_PIN"
             cd "$B_DIR"
             RENDERED="$("$DOCKER" compose config --images | head -1)"
