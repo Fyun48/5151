@@ -14,11 +14,15 @@ import {
   getListing,
   listingSearchBuildContext,
   preloadDecorationProviderAsync,
+  sqliteHandle,
 } from "./db.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingsRepository } from "./repository/listings.js";
+import { getSettingsAsync } from "./settingsAsync.js";
+import { defaultUserIdAsync } from "./usersAsync.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -40,11 +44,20 @@ export async function getListingAsync(postId, userId, options = {}) {
     // shape the decorators see is identical.
     const [row] = await repository.hydrate([id]);
     if (!row) return row;
-    const uid = deps.resolveUserId(userId);
+    // 同步 `resolveUserId(null)` 會走 `defaultUserId()` → `ensureUser()` 讀本機 users（開閘會拋）。
+    // 開閘時改用 PG 的 `defaultUserIdAsync()`（讀 PG users，行為與同步版同義：null/0 → 預設管理員）。
+    const uid = sqliteHandleIsUsable(sqliteHandle())
+      ? deps.resolveUserId(userId)
+      : (userId == null || !Number(userId) ? await defaultUserIdAsync({ ...options, exec }) : Number(userId));
     if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MEMBER_DETAIL, viewerId: uid })) {
       return undefined;
     }
-    const settings = options.settings || deps.getSettings(uid);
+    // 開閘後沒有可用的 SQLite handle，同步 `deps.getSettings()` 會拋；改讀 PG 的 settings。
+    // 未開閘（本機／parity 測試）維持原同步讀取，行為逐字不變。
+    const settings = options.settings
+      || (sqliteHandleIsUsable(sqliteHandle())
+        ? deps.getSettings(uid)
+        : await getSettingsAsync(uid, { ...options, exec }));
     const sameHouse = options.sameHouse !== false;
     const matchVoteUserId = options.matchVoteUserId == null ? uid : Number(options.matchVoteUserId) || 0;
     const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
@@ -66,6 +79,8 @@ export async function getListingAsync(postId, userId, options = {}) {
   } catch (error) {
     // A detail page must not go blank because PostgreSQL hiccuped.
     if (options.strict) throw error;
+    // 開閘後沒有可用的 SQLite handle，同步 `getListing()` 一定拋（proxy）；不要再回退到它。
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     return getListing(postId, userId, options);
   }
 }

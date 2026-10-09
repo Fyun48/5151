@@ -32,6 +32,8 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
+import { demandPgDdlStatements } from "./demandPgSchema.js";
 // 可見性與公開視圖是**純函式**，直接重用（與 closeSelfListing 那批同一個做法）。
 import { WISH_SURFACE, wishVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import { createPublicToken, publicInactiveWishView } from "./wishLifecycle.js";
@@ -144,13 +146,21 @@ function normalizeResult(raw) {
 }
 
 const schemaReady = new WeakMap();
-export async function ensureDemandStoreOnce(pgDriver) {
+export async function ensureDemandStoreOnce(pgDriver, sqliteDb = sqliteHandle()) {
   if (!pgDriver) return;
   if (schemaReady.has(pgDriver)) return schemaReady.get(pgDriver);
   const ready = (async () => {
-    const mirrored = await ensurePgSchema(pgDriver, sqliteHandle(), { tables: DEMAND_TABLES });
-    for (const sql of DEMAND_PG_ALTER_STATEMENTS) await pgDriver.exec(sql);
-    return mirrored;
+    if (sqliteHandleIsUsable(sqliteDb)) {
+      // 有可用的 SQLite handle：維持原本鏡射路徑（本機開發／parity 測試），行為逐字不變。
+      const mirrored = await ensurePgSchema(pgDriver, sqliteDb, { tables: DEMAND_TABLES });
+      for (const sql of DEMAND_PG_ALTER_STATEMENTS) await pgDriver.exec(sql);
+      return mirrored;
+    }
+    // 開閘（沒有可用的 SQLite handle）：走 PG 原生 DDL（建表＋補欄＋索引）。
+    // ADD COLUMN IF NOT EXISTS 涵蓋「cutover 已鏡射建好、之後才加的欄位」，不再需要 sqlite 當權威。
+    const statements = demandPgDdlStatements();
+    for (const sql of statements) await pgDriver.exec(sql);
+    return { statements: statements.length, tables: DEMAND_TABLES };
   })();
   schemaReady.set(pgDriver, ready);
   try {
@@ -346,7 +356,8 @@ export async function expireOpenPostsAsync(run, now = new Date()) {
   const stamp = iso(now);
   // 本機 handle 也要跑一次：還沒搬完的讀取（以及讀取失敗時的回退）看的是它。
   // 這與 reportDemand 的隱藏同一個處置——PG 是真的來源，本機追上才不會兩個 store 不一致。
-  expireOpenPosts(sqliteHandle(), now);
+  // 開閘（沒有可用的 SQLite handle）時不跑本機鏡像。
+  if (sqliteHandleIsUsable(sqliteHandle())) expireOpenPosts(sqliteHandle(), now);
   if (isWishLifecycleExpiryEnabled()) {
     await run(EXPIRE_CONFIRM_SQL, EXPIRE_CONFIRM_PARAMS(stamp));
     await run(EXPIRE_PAUSE_SQL, EXPIRE_PAUSE_PARAMS(stamp, expireGraceCutoff(now)));

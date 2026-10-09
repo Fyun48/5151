@@ -310,7 +310,7 @@ import {
 import { executeWithProvider } from "./providers/executeWithProvider.js";
 // 2.4：provider／budget 的讀寫都走同一個 driver-aware store。
 import { budgetStore } from "./budgetStore.js";
-import { DSH_NO_OPEN_MARKER } from "./sqliteHandle.js";
+import { DSH_NO_OPEN_MARKER, sqliteHandleIsUsable } from "./sqliteHandle.js";
 import {
   ensureListingSimilaritySchema,
   enqueueListingSimilarity,
@@ -4037,18 +4037,23 @@ export function rejectSuspectedMatch(postId, userId, { peerId, admin = false } =
   const now = new Date().toISOString();
   if (existing?.vote !== "split") {
     const peer = db.prepare("SELECT match_level FROM listings WHERE post_id = ?").get(otherId);
-    db.prepare(
-      `INSERT INTO user_match_votes (user_id, post_id, peer_id, vote, confidence, created_at, updated_at)
-       VALUES (?, ?, ?, 'split', ?, ?, ?)
-       ON CONFLICT(user_id, post_id, peer_id) DO UPDATE SET
-         vote = 'split',
-         confidence = excluded.confidence,
-         updated_at = excluded.updated_at`,
-    ).run(uid, lo, hi, pairConfidence(listing, peer), now, now);
-    db.prepare(
-      `INSERT INTO user_match_signals (user_id, post_id, peer_id, type, weight, created_at)
-       VALUES (?, ?, ?, 'split', 1, ?)`,
-    ).run(uid, lo, hi, now);
+    // A③：user_match_votes／user_match_signals 的寫入分歧。PG 才是唯一真相（async 路徑
+    // `sameHouseAsync.rejectSuspectedMatchAsync` 寫 PG）；這裡的同步寫入只在「真的 SQLite handle
+    // 可用」時才寫，開閘（handle 是拋錯 proxy）後自然不寫——不刪 PG 那條。
+    if (sqliteHandleIsUsable(db)) {
+      db.prepare(
+        `INSERT INTO user_match_votes (user_id, post_id, peer_id, vote, confidence, created_at, updated_at)
+         VALUES (?, ?, ?, 'split', ?, ?, ?)
+         ON CONFLICT(user_id, post_id, peer_id) DO UPDATE SET
+           vote = 'split',
+           confidence = excluded.confidence,
+           updated_at = excluded.updated_at`,
+      ).run(uid, lo, hi, pairConfidence(listing, peer), now, now);
+      db.prepare(
+        `INSERT INTO user_match_signals (user_id, post_id, peer_id, type, weight, created_at)
+         VALUES (?, ?, ?, 'split', 1, ?)`,
+      ).run(uid, lo, hi, now);
+    }
     addUserEvent({
       user_id: uid,
       post_id: Number(postId),

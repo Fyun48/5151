@@ -4925,7 +4925,7 @@ const DEMAND_MUTATIONS = [
   {
     name: "過期掃描只寫 PG（本機 handle 不追 ⇒ 回退路徑看到舊狀態）",
     file: DEMAND_SRC,
-    from: "  expireOpenPosts(sqliteHandle(), now);\n",
+    from: "  if (sqliteHandleIsUsable(sqliteHandle())) expireOpenPosts(sqliteHandle(), now);\n",
     to: "",
     expect: "兩個 store 都改",
   },

@@ -5,6 +5,8 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
+import { sponsorEntitlementPgDdlStatements } from "./sponsorEntitlementPgSchema.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
 import { setUserPlanAsync } from "./usersAsync.js";
 import {
@@ -26,11 +28,26 @@ function iso(value) {
   return (value instanceof Date ? value : new Date(value || Date.now())).toISOString();
 }
 
+async function ensureSponsorEntitlementStore(pgDriver, sqliteDb = sqliteHandle()) {
+  if (sqliteHandleIsUsable(sqliteDb)) {
+    // 有可用的 SQLite handle：維持原本鏡射路徑（本機開發／parity 測試），行為逐字不變。
+    await ensurePgSchema(pgDriver, sqliteDb, { tables: SPONSOR_ENTITLEMENT_TABLES });
+    return;
+  }
+  // 開閘（沒有可用的 SQLite handle）：走 PG 原生 DDL（建表＋補欄＋索引＋唯一後盾）。
+  // migration v11 的這三張表在正式庫尚未建出，這裡用 PG 原生路徑冪等建立。
+  for (const statement of sponsorEntitlementPgDdlStatements()) await pgDriver.exec(statement);
+}
+
+export function ensureSponsorEntitlementStoreForTest(pgDriver, sqliteDb) {
+  return ensureSponsorEntitlementStore(pgDriver, sqliteDb);
+}
+
 async function entitlementExec(options = {}) {
   const driver = resolveDbDriver(options);
   if (driver === "postgres") {
     const pgDriver = options.pgDriver || (await sharedPgDriver());
-    await ensurePgSchema(pgDriver, sqliteHandle(), { tables: SPONSOR_ENTITLEMENT_TABLES });
+    await ensureSponsorEntitlementStore(pgDriver, sqliteHandle());
     const exec = async (sql, params = []) => pgDriver.query(toPostgresSql(sql), params);
     return { exec, pg: true };
   }
