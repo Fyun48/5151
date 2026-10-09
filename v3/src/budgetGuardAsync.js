@@ -7,9 +7,10 @@
 // 交易：每個寫入動作都在 pgDriver.withTransaction() 內完成——對應 SQLite 的 BEGIN IMMEDIATE。
 // 離線替身（options.exec）沒有交易，測試以「同一條連線連續執行」近似。
 //
-// ⚠️ PG 端兩個一定要先處理的事（見 ensureBudgetStoreOnce）：
+// ⚠️ PG 端兩個一定要先處理的事（有 SQLite handle 時見 ensureBudgetStoreOnce 的鏡射路徑，
+//    沒有 handle 時見 budgetPgSchema.js 的 PG 原生 DDL，兩邊處理的是同一件事）：
 //   1. SQLite 的 UNIQUE **表約束**不會被 pgSchema 鏡射（它是隱式索引，不在 sqlite_master 裡），
-//      所以要自己建唯一索引，否則 ON CONFLICT(...) 直接回 42P10。
+//      所以要自己建唯一索引／UNIQUE 約束，否則 ON CONFLICT(...) 直接回 42P10。
 //   2. 帶 id 的匯入不會推進 identity 序號 → 不重對齊的話第一筆 INSERT 撞 pkey
 //      （實測影子站 provider_usage_logs 有 24705 列、序號還在 1）。
 import { randomUUID } from "node:crypto";
@@ -53,6 +54,7 @@ import {
 } from "./budgetGuard.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
+import { budgetPgDdlStatements, budgetPgIdentityResyncStatements } from "./budgetPgSchema.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
@@ -66,7 +68,9 @@ function iso(now = new Date()) {
   return (now instanceof Date ? now : new Date(now)).toISOString();
 }
 
-// 每次呼叫都帶著 sqliteHandle：PG 分支要靠 SQLite schema 鏡射建表與對齊序號。
+// 每次呼叫都帶著 sqliteHandle：PG 分支原本要靠 SQLite schema 鏡射建表與對齊序號。
+// 2.4 升級層 D-0021 之後，PG 模式**不再需要** sqlite handle 才能建表（走 PG 原生 DDL）；
+// 有 handle 仍照舊鏡射（本機開發／parity 測試相容），沒有就走 budgetPgSchema 的原生路徑。
 function withConn(options, conn) {
   if (!conn || options.sqliteHandle) return options;
   return { ...options, sqliteHandle: conn };
@@ -74,15 +78,30 @@ function withConn(options, conn) {
 
 const schemaReady = new WeakSet();
 
+// PG 原生 schema（sqliteDb 缺席時）：建表＋唯一索引＋序號對齊，全部來自 budgetPgSchema.js。
+async function ensureBudgetPgNativeSchema(pgDriver) {
+  for (const statement of budgetPgDdlStatements()) {
+    await pgDriver.exec(statement);
+  }
+  for (const statement of budgetPgIdentityResyncStatements()) {
+    await pgDriver.query(statement);
+  }
+}
+
 async function ensureBudgetStoreOnce(pgDriver, sqliteDb) {
   const key = pgDriver;
   if (schemaReady.has(key)) return;
-  if (!sqliteDb) throw new Error("budget store(postgres) requires the SQLite handle for schema mirroring");
-  await ensurePgSchema(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
-  for (const spec of repo.BUDGET_UNIQUE_INDEXES) {
-    await pgDriver.exec(repo.uniqueIndexStatement(spec).sql);
+  if (sqliteDb) {
+    // 有 SQLite handle：維持原本鏡射路徑，行為完全不變（本機開發／parity 測試）。
+    await ensurePgSchema(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
+    for (const spec of repo.BUDGET_UNIQUE_INDEXES) {
+      await pgDriver.exec(repo.uniqueIndexStatement(spec).sql);
+    }
+    await resyncIdentitySequences(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
+  } else {
+    // 沒有 SQLite handle（PG_NO_SQLITE_OPEN=1 的正式 PG 模式）：走 PG 原生 DDL＋序號對齊。
+    await ensureBudgetPgNativeSchema(pgDriver);
   }
-  await resyncIdentitySequences(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
   schemaReady.add(key);
 }
 
@@ -594,4 +613,9 @@ export function saveSiteBudgetAsync(conn, input = {}, options = {}) {
 // 暴露給測試／診斷：PG 路徑跑的 builder。
 export function budgetAsyncContext() {
   return repo;
+}
+
+// 暴露給測試／診斷：直接驅動 PG 端 schema 準備（不傳 sqliteDb 即走 PG 原生 DDL）。
+export function ensureBudgetStoreOnceForTest(pgDriver, sqliteDb) {
+  return ensureBudgetStoreOnce(pgDriver, sqliteDb);
 }
