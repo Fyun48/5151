@@ -310,6 +310,7 @@ import {
 import { executeWithProvider } from "./providers/executeWithProvider.js";
 // 2.4：provider／budget 的讀寫都走同一個 driver-aware store。
 import { budgetStore } from "./budgetStore.js";
+import { DSH_NO_OPEN_MARKER } from "./sqliteHandle.js";
 import {
   ensureListingSimilaritySchema,
   enqueueListingSimilarity,
@@ -523,7 +524,13 @@ function sqliteClosedCaller() {
 }
 
 function createNoOpenSqliteProxy() {
-  return new Proxy(function sqliteClosed() {}, {
+  const target = function sqliteClosed() {};
+  // 升級層 D-0021 第二包：加一個不可枚舉 marker，讓 sqliteHandleIsUsable() 能辨識
+  // 「這是開閘時的拋錯 proxy、不是真的 SQLite handle」。marker 是 Symbol、不可枚舉，
+  // 且 get trap 對 symbol 一律回 undefined，所以加 marker 前後 `proxy[symbol]` 的行為不變——
+  // 既有對外拋錯行為逐字不變。
+  Object.defineProperty(target, DSH_NO_OPEN_MARKER, { value: true });
+  return new Proxy(target, {
     get(_target, prop) {
       if (
         prop === "then" || prop === "catch" || prop === "finally" || prop === "inspect"

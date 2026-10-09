@@ -2,6 +2,7 @@
 // 讀與寫必須同一個 store——只換一半會變成「管理介面寫 SQLite、判斷讀 PG」。
 import { getBoundBudgetDb } from "../budgetGuard.js";
 import { budgetStore } from "../budgetStore.js";
+import { resolveDbDriver } from "../dbDriver.js";
 
 function isUncertainCharge(error) {
   if (!error) return false;
@@ -55,7 +56,11 @@ export async function executeWithProvider({
   const database = db || getBoundBudgetDb();
   const budget = store || budgetStore({ sqliteDb: database, options });
   const fallback = async () => fallbackAction();
-  if (!database || typeof actionWithProvider !== "function") return fallback();
+  if (typeof actionWithProvider !== "function") return fallback();
+  // 升級層 D-0021 第二包（②）：PG 模式不需要 SQLite handle 也能 reserve/claim/settle（走 PG 原生），
+  // 所以「缺 handle」不再是 fallback 的理由。只有 sqlite driver 且真的沒 handle 才維持原 fallback 語意。
+  const driver = options.driver || resolveDbDriver();
+  if (!database && driver !== "postgres") return fallback();
   const cfg = await budget.loadEnabled(category);
   if (!cfg || !(await budget.hasCredentials(cfg))) {
     await logFallbackState(budget, { now, category, provider_code: cfg?.provider_code, event_kind: "fallback", note: "disabled_or_no_credential" });

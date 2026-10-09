@@ -58,6 +58,7 @@ import { budgetPgDdlStatements, budgetPgIdentityResyncStatements } from "./budge
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import * as repo from "./repository/budgetGuard.js";
 
 function firstRow(rows) {
@@ -91,15 +92,16 @@ async function ensureBudgetPgNativeSchema(pgDriver) {
 async function ensureBudgetStoreOnce(pgDriver, sqliteDb) {
   const key = pgDriver;
   if (schemaReady.has(key)) return;
-  if (sqliteDb) {
-    // 有 SQLite handle：維持原本鏡射路徑，行為完全不變（本機開發／parity 測試）。
+  if (sqliteHandleIsUsable(sqliteDb)) {
+    // 有「可用的」SQLite handle：維持原本鏡射路徑，行為完全不變（本機開發／parity 測試）。
+    // （開閘時 sqliteDb 是帶 marker 的拋錯 proxy，會被 sqliteHandleIsUsable 判為不可用。）
     await ensurePgSchema(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
     for (const spec of repo.BUDGET_UNIQUE_INDEXES) {
       await pgDriver.exec(repo.uniqueIndexStatement(spec).sql);
     }
     await resyncIdentitySequences(pgDriver, sqliteDb, { tables: repo.BUDGET_TABLES });
   } else {
-    // 沒有 SQLite handle（PG_NO_SQLITE_OPEN=1 的正式 PG 模式）：走 PG 原生 DDL＋序號對齊。
+    // 沒有可用的 SQLite handle（PG_NO_SQLITE_OPEN=1 的正式 PG 模式）：走 PG 原生 DDL＋序號對齊。
     await ensureBudgetPgNativeSchema(pgDriver);
   }
   schemaReady.add(key);

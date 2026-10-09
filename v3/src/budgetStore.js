@@ -9,6 +9,7 @@
 import * as pg from "./budgetGuardAsync.js";
 import * as sync from "./budgetGuard.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 
 export function sqliteBudgetStore(sqliteDb) {
   return {
@@ -49,9 +50,10 @@ export function postgresBudgetStore({ sqliteDb = null, options = {} } = {}) {
   };
 }
 
-// 依 driver 取得 store；沒給 sqliteDb 時用 bindBudgetDb() 綁定的那一個（db.js 開機時綁）。
+// 依 driver 取得 store；沒給「可用的」sqliteDb 時用 bindBudgetDb() 綁定的那一個（db.js 開機時綁）。
+// 開閘時 sqliteDb 是帶 marker 的拋錯 proxy（truthy 但不可用）——用 sqliteHandleIsUsable() 判，而不是 truthy。
 export function budgetStore({ sqliteDb = null, options = {} } = {}) {
-  const handle = sqliteDb || sync.getBoundBudgetDb();
+  const handle = sqliteHandleIsUsable(sqliteDb) ? sqliteDb : sync.getBoundBudgetDb();
   const driver = options.driver || resolveDbDriver();
   if (driver === "postgres") return postgresBudgetStore({ sqliteDb: handle, options });
   return sqliteBudgetStore(handle);
