@@ -1,0 +1,20 @@
+name: 5151-shadow-pg-agent
+
+# 5151 PG agent-check responder（角色感知）——每節點各一份。
+#
+# 硬規則：
+#   - 映像釘 digest（不准 :latest）：${PG_AGENT_IMAGE:?...} 由同目錄 .env 提供。
+#   - agent.mjs 必須掛在 /app 子樹下（這裡是 /app/pg-agent/agent.mjs:ro），
+#     否則 ESM 找不到 /app/node_modules/pg（掛到 /tmp 會 Cannot find package 'pg'）。
+#   - 密碼一律由 .env（env_file）提供，本檔不出現任何 .secret 值或 password 形狀字串。
+services:
+  pg-agent:
+    container_name: 5151-pg-agent
+    image: ${PG_AGENT_IMAGE:?set PG_AGENT_IMAGE in .env (pin a digest; no :latest)}
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["node", "/app/pg-agent/agent.mjs"]
+    volumes:
+      - ./agent.mjs:/app/pg-agent/agent.mjs:ro
