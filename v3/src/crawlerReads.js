@@ -15,6 +15,8 @@
 import {
   findBySourceKey as findBySourceKeySync,
   listMatchCandidates,
+  listingCountForSearch as listingCountForSearchSync,
+  expandSearchKeysAgainst,
   listingSearchBuildContext,
   crawlerReadsBuildContext,
   listingsNeeding591Geo,
@@ -70,6 +72,45 @@ async function scan(options, runPostgres, runSqlite) {
 // db.js listingForWatch(): the crawler's per-listing read (getListing with sameHouse:false).
 export function listingForWatchAsync(postId, userId, options = {}) {
   return getListingAsync(postId, userId, { sameHouse: false, ...options });
+}
+
+// db.js listingCountForSearch(): counts the listings already stored under a search key (or its
+// same-search aliases) so the crawler can mark a batch as "baseline" (this search was first seen
+// this round). The SQLite path reuses the synchronous db.js implementation verbatim; the
+// PostgreSQL path reads the same two facts from PostgreSQL and runs the identical pure expansion
+// (expandSearchKeysAgainst), so the baseline cannot disagree about which store it describes.
+//
+// The DISTINCT scan is memoised for 8 seconds — the same TTL as db.js storedSearchKeys() — so a
+// round that lands many batches pays the full-catalog scan only once. Deliberately no fail-open
+// to the SQLite read here: a wrong baseline (always 0) silently drops every notification, which
+// is worse than surfacing the PostgreSQL error.
+const searchKeyCountMemo = { at: 0, stored: null };
+
+export async function listingCountForSearchAsync(searchKey, options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return listingCountForSearchSync(searchKey);
+  const exec = await postgresExec(options);
+  const now = Date.now();
+  if (!searchKeyCountMemo.stored || now - searchKeyCountMemo.at > 8000) {
+    searchKeyCountMemo.stored = (await exec("SELECT DISTINCT search_key FROM listings"))
+      .map((row) => row.search_key)
+      .filter(Boolean);
+    searchKeyCountMemo.at = now;
+  }
+  const keys = expandSearchKeysAgainst(searchKeyCountMemo.stored, [searchKey].filter(Boolean));
+  if (!keys.length) return 0;
+  const rows = await exec(
+    `SELECT COUNT(*) AS n FROM listings WHERE search_key IN (${keys.map(() => "?").join(",")})`,
+    keys,
+  );
+  return Number(rows?.[0]?.n || 0);
+}
+
+// Test hook: clear the DISTINCT memo so isolated suites can pin the exact query list without
+// cross-test TTL contamination (the 8s TTL would otherwise leak between subtests in one process).
+export function resetSearchKeyCountMemoForTest() {
+  searchKeyCountMemo.at = 0;
+  searchKeyCountMemo.stored = null;
 }
 
 // db.js findBySourceKey(): the same source fingerprint under a different post_id, used by

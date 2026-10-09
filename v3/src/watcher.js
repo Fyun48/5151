@@ -9,7 +9,6 @@ import {
   getUserById,
   getMailTemplates,
   listingCount,
-  listingCountForSearch,
   listMatchCandidates,
   listingHasTrustedGeo,
   markListingOffline,
@@ -101,6 +100,7 @@ import { detailConcurrency, mapPool } from "./pool.js";
 // (see crawlerReads.js). The synchronous read stays for helpers that are still sync.
 import {
   listingForWatchAsync,
+  listingCountForSearchAsync,
   matchCandidatesAsync,
   needing591GeoAsync,
   needingAddressEnrichAsync,
@@ -1105,7 +1105,7 @@ export async function runWatch(options = {}) {
     // 下一輪又開始 ⇒ 兩輪重疊、DB 連線與 CPU 互相排擠，收集階段被拖到 40 分鐘以上。
     // 被放棄的輪次留下的是「已落地的批次 ＋ 逐批完成紀錄」，其餘下一輪再抓。
     throwIfCrawlCancelled();
-    const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;
+    const isSearchBaseline = (await listingCountForSearchAsync(batch.searchUrl)) === 0;
     searchReports.push({
       label: batch.parsed.label,
       href: batch.parsed.href,
