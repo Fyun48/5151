@@ -637,8 +637,8 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
   }
 }
 
-async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS } = {}) {
-  const confirmDays = normalizeOfflineConfirmDays(getSystemCrawl().offlineConfirmDays);
+async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS, system = null } = {}) {
+  const confirmDays = normalizeOfflineConfirmDays((system || getSystemCrawl()).offlineConfirmDays);
   const confirmed = confirmExpiredOfflineListings(confirmDays);
   const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
   crawlTelemetry.log(`下架掃描開始：待確認 ${rows.length} 筆／預算 ${limit} 筆`);
@@ -837,6 +837,7 @@ export async function runWatch(options = {}) {
     offlineSweep = await sweepOfflineListings([], {
       limit: options.skipHeavyGeo ? 12 : 40,
       budgetMs: options.sweepScanBudgetMs,
+      system: runtime.system,
     });
   } catch (error) {
     if (isCrawlCancelled()) throw error;
