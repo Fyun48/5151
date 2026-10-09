@@ -61,6 +61,8 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 // 2.3b 第二段：入列與 worker 的 queue 管理走 driver-aware 版本
 // （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
+import { crawlSourceEnabled } from "./crawlSources.js";
+import { getCrawlSourcesAsync } from "./siteContentAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
@@ -176,7 +178,9 @@ export function listingEnrichHelpers(options = {}) {
     invalidateLocationAsync: (listing, next) => invalidateListingLocationAsync(Number(next?.post_id || listing?.post_id) || 0, options),
     markGoneAsync: fwd(markListingOfflineAsync),
     markAliveAsync: fwd(markListingAliveAsync),
-    isSourceEnabled: isCrawlSourceEnabled,
+    // 開閘後同步 `isCrawlSourceEnabled()`（getCrawlSources → settingKey）讀本機 SQLite ⇒ 改讀 PG。
+    // 同步版 `isSourceEnabled` 是 SQLite 專用（見下方），PG 模式只給 async 變體。
+    isSourceEnabledAsync: async (id) => crawlSourceEnabled((await getCrawlSourcesAsync(options)).items, id),
     onFirstReady: async (listing) => {
       const age = Date.now() - (Date.parse(listing.first_seen_at || "") || 0);
       if (age > 2 * 60 * 60 * 1000) return;
@@ -200,6 +204,7 @@ export function listingEnrichHelpers(options = {}) {
     invalidateLocation: invalidateListingLocation,
     markGone: (id) => markListingOffline(id),
     markAlive: (id) => markListingAlive(id),
+    isSourceEnabled: isCrawlSourceEnabled,
   };
 }
 
