@@ -45,8 +45,11 @@ case "$AGENT" in
 esac
 
 # --- Oracle 2：本機 PG 直連（容器內 unix socket，trust，不帶密碼／不印連線字串）。 ---
+# 注意：這裡「不能」加 docker exec -i——本腳本在 CI 走 ssh `bash -s` 由 stdin 餵入，
+# `-i` 會讓 docker 續讀 stdin，把還沒被 bash 讀完的腳本吃掉（症狀：無輸出、exit 0）。
+# psql -c 不需要 stdin，所以不帶 -i。
 RECOVERY=""
-if RECOVERY_RAW="$("$DOCKER" exec -i -u postgres "$PG_CONTAINER" psql -X -w -U postgres -d postgres -tA -c 'SELECT pg_is_in_recovery()' 2>/dev/null)"; then
+if RECOVERY_RAW="$("$DOCKER" exec -u postgres "$PG_CONTAINER" psql -X -w -U postgres -d postgres -tA -c 'SELECT pg_is_in_recovery()' 2>/dev/null)"; then
   RECOVERY="$(printf '%s' "$RECOVERY_RAW" | tr -d '[:space:]')"
 fi
 case "$RECOVERY" in

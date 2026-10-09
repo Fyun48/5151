@@ -330,12 +330,10 @@ jobs:
             casa)
               HOST="$NAS_HOST"; PORT="$NAS_PORT"; USER="$NAS_USER"; KEY="$NAS_SSH_KEY"
               BACKUP_DIR="$CASA_BACKUP_DIR"
-              REMOTE_HELPER="/mnt/Storage1/docker_data/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh"
               ;;
             syn)
               HOST="$TORI_HOST"; PORT="$TORI_PORT"; USER="$TORI_USER"; KEY="$TORI_SSH_KEY"
               BACKUP_DIR="$SYN_BACKUP_DIR"
-              REMOTE_HELPER="/var/services/homes/tori/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh"
               ;;
             *)
               echo "::error::unknown selected primary role '$SELECTED_ROLE'"; exit 1 ;;
@@ -346,12 +344,20 @@ jobs:
           chmod 600 "$kf"
           trap 'rm -f "$kf"' EXIT
 
-          # 把 pg backup helper scp 到「選中的 primary」主機（沿用既有 docker exec + unix socket 方式）。
-          REMOTE_HELPER_DIR="$(dirname "$REMOTE_HELPER")"
-          ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
-            "mkdir -p '$REMOTE_HELPER_DIR'"
-          scp -o StrictHostKeyChecking=accept-new -P "$PORT" -i "$kf" \
-            "$PG_HELPER" "$USER@$HOST:$REMOTE_HELPER"
+          # 把 pg backup helper 推到「選中的 primary」主機（沿用既有 docker exec + unix socket 方式）。
+          # 兩台都走 ssh exec channel（cat 管線），不用 scp/SFTP——ssh-tori bridge 沒有 SFTP 子系統
+          # （scp 會 subsystem request failed / Connection closed），CasaOS 也統一走同一條路。
+          REMOTE_HELPER="/tmp/production-predeploy-pg-remote.sh"
+          LOCAL_SIZE="$(wc -c < "$PG_HELPER" | tr -d '[:space:]')"
+          cat "$PG_HELPER" | ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
+            "cat > '$REMOTE_HELPER' && chmod 755 '$REMOTE_HELPER'"
+          # 推完比對遠端位元組數，不一致就 fail-closed（不拿壞掉的 helper 去跑 dump）。
+          REMOTE_SIZE="$(ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
+            "test -s '$REMOTE_HELPER' && wc -c < '$REMOTE_HELPER' || echo 0" | tr -d '[:space:]')"
+          if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
+            echo "::error::PG backup helper push size mismatch (local=$LOCAL_SIZE remote=${REMOTE_SIZE:-0}); refusing to back up"
+            exit 1
+          fi
 
           # 在選中的 primary 本機 docker exec pg_dump（unix socket trust，不帶密碼）。
           # command_timeout 由下方 timeout 對齊既有的 20m；job timeout-minutes 仍是 30。
