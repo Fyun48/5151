@@ -74,7 +74,7 @@ echo "rollback_note: restore to an isolated DB and verify row counts first; swit
 cat > "$PG_EVIDENCE" <<EOF
 {
   "timestamp_utc": "$STAMP",
-  "pg_backup_host": "syn-nas",
+  "pg_backup_host": "${PREDEPLOY_PG_HOST_LABEL:-syn-nas}",
   "pg_container": "$PG_CONTAINER",
   "pg_database": "$PG_DB_NAME",
   "pg_backup_path": "$PG_DUMP",

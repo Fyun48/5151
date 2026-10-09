@@ -311,6 +311,15 @@ jobs:
             copied=0
             for legacy in /DATA/AppData/591-tracker-v2/auth.env /DATA/AppData/591-tracker/auth.env; do if [ ! -f "$DATA_HOST/auth.env" ] && [ -f "$legacy" ]; then cp "$legacy" "$DATA_HOST/auth.env"; echo "copied_auth_env_from=$legacy"; copied=1; break; fi; done
             cd /mnt/Storage1/apps/5151
+            V3_ENV=/mnt/Storage1/apps/5151/.env
+            [ -f "$V3_ENV" ] || { echo "missing CasaOS app .env at $V3_ENV"; exit 1; }
+            V3_ENV_MODE="$(stat -c '%a' "$V3_ENV")"
+            cp -p "$V3_ENV" "$V3_ENV.bak-$(date +%Y%m%d%H%M%S)"
+            if grep -q '^V3_IMAGE_PIN=' "$V3_ENV"; then sed -i "s|^V3_IMAGE_PIN=.*|V3_IMAGE_PIN=${IMAGE_PIN}|" "$V3_ENV"; else printf 'V3_IMAGE_PIN=%s\n' "$IMAGE_PIN" >> "$V3_ENV"; fi
+            chmod "$V3_ENV_MODE" "$V3_ENV"
+            if [ "$(grep -c '^V3_IMAGE_PIN=' "$V3_ENV")" != "1" ]; then echo "V3_IMAGE_PIN must be exactly one line"; exit 1; fi
+            grep -Fqx "V3_IMAGE_PIN=${IMAGE_PIN}" "$V3_ENV" || { echo "V3_IMAGE_PIN value mismatch"; exit 1; }
+            echo "casaos_env_pin=ok"
             test -f docker-compose.override.yml
             if grep -q ':latest' docker-compose.override.yml; then echo "override contains :latest"; exit 1; fi
             V3_CFG="$(docker compose -f docker-compose.yml -f docker-compose.override.yml config --format json)"

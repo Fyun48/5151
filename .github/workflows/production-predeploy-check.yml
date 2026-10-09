@@ -330,10 +330,12 @@ jobs:
             casa)
               HOST="$NAS_HOST"; PORT="$NAS_PORT"; USER="$NAS_USER"; KEY="$NAS_SSH_KEY"
               BACKUP_DIR="$CASA_BACKUP_DIR"
+              PREDEPLOY_PG_HOST_LABEL="casa-nas"
               ;;
             syn)
               HOST="$TORI_HOST"; PORT="$TORI_PORT"; USER="$TORI_USER"; KEY="$TORI_SSH_KEY"
               BACKUP_DIR="$SYN_BACKUP_DIR"
+              PREDEPLOY_PG_HOST_LABEL="syn-nas"
               ;;
             *)
               echo "::error::unknown selected primary role '$SELECTED_ROLE'"; exit 1 ;;
@@ -362,7 +364,7 @@ jobs:
           # 在選中的 primary 本機 docker exec pg_dump（unix socket trust，不帶密碼）。
           # command_timeout 由下方 timeout 對齊既有的 20m；job timeout-minutes 仍是 30。
           timeout 20m ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
-            "PREDEPLOY_PG_CONTAINER='$SELECTED_CONTAINER' PREDEPLOY_PG_DB='$PG_DB' PREDEPLOY_PG_BACKUP_DIR='$BACKUP_DIR' bash '$REMOTE_HELPER'"
+            "PREDEPLOY_PG_CONTAINER='$SELECTED_CONTAINER' PREDEPLOY_PG_DB='$PG_DB' PREDEPLOY_PG_BACKUP_DIR='$BACKUP_DIR' PREDEPLOY_PG_HOST_LABEL='$PREDEPLOY_PG_HOST_LABEL' bash '$REMOTE_HELPER'"
       - name: Pull NAS predeploy evidence
         env:
           NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
