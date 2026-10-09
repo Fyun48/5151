@@ -673,8 +673,8 @@ async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN
       } else if (decision.write === "alive") {
         await markListingAliveAsync(row.post_id, { wasOffline: Boolean(listing.offline) });
       }
-    } catch (error) {
-      if (isCrawlCancelled()) throw error;
+    } catch {
+      throwIfCrawlCancelled();
       // 探測失敗（保守）：不動狀態，下輪再試
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -702,8 +702,8 @@ async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN
       const { supported, outcome, alive } = await probeListingAliveBySource(listing);
       if (supported && classifyListingProbeWrite({ outcome, alive }).write === "alive") { await restoreListingOnlineAsync(row.post_id); restored += 1; }
       else await touchListingCheckedAsync(row.post_id);
-    } catch (error) {
-      if (isCrawlCancelled()) throw error;
+    } catch {
+      throwIfCrawlCancelled();
       await touchListingCheckedAsync(row.post_id);
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
