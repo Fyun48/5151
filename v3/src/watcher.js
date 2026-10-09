@@ -23,7 +23,6 @@ import {
   saveSettings,
   commuteRushEnabled,
   collectCommuteSettings,
-  copyUserFlags,
   touchListingChecked,
   isCrawlSourceEnabled,
   persistHpListingFields,
@@ -133,6 +132,10 @@ import { getRakuyaPageCursorsAsync, saveRakuyaPageCursorsAsync } from "./crawler
 // （見 listingMatchAsync.js 的說明）。
 import { reconcileListingByIdAsync, setListingMatchAsync } from "./listingMatchAsync.js";
 import { getMemberMailBundleAsync } from "./memberMailAsync.js";
+
+// 重刊旗標複製必須走 driver-aware 入口：正式站 DB_DRIVER=postgres 時，同步版 copyUserFlags()
+// 只寫節點本機 SQLite（讀 PG、寫本機 = 無聲孤島寫入），所以這裡改用 async 版（讀寫都依 driver）。
+import { copyUserFlagsAsync } from "./personalFlagsAsync.js";
 
 // Driver-aware notification queue: the flush loop reads the pending page and writes every channel
 // outcome through these (notifyQueueAsync.js).
@@ -1081,7 +1084,7 @@ export async function runWatch(options = {}) {
         try { await reconcileListingByIdAsync(listing.post_id, { reason: "significant_update" }); } catch { /* ignore */ }
       }
       if (!existing && prev) {
-        const copied = copyUserFlags(prev.post_id, listing.post_id);
+        const copied = await copyUserFlagsAsync(prev.post_id, listing.post_id);
         if (copied || prev.hidden || prev.viewed) {
           await setListingMatchAsync(listing.post_id, {
             match_post_id: prev.post_id,

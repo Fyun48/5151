@@ -11,6 +11,7 @@
 // （watchLimits）也是各台自己算。2026-09-26 實測 user_listing_flags 為 705／736／711。
 import {
   adminEmailForUser,
+  copyUserFlagsForRelist,
   emptyFlags,
   loadFlagMap as loadFlagMapSync,
   loadFlags as loadFlagsSync,
@@ -43,6 +44,8 @@ import { toPostgresSql } from "./sqlDialect.js";
 export const FLAGS_BY_USER_POST_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ? AND post_id = ?";
 // `loadFlagMap()` 的語句（同步版逐字相同）。
 export const FLAGS_BY_USER_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ?";
+// `copyUserFlagsForRelist()` 的來源查詢（同步版逐字相同）：讀某個 post_id 的所有會員旗標。
+const FLAGS_BY_POST_SQL = "SELECT * FROM user_listing_flags WHERE post_id = ?";
 const COUNT_WATCHED_SQL = "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1";
 const SET_WATCH_GROUP_SQL = "UPDATE user_listing_flags SET watch_group_id = ? WHERE user_id = ? AND post_id = ?";
 const USER_BY_EMAIL_SQL = "SELECT id, role, plan FROM users WHERE email = ? LIMIT 1";
@@ -217,6 +220,56 @@ export async function clearListingFlagsByUserAsync(kind, userId, options = {}) {
     return clearListingFlagsByUserDb(kind, userId);
   }
   return clearListingFlagsByUser(kind, userId, options);
+}
+
+// ── 重刊旗標複製（`copyUserFlagsForRelist()`）────────────────────────────────
+//
+// db.js copyUserFlags() 的 driver-aware 版。原本只寫 `db`（節點本機 SQLite），
+// 正式站 DB_DRIVER=postgres 時讀的是 PG ⇒ 這筆寫入落在沒人讀的本機庫（無聲孤島寫入）。
+// PG 模式下：來源旗標從 PG 讀、目標也寫進 PG（同一份規則與語句）。**PG 失敗就往上丟**
+// （fail-closed），不落回本機 SQLite——寫本機等於重現同一個 bug。
+export async function copyUserFlagsAsync(fromPostId, toPostId, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    return copyUserFlagsForRelist(sqliteHandle(), fromPostId, toPostId);
+  }
+  const fromId = Number(fromPostId) || 0;
+  const toId = Number(toPostId) || 0;
+  if (!fromId || !toId || fromId === toId) return 0;
+  const exec = await pgExec(options);
+  const rows = await exec(FLAGS_BY_POST_SQL, [fromId]);
+  let copied = 0;
+  for (const row of rows || []) {
+    let flags;
+    if (Number(row.hidden) || Number(row.viewed)) {
+      flags = {
+        hidden: true,
+        viewed: true,
+        watched: Boolean(Number(row.watched)),
+        watch_note: row.watch_note || "",
+      };
+    } else if (Number(row.watched) || String(row.watch_note || "").trim()) {
+      flags = { watched: Boolean(Number(row.watched)), watch_note: row.watch_note || "" };
+    } else {
+      continue;
+    }
+    const uid = Number(row.user_id) || 0;
+    // 與同步版 setUserListingFlags() 同義：目標若已有這一列，就沿用它的時間戳再覆寫。
+    const prev = one(await exec(FLAGS_BY_USER_POST_SQL, [uid, toId])) || emptyFlags();
+    const next = stampFlags(prev, flags, new Date().toISOString());
+    await exec(WRITE_PATH_SQL.upsertPersonalFlags, [
+      uid,
+      toId,
+      int(next.viewed),
+      int(next.watched),
+      int(next.hidden),
+      String(next.watchNote || ""),
+      text(next.viewedAt),
+      text(next.watchedAt),
+      text(next.hiddenAt),
+    ]);
+    copied += 1;
+  }
+  return copied;
 }
 
 // ── 讀取（`loadFlags()`／`loadFlagMap()`）────────────────────────────────────
