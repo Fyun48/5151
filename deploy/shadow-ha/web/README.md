@@ -5,6 +5,11 @@
 HAProxy round-robin 兩台；公開站經 Cloudflare Tunnel 進 CasaOS 的 `25153`。
 實際容器、埠與 tunnel ingress 見 `docs/infra/containers.md`。
 
+> **⚠️ 現況（2026-10-08）——「Shadow」是歷史命名**：這份目錄的庫名仍叫 `5151_shadow`，但它是
+> **正式站業務庫**（primary `5151-postgres-B`，casa `5151-postgres-A` 是 hot standby），不是影子站。
+> 兩台各有 HAProxy（CasaOS `5151-haproxy`、Synology `5151-haproxy-B`，見下方拓撲）。容器
+> `5151-crawler` 已 Exited 約兩週，實際在跑的爬蟲是 `591-tracker-v3`。
+
 **發版（兩台必須同 digest）**：`deploy-v3.yml` 的
 `Recreate A-group web node with the same digest`（SSH 進 CasaOS）與
 `Recreate B-group web node with the same digest (Synology)`（Cloudflare Access bridge
