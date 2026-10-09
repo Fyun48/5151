@@ -553,7 +553,7 @@ const WISHLIFECYCLE_MUTATIONS = [
   {
     name: "更新只寫 PG，不讓本機 handle 追上（還沒搬完的讀取會看到舊資料）",
     file: WISHLIFECYCLE_SRC,
-    from: "    writeRow(sqliteHandle(), row.id, fields, extra);\n",
+    from: "    if (sqliteHandleIsUsable(sqliteHandle())) writeRow(sqliteHandle(), row.id, fields, extra);\n",
     to: "",
     expect: "正規化的欄位與落地狀態",
   },
@@ -4882,8 +4882,8 @@ const DEMAND_MUTATIONS = [
   {
     name: "靜默吞掉 PG 的錯誤（寫入失敗會變成無聲的分歧）",
     file: DEMAND_SRC,
-    from: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    return runSqlite();\n  }",
-    to: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) return null;\n    return runSqlite();\n  }",
+    from: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) throw error;\n    // 開閘（沒有可用的 SQLite handle）時不回退同步 SQLite 版：把 PG 的原始錯誤往上丟（#678 同形）。\n    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;\n    return runSqlite();\n  }",
+    to: "  } catch (error) {\n    if (!sqliteFallbackAllowed(options, { write })) return null;\n    // 開閘（沒有可用的 SQLite handle）時不回退同步 SQLite 版：把 PG 的原始錯誤往上丟（#678 同形）。\n    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;\n    return runSqlite();\n  }",
     expect: "fail-closed",
   },
   {
@@ -4911,8 +4911,8 @@ const DEMAND_MUTATIONS = [
     // CI 的 live PG 就是抓到這一條：只寫本機 handle，PG 上那一列還是 open。
     name: "隱藏不寫 PG（只寫本機 handle ⇒ PG 模式下等於沒有隱藏）",
     file: DEMAND_SRC,
-    from: "      await applyReportHideEffectsAsync(run, kind, id, now);\n      applyReportHideEffects(sqliteHandle(), kind, id, now);",
-    to: "      applyReportHideEffects(sqliteHandle(), kind, id, now);",
+    from: "      await applyReportHideEffectsAsync(run, kind, id, now);\n      if (sqliteHandleIsUsable(sqliteHandle())) applyReportHideEffects(sqliteHandle(), kind, id, now);",
+    to: "      if (sqliteHandleIsUsable(sqliteHandle())) applyReportHideEffects(sqliteHandle(), kind, id, now);",
     expect: "兩邊都變成 hidden",
   },
   {

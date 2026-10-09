@@ -184,3 +184,48 @@ deploy-v3.yml 的 A/B 組步驟是 `printf 'V3_IMAGE=…\n' > .env`（**整份�
 - **因此**：每次發版後，都要重跑 `bash v3/scripts/sqlite-gate.sh status` 確認三台閘值；
   web-a/web-b 若被洗掉，再 `bash v3/scripts/sqlite-gate.sh on 5151-web-A 5151-web-B` 重設。
   （長期解法是讓 deploy-v3.yml 改用「只動 V3_IMAGE 一行」的寫法，另開 PR，不在此包範圍。）
+
+## 7. 寫入面複驗（批 D）
+
+> 批 D 把 §5 表格那 5 支「先寫 PG、再讓本機 handle 追上」的無守衛鏡射，連同
+> `addDemandReplyAsync` 與 `getDemandPostAsync` 的同步 fallback，全部用
+> `sqliteHandleIsUsable()` 包起來（開閘 ⇒ 不鏡射、不回退；未開閘 ⇒ 行為逐字不變）。
+> 同時把 `deploy-v3.yml` 對 web-a／web-b 的 `.env` 從整份覆寫改成「單鍵寫入」，
+> 讓開閘後再發版不會把 `PG_NO_SQLITE_OPEN=1` 靜默洗掉（§6 那條警示在此包修掉）。
+
+### 7.1 單測（離線，原數字）
+
+| 測試 | 結果 |
+|---|---|
+| `v3/test/demand-gate-write.test.js`（新增：開閘六支寫入不碰 SQLite、PG reject 抛原始錯誤、讀取 fallback 不回退） | 4/4 |
+| `v3/test/deploy-v3-env-write.test.js`（新增：單鍵寫入 bash -n＋跑兩次不洗第二鍵） | 3/3 |
+| `v3/test/mutation-anchors.test.js`（3 支 source-text 錨點已同步更新） | 1/1 |
+| demand／wish 全系列（demand*.test.js＋wish*.test.js，live 項以 `PG_LIVE_REPRO_URL` 觸發） | 192 pass／1 skip（live 未設環境） |
+
+### 7.2 live 列數（repro 隔離庫，`PG_NO_SQLITE_OPEN=1`）
+
+六支寫入（report／reply／update／publish／reopen／close）開閘下全部回 `ok: true`、
+無 `business SQLite is closed`；寫入前後列數：
+
+| 表 | 寫入前 | 寫入後 | 變化 |
+|---|---|---|---|
+| `demand_posts` | 37 | 37 | 0（六支都是 UPDATE，不 INSERT） |
+| `demand_replies` | 1 | 2 | **PG +1**（`addDemandReplyAsync`） |
+| `user_match_votes` | 1 | 1 | 0（無誤寫） |
+| `user_match_signals` | 1 | 1 | 0（無誤寫） |
+
+節點 SQLite：開閘下 `DATA_DIR/v3.db` **未建立**（`nodeV3dbCreated: false`）。
+
+### 7.3 有資料差分（閘關 vs 閘開，逐欄位）
+
+往 repro 塞一筆有資料的 `demand_posts`（`districts=["1-5","1-7"]`）＋兩則 `demand_replies`＋
+各一筆 `user_match_votes`／`user_match_signals`，再以 `getDemandPostAsync` 讀回同一則：
+
+| 欄位 | 閘關 | 閘開 | 一致 |
+|---|---|---|---|
+| `status` | `open` | `open` | ✅ |
+| `districts` | `["1-5","1-7"]` | `["1-5","1-7"]` | ✅ |
+| `replies[0]` | `{body:"第一則回覆",hidden:false}` | 同左 | ✅ |
+| `replies[1]` | `{body:"第二則回覆",hidden:false}` | 同左 | ✅ |
+
+（`id` 因每次 seed 都用新 identity 而不同，非漂移；`replies`／`districts`／`status` 逐字相同。）
