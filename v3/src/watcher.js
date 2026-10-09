@@ -12,7 +12,6 @@ import {
   listMatchCandidates,
   listingHasTrustedGeo,
   markListingOffline,
-  confirmExpiredOfflineListings,
   restoreListingOnline,
   markListingAlive,
   eventPayloadFromListing,
@@ -115,6 +114,7 @@ import {
 } from "./crawlerReads.js";
 // ... and the write half: the loops must store their results in the same store (crawlerWrites.js).
 import {
+  confirmExpiredOfflineAsync,
   invalidateListingLocationAsync,
   markListingAliveAsync,
   markListingOfflineAsync,
@@ -639,7 +639,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
 
 async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS, system = null } = {}) {
   const confirmDays = normalizeOfflineConfirmDays((system || getSystemCrawl()).offlineConfirmDays);
-  const confirmed = confirmExpiredOfflineListings(confirmDays);
+  const confirmed = await confirmExpiredOfflineAsync({ days: confirmDays });
   const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
   crawlTelemetry.log(`下架掃描開始：待確認 ${rows.length} 筆／預算 ${limit} 筆`);
   let checked = 0;

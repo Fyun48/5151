@@ -100,10 +100,12 @@ test("legacy 路徑：有 sqliteDb 時仍走鏡射（不回退原生 DDL、行�
   assert.equal(resync.filter((sql) => sql.includes("setval")).length, 1, "鏡射路徑也要對齊一筆序號");
 });
 
-test("下架掃描：開閘後改吃 runtime.system（不再同步讀 getSystemCrawl）", () => {
+test("下架掃描：開閘後改吃 runtime.system＋confirmExpiredOfflineAsync（不再同步讀寫 SQLite）", () => {
   const watcher = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(watcher, /system: runtime\.system/, "runWatch 要把已載好的 runtime.system 傳給下架掃描");
   assert.match(watcher, /\(system \|\| getSystemCrawl\(\)\)\.offlineConfirmDays/, "下架掃描要優先吃傳入的 system");
+  assert.match(watcher, /await confirmExpiredOfflineAsync\(\{ days: confirmDays \}\)/, "確認下線的同步 UPDATE 要改走 driver-aware 的 confirmExpiredOfflineAsync");
+  assert.doesNotMatch(watcher, /confirmExpiredOfflineListings\(confirmDays\)/, "不得再用同步版 confirmExpiredOfflineListings（開閘會碰 db.prepare）");
 });
 
 test("原生 DDL 與序號對齊語句的形狀（逐字對齊正式庫結構）", () => {
