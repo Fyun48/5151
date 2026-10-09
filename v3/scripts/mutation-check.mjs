@@ -4454,8 +4454,8 @@ const SRCRECOVERY2_MUTATIONS = [
   {
     name: "落地階段不理會整輪取消（預算用盡後仍把上萬筆寫完，下一輪重疊）",
     file: "v3/src/watcher.js",
-    from: "    throwIfCrawlCancelled();\n    const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;",
-    to: "    const isSearchBaseline = listingCountForSearch(batch.searchUrl) === 0;",
+    from: "    throwIfCrawlCancelled();\n    const isSearchBaseline = (await listingCountForSearchAsync(batch.searchUrl)) === 0;",
+    to: "    const isSearchBaseline = (await listingCountForSearchAsync(batch.searchUrl)) === 0;",
     expect: "落地階段要真的停下來",
   },
   {
