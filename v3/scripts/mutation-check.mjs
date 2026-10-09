@@ -2804,8 +2804,10 @@ const NOTIFYFLUSH_MUTATIONS = [
   {
     name: "flush 的逐會員設定改讀本機（暫停通知的會員照樣被通知）",
     file: NOTIFYFLUSH_SRC,
-    from: "    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;",
-    to: "    const userSettings = userId ? getSettings(userId) : settings;",
+    // 批次 F 起 resolvePendingNotifyLocations 也用同一行（async）⇒ 錨點要連下一行才唯一
+    // （那裡的下一行是 `listingForWatchAsync(event.post_id, userId || undefined)`，無 options）。
+    from: "    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);",
+    to: "    const userSettings = userId ? getSettings(userId) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);",
     expect: "暫停旗標以 PG 為準",
   },
   {
@@ -2832,6 +2834,32 @@ const NOTIFYFLUSH_MUTATIONS = [
     to: "  settings = settings || getSettings();\n  await bindNotifyJobSnapshotsFor(options);",
     // 同上：站台設定的讀取在離線夾具裡的差異由接線那條守住。
     expect: "不得再用同步的",
+  },
+];
+
+// sqlite-exit 批次 F：web 開閘前最後一批「同族殘留」的同步 SQLite 呼叫點
+// （v3/test/sqlite-exit-web-callers.test.js）。
+const SQLITEEXITWEB_MUTATIONS = [
+  {
+    name: "resolvePendingNotifyLocations 逐會員設定改讀本機（開閘後同步 getSettings 拋 business SQLite is closed）",
+    file: "v3/src/watcher.js",
+    from: "    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;\n    if (!shouldNotify(userSettings, listing, event)) continue;",
+    to: "    const userSettings = userId ? getSettings(userId) : settings;\n    if (!shouldNotify(userSettings, listing, event)) continue;",
+    expect: "resolvePendingNotifyLocations 用 async",
+  },
+  {
+    name: "驗證碼過期通知信改讀本機（開閘後同步 getMailTemplates/getStoredSmtp 拋）",
+    file: "v3/src/server.js",
+    from: "        onExpire: (user) => {\n          if (user?.email) return queueSystemMailAsync(\"verify_expired\", user.email);\n        },",
+    to: "        onExpire: (user) => {\n          if (user?.email) queueSystemMail(\"verify_expired\", user.email);\n        },",
+    expect: "驗證碼過期信走 async",
+  },
+  {
+    name: "onExpire 的 async 工作不等待（寄信失敗被吞、成功路徑未完成就回傳）",
+    file: "v3/src/accountMaintenanceAsync.js",
+    from: "      if (typeof onExpire === \"function\") await onExpire(user);",
+    to: "      if (typeof onExpire === \"function\") onExpire(user);",
+    expect: "onExpire 的 async 工作被等待",
   },
 ];
 
@@ -6215,6 +6243,7 @@ const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATION
   : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
   : /crawl-external-rotation/.test(testFile) ? EXTERNALROT_MUTATIONS  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
+  : /sqlite-exit-web-callers/.test(testFile) ? SQLITEEXITWEB_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS
   : /email-verify-async/.test(testFile) ? VERIFY_MUTATIONS
   : /forgot-password-async/.test(testFile) ? FORGOT_MUTATIONS

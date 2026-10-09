@@ -62,7 +62,7 @@ export async function expireStaleVerifyTokensAsync({ now = Date.now(), onExpire 
     let n = 0;
     for (const user of stale) {
       await exec(CLEAR_STALE_VERIFY_SQL, [user.id]);
-      if (typeof onExpire === "function") onExpire(user);
+      if (typeof onExpire === "function") await onExpire(user);
       n += 1;
     }
     return n;
