@@ -24,6 +24,8 @@ services:
       PG_URL: ${PG_URL:-}
       # 正式部署（DB_DRIVER=postgres）一律 strict：讀寫都不回退本機 SQLite。
       PG_SQLITE_FALLBACK: ${PG_SQLITE_FALLBACK:-strict}
+      # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）；預設 0＝不影響現行行為。
+      PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-0}
     volumes:
       - /DATA/AppData/591-tracker-v3:/data
       - /DATA/AppData/591-tracker:/v1-data:ro
