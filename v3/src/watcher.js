@@ -626,7 +626,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
     const userId = Number(event.user_id) || 0;
     const listing = await listingForWatchAsync(event.post_id, userId || undefined);
     if (!listing) continue;
-    const userSettings = userId ? getSettings(userId) : settings;
+    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;
     if (!shouldNotify(userSettings, listing, event)) continue;
     if (decideNotifyDelivery(listing, {
       ...userSettings,

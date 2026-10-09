@@ -4616,7 +4616,7 @@ async function tick(reason = "schedule") {
       // 帳號維護必須與其他節點同源：PG 模式下只寫本機 SQLite 會讓兩台各自標記過期／暫停。
       await traceStep("expireStaleVerifyTokens", expireStaleVerifyTokensAsync({
         onExpire: (user) => {
-          if (user?.email) queueSystemMail("verify_expired", user.email);
+          if (user?.email) return queueSystemMailAsync("verify_expired", user.email);
         },
       }));
       try {
