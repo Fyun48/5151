@@ -653,7 +653,9 @@ export async function processOneEnrichJob(conn, helpers, job, {
     return { skipped: true };
   }
   job.listing_seq = Number(listing.content_seq || 0);
-  if (helpers.isSourceEnabled && !helpers.isSourceEnabled("houseprice")) {
+  // 開閘後 bundle 只有 `isSourceEnabledAsync`（PG 讀）；SQLite bundle／舊呼叫端仍給同步版。
+  // `runHelper` 優先 async，`await` 同步版回傳的 boolean 是 no-op，兩種形狀都吃得下。
+  if ((helpers.isSourceEnabled || helpers.isSourceEnabledAsync) && !(await runHelper(helpers, "isSourceEnabled", "houseprice"))) {
     await finishJobDriver(conn, job, { status: "failed", error: "source_disabled", errorClass: "source_limited" });
     return { skipped: true };
   }
@@ -826,7 +828,9 @@ export async function processOneEnrichJob(conn, helpers, job, {
 
 export async function processListingEnrichBatch(conn, helpers, { limit = 6 } = {}) {
   const queue = enrichQueueOf(helpers);
-  await queueSeed(queue, conn, { limit: 40, isEnabled: helpers.isSourceEnabled || (() => true) });
+  // PG bundle 只給 `isSourceEnabledAsync`；SQLite bundle／測試給同步 `isSourceEnabled`。
+  const isEnabled = helpers.isSourceEnabled || helpers.isSourceEnabledAsync || (() => true);
+  await queueSeed(queue, conn, { limit: 40, isEnabled });
   const jobs = await queueClaim(queue, conn, { limit });
   const results = [];
   for (const job of jobs) {

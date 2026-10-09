@@ -5549,8 +5549,10 @@ function startStartupWork() {
   setTimeout(() => {
     console.log("啟動後首次抓取：開始");
     ensureWorkCoords()
-      .then((settings) => {
-        const jobs = coveringJobsFromAllUsers({ includeSystem: true });
+      .then(async (settings) => {
+        // 開閘時同步 `coveringJobsFromAllUsers()`（coveringPlan → getLastCoveringAt → settingKey）
+        // 會讀本機 SQLite ⇒ 改成 PG 的 `coveringPlanAsync()`（讀 users／user_settings／settings）。
+        const { jobs } = await coveringPlanAsync({ includeSystem: true });
         if (!jobs.length) {
           queueGeoBackfill(settings);
           return;
