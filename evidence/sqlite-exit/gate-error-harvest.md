@@ -106,3 +106,28 @@
 - **已知代價**：開閘後這兩組「拆開」標記會回退成「同屋源」顯示（可接受）。
 - **處置**：留在節點 `/data/v3.db` 自然作廢，**不做任何正式庫寫入**（本批次 C 對正式庫只有唯讀查詢）。
 
+
+## ⑥ 正式站開閘實測（2026-10-09 22:07–23:10）——**三節點全部停用節點 SQLite**
+
+### 發版與閘
+| 時間 | 動作 | 證據 |
+|---|---|---|
+| 20:21 | `591-tracker-v3` 開閘（`sqlite-gate.sh on`） | `.env` 單鍵 `PG_NO_SQLITE_OPEN=1`、mode 600 不變、容器重建 |
+| 22:07 | `5151-web-A` 開閘 | 同上；`wal` 仍 `10-07T13:57:36` |
+| 22:10 | `5151-web-B` 開閘（syn-nas） | `wal` 仍 `10-07T12:22:40` |
+| 23:0x | 發版 `4c08f5e`（build 37946403970→predeploy 37946663871→deploy 37946971856 全 success） | 三容器 `image=sha256:d40301c82e0c…`、**發版後三台閘鍵都還在**（web-A `.env` 總鍵數 2＝`V3_IMAGE`+`PG_NO_SQLITE_OPEN`）→ **L-0422（發版洗掉閘）已被批 D 在正式站證偽** |
+
+### 開閘後正式站出現的炸點（全部「炸出來」而非猜測）
+1. **`settingKey (src/db.js:975:18)`** ×5：`第一次檢查失敗（啟動後 20069ms）`、`5168 補抓失敗`（⇒ 批 E `ec33ddf` 修：啟動首查改 `await coveringPlanAsync`；來源開關在 PG bundle 只給 `isSourceEnabledAsync`；並查出 `ops-delivery-error` 實為 `ensureFeedbackOutboxStoreOnce→tableInfo` 讀 `sqlite_master`）
+2. **`tableInfo (src/pgSchema.js:49:13)`** ×6：`rental-notify-tick`、`wish-lifecycle`、`wish-offer-expiry`（⇒ 批 G `4c08f5e` 修：**共用** `ensurePgSchema` 加 `sqliteHandleIsUsable()` 分岔走 `pgTableExists`/`pgTableInfo`，缺表直接拋；一處覆蓋 20+ 個領域呼叫端）
+
+### 同一時段「沒有壞」的證據
+- 主抓取：`來源 591：結束（109715ms，行政區 6/6，頁 12）`；`下架掃描` 按預算正常收手；`居住數據自動更新：6 筆`；`外站輪轉` 照政策延後（不計失敗）。
+- `5151-web-A`／`5151-web-B` 各 30 分鐘 `business SQLite is closed`＝**0**；公網 **200**；PG `pg_is_in_recovery()=f`、`pg_stat_replication=1`。
+- 三台 `-wal` mtime 在開閘前後**完全沒前進**＝孤島不再被寫。
+- 沙盒旁證：開閘單輪 `fetched=1896`、`covers` 前進、錯誤 0（批 E）；`fetched=1828`（批 C）；臨時 web 行程閘開掃描 47 支＋24 支（含已登入管理面）公開/會員端點 **0 差異、0 closed、0 5xx**（批 E/F）。
+
+### 仍未驗證的範圍（老實標注）
+- **164 支寫入端點**（POST/PUT/PATCH/DELETE）在閘開下**沒有做 HTTP 層**驗證；批 D 只做過函式層＋隔離庫 live 差分（`demand_replies` PG +1、節點 `v3.db` 未建立）。
+- 抽樣比對是「同端點同參數、閘關 vs 閘開」；**尚未**做「塞大量真實列後的逐欄位全形比對」。
+- **UI/UX 那場之前**，必須先把「篩選呈現速度」（無關鍵字 28.1 秒／`q=套房` 6.15 秒）這條查清——已另開工作場（基線在此檔 ⑥，SQL 級診斷另行交付）。
