@@ -19,8 +19,8 @@
 #   CONFIRM_FAILOVER=yes FENCED=yes bash drill.sh failover     # 在「要 promote 的那台」上跑
 #
 # 環境變數：
-#   PG_CONTAINER=5151-postgres-B        本機要操作的容器（預設 primary = Synology 的 B）
-#   PG_CONTAINER_PEER=5151-postgres-A   報告用的對側容器名（純記錄，不會去連它）
+#   PG_CONTAINER=5151-postgres-A        本機要操作的容器（預設 primary = CasaOS 的 A）
+#   PG_CONTAINER_PEER=5151-postgres-B   報告用的對側容器名（純記錄，不會去連它）
 #   PG_DATABASE=5151_shadow、HAPROXY_HOST=192.168.0.140、PG_RW_PORT=25433
 #   DRILL_REPORT_DIR=<dir>（預設 <本檔目錄>/drill-reports）
 set -euo pipefail
@@ -28,8 +28,8 @@ set -euo pipefail
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-PG_CONTAINER="${PG_CONTAINER:-5151-postgres-B}"
-PG_CONTAINER_PEER="${PG_CONTAINER_PEER:-5151-postgres-A}"
+PG_CONTAINER="${PG_CONTAINER:-5151-postgres-A}"
+PG_CONTAINER_PEER="${PG_CONTAINER_PEER:-5151-postgres-B}"
 PG_DATABASE="${PG_DATABASE:-5151_shadow}"
 HAPROXY_HOST="${HAPROXY_HOST:-192.168.0.140}"
 PG_RW_PORT="${PG_RW_PORT:-25433}"

@@ -8,7 +8,7 @@ set -euo pipefail
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-CONTAINER="${CONTAINER:-5151-postgres-B}"   # 預設 primary = Synology（5151-postgres-B）
+CONTAINER="${CONTAINER:-5151-postgres-A}"   # 預設 primary = CasaOS（5151-postgres-A）
 REPL_PASSWORD="${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD}"
 
 "${DOCKER}" exec -i "$CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 <<SQL

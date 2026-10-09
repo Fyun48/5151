@@ -14,7 +14,7 @@ set -euo pipefail
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-CONTAINER="${CONTAINER:-5151-postgres-B}"   # 預設 primary = Synology（5151-postgres-B）
+CONTAINER="${CONTAINER:-5151-postgres-A}"   # 預設 primary = CasaOS（5151-postgres-A）
 REPL_USER="${REPL_USER:-replicator}"
 REPL_CIDRS="${REPL_CIDRS:-192.168.0.0/24 172.16.0.0/12}"
 

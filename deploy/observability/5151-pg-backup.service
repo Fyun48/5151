@@ -1,5 +1,5 @@
 [Unit]
-Description=5151 PostgreSQL scheduled backup (daily, from standby)
+Description=5151 PostgreSQL scheduled backup (daily, from primary via HAProxy pg-rw)
 Documentation=repo:deploy/observability/README.md
 After=docker.service
 Requires=docker.service
@@ -7,6 +7,10 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart=/opt/5151-scripts/pg-backup.sh
+# PG_URL（app 連線字串，含密碼）由主機端 env_file 注入，絕不放進 repo／unit。
+# 路徑＝app 的 .env（CasaOS：/mnt/Storage1/apps/5151/.env），部署時視主機調整；
+# 前綴「-」表示檔不存在時不報錯（腳本會因 PG_URL 未設而 fail-closed）。
+EnvironmentFile=-/mnt/Storage1/apps/5151/.env
 TimeoutStartSec=1800
 Nice=10
 IOSchedulingClass=idle

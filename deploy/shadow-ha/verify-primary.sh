@@ -7,8 +7,8 @@ set -euo pipefail
 DOCKER="${DOCKER:-docker}"
 command -v "${DOCKER}" >/dev/null 2>&1 || DOCKER=/usr/local/bin/docker
 
-# verify 的目標容器可用 PG_CONTAINER 覆寫（預設 primary = Synology 的 5151-postgres-B）。
-PG_CONTAINER="${PG_CONTAINER:-5151-postgres-B}"
+# verify 的目標容器可用 PG_CONTAINER 覆寫（預設 primary = CasaOS 的 5151-postgres-A）。
+PG_CONTAINER="${PG_CONTAINER:-5151-postgres-A}"
 
 echo "=== pg_stat_replication (primary view) ==="
 "${DOCKER}" exec "${PG_CONTAINER}" psql -U postgres -tAc "SELECT client_addr, state, sync_state FROM pg_stat_replication;"

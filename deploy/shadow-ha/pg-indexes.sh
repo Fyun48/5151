@@ -12,10 +12,10 @@
 # listings.match_verdict, user_listing_flags(user_id, post_id)).
 #
 # Usage: sh pg-indexes.sh <database> [container]
-#   On Synology (the default primary) docker lives in /usr/local/bin.
+#   On Synology docker lives in /usr/local/bin（本腳本會自動 fallback 到 docker）。
 set -e
 DB="${1:?usage: pg-indexes.sh <database> [container]}"
-CONTAINER="${2:-5151-postgres-B}"
+CONTAINER="${2:-5151-postgres-A}"
 DOCKER=/usr/local/bin/docker
 [ -x /usr/local/bin/docker ] || DOCKER=docker
 

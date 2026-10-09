@@ -89,11 +89,9 @@
 - 目錄：`/mnt/Storage1/docker_data/5151-pg-backups/`
 - 失敗一律非 0 結束 → journal 記錄 `PG_BACKUP_ALERT`。
 
-> ⚠️ **2026-10-09 變更（repo 檔尚未同步）**：本目錄的 `pg-backup.sh` 仍是**舊版「從 standby 抓」**
-> （`PG_CONTAINER` 預設 `5151-postgres-A`），與已上線的 `/opt/5151-scripts/pg-backup.sh`（改抓 primary）
-> 不一致。**舊腳本從 standby 抓，自 2026-10-02 起連 7 天 `pg_dump_failed` 卻無人察覺**，才改成抓
-> primary。把 `pg-backup.sh` 與 `5151-pg-backup.service` 的描述同步成新行為屬程式變更，另開 PR，
-> 不在本 docs PR 範圍。
+> **2026-10-09 變更（本次已同步）**：`pg-backup.sh` 與 `5151-pg-backup.service` 已從舊版「從 standby 抓」
+> 同步成現行「抓 primary」行為（背景與決策詳見 `pg-backup.sh` 檔頭註解）。背景：舊版自 2026-10-02 起
+> 連 7 天 `pg_dump_failed`（`canceling statement due to conflict with recovery`）卻無人察覺，才改成抓 primary。
 
 ### 這一項與 PITR 的關係（Owner 問過）
 

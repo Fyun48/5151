@@ -58,7 +58,7 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
 | Hot Standby | Synology | `5151-postgres-B` / `5151-shadow-pg-b` | `postgres-standby/` |
 | primary 端工具 | 在「當下的 primary」跑 | — | `postgres-primary/`（`setup-replication.sh`、`fix-pg-hba.sh`）|
 | standby 端工具 | 在「當下的 standby」跑 | — | `postgres-standby/`（`setup-standby.sh`、`standby-basebackup`）|
-| 備份 / 還原 / verify | 在「當下的 primary」跑 | `PG_CONTAINER` 預設 `5151-postgres-B`（**舊預設，見下方提醒**） | `backup/`、`verify-*.sh` |
+| 備份 / 還原 / verify | 在「當下的 primary」跑 | `PG_CONTAINER` 預設 `5151-postgres-A`（primary 端；`verify-standby.sh` 預設 `5151-postgres-B`） | `backup/`、`verify-*.sh` |
 
 > 目錄名沿用第一次 bootstrap 時的角色，之後**只有角色變、路徑不變**：兩份 compose 各自綁定
 > 自己的節點與 volume（A = CasaOS、B = Synology），誰是 primary 由 promote / 重拉 base backup 決定。
@@ -66,10 +66,9 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
 > syn `postgres-standby/` = standby），但 **volume 名仍帶歷史字樣**（「primary／standby」這些字是
 > bootstrap 時的角色，不一定是現況）——判斷節點身分**依容器名／volume 名（`…-A`／`…-B`）**，不要看
 > 目錄名；判斷「誰是 primary」最準的是直接查 `pg_is_in_recovery()`。
-> 腳本（`setup-replication.sh`、`fix-pg-hba.sh`、`verify-*.sh`、`drill.sh`）的預設容器名目前仍是
-> `5151-postgres-B`（沿用 2026-09-20 的舊預設，當時 primary 在 Synology）；2026-10-09 交回 CasaOS 後，
-> 在 primary 上跑這些腳本**一律要 `CONTAINER` / `PG_CONTAINER=5151-postgres-A` 覆寫**（把腳本預設
-> 改回 A 屬程式變更，另開 PR，不在本 docs PR 範圍）。
+> 腳本（`setup-replication.sh`、`fix-pg-hba.sh`、`verify-*.sh`、`drill.sh`、`backup/*.sh`、
+> `pg-indexes.sh`）的預設容器名已改成現行角色：primary 端（CasaOS）預設 `5151-postgres-A`、
+> standby 端（Synology）預設 `5151-postgres-B`。仍可用 `CONTAINER` / `PG_CONTAINER` 覆寫。
 
 > **Synology 的 PATH 陷阱**：`docker` / `docker-compose` 都在 `/usr/local/bin`，非登入 shell 不在 PATH，
 > 直接打 `docker …` 會 `command not found`。用絕對路徑（`/usr/local/bin/docker compose …`）
