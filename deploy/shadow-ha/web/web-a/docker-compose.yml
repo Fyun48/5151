@@ -23,6 +23,8 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?shared across web nodes}
       DB_DRIVER: ${DB_DRIVER:-postgres}
       PG_URL: ${PG_URL:?postgres://…@<haproxy>:25433/<db>}
+      # 正式站一律 strict（讀寫都不回退本機 SQLite）；runtime guard 也會擋 PG_SQLITE_FALLBACK=open。
+      PG_SQLITE_FALLBACK: ${PG_SQLITE_FALLBACK:-strict}
       # 媒體 CDN（Cloudflare R2）：MEDIA_SERVE=r2 時，會員素材庫的「公開顯示檔」由 CDN 直送；
       # `_o.jpg`（未浮水印原圖）與身分自拍照永不外流。預設 local＝行為與以前完全相同。
       # ⚠️ 主機上的 compose 才是正本（這裡是去識別化模板）：實際值寫在主機 compose 的 environment，

@@ -63,6 +63,7 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 // （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
 import { listingCommutePatchesAsync } from "./listingCommuteAsync.js";
 import { sendUserWebPushAsync } from "./webPushAsync.js";
@@ -690,6 +691,8 @@ export function isWatchIntervalPending(lastCheckedAt, intervalMinutes, now = Dat
 }
 
 export async function runWatch(options = {}) {
+  // G4 啟動檢查：sandbox 與獨立 crawler 行程也走同一個 gate（fail-fast）。
+  assertRuntimeDbGuard();
   throwIfCrawlCancelled();
   const runtime = await crawlRuntimeAsync();
   const want591 = runtime.sourceEnabled("591");

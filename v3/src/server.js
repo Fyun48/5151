@@ -5,6 +5,7 @@ import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./
 import { apiErrorHandler, apiNotFoundHandler, statusOfApiError } from "./apiFallbacks.js";
 import { searchPublicListingsAsync } from "./publicListingSearchAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { loadListingPage } from "./listingSearchPage.js";
 import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
 import {
@@ -5428,6 +5429,9 @@ function runHousingRefresh() {
     .then((s) => { if (s.count) console.log(`居住數據自動更新：${s.count} 筆${s.errors.length ? `（${s.errors.length} 個來源失敗）` : ""}`); })
     .catch((error) => console.warn("居住數據自動更新失敗：", error.message));
 }
+
+// G4 啟動檢查：正式部署的「錯 driver／SQLite fallback 逃生門」在開始服務前就被拒絕。
+assertRuntimeDbGuard();
 
 const APP_ROLE = resolveAppRole();
 
