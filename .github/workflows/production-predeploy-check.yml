@@ -220,7 +220,7 @@ jobs:
             rm -f /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-readonly-inspect.mjs \
                   /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.mjs \
                   /mnt/Storage1/docker_data/5151-predeploy-helpers/.github/scripts/sqlite-online-backup.py
-      - name: Synology NAS SSH endpoint for the PG primary (Cloudflare Access bridge only)
+      - name: Synology NAS SSH endpoint (Cloudflare Access bridge only)
         id: cf-tori-bridge
         uses: ./.github/actions/cf-ssh-bridge
         with:
@@ -230,32 +230,133 @@ jobs:
           client-secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           ssh-user: ${{ secrets.V3_SYNOLOGY_USER }}
           ssh-key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
-      - name: Copy PG backup helper to Synology (primary host)
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ steps.cf-tori-bridge.outputs.docker_host }}
-          port: ${{ steps.cf-tori-bridge.outputs.port }}
-          username: ${{ secrets.V3_SYNOLOGY_USER }}
-          key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
-          source: ".github/scripts/production-predeploy-pg-remote.sh"
-          target: /var/services/homes/tori/5151-predeploy-pg-helpers
-          overwrite: true
-      - name: PostgreSQL backup from primary (Synology, no deploy)
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ steps.cf-tori-bridge.outputs.host }}
-          port: ${{ steps.cf-tori-bridge.outputs.port }}
-          username: ${{ secrets.V3_SYNOLOGY_USER }}
-          key: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
-          script_stop: true
-          # pg_dump of the shadow DB is small, but keep a generous timeout for parity.
-          command_timeout: 20m
-          script: |
-            set -euo pipefail
-            # 從 primary（5151-postgres-B）本機 docker exec pg_dump（unix socket trust，不帶密碼）。
-            # 不 pull、不 restart、不印 secrets；failover 後改以 PREDEPLOY_PG_CONTAINER 指向新 primary。
-            export PREDEPLOY_PG_CONTAINER=5151-postgres-B
-            bash /var/services/homes/tori/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh
+      - name: Probe PostgreSQL primary role on both NAS (role-aware, no deploy)
+        id: pg-role-probe
+        env:
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+          TORI_HOST: ${{ steps.cf-tori-bridge.outputs.host }}
+          TORI_PORT: ${{ steps.cf-tori-bridge.outputs.port }}
+          TORI_USER: ${{ secrets.V3_SYNOLOGY_USER }}
+          TORI_SSH_KEY: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          PROBE_SCRIPT: deploy/shadow-ha/predeploy-primary-probe.sh
+          CASA_LAN_IP: "192.168.0.140"
+          SYN_LAN_IP: "192.168.0.220"
+          CASA_PG_CONTAINER: "5151-postgres-A"
+          SYN_PG_CONTAINER: "5151-postgres-B"
+        run: |
+          set -euo pipefail
+          # 段一（探測，兩台都做、唯讀）：各自在「本機」判定角色——
+          #   oracle 1 = agent 埠 25436（up=primary）；oracle 2 = 本機 PG pg_is_in_recovery()（f=primary）。
+          # 兩個 oracle 必須一致（fail-closed）。注意：25433 已被 HAProxy 改成 role-aware
+          # （任何一台都導到当下的 primary），所以不能用 25433 判角色，否則兩台都回 f 誤判腦裂。
+          # probe 腳本經 ssh stdin 跑，不落地到 NAS、不印密碼／連線字串。
+          casa_out="$(mktemp)"; syn_out="$(mktemp)"
+          trap 'rm -f "$casa_out" "$syn_out"' EXIT
+
+          run_probe() {
+            host="$1"; port="$2"; user="$3"; key="$4"; role="$5"; lan_ip="$6"; container="$7"; out="$8"
+            kf="$(mktemp)"
+            printf '%s\n' "$key" > "$kf"
+            chmod 600 "$kf"
+            if ! ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$port" -i "$kf" \
+                "$user@$host" \
+                "HOST_ROLE=$role PG_CONTAINER=$container LAN_IP=$lan_ip bash -s" \
+                < "$PROBE_SCRIPT" > "$out" 2>&1; then
+              echo "::error::role probe on $role failed; remote output:" >&2
+              cat "$out" >&2
+              rm -f "$kf"
+              return 1
+            fi
+            rm -f "$kf"
+          }
+
+          run_probe "$NAS_HOST" "$NAS_PORT" "$NAS_USER" "$NAS_SSH_KEY" casa "$CASA_LAN_IP" "$CASA_PG_CONTAINER" "$casa_out"
+          run_probe "$TORI_HOST" "$TORI_PORT" "$TORI_USER" "$TORI_SSH_KEY" syn "$SYN_LAN_IP" "$SYN_PG_CONTAINER" "$syn_out"
+
+          casa_line="$(grep '^ROLE_PROBE_OK ' "$casa_out" | tail -n1)"
+          syn_line="$(grep '^ROLE_PROBE_OK ' "$syn_out" | tail -n1)"
+          [ -n "$casa_line" ] || { echo "::error::casa probe produced no ROLE_PROBE_OK line"; cat "$casa_out" >&2; exit 1; }
+          [ -n "$syn_line" ] || { echo "::error::syn probe produced no ROLE_PROBE_OK line"; cat "$syn_out" >&2; exit 1; }
+
+          casa_verdict="$(printf '%s' "$casa_line" | grep -o 'verdict=[a-z]*' | cut -d= -f2)"
+          syn_verdict="$(printf '%s' "$syn_line" | grep -o 'verdict=[a-z]*' | cut -d= -f2)"
+          casa_agent="$(printf '%s' "$casa_line" | grep -o 'agent=[a-z]*' | cut -d= -f2)"
+          syn_agent="$(printf '%s' "$syn_line" | grep -o 'agent=[a-z]*' | cut -d= -f2)"
+          casa_recovery="$(printf '%s' "$casa_line" | grep -o 'recovery=[a-z]*' | cut -d= -f2)"
+          syn_recovery="$(printf '%s' "$syn_line" | grep -o 'recovery=[a-z]*' | cut -d= -f2)"
+
+          echo "role probe: casa verdict=$casa_verdict agent=$casa_agent recovery=$casa_recovery; syn verdict=$syn_verdict agent=$syn_agent recovery=$syn_recovery"
+
+          if [ "$casa_verdict" = primary ] && [ "$syn_verdict" = standby ]; then
+            SELECTED_ROLE=casa; SELECTED_CONTAINER="$CASA_PG_CONTAINER"
+          elif [ "$casa_verdict" = standby ] && [ "$syn_verdict" = primary ]; then
+            SELECTED_ROLE=syn; SELECTED_CONTAINER="$SYN_PG_CONTAINER"
+          elif [ "$casa_verdict" = primary ] && [ "$syn_verdict" = primary ]; then
+            echo "::error::split-brain: both casa and syn report primary; refusing to back up"; exit 1
+          elif [ "$casa_verdict" = standby ] && [ "$syn_verdict" = standby ]; then
+            echo "::error::no primary: both casa and syn report standby; refusing to back up"; exit 1
+          else
+            echo "::error::could not resolve PG primary (casa=$casa_verdict syn=$syn_verdict)"; exit 1
+          fi
+
+          echo "host_role=$SELECTED_ROLE" >> "$GITHUB_OUTPUT"
+          echo "pg_container=$SELECTED_CONTAINER" >> "$GITHUB_OUTPUT"
+
+          # 段一結果落成 evidence（純觀測、無密碼）。
+          printf '%s\n' "{\"schema\":\"pg-role-probe-v1\",\"selected_primary\":\"$SELECTED_ROLE\",\"selected_container\":\"$SELECTED_CONTAINER\",\"casa\":{\"verdict\":\"$casa_verdict\",\"agent\":\"$casa_agent\",\"recovery\":\"$casa_recovery\"},\"syn\":{\"verdict\":\"$syn_verdict\",\"agent\":\"$syn_agent\",\"recovery\":\"$syn_recovery\"}}" > pg-role-probe-evidence.json
+      - name: PostgreSQL backup from current primary (role-aware, no deploy)
+        env:
+          NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
+          NAS_PORT: ${{ steps.cf-bridge.outputs.port }}
+          NAS_USER: ${{ secrets.NAS_USER }}
+          NAS_SSH_KEY: ${{ secrets.NAS_SSH_KEY }}
+          TORI_HOST: ${{ steps.cf-tori-bridge.outputs.host }}
+          TORI_PORT: ${{ steps.cf-tori-bridge.outputs.port }}
+          TORI_USER: ${{ secrets.V3_SYNOLOGY_USER }}
+          TORI_SSH_KEY: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          SELECTED_ROLE: ${{ steps.pg-role-probe.outputs.host_role }}
+          SELECTED_CONTAINER: ${{ steps.pg-role-probe.outputs.pg_container }}
+          PG_HELPER: .github/scripts/production-predeploy-pg-remote.sh
+          PG_DB: 5151_shadow
+          CASA_BACKUP_DIR: /mnt/Storage1/docker_data/5151-pg-backups
+          SYN_BACKUP_DIR: /var/services/homes/tori/backups/5151
+        run: |
+          set -euo pipefail
+          # 段二（備份）：只在段一選出的 primary 那台跑 pg_dump。
+          case "$SELECTED_ROLE" in
+            casa)
+              HOST="$NAS_HOST"; PORT="$NAS_PORT"; USER="$NAS_USER"; KEY="$NAS_SSH_KEY"
+              BACKUP_DIR="$CASA_BACKUP_DIR"
+              REMOTE_HELPER="/mnt/Storage1/docker_data/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh"
+              ;;
+            syn)
+              HOST="$TORI_HOST"; PORT="$TORI_PORT"; USER="$TORI_USER"; KEY="$TORI_SSH_KEY"
+              BACKUP_DIR="$SYN_BACKUP_DIR"
+              REMOTE_HELPER="/var/services/homes/tori/5151-predeploy-pg-helpers/.github/scripts/production-predeploy-pg-remote.sh"
+              ;;
+            *)
+              echo "::error::unknown selected primary role '$SELECTED_ROLE'"; exit 1 ;;
+          esac
+
+          kf="$(mktemp)"
+          printf '%s\n' "$KEY" > "$kf"
+          chmod 600 "$kf"
+          trap 'rm -f "$kf"' EXIT
+
+          # 把 pg backup helper scp 到「選中的 primary」主機（沿用既有 docker exec + unix socket 方式）。
+          REMOTE_HELPER_DIR="$(dirname "$REMOTE_HELPER")"
+          ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
+            "mkdir -p '$REMOTE_HELPER_DIR'"
+          scp -o StrictHostKeyChecking=accept-new -P "$PORT" -i "$kf" \
+            "$PG_HELPER" "$USER@$HOST:$REMOTE_HELPER"
+
+          # 在選中的 primary 本機 docker exec pg_dump（unix socket trust，不帶密碼）。
+          # command_timeout 由下方 timeout 對齊既有的 20m；job timeout-minutes 仍是 30。
+          timeout 20m ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$PORT" -i "$kf" "$USER@$HOST" \
+            "PREDEPLOY_PG_CONTAINER='$SELECTED_CONTAINER' PREDEPLOY_PG_DB='$PG_DB' PREDEPLOY_PG_BACKUP_DIR='$BACKUP_DIR' bash '$REMOTE_HELPER'"
       - name: Pull NAS predeploy evidence
         env:
           NAS_HOST: ${{ steps.cf-bridge.outputs.host }}
@@ -266,6 +367,7 @@ jobs:
           TORI_PORT: ${{ steps.cf-tori-bridge.outputs.port }}
           TORI_USER: ${{ secrets.V3_SYNOLOGY_USER }}
           TORI_SSH_KEY: ${{ secrets.V3_SYNOLOGY_SSH_KEY }}
+          PG_ROLE: ${{ steps.pg-role-probe.outputs.host_role }}
         run: |
           set -euo pipefail
           key="$(mktemp)"
@@ -274,17 +376,31 @@ jobs:
           scp -o StrictHostKeyChecking=accept-new -P "$NAS_PORT" -i "$key" \
             "$NAS_USER@$NAS_HOST:/mnt/Storage1/docker_data/phase15-predeploy-evidence.json" ./nas-predeploy-evidence.json
           rm -f "$key"
-          tkey="$(mktemp)"
-          printf '%s\n' "$TORI_SSH_KEY" > "$tkey"
-          chmod 600 "$tkey"
-          # OpenSSH >= 9 的 scp 走 SFTP 子系統，而 ssh-tori bridge 的 SFTP 不通（subsystem request
-          # failed on channel 0）；exec channel 是通的，所以改用 ssh 跑 cat 把證據檔拉回。
-          ssh -o StrictHostKeyChecking=accept-new -p "$TORI_PORT" -i "$tkey" \
-            "$TORI_USER@$TORI_HOST" 'cat /var/services/homes/tori/backups/5151/pg-predeploy-evidence.json' > ./pg-predeploy-evidence.json
-          rm -f "$tkey"
+          # pg 證據檔在「段一選出的 primary」那台，依 PG_ROLE 決定從哪台拉。
+          case "$PG_ROLE" in
+            casa)
+              pg_host="$NAS_HOST"; pg_port="$NAS_PORT"; pg_user="$NAS_USER"; pg_key="$NAS_SSH_KEY"
+              pg_evidence_path="/mnt/Storage1/docker_data/5151-pg-backups/pg-predeploy-evidence.json"
+              export PG_HOST_LABEL="casa-nas"
+              ;;
+            syn)
+              pg_host="$TORI_HOST"; pg_port="$TORI_PORT"; pg_user="$TORI_USER"; pg_key="$TORI_SSH_KEY"
+              pg_evidence_path="/var/services/homes/tori/backups/5151/pg-predeploy-evidence.json"
+              export PG_HOST_LABEL="syn-nas"
+              ;;
+            *)
+              echo "::error::unknown PG role '$PG_ROLE'"; exit 1 ;;
+          esac
+          pgkey="$(mktemp)"
+          printf '%s\n' "$pg_key" > "$pgkey"
+          chmod 600 "$pgkey"
+          # 用 exec channel（ssh cat）拉回證據檔：兩台 bridge 都走這條路，避免 SFTP 子系統差異。
+          ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -p "$pg_port" -i "$pgkey" \
+            "$pg_user@$pg_host" "cat '$pg_evidence_path'" > ./pg-predeploy-evidence.json
+          rm -f "$pgkey"
           test -s ./pg-predeploy-evidence.json || { echo "::error::pg-predeploy-evidence.json is empty after ssh cat pull"; exit 1; }
           python3 - <<'PY'
-          import json, re
+          import json, os, re
           nas = json.load(open("nas-predeploy-evidence.json"))
           pg_raw = open("pg-predeploy-evidence.json").read()
           first_line = next((line for line in pg_raw.splitlines() if line.strip()), "")
@@ -293,6 +409,9 @@ jobs:
               print("\n".join(pg_raw.splitlines()[:3]))
               raise SystemExit("pg-predeploy-evidence.json is not JSON (unexpected ssh cat output)")
           pg = json.loads(pg_raw)
+          # 段一已選出 primary 主機角色；remote script 的 pg_backup_host 仍寫死 syn-nas，
+          # 這裡依段一結果校正，避免證據把「從 CasaOS 做的備份」誤標成 syn-nas。
+          pg["pg_backup_host"] = os.environ["PG_HOST_LABEL"]
           backup_id = nas.get("backup_dir") or ""
           # PG 時代：可回版的業務資料是 PG dump，以它的 sha256 作為備份身份（rollback 用的
           # BACKUP_HASH）；v3.db 的 sha256 只在 PG dump 缺失時當 fallback。
