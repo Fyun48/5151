@@ -97,3 +97,12 @@
 - 跳過（8 支）：`/auth/:provider`、`/auth/:provider/callback`（OAuth 打外部）、`/api/events/stream`（SSE 長連線）、`/logout`（清 cookie）、`/media/self/:file`、`/media/lib/:file`、`/api/wish-offers/:offerRef/contact`、`/api/wish-offers/:offerRef`（`:file`/`:offerRef` 無可用樣本值，且沙盒 `wish_offers` 0 列）。
 - **未打的寫入/通知/抓取端點**（依指示排除，避免污染隔離庫與打外部站台）：全部 164 條 POST/PUT/PATCH/DELETE，含 `/api/crawl*`、手動抓取、下架探測（`/api/listings/:id/recheck`、`/report-gone`）、`/api/support/webhook/:provider`、`/api/admin/mail/test`、`reject-match`/`confirm-match`（A③ 寫入點）。
 - 需要登入的端點：用隔離庫 `crawl_sandbox` 既有的 1 個 admin 帳號（`role=admin`，未讀其密碼，直接以「SESSION_SECRET 未設 → HMAC("missing")」自簽 session cookie 走 `readSessionAsync` 的 PG 查 user 路徑），未在隔離庫新建帳號。
+
+---
+
+## ⑤ Owner 裁決：不補（A③ 的 4 列孤島）
+
+- **哪 4 列**：節點 SQLite 孤島裡比 PG 多的 `user_match_votes`／`user_match_signals` 各 2 列（`user_id=1`、`created_at=2026-09-22`、兩組 `(post_id, peer_id)`＝`(21871727, 22043512)` 與 `(21927990, 22043512)`、`vote=split`）。
+- **已知代價**：開閘後這兩組「拆開」標記會回退成「同屋源」顯示（可接受）。
+- **處置**：留在節點 `/data/v3.db` 自然作廢，**不做任何正式庫寫入**（本批次 C 對正式庫只有唯讀查詢）。
+
