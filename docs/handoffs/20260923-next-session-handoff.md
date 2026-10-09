@@ -140,6 +140,18 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
      本機 dev container 的 `cloudflared` 執行時 segfault，所以 CF 那一跳只能靠 OPS 部署的成功紀錄佐證
      （2026-09-23T02:37 那筆成功走的就是同一個 bridge）。
 
+### 3.6 HA 維運風險（2026-10-09 cutover 後新增，尚未解決）
+
+> 2026-10-09 已把 primary 交回 CasaOS（NVMe），Synology 重建成 hot standby，
+> 記錄見 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。以下兩項是該場切換後仍開放的風險：
+
+1. **角色感知的 pg-rw**：目前 HAProxy `backend pg_primary` 的順序是「pg-rw 打對 primary」的唯一依據，
+   但 `option pgsql-check` 只驗連通、不驗 `pg_is_in_recovery()`。待辦：用 `agent-check` 或外部探測
+   把「這顆是 primary 嗎」回報成 `up/down`，讓 pg-rw 不再依賴手動排順序（promote 後應用端不會自己
+   跟過去，靠手動改 HAProxy 順序是這項風險的來源）。
+2. **複寫與歸檔的兩個風險**：`synchronous_standby_names` 目前是空＝純 async（RPO > 0 風險）；
+   兩節點 `archive_mode` 漂移（A=on／B=off，primary 端目前 off＝無 PITR）。
+
 ## 4. 常用指令
 
 ```bash

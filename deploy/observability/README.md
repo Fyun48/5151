@@ -16,7 +16,7 @@
 | Timer | 頻率 | 用途 |
 |---|---|---|
 | `5151-crawl-staleness-monitor.timer` | 每 5 分鐘 | crawler 即時性：`listings.last_seen_at` 是否停滯 |
-| `5151-pg-backup.timer` | 每天 20:30 UTC | PostgreSQL 排程備份（取自 standby） |
+| `5151-pg-backup.timer` | 每天 20:30 UTC | PostgreSQL 排程備份（取自 primary，經 HAProxy pg-rw） |
 | `5151-projection-monitor.timer` | 每 15 分鐘 | 唯讀投影完整性：`listing_search_projection` 的 orphan／dup／nulls |
 | `5151-media-mount-guard.timer` | — | 媒體掛載守衛 |
 
@@ -78,13 +78,22 @@
 而 standby（`5151-postgres-A`）救不了誤刪／誤改：它會在毫秒內把破壞一起複製過去。
 實際曝險視窗 = 距離上次部署多久 = **無上限**。本 timer 把它收斂成一天。
 
-### 行為
+### 行為（2026-10-09 起；舊版見下方「2026-10-09 變更」）
 
-- 從 **standby**（`PG_CONTAINER`，預設 `5151-postgres-A`）取 `pg_dump -Fc`，與 predeploy 一致。
+- 從 **primary** 取 `pg_dump -Fc`：改用 app 的 `PG_URL` 經 HAProxy `pg-rw`
+  （`192.168.0.140:25433`）抓，不再直連某一顆容器、也不再從 standby 抓。
+- 內建 `pg_is_in_recovery()` 檢查：來源**非 `f` 就 fail-closed**（不是 primary 就拒絕產出備份）。
+- 內建 status 檔與 **26 小時老化檢查**：太久沒成功備份會被發現（不會再發生「備份悄悄斷掉」）。
 - 每次備份都驗證：`pg_restore -l` 能列出內容（`TABLE DATA` > 0）才算有效。
 - 只保留最新 `PG_BACKUP_KEEP`（預設 7）份，且**只刪自己前綴** `pg-5151_shadow-*.dump` 的檔案。
 - 目錄：`/mnt/Storage1/docker_data/5151-pg-backups/`
 - 失敗一律非 0 結束 → journal 記錄 `PG_BACKUP_ALERT`。
+
+> ⚠️ **2026-10-09 變更（repo 檔尚未同步）**：本目錄的 `pg-backup.sh` 仍是**舊版「從 standby 抓」**
+> （`PG_CONTAINER` 預設 `5151-postgres-A`），與已上線的 `/opt/5151-scripts/pg-backup.sh`（改抓 primary）
+> 不一致。**舊腳本從 standby 抓，自 2026-10-02 起連 7 天 `pg_dump_failed` 卻無人察覺**，才改成抓
+> primary。把 `pg-backup.sh` 與 `5151-pg-backup.service` 的描述同步成新行為屬程式變更，另開 PR，
+> 不在本 docs PR 範圍。
 
 ### 這一項與 PITR 的關係（Owner 問過）
 

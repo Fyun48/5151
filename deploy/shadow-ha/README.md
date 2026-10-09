@@ -3,22 +3,23 @@
 Shadow 環境（Phase 19）。與正式 v3 / 5151-ops 完全隔離：獨立 container name、
 獨立 port、獨立 volume、獨立 database。**不切換、不停任何正式 container。**
 
-> **⚠️ 現況（2026-10-08）——「Shadow」是歷史命名，內容已是正式站業務庫**：
-> - 庫名仍叫 `5151_shadow`，但它是**正式站的業務庫**（primary `5151-postgres-B`，casa
->   `5151-postgres-A` 是 hot standby），不是與正式站隔離的影子站。
+> **⚠️ 現況（2026-10-09）——「Shadow」是歷史命名，內容已是正式站業務庫**：
+> - 庫名仍叫 `5151_shadow`，但它是**正式站的業務庫**。2026-10-09 起 primary = CasaOS
+>   `5151-postgres-A`（NVMe `/mnt/Storage1`，`rotational=0`），Synology `5151-postgres-B`
+>   重建成 hot standby（HDD 卷），不是與正式站隔離的影子站。
 > - 兩台各有自己的 HAProxy：CasaOS `5151-haproxy`、Synology `5151-haproxy-B`
 >   （下方「實際佈署只有 CasaOS 一台」那句已過時；拓撲見 `web/README.md`）。
-> - 容器 `5151-crawler` 已 Exited 約兩週；實際在跑的爬蟲是 `591-tracker-v3`。
+> - 容器 `5151-crawler` 已 Exited；實際在跑的爬蟲是 `591-tracker-v3`。
 
 ## 網路拓撲（兩台 NAS 同一內網）
 
 ```
 CasaOS  192.168.0.140 (CASAOS_HOST)
-└─ 5151-postgres-A   Hot Standby  host 0.0.0.0:15432 -> 5432（只讀；不可寫）
+└─ 5151-postgres-A   **Primary（預設，2026-10-09 起）** host 0.0.0.0:15432 -> 5432
 └─ 5151-web-A        APP_ROLE=web host 0.0.0.0:15153 -> 5153（HAProxy 的 web backend）
 
 Synology 192.168.0.220 (SYNOLOGY_HOST)
-└─ 5151-postgres-B   **Primary（預設）** host 0.0.0.0:15432 -> 5432
+└─ 5151-postgres-B   Hot Standby  host 0.0.0.0:15432 -> 5432（只讀；不可寫）
 └─ 5151-web-B        APP_ROLE=web host 0.0.0.0:15153 -> 5153
 
 5151-haproxy（CasaOS）
@@ -26,15 +27,22 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
 └─ host 0.0.0.0:25153 -> container 15153 (web)
 ```
 
-- **預設 primary 在 Synology**（`5151-postgres-B`）；CasaOS（`5151-postgres-A`）是 hot standby。
-  （2026-09-20 由 A→B 手動 failover 後定案；程序見 `docs/runbooks/postgres-manual-failover.md`。）
+- **預設 primary 在 CasaOS**（`5151-postgres-A`，NVMe）；Synology（`5151-postgres-B`）是 hot standby。
+  （2026-09-20 由 A→B 定案；**2026-10-09 又走了一次 B→A**。程序見
+  `docs/runbooks/postgres-manual-failover.md`；實測記錄見 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。）
 - 角色是**狀態**不是設定：promote 之後兩個節點的資料目錄各自記住自己的角色，
   `docker restart` 不會改變角色；要換回來得再走一次 failover。
+- **2026-10-09 換方向的動機是「磁碟」，不是容錯**：Synology 的資料卷是 HDD，且當晚正在跑
+  `btrfs scrub`（已跑 5.8 小時），`1k + fsync` 實測 327–670ms、`32MB + fsync` 0.87–1.42s，
+  app 端出現 `slow commit 20485ms / 17527ms`、`pg_stat_activity` 抓到 `wait_event=WALSync`；
+  CasaOS 是 NVMe，對照 `1k + fsync = 15ms`、`32MB = 169ms`。換完後新 primary 每筆 insert+commit
+  （含 docker exec 開銷）**171–181ms**、tracker 重啟後 6 分鐘 `slow commit` 筆數 **0**、備份 53s→**41s**。
 - 實際佈署只有 **CasaOS 一台** `5151-haproxy`（Synology 沒有第二份）。**（過時：2026-10-08 起兩台各有 HAProxy，Synology 是 `5151-haproxy-B`，見開頭「現況」與 `web/README.md`。）**
 - web 對外埠是 **25153**（container 15153）：同一台的 Web-A 已經佔用主機 `15153`，
   HAProxy 若也綁 15153 會 `address already in use`。
 
-- Primary 的 `15432` 需對 Standby（`SYNOLOGY_HOST`）開放，供 streaming replication。
+- Primary 的 `15432` 需對 Standby 開放，供 streaming replication（現況：primary = CasaOS
+  `CASAOS_HOST`、standby = Synology `SYNOLOGY_HOST`，所以 CasaOS 的 15432 要對 Synology 開）。
 - 所有密碼一律走 env（`PG_SUPER_PASSWORD` / `PG_REPLICATION_PASSWORD`），不 commit 明文。
 - 2026-09-21 起：`standby-basebackup` helper 的 `PG_REPLICATION_PASSWORD` 改由**同目錄 `.env`**
   （compose `env_file`）提供，compose 檔本身不再出現 password 形狀的字串（secret scanner 誤報來源）；
@@ -46,49 +54,57 @@ Synology 192.168.0.220 (SYNOLOGY_HOST)
 
 | 角色 | 主機 | 節點（container / volume） | 目錄 |
 |---|---|---|---|
-| **Primary（預設）** | Synology | `5151-postgres-B` / `5151-shadow-pg-b` | `postgres-standby/` |
-| Hot Standby | CasaOS | `5151-postgres-A` / `5151-shadow-pg-a` | `postgres-primary/` |
+| **Primary（預設，2026-10-09 起）** | CasaOS | `5151-postgres-A` / `5151-shadow-pg-a` | `postgres-primary/` |
+| Hot Standby | Synology | `5151-postgres-B` / `5151-shadow-pg-b` | `postgres-standby/` |
 | primary 端工具 | 在「當下的 primary」跑 | — | `postgres-primary/`（`setup-replication.sh`、`fix-pg-hba.sh`）|
 | standby 端工具 | 在「當下的 standby」跑 | — | `postgres-standby/`（`setup-standby.sh`、`standby-basebackup`）|
-| 備份 / 還原 / verify | 在「當下的 primary」跑 | `PG_CONTAINER` 預設 `5151-postgres-B` | `backup/`、`verify-*.sh` |
+| 備份 / 還原 / verify | 在「當下的 primary」跑 | `PG_CONTAINER` 預設 `5151-postgres-B`（**舊預設，見下方提醒**） | `backup/`、`verify-*.sh` |
 
 > 目錄名沿用第一次 bootstrap 時的角色，之後**只有角色變、路徑不變**：兩份 compose 各自綁定
 > 自己的節點與 volume（A = CasaOS、B = Synology），誰是 primary 由 promote / 重拉 base backup 決定。
-> 腳本的預設容器名已對齊「預設 primary = Synology」，換 primary 後用 `CONTAINER` / `PG_CONTAINER` 覆寫。
+> 2026-10-09 交回 CasaOS 後，目錄名與角色**恰好一致**（casa `postgres-primary/` = primary、
+> syn `postgres-standby/` = standby），但 **volume 名仍帶歷史字樣**（「primary／standby」這些字是
+> bootstrap 時的角色，不一定是現況）——判斷節點身分**依容器名／volume 名（`…-A`／`…-B`）**，不要看
+> 目錄名；判斷「誰是 primary」最準的是直接查 `pg_is_in_recovery()`。
+> 腳本（`setup-replication.sh`、`fix-pg-hba.sh`、`verify-*.sh`、`drill.sh`）的預設容器名目前仍是
+> `5151-postgres-B`（沿用 2026-09-20 的舊預設，當時 primary 在 Synology）；2026-10-09 交回 CasaOS 後，
+> 在 primary 上跑這些腳本**一律要 `CONTAINER` / `PG_CONTAINER=5151-postgres-A` 覆寫**（把腳本預設
+> 改回 A 屬程式變更，另開 PR，不在本 docs PR 範圍）。
 
 > **Synology 的 PATH 陷阱**：`docker` / `docker-compose` 都在 `/usr/local/bin`，非登入 shell 不在 PATH，
 > 直接打 `docker …` 會 `command not found`。用絕對路徑（`/usr/local/bin/docker compose …`）
 > 或先 `export PATH=/usr/local/bin:$PATH`；repo 的腳本會自動解析（`DOCKER` 變數）。
 
-## 套用（依序；預設目標：Synology = primary）
+## 套用（依序；預設目標：CasaOS = primary，2026-10-09 起）
 
-### 1. Synology — 啟動 Primary（預設）
+### 1. CasaOS — 啟動 Primary（預設）
 
 ```bash
-cd deploy/shadow-ha/postgres-standby          # 這個目錄 = Synology 節點（B）
+cd deploy/shadow-ha/postgres-primary          # 這個目錄 = CasaOS 節點（A）
 SYNOLOGY_HOST=192.168.0.220 CASAOS_HOST=192.168.0.140 \
 PG_SUPER_PASSWORD='<super>' \
 "${DOCKER:-docker}" compose up -d
 # primary 端工具在 postgres-primary/（工具與「角色」有關，與節點無關）
-cd ../postgres-primary
-CONTAINER=5151-postgres-B PG_REPLICATION_PASSWORD='<repl>' bash setup-replication.sh
-CONTAINER=5151-postgres-B bash fix-pg-hba.sh    # pg_hba：LAN + docker 網段（idempotent）+ reload
+CONTAINER=5151-postgres-A PG_REPLICATION_PASSWORD='<repl>' bash setup-replication.sh
+CONTAINER=5151-postgres-A bash fix-pg-hba.sh    # pg_hba：LAN + docker 網段（idempotent）+ reload
 ```
 
-### 2. CasaOS — 建立 Hot Standby（從 Synology 拉）
+### 2. Synology — 建立 Hot Standby（從 CasaOS 拉）
 
 ```bash
-cd deploy/shadow-ha/postgres-primary          # 這個目錄 = CasaOS 節點（A）
+cd deploy/shadow-ha/postgres-standby          # 這個目錄 = Synology 節點（B）
 # 密碼由同目錄 .env 提供（PG_REPLICATION_PASSWORD=…）；要用 inline 覆寫也可以：
-SYNOLOGY_HOST=192.168.0.220 \
+CASAOS_HOST=192.168.0.140 \
 PG_REPLICATION_PASSWORD='<repl>' \
 docker compose --profile setup run --rm standby-basebackup
 docker compose up -d                          # 以 standby 模式啟動（standby.signal）
 ```
 
-> 反向（把 primary 交回 CasaOS）只是角色對調，程序見
-> `docs/runbooks/postgres-manual-failover.md`；`setup-standby.sh` 的 `PRIMARY_HOST` / `SLOT_NAME`
-> 可覆寫來源與 slot 名稱。
+> 反向（把 primary 交回 Synology）只是角色對調，程序見
+> `docs/runbooks/postgres-manual-failover.md` §8；`setup-standby.sh` 的 `PRIMARY_HOST` / `SLOT_NAME`
+> 可覆寫來源與 slot 名稱（重建 B 時 `SLOT_NAME=standby_b`、`PRIMARY_HOST` 預設即 `192.168.0.140`）。
+> 2026-10-09 走的方向是「CasaOS = primary」——動機是磁碟效能（HDD＋scrub）不是容錯，見本檔「網路拓撲」
+> 與 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。
 
 ### 3. HAProxy（CasaOS；實際佈署只跑這一台）
 

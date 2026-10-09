@@ -1,9 +1,17 @@
 # PostgreSQL Backup / Restore Runbook（Shadow）
 
 適用兩節點（CasaOS Primary + Synology Hot Standby）的 shadow cluster。備份一律從
-**Primary**（`CASAOS_HOST:15432`）拉，走 `pg_dump`（邏輯、可選表／可回單一時間點）與
+**Primary** 拉，走 `pg_dump`（邏輯、可選表／可回單一時間點）與
 `pg_basebackup`（實體、全 instance + WAL，供快速重建 standby）。**備份唯讀，不影響
 replication 或正式 DB。**
+
+> ⚠️ **備份來源（2026-10-09 起）**：正式站的排程備份（`/opt/5151-scripts/pg-backup.sh`，repo 對應
+> `deploy/observability/pg-backup.sh`）已改為**用 app 的 `PG_URL` 經 HAProxy `pg-rw`
+> （`192.168.0.140:25433`）抓 primary**，並內建 `pg_is_in_recovery()` **非 `f` 就 fail-closed**、
+> status 檔、26 小時老化檢查。**備份不再從 standby 抓。**
+>
+> 背景（2026-10-09 實測）：舊腳本從 standby 抓，自 2026-10-02 起連 7 天 `pg_dump_failed` 卻無人察覺
+> （standby dump 不出來、錯誤沒被當成告警），所以改成抓 primary。
 
 ## 原則
 
@@ -85,9 +93,11 @@ docker exec 5151-postgres-B psql -U postgres -d 5151_restore_test -c "SELECT cou
   （**不要**用 `/volume1/backups/...`：tori 沒有那個路徑的寫入權限，drill 實測失敗；
   用家目錄 `~/backups/5151/` 且已經實測 sha256 一致）。
 - 定期「還原演練」（本 runbook §4）至少每月一次，驗證備份真的能還原。
-- **failover 後**：primary 會換到另一台，腳本要在「當下的 primary」主機上跑，並指定容器：
-  `PG_CONTAINER=5151-postgres-B bash backup.sh`（Synology 的 docker 在 `/usr/local/bin`，
-  腳本會自動解析 `DOCKER`）。`restore.sh` 同樣支援 `PG_CONTAINER`。
+- **failover 後**：primary 會換到另一台，腳本要在「當下的 primary」主機上跑，並指定容器。
+  2026-10-09 起 primary = CasaOS，所以是 `PG_CONTAINER=5151-postgres-A bash backup.sh`
+  （Synology 的 docker 在 `/usr/local/bin`，腳本會自動解析 `DOCKER`；腳本預設容器名目前仍是
+  舊的 `5151-postgres-B`，交回 CasaOS 後務必用 `PG_CONTAINER` 覆寫）。`restore.sh` 同樣支援
+  `PG_CONTAINER`。
 
 ## 演練實證（2026-09-20）
 

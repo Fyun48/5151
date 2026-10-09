@@ -11,16 +11,20 @@
 
 ## 名詞
 
-- 本 cluster 自 2026-09-20 起**預設 primary = Synology**（`5151-postgres-B`，`SYNOLOGY_HOST:15432`），
-  預設 standby = CasaOS（`5151-postgres-A`，`CASAOS_HOST:15432`）。流程本身對稱。
-- `P` = 當下的 primary（預設 Synology）
-- `S` = 當下的 standby（預設 CasaOS）
+- 本 cluster 自 2026-10-09 起**預設 primary = CasaOS**（`5151-postgres-A`，`CASAOS_HOST:15432`），
+  預設 standby = Synology（`5151-postgres-B`，`SYNOLOGY_HOST:15432`）。流程本身對稱。
+  （2026-09-20 曾把預設 primary 改到 Synology；2026-10-09 因磁碟效能把 primary 交回 CasaOS 的 NVMe、
+  Synology 重建成 hot standby，見 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。）
+- `P` = 當下的 primary（預設 CasaOS）
+- `S` = 當下的 standby（預設 Synology）
 - 連線一律用 `docker exec`（shadow container），不碰正式 DB。
 
-> ⚠️ 下面 §1–§8 的**範例指令是照「CasaOS → Synology」方向寫的**（2026-09-20 drill 逐步實測過，
-> 那次 CasaOS 是 primary）。要按預設方向（Synology → CasaOS）操作時，把範例中的
+> ⚠️ 下面 §1–§8 的**範例指令是照「CasaOS（primary）→ Synology（standby）」方向寫的**，也就是
+> 2026-10-09 交回 CasaOS 之後的**預設方向**（2026-09-20 drill 與 2026-10-09 cutover 都逐步實測過）。
+> 要按反方向（Synology → CasaOS）操作時，把範例中的
 > `5151-postgres-A` ↔ `5151-postgres-B`、`CASAOS_HOST` ↔ `SYNOLOGY_HOST` 對調即可；
-> 兩個方向 drill 都跑過（見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md`）。
+> 兩個方向都跑過（見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md` 與
+> `evidence/runtime-modernization/HA-CUTOVER-20261009.md`）。
 
 > 演練可改用 `deploy/shadow-ha/drill.sh`（`preflight` / `failover`；`failover` 需 `CONFIRM_FAILOVER=yes`，
 > 且它只做本機步驟、跨主機一律人工）。**下列步驟仍是唯一權威來源**，腳本只是把已實測過的步驟自動化。
@@ -86,8 +90,8 @@ docker exec 5151-postgres-B psql -U postgres -c "SELECT pg_is_in_recovery();"  #
 - **舊 primary 已回來變成 standby**：**必須**把 `pg_primary` 的順序對調並 reload，否則 pg-rw 會照舊順序
   打到「已降級成唯讀」的節點（2026-09-20 實測踩到：`pg_is_in_recovery()` 回 `t`、寫入會失敗）。
 
-本 cluster 預設 primary = Synology，`haproxy.cfg` 已按此排列（`pg-b` 在前）；若把 primary 交回 CasaOS，
-要把 `pg-a` 排回前面。重新載入：
+本 cluster 自 2026-10-09 起預設 primary = CasaOS，`haproxy.cfg` 的 `backend pg_primary` 已按此排列
+（`pg-a` 在前、`pg-b` backup）。重新載入：
 
 ```bash
 docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
@@ -96,7 +100,7 @@ docker exec 5151-haproxy kill -s HUP 1
 
 應用程式 DB router 亦依 `pg_is_in_recovery()` 自動辨識新 primary（read-after-write 打 primary）。
 
-> ⚠️ **2026-09-23 演練實測的兩個必讀事項**
+> ⚠️ **2026-09-23 演練 + 2026-10-09 cutover 實測的必讀事項**
 >
 > 1. **`haproxy.cfg` 只能用「就地改寫」**：compose 是把 `./haproxy.cfg` 以**單檔 bind mount** 掛進容器，
 >    而 bind mount 綁的是 inode。若用 `awk … > f.new && mv f.new f`（或任何會換 inode 的編輯器）改設定，
@@ -113,11 +117,18 @@ docker exec 5151-haproxy kill -s HUP 1
 >    但不會產生無聲的資料分歧；讀取仍維持 fail-open（回舊資料）。真的需要「先讓站活著」時才設
 >    `PG_SQLITE_FALLBACK=open`（寫入也回退），用完立刻關掉。
 >
-> 另外：**兩個 compose 目錄名稱與實際角色是相反的**——
-> primary 的 compose 在 `~/5151-shadow-ha/shadow-ha/postgres-standby/`（syn-nas，容器 `5151-postgres-B`）、
-> standby 的在 `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（casa-nas，容器 `5151-postgres-A`）；
-> volume 名稱同理（`…pg-primary_…pg-a` 目前裝的是 standby）。重建節點時依 **容器名稱與 volume 名稱**判斷，
-> 不要看目錄名。
+> 4. **`haproxy.cfg` 有兩個 backend 都列 `pg-a`／`pg-b`，別用整檔字串比對判斷「是否已對調」**：
+>    `backend pg_primary`（pg-rw 用，第 39 行起）與 `backend pg_standby_first`（pg-ro 用，第 47 行起，
+>    本來就 pg-a 優先）都列出兩台。2026-10-09 cutover 第一次核對時，就因為在 `pg_standby_first`
+>    命中「pg-a 在前」而誤以為已對調、跳過。**改動／核對要限定在 `pg_primary` 這個 block 內**，
+>    並確認該 block 自己的 server 順序。
+>
+> 另外（2026-10-09 對調後）：**compose 目錄名稱與角色已一致**——
+> primary 的 compose 在 casa-nas `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（容器 `5151-postgres-A`）、
+> standby 的在 syn-nas `~/5151-shadow-ha/shadow-ha/postgres-standby/`（容器 `5151-postgres-B`）。
+> 但 **volume 名稱仍帶歷史字樣**（「primary／standby」這些字是第一次 bootstrap 時的角色，不一定是現況），
+> 目錄名也可能再隨下次 failover 變得不一致。重建節點時依 **容器名稱（`…-A`／`…-B`）與 volume 名稱**判斷
+> 節點身分，不要看目錄名；要確認「誰是 primary」最準的是直接查 `pg_is_in_recovery()`。
 
 ### 7. verify — 驗證新 primary 可寫
 
@@ -127,18 +138,20 @@ docker exec 5151-postgres-B psql -U postgres -d 5151_shadow -c "CREATE TABLE fai
 
 ### 8. rejoin — 舊 primary 回來後重建為 standby
 
-舊 P 重新可達後，**不要直接啟動**（否則兩個 primary 併存）。以下步驟為 2026-09-20 drill 實測可行版本：
+舊 P 重新可達後，**不要直接啟動**（否則兩個 primary 併存）。以下兩個方向都實測可行
+（方向一 = 2026-09-20 drill；方向二 = 2026-10-09 cutover 實走）。
+
+**方向一：promote B（Synology）、重建 A（CasaOS）**
 
 ```bash
-# 1) 在「新 primary」上為被重建的節點建 slot（名字要與下面 SLOT_NAME 一致）
+# 1) 在「新 primary」B 上為被重建的 A 建 slot（名字要與下面 SLOT_NAME 一致）
 docker exec -u postgres 5151-postgres-B psql -U postgres \
   -c "SELECT pg_create_physical_replication_slot('standby_a');"   # 舊 primary = A
 
 # 2) fence 舊節點（避免邊跑邊被覆蓋）
 docker stop 5151-postgres-A
 
-# 3) 用「被重建節點自己的 volume」重拉 base backup
-#    （standby compose 掛的是 5151-shadow-pg-b；重建 A 必須換成 A 的 volume）
+# 3) 用 A 自己的 volume 重拉 base backup（PRIMARY_HOST = 新 primary B）
 docker run --rm -u postgres \
   -v 5151-shadow-pg-primary_5151-shadow-pg-a:/var/lib/postgresql/data \
   -e PRIMARY_HOST=192.168.0.220 -e SLOT_NAME=standby_a \
@@ -146,15 +159,40 @@ docker run --rm -u postgres \
   -v "$PWD/setup-standby.sh:/setup-standby.sh:ro" \
   --entrypoint /bin/sh postgres:16-alpine -c '. /setup-standby.sh'
 
-# 4) 啟動（standby.signal + primary_conninfo 已寫好）
+# 4) 啟動 A（standby.signal + primary_conninfo 已寫好）
 docker start 5151-postgres-A
+```
+
+**方向二：promote A（CasaOS）、重建 B（Synology）——2026-10-09 cutover 實走**
+
+```bash
+# 1) 在「新 primary」A 上為被重建的 B 建 slot
+docker exec -u postgres 5151-postgres-A psql -U postgres \
+  -c "SELECT pg_create_physical_replication_slot('standby_b');"   # 舊 primary = B
+
+# 2) fence 舊節點
+docker stop 5151-postgres-B
+
+# 3) 用 B 自己的 volume 重拉 base backup（PRIMARY_HOST = 新 primary A；
+#    postgres-standby/ 的 compose 與 setup-standby.sh 預設就是 CasaOS 192.168.0.140）
+docker run --rm -u postgres \
+  -v 5151-shadow-pg-standby_5151-shadow-pg-b:/var/lib/postgresql/data \
+  -e PRIMARY_HOST=192.168.0.140 -e SLOT_NAME=standby_b \
+  -e PG_REPLICATION_PASSWORD='<repl>' -e PGDATA=/var/lib/postgresql/data/pgdata \
+  -v "$PWD/setup-standby.sh:/setup-standby.sh:ro" \
+  --entrypoint /bin/sh postgres:16-alpine -c '. /setup-standby.sh'
+
+# 4) 啟動 B（standby.signal + primary_conninfo 已寫好）
+docker start 5151-postgres-B
 ```
 
 - 第 3 步若出現 `no pg_hba.conf entry for replication connection from host "172.21.0.1"`，
   表示 pg_hba 少了 docker 私有網段（peer 主機上的容器經 docker-proxy，來源會變 bridge gateway）。
   用 `deploy/shadow-ha/postgres-primary/fix-pg-hba.sh` 補（`CONTAINER=<new primary>`），兩段都仍要密碼。
-- 反向（B 接回 A）只是把 `PRIMARY_HOST` / `SLOT_NAME` / volume 對調；drill 兩個方向都實測過，
-  **RPO = 0、RTO ≈ 5–17s**（詳見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md`）。
+- 兩個方向（promote B 重建 A、promote A 重建 B）都實測過；drill 的 **RPO = 0、RTO ≈ 5–17s**
+  （見 `evidence/runtime-modernization/A4-HA-DRILL-20260920.md`）；2026-10-09 的正式切換是
+  「停寫入端 → 站體回 200 約 9 分鐘、公網中斷約 2 分鐘」
+  （見 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`）。
 - 腳本已加 `DOCKER`（Synology 的 docker 在 `/usr/local/bin`）與 `PG_CONTAINER` 覆寫，
   failover 後不論在哪一台主機都能執行。
 
