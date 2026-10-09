@@ -363,8 +363,6 @@ jobs:
             IMAGE_PIN="ghcr.io/fyun48/5151@${IMAGE_DIGEST}"
             A_DIR=/opt/5151-shadow/web-a
             if [ ! -f "$A_DIR/docker-compose.yml" ]; then echo "A_GROUP_SKIPPED reason=no_compose"; exit 0; fi
-            # 單鍵寫入（與 591-tracker-v3 的 V3_IMAGE_PIN 同一種寫法）：不整份覆寫 .env，
-            # 保留 PG_NO_SQLITE_OPEN／PG_URL／SESSION_SECRET／R2_* 等節點旗標。
             A_ENV="$A_DIR/.env"
             cp -p "$A_ENV" "$A_ENV.bak"
             A_MODE="$(stat -c '%a' "$A_ENV")"
@@ -418,8 +416,6 @@ jobs:
             B_DIR="$HOME/5151-shadow/web-b"
             DOCKER=/usr/local/bin/docker
             if [ ! -f "$B_DIR/docker-compose.yml" ]; then echo "B_GROUP_SKIPPED reason=no_compose dir=$B_DIR"; exit 0; fi
-            # 單鍵寫入（與 591-tracker-v3 的 V3_IMAGE_PIN 同一種寫法）：不整份覆寫 .env，
-            # 保留 PG_NO_SQLITE_OPEN／PG_URL／SESSION_SECRET／R2_* 等節點旗標。
             B_ENV="$B_DIR/.env"
             cp -p "$B_ENV" "$B_ENV.bak"
             B_MODE="$(stat -c '%a' "$B_ENV")"
