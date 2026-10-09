@@ -50,6 +50,22 @@ export function candidateRowFromValues(values) {
 export const LIST_CANDIDATE_KEYS = Object.freeze(Object.keys(candidateRowFromValues([])));
 export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");
 
+// PG 公開列表路徑的候選查詢欄位（searchPublicListingsAsync 用）。這是「過濾＋排序＋識別」
+// 真正會讀到的欄位：其餘 6 欄（address_norm／layout／match_rejected／hidden_at／last_event／
+// self_status）只在「頁面二次 SELECT *」與「非公開列表的成員/自我列表/配對」路徑才會讀到，
+// 公開候選階段碰不到。頁面資料仍由 `post_id = ANY` 的 `SELECT *` 完整補回，語意不變。
+// 每欄被哪一道過濾/排序/affiliate 判定讀到，見 v3/test/public-listings-candidate-columns.test.js
+// 的欄位需求查證表。
+export const PUBLIC_LISTING_CANDIDATE_COLUMNS = [
+  "post_id", "source", "source_id", "source_key", "url", "price", "price_num",
+  "extra_fee", "extra_fees", "extra_fee_text", "price_contain_text", "title",
+  "address", "area_name", "floor_name", "kind_name", "tags", "role_name",
+  "contact_name", "contact_role", "contact_uid", "agency", "lat", "lng",
+  "geo_source", "location_class", "match_post_id", "match_level", "match_verdict",
+  "offline", "offline_confirmed", "hidden", "first_seen_at", "last_seen_at",
+  "refresh_time", "listed_by_user_id",
+].join(", ");
+
 // Only for the canonical 42-column PG candidate projection, before decoration.
 // Explicit fields avoid enumerating/copying a wide object for every personal view.
 // Generic rows keep using overlayPersonal's spread so additional fields survive.
