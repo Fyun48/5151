@@ -1,0 +1,74 @@
+{
+  "generated": "2026-10-09T14:10:00+08:00",
+  "package": "budgetguard-pg-native",
+  "scope": "budget store（provider／budget 切面）",
+  "driver": "postgres",
+  "gate": "PG_NO_SQLITE_OPEN=1",
+  "schema_version": 1,
+  "entries": [
+    {
+      "file": "v3/src/budgetGuardAsync.js",
+      "line": 74,
+      "symbol": "withConn(options, conn)",
+      "pg_reachable": true,
+      "disposition": "guarded",
+      "note": "仍把 conn 塞進 options.sqliteHandle（供 SQLite fallback／legacy 鏡射相容），但 PG 原生路徑不再需要它才能建表。"
+    },
+    {
+      "file": "v3/src/budgetGuardAsync.js",
+      "line": 82,
+      "symbol": "ensureBudgetPgNativeSchema(pgDriver)",
+      "pg_reachable": true,
+      "disposition": "removed",
+      "note": "本包新增；純 PG 原生 DDL＋setval 序號對齊，完全不碰 SQLite。"
+    },
+    {
+      "file": "v3/src/budgetGuardAsync.js",
+      "line": 91,
+      "symbol": "ensureBudgetStoreOnce(pgDriver, sqliteDb)",
+      "pg_reachable": true,
+      "disposition": "guarded",
+      "note": "原先 sqliteDb 缺席就 throw；改為：有 sqliteDb 走鏡射（行為不變）、沒有就走 budgetPgSchema 原生路徑。"
+    },
+    {
+      "file": "v3/src/budgetGuard.js",
+      "line": 27,
+      "symbol": "bindBudgetDb(db)",
+      "pg_reachable": false,
+      "disposition": "pending",
+      "note": "SQLite driver 路，本包不准動（本機開發／測試要用）。PG_NO_SQLITE_OPEN 下不會被呼叫，導致 getBoundBudgetDb() 回 null。"
+    },
+    {
+      "file": "v3/src/budgetGuard.js",
+      "line": 31,
+      "symbol": "getBoundBudgetDb()",
+      "pg_reachable": true,
+      "disposition": "pending",
+      "note": "回傳綁定的 SQLite handle；PG_NO_SQLITE_OPEN 下回 null。"
+    },
+    {
+      "file": "v3/src/budgetStore.js",
+      "line": 53,
+      "symbol": "budgetStore({ sqliteDb, options })",
+      "pg_reachable": true,
+      "disposition": "pending",
+      "note": "handle = sqliteDb || getBoundBudgetDb()。PG 模式下 handle 為 null 時現在已可安全進 PG 原生 schema init（本包解掉的點）；但取得 handle 的來源仍是 SQLite。"
+    },
+    {
+      "file": "v3/src/db.js",
+      "line": 885,
+      "symbol": "bindBudgetDb(db)（開機時）",
+      "pg_reachable": true,
+      "disposition": "pending",
+      "note": "包在 if (!PG_NO_SQLITE_OPEN) 內；開閘時不綁，仍會讓依賴 getBoundBudgetDb() 的消費端拿到 null。本包不動。"
+    },
+    {
+      "file": "v3/src/providers/executeWithProvider.js",
+      "line": 55,
+      "symbol": "executeWithProvider({ db, ... })：database = db || getBoundBudgetDb()",
+      "pg_reachable": true,
+      "disposition": "pending",
+      "note": "database 為 null 時直接 fallback()（第 58 行），不會進到 budget store。這是 provider 呼叫切面、非本包範圍，仍為 PG_NO_SQLITE_OPEN 的殘餘 blocker（沙盒抓取輪因此不會真的寫 budget）。"
+    }
+  ]
+}
