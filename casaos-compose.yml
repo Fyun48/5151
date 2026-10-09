@@ -2,7 +2,7 @@ name: 591-tracker
 
 services:
   591-tracker-v3:
-    image: ghcr.io/fyun48/5151:latest
+    image: ${V3_IMAGE_PIN:-ghcr.io/fyun48/5151@sha256:00bc8c678925c01f80e865d4c788f8e8a709a5ec0a2b01ba22ccaa7c713d7aa6}
     container_name: 591-tracker-v3
     restart: unless-stopped
     ports:
