@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  BUCKET_MS,
+  TTL_MS,
   getCachedPublicListings,
   guestCacheNamespace,
   normalizePublicQuery,
@@ -9,9 +11,14 @@ import {
   resolveGuestCacheNamespace,
 } from "../src/publicListings.js";
 
-// PG 訪客快取的 revision-generation 行為：這一批把「PG 模式 namespace 永遠 null ⇒ 永不命中」
-// 修成「以 data_revision 的 MAX(id) 當 generation」，並釘住 fail-closed 與個人化隔離。
-// （cold/warm 毫秒與「寫入後不命中」的 live 驗證在隔離庫端到端做，這裡只釘純函式語意。）
+// PG 訪客快取的 revision-generation（粗粒度 bucket）＋ single-flight 行為。
+// cold/warm 毫秒與「bucket 內寫入仍回舊結果」的 live 驗證在隔離庫端到端做，這裡釘純函式語意。
+
+test("B + T 陳舊上限被釘住：20s bucket + 20s TTL = 40s ≤ 45s 現行上限", () => {
+  assert.equal(BUCKET_MS, 20_000);
+  assert.equal(TTL_MS, 20_000);
+  assert.ok(BUCKET_MS + TTL_MS <= 45_000, `B+T=${BUCKET_MS + TTL_MS} 必須 ≤ 45_000`);
+});
 
 test("guest cache: first miss then same-parameter hit within the generation", async () => {
   resetPublicListingsCache();
@@ -25,43 +32,54 @@ test("guest cache: first miss then same-parameter hit within the generation", as
   assert.deepEqual(second.listings, [{ post_id: 1 }]);
 });
 
-test("bumping the revision changes the generation and forces a miss", async () => {
+test("bucket 邊界（假時鐘 20s/21s）：bucket 內沿用同一 generation（hit），跨 bucket 重讀必 miss", async () => {
   resetPublicListingsCache();
-  const ns1 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 7 });
-  const ns2 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 8 });
-  assert.equal(ns1, "pg:guest:v7");
-  assert.equal(ns2, "pg:guest:v8");
-  assert.notEqual(ns1, ns2);
-  await getCachedPublicListings({}, async () => ({ listings: [1] }), { namespace: ns1 });
-  const hit = await getCachedPublicListings({}, async () => assert.fail("same generation must hit"), { namespace: ns1 });
+  let t = 0;
+  const now = () => t;
+  const ns1 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 5, now });
+  assert.equal(ns1, "pg:guest:v5");
+  await getCachedPublicListings({ q: "x" }, async () => ({ listings: [1] }), { namespace: ns1 });
+
+  // bucket 內（t=10s < 20s）：不重讀 revision，沿用 v5 ⇒ hit。
+  t = 10_000;
+  const ns2 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => { throw new Error("must not re-read within bucket"); }, now });
+  assert.equal(ns2, "pg:guest:v5");
+  const hit = await getCachedPublicListings({ q: "x" }, async () => assert.fail("bucket 內同 generation 應 hit"), { namespace: ns2 });
   assert.equal(hit.cache_hit, true);
-  const miss = await getCachedPublicListings({}, async () => ({ listings: [2] }), { namespace: ns2 });
+
+  // 跨 bucket（t=21s ≥ 20s）：重讀 revision → 6 ⇒ 換 generation ⇒ miss。
+  t = 21_000;
+  const ns3 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 6, now });
+  assert.equal(ns3, "pg:guest:v6");
+  const miss = await getCachedPublicListings({ q: "x" }, async () => ({ listings: [2] }), { namespace: ns3 });
   assert.equal(miss.cache_hit, false);
   assert.deepEqual(miss.listings, [2]);
 });
 
-test("revision read failure is fail-closed: miss + correct fresh data, never an empty/fake payload", async () => {
+test("revision read failure is fail-closed: miss + correct fresh data, never an old generation", async () => {
   resetPublicListingsCache();
-  const ns = await resolveGuestCacheNamespace({
-    driver: "postgres",
-    readRevision: async () => { throw new Error("pg down"); },
-  });
-  assert.equal(ns, null);
-  // null namespace ⇒ no hit and no write, but the real payload must still be served.
+  let t = 0;
+  const now = () => t;
+  const ns1 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 5, now });
+  assert.equal(ns1, "pg:guest:v5");
+  await getCachedPublicListings({ q: "x" }, async () => ({ listings: [1] }), { namespace: ns1 });
+
+  // 跨 bucket 後 revision 讀取抛錯：不得沿用舊的 v5，要 fail-closed 回 null。
+  t = 21_000;
+  const ns2 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => { throw new Error("pg down"); }, now });
+  assert.equal(ns2, null, "revision 讀取失敗不得回舊 generation");
   const payload = { listings: [{ post_id: 11 }] };
-  const first = await getCachedPublicListings({}, async () => payload, { namespace: ns });
+  const first = await getCachedPublicListings({ q: "x" }, async () => payload, { namespace: ns2 });
   assert.equal(first.cache_hit, false);
   assert.deepEqual(first.listings, payload.listings);
-  const second = await getCachedPublicListings({}, async () => ({ listings: [{ post_id: 22 }] }), { namespace: ns });
+  const second = await getCachedPublicListings({ q: "x" }, async () => ({ listings: [{ post_id: 22 }] }), { namespace: ns2 });
   assert.equal(second.cache_hit, false);
   assert.deepEqual(second.listings, [{ post_id: 22 }]);
-  assert.equal(publicListingsCacheSize(), 0, "fail-closed must never write into the cache");
+  assert.equal(publicListingsCacheSize(), 1, "fail-closed 不得再寫入（只剩前面 v5 那筆）");
 });
 
 test("guest cache key is user-agnostic and never keyed by personal fields", async () => {
   resetPublicListingsCache();
-  // 個人化欄位（uid／starred／hidden）不是訪客快取鍵的一部分：兩個訪客問同一組公開參數，
-  // 鍵必須相同（訪客結果本來就相同）；帶個人欄位不得產生不同鍵。
   const guestA = normalizePublicQuery({ districts: ["中山區"], sort: "newest" });
   const guestB = normalizePublicQuery({ districts: ["中山區"], sort: "newest", uid: 42, starred: true, hidden: true });
   assert.equal(guestA, guestB);
@@ -78,6 +96,30 @@ test("guest cache key is user-agnostic and never keyed by personal fields", asyn
   assert.deepEqual(hit.listings, payload.listings);
 });
 
+test("single-flight: 同 key 併發只跑一次 load()，後到者共用同一個 in-flight 結果", async () => {
+  resetPublicListingsCache();
+  let calls = 0;
+  let release;
+  const load = () => new Promise((resolve) => { calls += 1; release = resolve; });
+  const ns = "pg:guest:v1";
+  const p1 = getCachedPublicListings({ q: "same" }, load, { namespace: ns });
+  const p2 = getCachedPublicListings({ q: "same" }, load, { namespace: ns });
+  const p3 = getCachedPublicListings({ q: "same" }, load, { namespace: ns });
+  assert.equal(calls, 1, "single-flight：同 key 併發只該算一次 load");
+  release({ listings: [42] });
+  const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+  assert.deepEqual(r1.listings, [42]);
+  assert.deepEqual(r2.listings, [42]);
+  assert.deepEqual(r3.listings, [42]);
+  assert.equal(r1.cache_hit, false);
+  assert.equal(r2.cache_hit, false);
+  assert.equal(r3.cache_hit, false);
+  assert.equal(calls, 1);
+  // 完成後才來的請求 → 命中快取（不是 in-flight）。
+  const hit = await getCachedPublicListings({ q: "same" }, async () => assert.fail("completed entry must hit"), { namespace: ns });
+  assert.equal(hit.cache_hit, true);
+});
+
 test("sqlite namespace path is verbatim and never consults the revision", async () => {
   resetPublicListingsCache();
   assert.equal(guestCacheNamespace({ driver: "sqlite" }), "sqlite:guest:v2");
@@ -86,7 +128,6 @@ test("sqlite namespace path is verbatim and never consults the revision", async 
     await resolveGuestCacheNamespace({ driver: "sqlite", readRevision: async () => { throw new Error("must not be called"); } }),
     "sqlite:guest:v2",
   );
-  // sqlite 路徑仍照舊寫入同一代（v2），不改 namespace。
   const first = await getCachedPublicListings({}, async () => ({ listings: ["sqlite"] }), { namespace: "sqlite:guest:v2" });
   assert.equal(first.cache_hit, false);
   const hit = await getCachedPublicListings({}, async () => assert.fail("sqlite v2 must hit"), { namespace: "sqlite:guest:v2" });
