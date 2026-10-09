@@ -24,6 +24,17 @@ export const COVERING_PHASE_MAX_MINUTES_MAX = 30;
 export const COVERING_PHASE_TAIL_MS = 120_000;    // 留 2 分鐘給輪尾收尾
 export const COVERING_PHASE_MIN_MS = 300_000;     // 算出來少於 5 分就不設限（這一輪本來就快結束了）
 
+// ── 下架掃描的獨立小預算（2026-10-09 加）───────────────────────────────
+// 掃描移到「抓來源之前」跑後，仍給它自己的時間上限，避免外部站台的逐筆探測慢回應把整輪開頭
+// 吃掉、反過來擠壓後面的抓取與輪尾落地。預設 3 分鐘（提案選項 A 的「3～5 分鐘」取下界）：
+// 每批上限 40 筆 × 每筆固定 400ms 延遲 ≈ 16～20 秒，3 分鐘留有約 3 倍餘量給慢站台。
+// `CRAWL_SWEEP_SCAN_BUDGET_MINUTES` 可覆寫（正數才生效）。
+export const SWEEP_SCAN_BUDGET_MS = (() => {
+  const raw = Number(process.env.CRAWL_SWEEP_SCAN_BUDGET_MINUTES);
+  if (Number.isFinite(raw) && raw > 0) return Math.round(raw * 60 * 1000);
+  return 3 * 60 * 1000;
+})();
+
 function clampInt(raw, fallback, min, max) {
   const value = Math.trunc(Number(raw));
   if (!Number.isFinite(value)) return fallback;

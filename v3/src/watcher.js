@@ -50,12 +50,12 @@ import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./
 import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
 import { markCoveringProgressAsync } from "./coveringBookkeepingAsync.js";
-import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL, coveringPhaseDeadlineMs } from "./crawlPolicy.js";
+import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL, coveringPhaseDeadlineMs, SWEEP_SCAN_BUDGET_MS } from "./crawlPolicy.js";
 // 外站跨輪輪轉（一輪只排一家、最久沒成功的先；延後不記失敗）。政策與理由寫在該檔檔首。
 import { pickExternalSources, externalSourcesPerRun, externalPhaseBudgetMs } from "./externalRotation.js";
 import { noteConsecutiveTimeout, withBudget } from "./crawlWatchdog.js";
 import { currentCrawlExecution, isCrawlCancelled, throwIfCrawlCancelled } from "./crawlExecution.js";
-import { crawlTelemetry, setCrawlPhase, newCrawlRoundId } from "./crawlTelemetry.js";
+import { crawlTelemetry, setCrawlPhase, newCrawlRoundId, logDeadlineStop } from "./crawlTelemetry.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
@@ -637,7 +637,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
   }
 }
 
-async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
+async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS } = {}) {
   const confirmDays = normalizeOfflineConfirmDays(getSystemCrawl().offlineConfirmDays);
   const confirmed = confirmExpiredOfflineListings(confirmDays);
   const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
@@ -646,8 +646,20 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   let gone = 0;
   let rechecked = 0;
   let restored = 0;
+  // 掃描自己的小預算（預設 SWEEP_SCAN_BUDGET_MS）：到點就停手並留一行儀表板，
+  // 不讓「逐筆探測外部站台」的慢回應反過來吃掉整輪抓取的開頭。0／負數＝不設限。
+  const scanStartedAt = Date.now();
+  const scanBudget = Number(budgetMs);
+  const overScanBudget = () => Number.isFinite(scanBudget) && scanBudget > 0 && Date.now() - scanStartedAt >= scanBudget;
+  let stoppedOnBudget = false;
+  const stopOnBudget = () => {
+    stoppedOnBudget = true;
+    logDeadlineStop(Date.now() - scanStartedAt);
+  };
   const aliveBatchStartedAt = Date.now();
   for (const row of rows) {
+    throwIfCrawlCancelled();
+    if (overScanBudget()) { stopOnBudget(); break; }
     const listing = await listingForWatchAsync(row.post_id);
     if (!listing) continue;
     checked += 1;
@@ -662,6 +674,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
         await markListingAliveAsync(row.post_id, { wasOffline: Boolean(listing.offline) });
       }
     } catch {
+      throwIfCrawlCancelled();
       // 探測失敗（保守）：不動狀態，下輪再試
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -670,12 +683,18 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   if (rows.length >= limit && limit > 0) {
     crawlTelemetry.log(`下架掃描：待確認已達預算 ${limit} 筆（可能還有更多），本輪先收手`);
   }
+  if (stoppedOnBudget || overScanBudget()) {
+    if (!stoppedOnBudget) stopOnBudget();
+    return { checked, gone, rechecked, restored, confirmed };
+  }
   const pendingRecheck = await needingOfflineRecheckAsync({ limit: 8 });
   const now = new Date();
   const recheckBatchStartedAt = Date.now();
   for (const row of pendingRecheck) {
     if (rechecked >= 8) break;
     if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
+    throwIfCrawlCancelled();
+    if (overScanBudget()) { stopOnBudget(); break; }
     const listing = await listingForWatchAsync(row.post_id);
     if (!listing) continue;
     rechecked += 1;
@@ -684,6 +703,7 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
       if (supported && classifyListingProbeWrite({ outcome, alive }).write === "alive") { await restoreListingOnlineAsync(row.post_id); restored += 1; }
       else await touchListingCheckedAsync(row.post_id);
     } catch {
+      throwIfCrawlCancelled();
       await touchListingCheckedAsync(row.post_id);
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
@@ -805,6 +825,23 @@ export async function runWatch(options = {}) {
     workLat: settings.workLat,
     workLng: settings.workLng,
   };
+
+  // 下架掃描排在「抓來源之前」（2026-10-09，提案選項 B）：可見優先的探測要在這一輪抓頁落地
+  // 之前先做一小段，才不會像 2026-10-09 實測那樣——整輪預算被輪尾（落地＋明細＋套件＋通知）
+  // 吃光，掃描永遠輪不到。每輪探測上限沿用 #662（skipHeavyGeo 的輕量路徑 12、重路徑 40，
+  // 每筆固定 400ms 延遲）；掃描有自己的小預算（SWEEP_SCAN_BUDGET_MS），到點就停手。
+  // 掃描放前面不准變成整輪失敗的新來源：fail-soft（逐筆 try/catch），讀寫例外只記一行、抓取照跑。
+  let offlineSweep = { checked: 0, gone: 0, rechecked: 0, restored: 0, confirmed: 0 };
+  try {
+    setCrawlPhase("下架掃描");
+    offlineSweep = await sweepOfflineListings([], {
+      limit: options.skipHeavyGeo ? 12 : 40,
+      budgetMs: options.sweepScanBudgetMs,
+    });
+  } catch (error) {
+    if (isCrawlCancelled()) throw error;
+    crawlTelemetry.warn(`下架掃描失敗，本輪跳過（不影響抓取）：${error?.message || error}`);
+  }
 
   if (want591 && !cooling.has("591")) {
     const successful = new Set();
@@ -1172,11 +1209,6 @@ export async function runWatch(options = {}) {
   }
 
   await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true, ...options });
-  // 下架掃描每輪探測上限：可見優先後，41,418 筆從未探測的可見物件按 ~3.5k/天約要 12 天才掃完。
-  // 每筆只多 400ms，20 → 40 讓每輪多 ~8 秒（相對整輪 ~25 分鐘預算可忽略），把首輪掃完時間砍半到
-  // ~6 天；skipHeavyGeo 的輕量路徑維持 12，不加重那條路徑。
-  setCrawlPhase("下架掃描");
-  const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 40 });
 
   setCrawlPhase("明細補抓");
   const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });

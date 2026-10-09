@@ -156,10 +156,16 @@ test("加 log 不改變行為：同一輪跑兩次，行為欄位一致，且儀
   // 逐來源開始／結束（含行政區 x/y、頁 p）。
   assert.match(text1, /來源 住商：開始/);
   assert.match(text1, /來源 住商：結束（\d+ms，行政區 \d+\/\d+，頁 \d+）/);
-  // 輪尾下架掃描：開始行（待確認 N／預算 M）與每批探測／複查。
+  // 下架掃描（現已排在「抓來源之前」）：開始行（待確認 N／預算 M）與每批探測／複查。
   assert.match(text1, /下架掃描開始：待確認 \d+ 筆／預算 \d+ 筆/);
   assert.match(text1, /本批探測 \d+ 筆、耗時 \d+ms/);
   assert.match(text1, /本批複查 \d+ 筆、耗時 \d+ms/);
+  // 順序斷言（選項 B）：「下架掃描開始」必須出現在第一個「來源 …：開始」之前。
+  const scanAt = text1.indexOf("下架掃描開始：");
+  const firstSourceAt = text1.search(/來源 [^：]+：開始/);
+  assert.ok(scanAt >= 0, "要有「下架掃描開始」這一行");
+  assert.ok(firstSourceAt >= 0, "要有「來源 …：開始」這一行");
+  assert.ok(scanAt < firstSourceAt, "下架掃描必須排在抓來源之前");
 
   // 兩次輸出結構一致（不是只發生在第一次）。
   const text2 = lines2.map(([, m]) => m).join("\n");
@@ -167,4 +173,54 @@ test("加 log 不改變行為：同一輪跑兩次，行為欄位一致，且儀
   assert.match(text2, /輪次結束：/);
   assert.match(text2, /來源 住商：開始/);
   assert.match(text2, /下架掃描開始：待確認 \d+ 筆／預算 \d+ 筆/);
+});
+
+test("下架掃描小預算：到點就停手、留一行「到點停手」（停在〈下架掃描〉），且不影響抓取落地", async () => {
+  const db = seed();
+  // 種一筆可見、在線、非自刊的物件，讓掃描有待確認工作（否則迴圈不進、測不到到點停手）。
+  const { upsertListing } = await import("../src/db.js");
+  upsertListing({
+    post_id: 910001,
+    source: "591",
+    source_id: "910001",
+    source_key: "1|8|910001",
+    search_key: "https://example.test/search",
+    title: "合成住宅 910001",
+    url: "https://example.test/listing/910001",
+    price: "25000元",
+    price_num: 25000,
+    extra_fee: 0,
+    extra_fees: [],
+    cover: "https://example.test/cover.png",
+    tags: "[]",
+    address: "台北市士林區測試路",
+    area_name: "20坪",
+    layout: "2房1廳1衛",
+    floor_name: "5/12",
+    kind_name: "整層住家/電梯大樓",
+    role_name: "",
+    refresh_time: "2026-10-08T00:00:00.000Z",
+    first_seen_at: "2026-10-08T00:00:00.000Z",
+    last_seen_at: "2026-10-08T00:00:00.000Z",
+    last_event: "new",
+    lat: 25.11,
+    lng: 121.52,
+  });
+
+  const lines = [];
+  setCrawlTelemetrySink(recordingSink(lines));
+  let result;
+  try {
+    // 1ms 的掃描小預算：最多只夠 0～1 筆探測就超時 → 到點停手，整輪抓取照跑。
+    result = await runWatch({ ...OPTIONS, sweepScanBudgetMs: 1 });
+  } finally {
+    setCrawlTelemetrySink(null);
+  }
+  const text = lines.map(([, m]) => m).join("\n");
+  assert.match(text, /到點停手：本輪已耗 \d+ms，停在〈下架掃描〉/);
+  assert.match(text, /本批探測 \d+ 筆、耗時 \d+ms/);
+  // 掃描被小預算提前收手（1ms 只夠 0～1 筆探測），但整輪抓取照跑、照樣落地
+  // （掃描不能變成整輪失敗的新來源）。
+  assert.ok(result.fetched > 0, "掃描提前收手不影響抓取落地");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM listings WHERE post_id = 910001").get().n, 1, "種子物件仍在");
 });
