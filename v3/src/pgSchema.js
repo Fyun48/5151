@@ -7,6 +7,7 @@
 // schema does not state is not added, so a parity fixture cannot pass because
 // of extra PostgreSQL-side coercion.
 import { translateInsertOrIgnore } from "./sqlDialect.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 
 const TYPE_MAP = new Map([
   ["INTEGER", "BIGINT"],
@@ -150,7 +151,38 @@ export function schemaStatements(db, { schema = "", tables = [] } = {}) {
   return statements;
 }
 
+// 開閘（PG_NO_SQLITE_OPEN=1）時 `sqliteDb` 是帶 DSH_NO_OPEN_MARKER 的拋錯 proxy：
+// 碰任何 method（含 `prepare`／`exec`）就丟「business SQLite is closed」。此時 SQLite
+// 不再是 schema 權威，改用 PG 原生 `pgTableExists`／`pgTableInfo`（讀 information_schema）
+// 做存在性與欄位比對；SQLite 只在 `sqliteHandleIsUsable()` 為真時才當作輔助鏡射。
+// 複用 #678 的兩個 PG 原生 reader，不另發明 schema introspection。
+async function ensurePgSchemaNative(pgDriver, { schema = "", tables = [], indexes = true } = {}) {
+  void indexes; // 開閘時沒有 SQLite 可生成索引 DDL；索引由各 *Async 模組的原生 DDL 自行補齊。
+  const selected = tables.length ? tables : [];
+  const pgSchema = schema || "public";
+  const missing = [];
+  for (const table of selected) {
+    if (!(await pgTableExists(pgDriver, table, { schema: pgSchema }))) {
+      missing.push(table);
+      continue;
+    }
+    // 欄位比對：information_schema.columns 零欄（缺表或零欄表）等同下方 SQLite 路徑的
+    // `tableInfo(...).length === 0`，擋下以免之後只看到 42703。失敗不被吞。
+    const columns = await pgTableInfo(pgDriver, table, { schema: pgSchema });
+    if (columns.length === 0) missing.push(table);
+  }
+  if (missing.length) {
+    throw new Error(
+      `ensurePgSchema：PostgreSQL 缺少資料表 ${missing.join(", ")}（SQLite 開閘無法鏡射，請先由原生 DDL 建立）`,
+    );
+  }
+  return { statements: 0, tables: selected };
+}
+
 export async function ensurePgSchema(pgDriver, sqliteDb, { schema = "", tables = [], indexes = true } = {}) {
+  if (!sqliteHandleIsUsable(sqliteDb)) {
+    return ensurePgSchemaNative(pgDriver, { schema, tables, indexes });
+  }
   // 🚨 來源（SQLite）沒有那張表時，`createTableStatement()` 會產生一個**零欄的
   // `CREATE TABLE IF NOT EXISTS x ()`**，而 PostgreSQL 照收 —— 症狀不是 42P01（找不到表），
   // 而是之後每一句都 42703（`column "..." does not exist`），極難回推。
