@@ -24,6 +24,7 @@ import * as repo from "./repository/listingGroups.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
+import { bumpRevisionPgClient, bumpRevisionPgExec } from "./revisionBumpAsync.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -32,11 +33,11 @@ async function postgresExec(options = {}) {
 }
 
 async function runInTransaction(options, fn) {
-  if (options.exec) return fn(options.exec);
+  if (options.exec) return fn(options.exec, null);
   const pgDriver = options.pgDriver || (await sharedPgDriver());
   return pgDriver.withTransaction(async (client) => {
     const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);
-    return fn(tx);
+    return fn(tx, client);
   });
 }
 
@@ -70,7 +71,7 @@ export async function blockMatchCandidates(exec, incoming, { limit } = {}) {
 }
 
 // db.js setListingMatch() 的 PG 分支。
-export async function setListingMatch(exec, postId, match = {}) {
+export async function setListingMatch(exec, postId, match = {}, client = null) {
   await exec(repo.SET_LISTING_MATCH_SQL, [
     match.match_post_id || null,
     match.match_level || null,
@@ -95,11 +96,16 @@ export async function setListingMatch(exec, postId, match = {}) {
       }
     }
   }
+  // 配對會改 match_post_id／群組（同屋摺疊的裝飾），是訪客快取回應的一部分 ⇒ bump。
+  // 真交易（有 client）用 SAVEPOINT 隔離；注入式 exec（測試）無交易，直接 best-effort。
+  const payload = { entityType: "listing", entityId: Number(postId) || 0, eventType: "same_house_match" };
+  if (client) await bumpRevisionPgClient(client, payload);
+  else await bumpRevisionPgExec(exec, payload);
   return one(await exec(repo.LISTING_BY_POST_SQL, [postId]));
 }
 
 // db.js reconcileListingById() 的 PG 分支。步驟與同步版逐條對應。
-export async function reconcileListingById(exec, postId, { reason = "manual", now = new Date(), limit } = {}) {
+export async function reconcileListingById(exec, postId, { reason = "manual", now = new Date(), limit } = {}, client = null) {
   const listing = one(await exec(repo.LISTING_BY_POST_SQL, [Number(postId) || 0]));
   if (!listing) return { skipped: true, reason: "missing" };
   if ((await postConfirmationLevel(exec, listing.post_id)) === CONFIRM_ADMIN) {
@@ -128,7 +134,7 @@ export async function reconcileListingById(exec, postId, { reason = "manual", no
   if (result.skipped || !result.best?.hit) return result;
   const patch = matchPatchFromEvaluation(result.best);
   if (patch?.match_post_id) {
-    await setListingMatch(exec, listing.post_id, { ...patch, confirmationLevel: result.confirmation_level });
+    await setListingMatch(exec, listing.post_id, { ...patch, confirmationLevel: result.confirmation_level }, client);
     result.applied = true;
   }
   return result;
@@ -138,12 +144,12 @@ export async function reconcileListingById(exec, postId, { reason = "manual", no
 
 export async function setListingMatchAsync(postId, match, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") return setListingMatchSync(postId, match);
-  return runInTransaction(options, (exec) => setListingMatch(exec, postId, match));
+  return runInTransaction(options, (exec, client) => setListingMatch(exec, postId, match, client));
 }
 
 export async function reconcileListingByIdAsync(postId, { reason = "manual", ...rest } = {}, options = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") {
     return reconcileListingByIdSync(postId, { reason });
   }
-  return runInTransaction(options, (exec) => reconcileListingById(exec, postId, { reason, ...rest }));
+  return runInTransaction(options, (exec, client) => reconcileListingById(exec, postId, { reason, ...rest }, client));
 }

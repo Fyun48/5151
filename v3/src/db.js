@@ -3962,6 +3962,11 @@ export function setListingMatch(postId, match) {
       }
     }
   }
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(postId) || 0,
+    eventType: "same_house_match",
+  });
   return getListing(postId);
 }
 
