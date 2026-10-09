@@ -53,6 +53,8 @@ const TABLES = [
 const SEEDED = [920001, 920002, 920003];
 // The scan subtests need a pending-offline row (see loadFixture).
 const PENDING_OFFLINE = 920004;
+const ALIVE_RECENT = 920005;
+const ALIVE_ANCIENT = 920006;
 // Written through PostgreSQL only, so a SQLite read cannot see it.
 const PG_ONLY = 930001;
 // One row per branch of the seven remaining backfill scans (see loadFixture).
@@ -112,6 +114,14 @@ async function loadFixture() {
   seed(920003, { source_key: "1|8|other" });
   // One pending-offline row, so the recheck scan has work on both drivers.
   seed(920004, { source_key: "1|8|offline" });
+  // 下架掃描的排序依據：兩筆都在線、都還沒被探測過，只差「最後見到」的時間（實際的
+  // last_seen_at 要在下方 distinct-timestamps 迴圈之後才設，否則會被洗成 9/05-9/06 那批，
+  // 斷言就測不到「可見優先」）。2026-10-08 實測：正式站 800 筆候選窗口 100% 是 9/01-9/03
+  // 那批（近 7 天可見的 0 筆），以 3.5k/天的探測速率要 48 天才輪到使用者看得到的 4.1 萬筆
+  // ⇒ 掃描必須可見優先。id 用 920005/920006：避開既有種子（920011 已被 FEE_STALE_CONTACT
+  // 佔用，共用同一個 post_id 會互相覆蓋）。
+  seed(ALIVE_RECENT, { source_key: "1|8|recent" });
+  seed(ALIVE_ANCIENT, { source_key: "1|8|ancient" });
   // --- the seven remaining scans: one row per branch -------------------------------------------
   seed(FEE_NO_COORDS, { source_key: "1|8|fee" });
   seed(FEE_STALE_CONTACT, { source_key: "1|8|stale" });
@@ -140,6 +150,15 @@ async function loadFixture() {
     });
   db.prepare("UPDATE listings SET last_checked_at = NULL, geo_source = 'geocode'").run();
   db.prepare("UPDATE listings SET contact_fetched = 0, extra_fees_fetched = 0, kit_fetched = 0, contact_fetched_at = '', kit_next_retry_at = NULL").run();
+  // 下架掃描排序依據（見上方 seed）：上面兩段整表 UPDATE 會把 ALIVE_RECENT／ALIVE_ANCIENT 的
+  // last_seen_at 洗成 9/05-9/06 那批，所以要在它們之後才設；同時標成「已抓齊明細」讓它們不進
+  // fee backfill——否則會把 needy 階段的 LIMIT 12 塞滿，擠掉 FEE_STALE_CONTACT 的 stale 補抓。
+  db.prepare(
+    "UPDATE listings SET last_seen_at = ?, contact_fetched = 1, extra_fees_fetched = 1, kit_fetched = 1, contact_fetched_at = ? WHERE post_id = ?",
+  ).run("2026-10-07T00:00:00.000Z", "2999-01-01T00:00:00.000Z", ALIVE_RECENT);
+  db.prepare(
+    "UPDATE listings SET last_seen_at = ?, contact_fetched = 1, extra_fees_fetched = 1, kit_fetched = 1, contact_fetched_at = ? WHERE post_id = ?",
+  ).run("2026-01-05T00:00:00.000Z", "2999-01-01T00:00:00.000Z", ALIVE_ANCIENT);
   db.prepare("UPDATE listings SET offline = 1, offline_at = ? WHERE post_id = ?").run(stamp, PENDING_OFFLINE);
   // FeeDetail: a row without coordinates lands in the first stage...
   db.prepare("UPDATE listings SET lat = NULL, lng = NULL, geo_source = '' WHERE post_id = ?").run(FEE_NO_COORDS);
@@ -477,3 +496,18 @@ test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is
   });
 });
 
+
+// 行為規則（不只是兩條路一致，還要排對）：近 7 天有再看到的，必須排在陳年未探測料之前。
+test("下架掃描：可見優先（同一顆 now 下，10/07 那筆要贏 1/05 那筆）", async () => {
+  const { app } = await loadFixture();
+  const now = new Date("2026-10-08T12:00:00.000Z");
+  const ids = app.listingsNeedingAliveCheck({ excludeIds: [], limit: 20, now }).map((row) => Number(row.post_id));
+  assert.ok(ids.includes(ALIVE_RECENT) && ids.includes(ALIVE_ANCIENT), "兩筆都該在候補裡");
+  assert.ok(ids.indexOf(ALIVE_RECENT) < ids.indexOf(ALIVE_ANCIENT), "近 7 天可見的要排在前面");
+  assert.equal(ids[0], ALIVE_RECENT, "可見層內沒有更舊的候補，所以它應該排第一");
+
+  // 反向：切點拉長到 300 天，兩筆都算「可見」⇒ 退回原本的「最舊先」（1/05 要贏 10/07），
+  // 證明新分層沒有吃掉舊行為。
+  const wide = app.listingsNeedingAliveCheck({ excludeIds: [], limit: 20, now, visibleDays: 300 }).map((row) => Number(row.post_id));
+  assert.ok(wide.indexOf(ALIVE_ANCIENT) < wide.indexOf(ALIVE_RECENT), "切點拉長到 300 天時退回最舊先");
+});
