@@ -499,14 +499,62 @@ import { adminSiteAdsView, normalizeSiteAds, publicSiteAdsRuntime, rejectLegacyS
 import { adminBroadcastsView, normalizeBroadcasts, publicBroadcastsRuntime, rejectLegacyBroadcastMutation } from "./broadcasts.js";
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data-v3");
-mkdirSync(DATA_DIR, { recursive: true });
 
-const db = guardCrawlSqlite(new DatabaseSync(path.join(DATA_DIR, "v3.db")));
-db.exec("PRAGMA journal_mode = WAL");
-db.exec("PRAGMA busy_timeout = 8000");
-db.exec("PRAGMA foreign_keys = ON");
+// PG_NO_SQLITE_OPEN=1（且 DB_DRIVER=postgres）時，正式 PG 模式「根本不開啟」業務 SQLite：
+// 不建立 DatabaseSync、不跑 PRAGMA/DDL/migrations，`db` 換成碰任何 method 就拋錯的 proxy，
+// 讓任何還沒退場的同步讀者在呼叫點立刻失敗（預設旗標未設時行為完全不變）。
+const PG_NO_SQLITE_OPEN = resolveDbDriver() === "postgres" && process.env.PG_NO_SQLITE_OPEN === "1";
 
-db.exec(`
+function sqliteClosedCaller() {
+  const frames = String(new Error().stack || "").split("\n");
+  for (let i = 1; i < frames.length; i += 1) {
+    const frame = frames[i].trim().replace(/^at /, "");
+    if (!frame) continue;
+    if (
+      frame.startsWith("sqliteClosedCaller")
+      || frame.startsWith("Object.get")
+      || frame.startsWith("Object.apply")
+      || frame.startsWith("createNoOpenSqliteProxy")
+      || frame.startsWith("sqliteClosed")
+    ) continue;
+    return frame;
+  }
+  return "unknown caller";
+}
+
+function createNoOpenSqliteProxy() {
+  return new Proxy(function sqliteClosed() {}, {
+    get(_target, prop) {
+      if (
+        prop === "then" || prop === "catch" || prop === "finally" || prop === "inspect"
+        || prop === Symbol.toPrimitive || prop === Symbol.toStringTag
+        || prop === Symbol.asyncIterator || prop === Symbol.iterator
+      ) return undefined;
+      if (typeof prop === "symbol") return undefined;
+      const caller = sqliteClosedCaller();
+      return () => {
+        throw new Error(`business SQLite is closed (PG_NO_SQLITE_OPEN=1, DB_DRIVER=postgres): synchronous SQLite handle access "${String(prop)}" reached at ${caller}`);
+      };
+    },
+    apply() {
+      const caller = sqliteClosedCaller();
+      throw new Error(`business SQLite is closed (PG_NO_SQLITE_OPEN=1, DB_DRIVER=postgres): synchronous SQLite handle was invoked at ${caller}`);
+    },
+  });
+}
+
+if (!PG_NO_SQLITE_OPEN) mkdirSync(DATA_DIR, { recursive: true });
+
+const db = PG_NO_SQLITE_OPEN
+  ? createNoOpenSqliteProxy()
+  : guardCrawlSqlite(new DatabaseSync(path.join(DATA_DIR, "v3.db")));
+
+if (!PG_NO_SQLITE_OPEN) {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 8000");
+  db.exec("PRAGMA foreign_keys = ON");
+
+  db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -554,7 +602,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_listings_last_seen ON listings(last_seen_at);
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 `);
-ensureListingSearchProjection(db);
+  ensureListingSearchProjection(db);
+}
 // 訪客搜尋也讀 listing_search_projection；Phase 7 之前建立、之後沒再被 upsert 的列若不在表裡，
 // 會從清單消失（2026-09-23 正式站實測：65k 列中約 14.5k 缺席）。啟動後用冪等、分批、可中斷的
 // 方式補齊；補到 projection 與 listings 筆數一致，訪客搜尋才會真的切到 SQL-first。
@@ -636,6 +685,7 @@ export function resumePublicListingsProjectionBackfill(wasArmed = true) {
 }
 if (resolveDbDriver() !== "postgres") publicProjectionBackfillTimer = setTimeout(publicProjectionBackfillStep, 1500);
 
+if (!PG_NO_SQLITE_OPEN) {
 addColumnsIfMissing(db, "listings", [
   ["search_key", "TEXT NOT NULL DEFAULT ''"],
   ["hidden", "INTEGER NOT NULL DEFAULT 0"],
@@ -833,7 +883,9 @@ try {
   // ignore
 }
 bindBudgetDb(db);
+}
 setRentalNotifyDockWriter(addUserEvent);
+if (!PG_NO_SQLITE_OPEN) {
 try {
   seedDefaultDocuments(db, { legalCopy: settingKey("legalCopy") ?? defaultLegalCopy() });
 } catch {
@@ -876,6 +928,7 @@ try {
   }
 } catch {
   try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+}
 }
 
 let cachedDefaultUserId = 0;
@@ -1852,7 +1905,7 @@ function migrateSelfCrawlSourceOn() {
   );
 }
 
-migrateSelfCrawlSourceOn();
+if (!PG_NO_SQLITE_OPEN) migrateSelfCrawlSourceOn();
 
 export function getCrawlSources() {
   return publicCrawlSources(settingKey("crawlSources") ?? defaultCrawlSources());
@@ -5341,6 +5394,7 @@ function stampDataEpoch() {
   ).run("dataEpoch", JSON.stringify(DATA_EPOCH));
 }
 
+if (!PG_NO_SQLITE_OPEN) {
 if (shouldResetForEpoch(readDataEpoch(), DATA_EPOCH)) {
   console.warn(`[5151] DATA_EPOCH 變更（${readDataEpoch()} → ${DATA_EPOCH}），執行整庫重置`);
   resetAllData();
@@ -5355,6 +5409,7 @@ try {
   }
 } catch (error) {
   console.warn("個人標記遷移失敗：", error.message);
+}
 }
 
 export function addUserEvent(event) {
@@ -8790,6 +8845,7 @@ export function migrateEventsToUser(userId) {
   }
 }
 
+if (!PG_NO_SQLITE_OPEN) {
 try {
   const adminId = bootstrapAdminFromEnv();
   migrateGlobalSettingsToUser(adminId);
@@ -8826,4 +8882,5 @@ try {
   }
 } catch (error) {
   console.warn("會員帳號初始化失敗：", error.message);
+}
 }
