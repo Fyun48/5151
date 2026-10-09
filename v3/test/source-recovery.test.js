@@ -554,7 +554,7 @@ test("不適用：這一輪沒有可抓行政區的來源不算失敗、也不�
 test("整輪被放棄時，落地階段要真的停下來（第九十六批追加；原本會把上萬筆寫完才結束）", () => {
   const src = readFileSync(new URL("../src/watcher.js", import.meta.url), "utf8");
   // 批次開頭檢查一次：否則預算用盡後整批（上萬筆）仍會寫完，下一輪又開始 ⇒ 兩輪重疊。
-  assert.match(src, /throwIfCrawlCancelled\(\);\n    const isSearchBaseline = listingCountForSearch\(batch\.searchUrl\) === 0;/,
+  assert.match(src, /throwIfCrawlCancelled\(\);\n    const isSearchBaseline = \(await listingCountForSearchAsync\(batch\.searchUrl\)\) === 0;/,
     "落地迴圈的批次開頭要有 throwIfCrawlCancelled()");
   // 同一批之內每 20 筆再檢查一次（用既有的 upserts 計數）。
   assert.match(src, /if \(upserts % 20 === 0\) throwIfCrawlCancelled\(\);/,
