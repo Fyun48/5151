@@ -49,6 +49,36 @@ export function tableInfo(db, table) {
   return db.prepare(`PRAGMA table_info(${quoteIdent(table)})`).all();
 }
 
+// PG-native structure readers（開閘 D-0021 批次）：不再用 SQLite 的 `sqlite_master`／
+// `PRAGMA table_info` 當權威，改讀 PG 自己的 `information_schema`。回傳形狀對齊上面的
+// `tableInfo()`（`{ name, type, notnull, pk, dflt_value }`），讓既有的呼叫端能無痛替換。
+export async function pgTableExists(pgDriver, table, { schema = "public" } = {}) {
+  const res = await pgDriver.query(
+    `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
+    [schema, table],
+  );
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  return rows.length > 0;
+}
+
+export async function pgTableInfo(pgDriver, table, { schema = "public" } = {}) {
+  const res = await pgDriver.query(
+    `SELECT column_name AS name, data_type AS type, is_nullable, column_default
+     FROM information_schema.columns
+     WHERE table_schema = $1 AND table_name = $2
+     ORDER BY ordinal_position`,
+    [schema, table],
+  );
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  return rows.map((row) => ({
+    name: row.name,
+    type: row.type,
+    notnull: row.is_nullable === "NO" ? 1 : 0,
+    pk: 0,
+    dflt_value: row.column_default ?? null,
+  }));
+}
+
 export function userTables(db) {
   return db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")

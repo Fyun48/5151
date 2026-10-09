@@ -14,11 +14,14 @@ import {
   getListing,
   listingSearchBuildContext,
   preloadDecorationProviderAsync,
+  sqliteHandle,
 } from "./db.js";
 import { LISTING_SURFACE, listingVisibleOnSurface } from "./stage1FixtureIsolation.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { createListingsRepository } from "./repository/listings.js";
+import { getSettingsAsync } from "./settingsAsync.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 
 // One pool for the process, shared with the list path and the write path.
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -44,7 +47,9 @@ export async function getListingAsync(postId, userId, options = {}) {
     if (!listingVisibleOnSurface(row, { surface: LISTING_SURFACE.MEMBER_DETAIL, viewerId: uid })) {
       return undefined;
     }
-    const settings = options.settings || deps.getSettings(uid);
+    // 開閘後沒有可用的 SQLite handle，同步 `deps.getSettings()` 會拋；改用 driver-aware 的
+    // `getSettingsAsync()`（PG 讀 settings／user_settings／users，SQLite 直接回同步版）。
+    const settings = options.settings || (await getSettingsAsync(uid, { ...options, exec }));
     const sameHouse = options.sameHouse !== false;
     const matchVoteUserId = options.matchVoteUserId == null ? uid : Number(options.matchVoteUserId) || 0;
     const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
@@ -66,6 +71,8 @@ export async function getListingAsync(postId, userId, options = {}) {
   } catch (error) {
     // A detail page must not go blank because PostgreSQL hiccuped.
     if (options.strict) throw error;
+    // 開閘後沒有可用的 SQLite handle，同步 `getListing()` 一定拋（proxy）；不要再回退到它。
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     return getListing(postId, userId, options);
   }
 }

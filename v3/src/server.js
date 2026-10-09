@@ -5,6 +5,7 @@ import { resolveAppRole, roleRunsWeb, roleRunsCrawler, roleRunsWorker } from "./
 import { apiErrorHandler, apiNotFoundHandler, statusOfApiError } from "./apiFallbacks.js";
 import { searchPublicListingsAsync } from "./publicListingSearchAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { loadListingPage } from "./listingSearchPage.js";
 import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
@@ -702,7 +703,9 @@ import {
 } from "./brandMascot.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-initSupportDomain(db);
+// 開閘（PG_NO_SQLITE_OPEN=1）時 `db` 是拋錯 proxy，同步 DDL 只是冗餘啟動副作用（support_* 表已在 PG）。
+// 只有「真的 SQLite handle 可用」才跑同步 seed/remap；sqlite driver 路徑逐字不變。
+if (sqliteHandleIsUsable(db)) initSupportDomain(db);
 const app = express();
 app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 5153);
@@ -5437,7 +5440,7 @@ assertRuntimeDbGuard();
 const APP_ROLE = resolveAppRole();
 
 if (roleRunsWeb(APP_ROLE)) {
-  app.listen(PORT, HOST, () => {
+  app.listen(PORT, HOST, async () => {
     if (roleRunsCrawler(APP_ROLE)) schedule();
     if (roleRunsWorker(APP_ROLE)) startWorkerLoops();
     if (roleRunsCrawler(APP_ROLE) || roleRunsWorker(APP_ROLE)) startStartupWork();
@@ -5447,8 +5450,14 @@ if (roleRunsWeb(APP_ROLE)) {
     } else {
       console.log("可從登入頁註冊新會員。若要保留舊的單一管理員，請在 auth.env 設定 AUTH_EMAIL / AUTH_PASSWORD。");
     }
-    if (!mailConfigured(getStoredSmtp())) {
-      console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
+    // 開閘時同步 getStoredSmtp() 會讀 SQLite（settingKey→db.prepare）⇒ 改用 driver-aware 的 async 版。
+    // 這只是啟動時的提示訊息，SMTP 讀取失敗不該讓 web 行程起不來。
+    try {
+      if (!mailConfigured(await getStoredSmtpAsync())) {
+        console.log("系統信（註冊、忘記密碼、變更密碼、贊助）尚未能寄信：請在後台填 SMTP，或在 auth.env 寫入 SMTP_HOST、SMTP_USER、SMTP_PASS、SMTP_FROM。");
+      }
+    } catch (error) {
+      console.warn("啟動時讀取 SMTP 設定失敗（不影響服務）：", error.message);
     }
   });
 } else {
