@@ -55,6 +55,7 @@ import { CRAWL_PAGES_591, CRAWL_PAGES_EXTERNAL, coveringPhaseDeadlineMs } from "
 import { pickExternalSources, externalSourcesPerRun, externalPhaseBudgetMs } from "./externalRotation.js";
 import { noteConsecutiveTimeout, withBudget } from "./crawlWatchdog.js";
 import { currentCrawlExecution, isCrawlCancelled, throwIfCrawlCancelled } from "./crawlExecution.js";
+import { crawlTelemetry, setCrawlPhase, newCrawlRoundId } from "./crawlTelemetry.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
@@ -640,10 +641,12 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
   const confirmDays = normalizeOfflineConfirmDays(getSystemCrawl().offlineConfirmDays);
   const confirmed = confirmExpiredOfflineListings(confirmDays);
   const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
+  crawlTelemetry.log(`下架掃描開始：待確認 ${rows.length} 筆／預算 ${limit} 筆`);
   let checked = 0;
   let gone = 0;
   let rechecked = 0;
   let restored = 0;
+  const aliveBatchStartedAt = Date.now();
   for (const row of rows) {
     const listing = await listingForWatchAsync(row.post_id);
     if (!listing) continue;
@@ -663,8 +666,13 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
+  crawlTelemetry.log(`本批探測 ${checked} 筆、耗時 ${Date.now() - aliveBatchStartedAt}ms`);
+  if (rows.length >= limit && limit > 0) {
+    crawlTelemetry.log(`下架掃描：待確認已達預算 ${limit} 筆（可能還有更多），本輪先收手`);
+  }
   const pendingRecheck = await needingOfflineRecheckAsync({ limit: 8 });
   const now = new Date();
+  const recheckBatchStartedAt = Date.now();
   for (const row of pendingRecheck) {
     if (rechecked >= 8) break;
     if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
@@ -680,6 +688,10 @@ async function sweepOfflineListings(seenIds, { limit = 20 } = {}) {
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
+  crawlTelemetry.log(`本批複查 ${rechecked} 筆、耗時 ${Date.now() - recheckBatchStartedAt}ms`);
+  if (rechecked >= 8) {
+    crawlTelemetry.log(`下架掃描：複查已達 ${rechecked} 筆上限（rechecked>=8），提前收手`);
+  }
   return { checked, gone, rechecked, restored, confirmed };
 }
 
@@ -694,6 +706,13 @@ export async function runWatch(options = {}) {
   // G4 啟動檢查：sandbox 與獨立 crawler 行程也走同一個 gate（fail-fast）。
   assertRuntimeDbGuard();
   throwIfCrawlCancelled();
+  const roundId = newCrawlRoundId();
+  const roundStartedAt = Date.now();
+  setCrawlPhase("準備");
+  crawlTelemetry.log(`輪次開始：${roundId}`);
+  const logRoundEnd = (extra = {}) => {
+    crawlTelemetry.log(`輪次結束：${roundId}（${Date.now() - roundStartedAt}ms，fetched ${extra.fetched ?? 0}，covered ${extra.covered ?? 0}，jobs ${extra.jobs ?? 0}，skipped ${extra.skipped ?? ""}）`);
+  };
   const runtime = await crawlRuntimeAsync();
   const want591 = runtime.sourceEnabled("591");
   const wantHb = runtime.sourceEnabled("hbhousing");
@@ -703,6 +722,7 @@ export async function runWatch(options = {}) {
   const wantHf = runtime.sourceEnabled("housefun");
   const wantRakuya = runtime.sourceEnabled("rakuya");
   if (!want591 && !wantHb && !wantSinyi && !wantHp && !wantDd && !wantHf && !wantRakuya) {
+    logRoundEnd({ skipped: "sources" });
     return {
       checked_at: nowIso(),
       searches: [],
@@ -738,6 +758,7 @@ export async function runWatch(options = {}) {
     });
   const jobs = plan.jobs;
   if (!jobs.length) {
+    logRoundEnd({ jobs: 0, skipped: "no-jobs" });
     throw new Error("請先選行政區或貼上至少一組 591 搜尋網址");
   }
   await bindNotifyJobSnapshotsFor(options);
@@ -790,49 +811,60 @@ export async function runWatch(options = {}) {
     const sourceErrors = [];
     sourceSuccess.push({ source: "591", urls: successful });
     let consecutiveTimeouts = 0;
-    // 591 覆蓋階段的時間上限（理由寫在 crawlPolicy.js：實測地板是 591，不是外站）。
-    // 只在「兩個覆蓋條件之間」檢查，不在半頁中停 ⇒ 已抓到的頁面照樣落地、照樣記完成。
-    const coveringExecution = currentCrawlExecution();
-    const coveringRemainingMs = coveringExecution?.deadline ? coveringExecution.deadline - Date.now() : 0;
-    const coveringDeadline = Number(options.coveringPhaseDeadlineMs) > 0
-      ? Number(options.coveringPhaseDeadlineMs)
-      : coveringPhaseDeadlineMs({ remainingMs: coveringRemainingMs, env: process.env });
-    let coveringTimedOut = false;
-    for (const job of jobs) {
-      if (coveringDeadline && Date.now() >= coveringDeadline) {
-        coveringTimedOut = true;
-        errors.push(`591 覆蓋階段到點停手（本輪 ${jobs.length} 個縣市，只跑完 ${successful.size} 個）`
-          + "，其餘留到下一輪——未跑完的覆蓋條件不會被記成完成，這一輪也不記成失敗");
-        break;
-      }
-      try {
-        const result = await fetchListings(job.searchUrl, pages, fetchOptions);
-        throwIfCrawlCancelled();
-        collected.push(result);
-        if (!result.errors?.length) successful.add(job.searchUrl);
-        consecutiveTimeouts = 0;
-        if (result.total > 0 && result.listings.length === 0) {
-          errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
-        }
-      } catch (error) {
-        throwIfCrawlCancelled();
-        errors.push(`${job.searchUrl} → ${error.message}`);
-        sourceErrors.push(error.message);
-        const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
-        consecutiveTimeouts = skip.consecutive;
-        if (skip.skipRest) {
-          errors.push("591 連續逾時，其餘縣市本輪跳過");
+    const source591StartedAt = Date.now();
+    setCrawlPhase("來源 591");
+    crawlTelemetry.log("來源 591：開始");
+    try {
+      // 591 覆蓋階段的時間上限（理由寫在 crawlPolicy.js：實測地板是 591，不是外站）。
+      // 只在「兩個覆蓋條件之間」檢查，不在半頁中停 ⇒ 已抓到的頁面照樣落地、照樣記完成。
+      const coveringExecution = currentCrawlExecution();
+      const coveringRemainingMs = coveringExecution?.deadline ? coveringExecution.deadline - Date.now() : 0;
+      const coveringDeadline = Number(options.coveringPhaseDeadlineMs) > 0
+        ? Number(options.coveringPhaseDeadlineMs)
+        : coveringPhaseDeadlineMs({ remainingMs: coveringRemainingMs, env: process.env });
+      let coveringTimedOut = false;
+      for (const job of jobs) {
+        if (coveringDeadline && Date.now() >= coveringDeadline) {
+          coveringTimedOut = true;
+          errors.push(`591 覆蓋階段到點停手（本輪 ${jobs.length} 個縣市，只跑完 ${successful.size} 個）`
+            + "，其餘留到下一輪——未跑完的覆蓋條件不會被記成完成，這一輪也不記成失敗");
           break;
         }
+        try {
+          const result = await fetchListings(job.searchUrl, pages, fetchOptions);
+          throwIfCrawlCancelled();
+          collected.push(result);
+          if (!result.errors?.length) successful.add(job.searchUrl);
+          consecutiveTimeouts = 0;
+          if (result.total > 0 && result.listings.length === 0) {
+            errors.push(`${result.parsed.label}：591 有 ${result.total} 筆，但都被目前篩選排除了`);
+          }
+        } catch (error) {
+          throwIfCrawlCancelled();
+          errors.push(`${job.searchUrl} → ${error.message}`);
+          sourceErrors.push(error.message);
+          const skip = noteConsecutiveTimeout(consecutiveTimeouts, error);
+          consecutiveTimeouts = skip.consecutive;
+          if (skip.skipRest) {
+            errors.push("591 連續逾時，其餘縣市本輪跳過");
+            break;
+          }
+        }
       }
+      noteSourceRound("591", successful, sourceErrors, false, true, coveringTimedOut);
+    } finally {
+      const interrupted = isCrawlCancelled();
+      crawlTelemetry.log(`來源 591：結束（${Date.now() - source591StartedAt}ms，行政區 ${successful.size}/${jobs.length}，頁 ${pages}${interrupted ? "，中斷" : ""}）`);
     }
-    noteSourceRound("591", successful, sourceErrors, false, true, coveringTimedOut);
   }
 
   async function collectExternal(source, label, run, phaseBudgetMs = 0) {
     const successful = new Set();
     const sourceErrors = [];
     sourceSuccess.push({ source, urls: successful });
+    const externalStartedAt = Date.now();
+    setCrawlPhase(`來源 ${label}`);
+    crawlTelemetry.log(`來源 ${label}：開始`);
     // ⚠️ 一定要宣告在 try 外面：`noteSourceRound(...)` 在 try/catch 之後要用它，
     // 寫在 try 裡面會是 `ReferenceError: batches is not defined`（2026-09-30 沙盒第一輪就抓到，
     // 當時的 watcher 測試只比對原始碼文字，抓不到這種作用域錯誤）。
@@ -877,6 +909,9 @@ export async function runWatch(options = {}) {
         errors.push(`${label} → ${error.message}`);
         sourceErrors.push(error.message);
       }
+    } finally {
+      const interrupted = isCrawlCancelled();
+      crawlTelemetry.log(`來源 ${label}：結束（${Date.now() - externalStartedAt}ms，行政區 ${successful.size}/${jobs.length}，頁 ${hbPages}${interrupted ? "，中斷" : ""}）`);
     }
     // 這一批是不是「被擋到停工」：只要有任一批次回報 blocked，就當這一家這一輪被擋。
     const applicable = batches.some((batch) => batch?.applicable !== false);
@@ -980,8 +1015,10 @@ export async function runWatch(options = {}) {
 
   if (!collected.length) {
     if (want591) {
+      logRoundEnd({ jobs: jobs.length, skipped: "portals" });
       throw new Error(errors.join("；") || "591 搜尋沒有回傳資料");
     }
+    logRoundEnd({ jobs: jobs.length, skipped: "portals" });
     return {
       checked_at: nowIso(),
       searches: [],
@@ -1024,6 +1061,7 @@ export async function runWatch(options = {}) {
   // 否則 isSystemCoveringDue() 在這段期間只會看到上一輪的舊時間（2026-09-24 事故）。
   await markCoveringProgressAsync({ at: nowIso(), includeSystem: plan.includeSystem === true });
 
+  setCrawlPhase("落地");
   for (const batch of collected) {
     // 第九十六批追加：落地階段也要理會「整輪被 withBudget 放棄」。
     // 原本只有取頁階段會檢查，於是預算用盡後這一輪仍把上萬筆寫完（正式站實測 70 分鐘沒收尾），
@@ -1137,8 +1175,10 @@ export async function runWatch(options = {}) {
   // 下架掃描每輪探測上限：可見優先後，41,418 筆從未探測的可見物件按 ~3.5k/天約要 12 天才掃完。
   // 每筆只多 400ms，20 → 40 讓每輪多 ~8 秒（相對整輪 ~25 分鐘預算可忽略），把首輪掃完時間砍半到
   // ~6 天；skipHeavyGeo 的輕量路徑維持 12，不加重那條路徑。
+  setCrawlPhase("下架掃描");
   const offlineSweep = await sweepOfflineListings(seen, { limit: options.skipHeavyGeo ? 12 : 40 });
 
+  setCrawlPhase("明細補抓");
   const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });
   for (const row of pendingFees) {
     try {
@@ -1157,6 +1197,7 @@ export async function runWatch(options = {}) {
   }
 
   const skipBlockedKit = new Set();
+  setCrawlPhase("來源套件");
   const pendingSourceKit = await needingSourceKitAsync({ limit: 8 });
   for (const row of pendingSourceKit) {
     try {
@@ -1187,6 +1228,7 @@ export async function runWatch(options = {}) {
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
+  setCrawlPhase("通知");
   const events = options.silent ? [] : await flushPendingNotifications(settings, { silent: options.silent });
   if (settings.hasBaseline !== true) {
     await saveSettingsAsync({ hasBaseline: true });
@@ -1196,6 +1238,7 @@ export async function runWatch(options = {}) {
   // A partial source failure is not a successful cover. Be conservative until every source that is
   // still strict reports success; tolerated (long-failing) sources no longer block, but they always
   // leave a warning. Never postpone unprocessed members.
+  setCrawlPhase("完成記錄");
   await completeCoveringPlan({
     successfulJobs: jobs.filter((job) => isCoveredJob(job)),
     memberRequirements: plan.memberRequirements,
@@ -1228,6 +1271,7 @@ export async function runWatch(options = {}) {
     offline: offlineSweep,
     checked_at: nowIso(),
   };
+  logRoundEnd({ fetched: seen.size, covered: recordedCoverUrls.size, jobs: jobs.length, skipped: result.skipped });
   return result;
 }
 

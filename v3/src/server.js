@@ -592,6 +592,7 @@ import {
   humanTimeoutMessage,
   withBudget,
 } from "./crawlWatchdog.js";
+import { logDeadlineStop } from "./crawlTelemetry.js";
 import { APP_NAME, APP_VERSION } from "./brand.js";
 import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
 import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
@@ -4662,7 +4663,7 @@ async function tick(reason = "schedule") {
     const result = await withBudget(async signal => {
       if (resolveDbDriver() !== "postgres") return execute();
       return withPgCrawlOwner(await sharedPgDriver(), execute, { signal });
-    }, TICK_BUDGET_MS, "這輪抓取", { signal: tickGate.signal(tickGen) });
+    }, TICK_BUDGET_MS, "這輪抓取", { signal: tickGate.signal(tickGen), onTimeout: (elapsed) => logDeadlineStop(elapsed) });
     if (!tickGate.isCurrent(tickGen) || ["owner_busy", "idle", "interval"].includes(result?.skipped)) return result;
     lastRun = result;
     lastRun.reason = reason;

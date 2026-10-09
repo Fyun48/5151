@@ -28,6 +28,7 @@ import { resolveDbDriver } from "../src/dbDriver.js";
 import { sharedPgDriver } from "../src/pgSharedDriver.js";
 import { withPgCrawlOwner } from "../src/crawlOwnership.js";
 import { withBudget, TICK_BUDGET_MS } from "../src/crawlWatchdog.js";
+import { logDeadlineStop } from "../src/crawlTelemetry.js";
 import { reserveCoveringPlan } from "../src/crawlScheduleAsync.js";
 import { runWatch } from "../src/watcher.js";
 
@@ -161,7 +162,7 @@ export async function runSandboxRound({ round = 1, env = process.env } = {}) {
         memberRequirements: plan.memberRequirements,
         includeSystem: plan.includeSystem,
       });
-    }, { signal }), TICK_BUDGET_MS, "沙盒這一輪", {});
+    }, { signal }), TICK_BUDGET_MS, "沙盒這一輪", { onTimeout: (elapsed) => logDeadlineStop(elapsed) });
   } catch (error) {
     // 沙盒的價值之一就是把「被放棄的輪次」變成可讀的紀錄，所以不在這裡往上丟。
     result = { error: error?.message || String(error), errors: [], fetched: 0, covers: [], sources: [] };
