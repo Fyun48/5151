@@ -15,6 +15,7 @@ import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, pu
 import { defaultCrawlSources, normalizeCrawlSources, publicCrawlSources } from "./crawlSources.js";
 import { emptyCommsConfig, normalizeCommsConfig } from "./comms.js";
 import { getSiteSettingAsync, setSiteSettingAsync } from "./settingsKvAsync.js";
+import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 import {
   SYSTEM_CRAWL_SETTING_KEYS,
   SITE_CATALOG_ROWS_SQL,
@@ -176,6 +177,10 @@ export async function saveCrawlSourcesAsync(partial = {}, options = {}) {
     return { ...row, enabled: Boolean(enabledRaw) };
   });
   await setSiteSettingAsync(CRAWL_SOURCES_KEY, normalizeCrawlSources(merged), options);
+  await bumpRevisionPgExec(await pgExec(options), {
+    entityType: "crawl_source",
+    eventType: "crawl_sources_updated",
+  });
   return getCrawlSourcesAsync(options);
 }
 

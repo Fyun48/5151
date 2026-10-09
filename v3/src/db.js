@@ -132,7 +132,7 @@ import {
 } from "./comms.js";
 import { ensureSupportSchema } from "./supportSchema.js";
 import { DATA_EPOCH, shouldResetForEpoch } from "./dataEpoch.js";
-import { bumpRevision, ensureDataRevisionTable } from "./dataRevision.js";
+import { bumpRevision, bumpRevisionSafe, ensureDataRevisionTable } from "./dataRevision.js";
 import { dataRevisionPgDdlStatements, dataRevisionPgIdentityResyncStatements } from "./dataRevisionPgSchema.js";
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { countsTowardAllTotal, isConfirmedOffline, isPendingOffline, normalizeOfflineConfirmDays } from "./offline.js";
@@ -1911,6 +1911,10 @@ function migrateSelfCrawlSourceOn() {
       row?.id === "self" ? { ...row, enabled: true, stub: false } : row
     ))),
   );
+  bumpRevisionSafe(db, {
+    entityType: "crawl_source",
+    eventType: "crawl_sources_updated",
+  });
 }
 
 if (!PG_NO_SQLITE_OPEN) migrateSelfCrawlSourceOn();
@@ -1936,6 +1940,10 @@ export function saveCrawlSources(partial = {}) {
     return { ...row, enabled: Boolean(enabledRaw) };
   });
   writeSettingKey("crawlSources", normalizeCrawlSources(merged));
+  bumpRevisionSafe(db, {
+    entityType: "crawl_source",
+    eventType: "crawl_sources_updated",
+  });
   return getCrawlSources();
 }
 
@@ -4080,6 +4088,10 @@ export function rejectSuspectedMatch(postId, userId, { peerId, admin = false } =
        SET match_verdict = 'no', match_rejected = 1, hidden = 0
        WHERE post_id IN (?, ?)`,
     ).run(lo, hi);
+    bumpRevisionSafe(db, {
+      entityType: "listing",
+      eventType: "same_house_split",
+    });
   }
 
   return {
@@ -4131,6 +4143,10 @@ export function confirmSameHouseAsAdmin(adminUserId, postIds, { now = new Date()
     resultingGroupId: groupId,
     now,
   });
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    eventType: "same_house_merge",
+  });
   return {
     ok: true,
     personal: false,
@@ -4160,6 +4176,10 @@ export function adminSplitSameHouse(adminUserId, postId, peerId, { now = new Dat
      SET match_verdict = 'no', match_rejected = 1
      WHERE post_id IN (?, ?)`,
   ).run(a, b);
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    eventType: "same_house_split",
+  });
   writeGroupAudit(db, {
     action: "admin_split_same_house",
     adminUserId,
@@ -5169,6 +5189,11 @@ export function markListingOffline(postId) {
        WHERE post_id = ?`,
     ).run(now, now, postId);
   }
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(postId) || 0,
+    eventType: "listing_offline",
+  });
   return getListing(postId);
 }
 
@@ -5196,6 +5221,11 @@ export function restoreListingOnline(postId) {
        WHERE post_id = ?`,
     ).run(now, postId);
   }
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(postId) || 0,
+    eventType: "listing_online",
+  });
   return getListing(postId);
 }
 
@@ -5227,6 +5257,11 @@ export function markListingAlive(postId) {
        WHERE post_id = ?`,
     ).run(now, now, postId);
   }
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(postId) || 0,
+    eventType: "listing_alive",
+  });
   return { listing: getListing(postId), restored: wasOffline };
 }
 
@@ -5242,6 +5277,11 @@ export function confirmListingOffline(postId) {
          last_checked_at = ?
      WHERE post_id = ?`,
   ).run(now, postId);
+  bumpRevisionSafe(db, {
+    entityType: "listing",
+    entityId: Number(postId) || 0,
+    eventType: "listing_offline_confirmed",
+  });
   return getListing(postId);
 }
 
@@ -5261,7 +5301,14 @@ export function confirmExpiredOfflineListings(days = 7) {
          AND COALESCE(NULLIF(offline_at, ''), last_checked_at, last_seen_at) <= ?`,
     )
     .run(now, cutoff);
-  return Number(info.changes) || 0;
+  const changed = Number(info.changes) || 0;
+  if (changed > 0) {
+    bumpRevisionSafe(db, {
+      entityType: "listing",
+      eventType: "listing_offline_confirmed",
+    });
+  }
+  return changed;
 }
 
 const EXPIRED_OFFLINE_SWEEP_MS = 60_000;

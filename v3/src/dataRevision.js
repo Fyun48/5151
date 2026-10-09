@@ -3,6 +3,7 @@
 // replaying the whole dataset. Pair with deltaEvents + eventBus: a change bumps
 // the revision and publishes a delta hint; the DB change-log is the durable
 // source of truth the client re-reads on reconnect.
+import { noteRevisionBumpFailure } from "./dataRevisionHealth.js";
 
 export const DATA_REVISION_DDL = `
 CREATE TABLE IF NOT EXISTS data_revision (
@@ -32,6 +33,18 @@ export function bumpRevision(db, { entityType, entityId = null, eventType, now =
   ).run(entityType, entityId == null ? null : Number(entityId), eventType, now);
   return Number(result.lastInsertRowid);
 }
+
+// 同步 SQLite 寫入路徑的 best-effort bump：失敗只記錄（接到 /api/health 的
+// `revision_bump_failures`），**不得**讓主寫入的呼叫端拋錯（保持現有 best-effort 語意）。
+export function bumpRevisionSafe(db, { entityType, entityId = null, eventType, now = Date.now() } = {}) {
+  try {
+    return bumpRevision(db, { entityType, entityId, eventType, now });
+  } catch (error) {
+    noteRevisionBumpFailure(error);
+    return null;
+  }
+}
+
 
 // 上限是共用政策（PG 版也用它）。
 export const CHANGES_SINCE_MAX = 5000;

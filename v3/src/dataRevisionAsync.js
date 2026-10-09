@@ -17,6 +17,11 @@ import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
+import {
+  dataRevisionPgDdlStatements,
+  dataRevisionPgIdentityResyncStatements,
+} from "./dataRevisionPgSchema.js";
 import {
   CHANGES_SINCE_MAX,
   changesSince as changesSinceSync,
@@ -48,8 +53,23 @@ export async function ensureDataRevisionStoreOnce(pgDriver) {
   // `ensureDataRevisionTable(db)`），全新節點的本機 SQLite 還沒有它 ⇒ 直接鏡射會讓 PG 被建出
   // **零欄表**（症狀是之後每一句都 42703，不是 42P01）。2026-09-28 在 CI 的拋棄式資料庫上實測中過。
   // `pgSchema.ensurePgSchema()` 現在也會擋這種情況，這裡先照同步版把來源表準備好。
-  ensureDataRevisionTable(sqlite);
-  const ready = ensurePgSchema(pgDriver, sqlite, { tables: DATA_REVISION_TABLES });
+  //
+  // ⚠️ 開閘（PG_NO_SQLITE_OPEN=1）時 `sqliteHandle()` 是帶 DSH_NO_OPEN_MARKER 的拋錯 proxy——
+  // truthy 但不可用，要用 `sqliteHandleIsUsable()` 判、不能碰任何 method（L-0445）。那時改走
+  // PG 原生 DDL＋序號對齊（與 db.js `ensureChangeLogStoreOnce` 同一慣例）。
+  const ready = sqliteHandleIsUsable(sqlite)
+    ? (async () => {
+        ensureDataRevisionTable(sqlite);
+        return ensurePgSchema(pgDriver, sqlite, { tables: DATA_REVISION_TABLES });
+      })()
+    : (async () => {
+        for (const statement of dataRevisionPgDdlStatements()) {
+          await pgDriver.exec(statement);
+        }
+        for (const statement of dataRevisionPgIdentityResyncStatements()) {
+          await pgDriver.query(statement);
+        }
+      })();
   schemaReady.set(pgDriver, ready);
   try {
     await ready;
@@ -72,6 +92,8 @@ async function withFallback(options, runPostgres, runSqlite) {
     return await runPostgres(exec);
   } catch (error) {
     if (!sqliteFallbackAllowed(options, {})) throw error;
+    // 開閘後沒有可用的 SQLite handle：不回退（回退會讓同步 `sqliteHandle()` 拋出更難懂的錯）。
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     return runSqlite();
   }
 }

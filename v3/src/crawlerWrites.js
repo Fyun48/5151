@@ -46,6 +46,7 @@ import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { normalizeOfflineConfirmDays } from "./offline.js";
 import { setCachedGeoAsync } from "./geoCacheAsync.js";
+import { bumpRevisionPgClient, bumpRevisionPgExec } from "./revisionBumpAsync.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -66,19 +67,57 @@ async function write(options, runPostgres, runSqlite) {
   }
 }
 
+// 與 write() 同形，但把「主寫入 + bump」包進同一個 PG 交易（bump 用 SAVEPOINT 隔離）。
+// ⚠️ 刻意留在本檔（不 import 自 revisionBumpAsync.js）：route-data-map 的
+// `driverAwareLocalNames` 只認**同模組**、本文帶 driver 判斷的函式當「fallback 包裹器」；
+// 若寫在 *Async.js 再 import，`markListingOfflineSync` 這類 fallback 引數會被誤判成真呼叫。
+async function writeThenBump(options, runPostgres, runSqlite, payload) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return runSqlite();
+  try {
+    if (options.exec) {
+      // 測試夾具注入的 exec：沒有真交易，主寫入與 bump 依序執行（同一條寫入路徑）。
+      const result = await runPostgres(options.exec);
+      await bumpRevisionPgExec(options.exec, payload);
+      return result;
+    }
+    const pgDriver = options.pgDriver || (await sharedPgDriver());
+    return await pgDriver.withTransaction(async (client) => {
+      const tx = (sql, params = []) => client.query(toPostgresSql(sql), params).then((res) => res.rows);
+      const result = await runPostgres(tx);
+      await bumpRevisionPgClient(client, payload);
+      return result;
+    });
+  } catch (error) {
+    if (!sqliteFallbackAllowed(options, { write: true })) throw error;
+    return runSqlite();
+  }
+}
+
 export function markListingOfflineAsync(postId, options = {}) {
-  return write(options, (exec) => markListingOfflineRepo(exec, postId), () => markListingOfflineSync(postId));
+  return writeThenBump(
+    options,
+    (exec) => markListingOfflineRepo(exec, postId),
+    () => markListingOfflineSync(postId),
+    { entityType: "listing", entityId: Number(postId) || 0, eventType: "listing_offline" },
+  );
 }
 
 export function restoreListingOnlineAsync(postId, options = {}) {
-  return write(options, (exec) => restoreListingOnlineRepo(exec, postId), () => restoreListingOnlineSync(postId));
+  return writeThenBump(
+    options,
+    (exec) => restoreListingOnlineRepo(exec, postId),
+    () => restoreListingOnlineSync(postId),
+    { entityType: "listing", entityId: Number(postId) || 0, eventType: "listing_online" },
+  );
 }
 
 export function markListingAliveAsync(postId, options = {}) {
-  return write(
+  return writeThenBump(
     options,
     (exec) => markListingAliveRepo(exec, postId, { wasOffline: options.wasOffline === true }),
     () => markListingAliveSync(postId),
+    { entityType: "listing", entityId: Number(postId) || 0, eventType: "listing_alive" },
   );
 }
 
@@ -295,10 +334,11 @@ export async function confirmExpiredOfflineAsync({ days = 7, now = Date.now() } 
   const n = normalizeOfflineConfirmDays(days);
   const cutoff = new Date(at - n * 86_400_000).toISOString();
   const stamp = new Date(at).toISOString();
-  return write(
+  return writeThenBump(
     options,
     async (exec) => (await exec(`${EXPIRED_OFFLINE_SQL} RETURNING 1`, [stamp, cutoff])).length,
     () => confirmExpiredOfflineListingsSync(days),
+    { entityType: "listing", eventType: "listing_offline_confirmed" },
   );
 }
 

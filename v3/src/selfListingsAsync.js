@@ -124,6 +124,7 @@ import { depositLabel, selfTraitLabels } from "./selfTraits.js";
 import { ownsMediaUrlAsync } from "./memberMediaAsync.js";
 import { copyResult } from "./listingTools.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 
 // 複製的冪等表（同步 `listingTools.js:copyOwnListing()` 用的同一組語句）。
 export const COPY_IDEMPOTENCY_HIT_SQL =
@@ -248,6 +249,11 @@ export async function hideSelfListingAsync(postId, { now = new Date(), ...option
   if (!row) throw httpError("找不到這則站內刊登", 404);
   const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
   await exec(HIDE_SELF_LISTING_SQL, [stamp, row.post_id]);
+  await bumpRevisionPgExec(exec, {
+    entityType: "listing",
+    entityId: Number(row.post_id) || 0,
+    eventType: "listing_hidden",
+  });
   // **兩個 store 都寫**：`listings` 的狀態是本機**同步**瀏覽路徑（`keepSelfListingForViewer()`）
   // 在讀的，只寫 PG 會讓「已隱藏」的刊登還留在本機的清單裡。
   sqliteHandle().prepare(HIDE_SELF_LISTING_SQL).run(stamp, row.post_id);

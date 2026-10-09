@@ -43,6 +43,7 @@ import {
 } from "./listingGroupsAsync.js";
 import { CONFIRM_ADMIN } from "./listingGroups.js";
 import { getListingAsync } from "./listingDetailAsync.js";
+import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 import {
   MATCH_SPLIT_DAILY_LIMIT,
   pairConfidence,
@@ -123,6 +124,10 @@ export async function confirmSameHouseAsAdminAsync(adminUserId, postIds, { now =
     previousGroupIds: previous,
     resultingGroupId: groupId,
     now,
+  });
+  await bumpRevisionPgExec(exec, {
+    entityType: "listing",
+    eventType: "same_house_merge",
   });
   return {
     ok: true,
@@ -245,6 +250,10 @@ export async function adminSplitSameHouseAsync(adminUserId, postId, peerId, { no
   await unbindListingFromGroup(exec, a, { now });
   await unbindListingFromGroup(exec, b, { now });
   await exec(ADMIN_SPLIT_SQL, [a, b]);
+  await bumpRevisionPgExec(exec, {
+    entityType: "listing",
+    eventType: "same_house_split",
+  });
   await writeGroupAudit(exec, {
     action: "admin_split_same_house",
     adminUserId,
@@ -325,6 +334,10 @@ export async function rejectSuspectedMatchAsync(postId, userId, { peerId, admin 
   });
   if (promoted) {
     await exec(PROMOTE_SPLIT_SQL, [lo, hi]);
+    await bumpRevisionPgExec(exec, {
+      entityType: "listing",
+      eventType: "same_house_split",
+    });
   }
 
   return {
