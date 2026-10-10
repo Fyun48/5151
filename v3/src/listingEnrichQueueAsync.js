@@ -43,6 +43,7 @@ import {
 // 靜態掃描，import 清單裡的註解會被當成一個具名 import。
 import { ensurePgSchema, resyncIdentitySequences } from "./pgSchema.js";
 import { resolveDbDriver } from "./dbDriver.js";
+import { sqliteHandle } from "./db.js";
 import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -68,6 +69,7 @@ async function withFallback(options, runPostgres, runSqlite) {
     const exec = (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows);
     return await runPostgres(exec);
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return runSqlite();
   }

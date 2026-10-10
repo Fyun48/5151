@@ -28,7 +28,8 @@ test("shared crawl uses fixed page depth and a 15-minute default interval", () =
   assert.match(admin, /顯示列表更新細線/);
   assert.match(admin, /全站顯示步行未滿 1\.5 公里的最近捷運站/);
   assert.match(admin, /會員畫面沒有這些選項/);
-  assert.match(watcher, /\(system \|\| getSystemCrawl\(\)\)\.offlineConfirmDays/);
+  assert.match(watcher, /const systemCrawl = system \|\| await getSystemCrawlAsync\(\);/);
+  assert.match(watcher, /normalizeOfflineConfirmDays\(systemCrawl\.offlineConfirmDays\)/);
   assert.match(admin, /id="systemCrawlSelectAll"/);
   assert.match(admin, /id="systemCrawlSelectNone"/);
   assert.match(admin, /id="systemCatalogStats"/);

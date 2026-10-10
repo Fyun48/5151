@@ -28,7 +28,9 @@ import {
   listingsNeedingOfflineRecheck,
   listingsNeedingRoute,
   listingsNeedingSourceKit,
+  sqliteHandle,
 } from "./db.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
 import {
@@ -64,6 +66,7 @@ async function scan(options, runPostgres, runSqlite) {
     const deps = options.deps || crawlerReadsBuildContext();
     return await runPostgres(exec, deps);
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return runSqlite();
   }
@@ -122,6 +125,7 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
     const exec = await postgresExec(options);
     return await findBySourceKeyRepo(exec, { sourceKey, excludePostId });
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return findBySourceKeySync(sourceKey, excludePostId);
   }
@@ -224,6 +228,7 @@ export async function needingRouteAsync({ limit = 40, priorityIds = [], cursor }
     needingRouteAsync.lastCursor = result.cursor;
     return result.rows;
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return runSqlite();
   }
@@ -245,6 +250,7 @@ export async function matchCandidatesAsync(excludePostId, incoming = null, optio
     const deps = options.deps || crawlerReadsBuildContext();
     return await listMatchCandidatesRepo(exec, { deps, excludePostId, incoming });
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return listMatchCandidates(excludePostId, incoming);
   }

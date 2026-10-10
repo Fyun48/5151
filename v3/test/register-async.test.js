@@ -265,7 +265,7 @@ test("參數驗證：四種 400 的訊息與同步版逐字相同（不會偷偷
   }
 });
 
-test("交易版（含同意紀錄）：同意列寫進 PG、本機鏡射看帳號在不在；帳號與同意同一個交易", async () => {
+test("交易版（含同意紀錄）：同意列寫進 PG；帳號與同意同一個交易", async () => {
   const [disk, exec] = worlds();
   const register = (email) => usersAsync.registerUserWithConsentsAsync(
     { email, password: "password1", acceptDisclaimer: true, emailVerified: false, consents: consentsFor(exec.raw) },
@@ -289,7 +289,8 @@ test("交易版（含同意紀錄）：同意列寫進 PG、本機鏡射看帳�
     "本機沒有那個帳號時，同意列不得硬寫本機",
   );
 
-  // (b) 本機本來就有同一個 id 的帳號（舊站升級、或別的節點同步過來）⇒ 同意列要鏡射到本機。
+  // (b) 本機本來就有同一個 id 的帳號（舊站升級、或別的節點同步過來）：P5b 起**不再鏡射**——
+  // `db.js` 的同步同意讀者已無呼叫端，鏡射只會在開閘後撞到關閉的 handle。
   const mirroredEmail = freshEmail();
   const nextId = Number(user.id) + 1;
   assert.equal(nextId, SENTINEL + 2, "前提：PG 的 id 是可預期的（哨兵 +1 之後遞增）");
@@ -298,8 +299,8 @@ test("交易版（含同意紀錄）：同意列寫進 PG、本機鏡射看帳�
   const mirrored = await register(mirroredEmail);
   assert.equal(Number(mirrored.id), nextId);
   assert.equal(
-    disk.prepare("SELECT COUNT(*) AS n FROM member_consents WHERE user_id = ?").get(nextId).n, REGISTRATION_DOC_COUNT,
-    "本機已經有那個帳號時，同意列要鏡射（同步的路由還在讀本機）",
+    disk.prepare("SELECT COUNT(*) AS n FROM member_consents WHERE user_id = ?").get(nextId).n, 0,
+    "本機不得再被鏡射補寫同意列（PG 才是唯一來源）",
   );
 
   // 同意不齊 → 400，且**不得**留下帳號（比對同步版）

@@ -53,7 +53,6 @@ import { fileURLToPath } from "node:url";
 import {
   coveringJobsFromAllUsers,
   coveringPlan,
-  crawlIntervalMinutes,
   defaultUserId,
   listUserIds,
   deleteProfile,
@@ -514,7 +513,7 @@ import {
   getCommsConfigAsync, getCrawlSourcesAsync, getHelpQaAsync, getHousingDataAsync,
   getHousingDataRawAsync, writeHousingDataAsync, getSpiritAsync,
   saveCommsConfigAsync, saveCrawlSourcesAsync, saveHelpQaAsync, saveHousingDataAsync, saveSpiritAsync,
-  getSystemCrawlAsync, refreshSiteCatalogStatsAsync, saveSystemCrawlAsync,
+  getSystemCrawlAsync, refreshSiteCatalogStatsAsync, saveSystemCrawlAsync, crawlIntervalMinutesAsync,
 } from "./siteContentAsync.js";
 import { crawlSourceHealthAsync, searchAdminListingsAsync } from "./adminOverviewAsync.js";
 import {
@@ -680,7 +679,7 @@ import {
   updateSupportTransaction,
   verifySupportWebhook,
 } from "./support.js";
-import { crawlSourceHealth, getAdminDataHealthAsync, getAdminOverviewAsync } from "./adminOverview.js";
+import { getAdminDataHealthAsync, getAdminOverviewAsync } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
@@ -4644,7 +4643,7 @@ async function tick(reason = "schedule") {
         && !systemDue
         && lastRun?.checked_at
         && !lastRun.error
-        && isWatchIntervalPending(lastRun.checked_at, crawlIntervalMinutes(), now)
+        && isWatchIntervalPending(lastRun.checked_at, await crawlIntervalMinutesAsync(), now)
       ) {
         const duePlan = await traceStep("coveringPlan(due)", coveringPlanAsync({ now, includeSystem: false }));
         if (!duePlan.jobs.length) {

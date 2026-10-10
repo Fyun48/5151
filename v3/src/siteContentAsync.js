@@ -9,6 +9,7 @@
 //   spirit      儲存：normalizeSpirit({ ...getSpirit(), ...src })   ← 與**公開形狀**合併
 // 這種差異用共用樣板很容易寫錯，而錯了就是資料語意改變。parity 優先於 DRY。
 import { resolveDbDriver } from "./dbDriver.js";
+import { SYSTEM_CRAWL_INTERVAL_MINUTES } from "./crawlPolicy.js";
 import { defaultHousingData, normalizeHousingData, publicHousingData } from "./housingData.js";
 import { defaultSpirit, normalizeSpirit, publicSpirit } from "./spirit.js";
 import { defaultHelpQaItems, mergeMissingDefaultHelpQa, normalizeHelpQaItems, publicHelpQa } from "./helpQa.js";
@@ -229,6 +230,13 @@ async function readSystemCrawlRows(options) {
 export async function getSystemCrawlAsync(options = {}) {
   if (!isPg(options)) return getSystemCrawlSync();
   return systemCrawlFromRows(await readSystemCrawlRows(options));
+}
+
+// `db.js crawlIntervalMinutes()` 的 driver-aware 版（同步版讀的是節點本機 SQLite）。
+// 數值語意逐字照抄同步版：`Math.max(1, Number(intervalMinutes) || 15)`。
+export async function crawlIntervalMinutesAsync(options = {}) {
+  const system = await getSystemCrawlAsync(options);
+  return Math.max(1, Number(system?.intervalMinutes) || SYSTEM_CRAWL_INTERVAL_MINUTES);
 }
 
 async function refreshSiteCatalogStatsPg(options, system) {

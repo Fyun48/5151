@@ -22,6 +22,7 @@ import {
   updateListingsGeoByAddress as updateListingsGeoByAddressSync,
   persistHpListingFields as persistHpListingFieldsSync,
   listingFieldsBuildContext,
+  sqliteHandle,
 } from "./db.js";
 import * as crawlerProgressRepo from "./repository/crawlerProgress.js";
 import { getListingAsync } from "./listingDetailAsync.js";
@@ -44,6 +45,7 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { normalizeOfflineConfirmDays } from "./offline.js";
 import { setCachedGeoAsync } from "./geoCacheAsync.js";
 import { bumpRevisionPgClient, bumpRevisionPgExec } from "./revisionBumpAsync.js";
@@ -165,6 +167,7 @@ export async function setListingDetailAsync(postId, input = {}, options = {}) {
     }
     return result;
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return setListingDetailSync(postId, input);
   }
@@ -183,6 +186,7 @@ export async function persistHpListingFieldsAsync(postId, next, options = {}) {
     const result = await persistHpListingFieldsRepo(exec, { deps, listing, next, locationChanged });
     return { ...result, postId: Number(postId) || 0 };
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (driverOptions.strict) throw error;
     return persistHpListingFieldsSync(postId, next, { locationChanged, previous });
   }

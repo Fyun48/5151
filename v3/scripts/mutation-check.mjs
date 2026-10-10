@@ -1241,18 +1241,11 @@ const CONSENTS_SYNC_SRC = "v3/src/memberConsents.js";
 const CONFIRM_SRC = "v3/src/listingImportAsync.js";
 const CONSENTS_MUTATIONS = [
   {
+    // P5b 起本機鏡射已移除（`db.js` 的同步同意讀者已無呼叫端），這個變異沒有東西可變了。
     name: "同意紀錄不比對既有列（同一份文件會一直寫新列）",
     file: CONSENTS_SRC,
     from: "    const existing = one((await run(CONSENT_EXISTS_SQL, [uid, documentId, hash])).rows);\n",
     to: "    const existing = null;\n",
-    expect: "同意紀錄：列表、idempotent",
-  },
-  {
-    name: "同意紀錄不鏡射本機（同步的註冊流程看不到）",
-    file: CONSENTS_SRC,
-    // ⚠️ 錨點跟著實作更新（`mirror()` 在第四十八批之後多了 `LOCAL_USER_SQL` 守衛與 try/catch）。
-    from: "    mirror({ document_type: type, version, source, agreed_at: isoOf(now) }, version);",
-    to: "    void mirror;",
     expect: "同意紀錄：列表、idempotent",
   },
   {
