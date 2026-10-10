@@ -176,17 +176,17 @@ test("同意紀錄：列表、idempotent、不完整要 400、未登入要 401",
   assert.deepEqual(asyncAgain, syncAgain, "重複同意的回傳值必須相同");
   assert.equal(consentRows(exec.raw, USER).length, 1, "PG 上不得寫出第二列（先查再寫）");
 
-  // 新的雜湊：要寫進去（兩邊都寫）
+  // 新的雜湊：要寫進去（PG 為主；本機鏡射已於 P5b 移除）
   // ⚠️ 同步基準與 PG 版用**不同帳號**：同意列 append-only（不能刪），同一帳號跑兩次時
-  // 本機那一列其實是**同步版**寫的，於是「PG 版有沒有鏡射本機」就驗不出來
-  // （變異測試抓到的）。
+  // 本機那一列會是**同步版**寫的，兩邊的列數會混在一起看不出差異。
   const fresh = { ...input, document_id: 700002, content_hash: "hash-v2" };
   const syncFresh = plain(syncMod.recordConsent(disk, OTHER, fresh, { now: new Date(NOW) }));
   const asyncFresh = plain(await asyncMod.recordConsentAsync(USER, fresh, { ...PG, exec, strict: true, now: NOW }));
   assert.deepEqual(asyncFresh, syncFresh, "新同意的回傳值必須相同（id 之外的鍵）");
   // USER 本來就有 seed 的那一列（710001），加上新雜湊那一列 = 2。
   assert.equal(consentRows(exec.raw, USER).length, 2, "PG 上要有兩列（seed ＋ 新雜湊）");
-  assert.equal(consentRows(disk, USER).length, 2, "本機也要追上（新雜湊那一列是 PG 版自己寫的）");
+  // P5b：本機鏡射已移除（`db.js` 的同步同意讀者已無呼叫端）⇒ 本機只有 seed 那一列。
+  assert.equal(consentRows(disk, USER).length, 1, "本機不得再被鏡射補寫");
   assert.equal(consentRows(disk, OTHER).length, 1, "同步基準那一列在本機");
 
   // 錯誤形狀

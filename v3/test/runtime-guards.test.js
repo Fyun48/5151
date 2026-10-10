@@ -6,6 +6,11 @@
 //   :60 不保留 PG_SQLITE_FALLBACK=open 逃生門
 //
 // 這支測試釘住 runtimeGuards.js 的門禁，以及 server.js／watcher.js 的接線與 repo compose 的持久化。
+//
+// P5b 補的兩刀（有 PG 連線 env 就必須是完整開閘規格）：
+//   ④ 未設 PG_NO_SQLITE_OPEN=1 ⇒ 拒絕（否則節點照樣開業務 SQLite，回退路徑還在）
+//   ⑤ PG_SQLITE_FALLBACK 不是 strict（未設＝closed）⇒ 拒絕（closed 的讀取仍會回退，
+//      真 PG 錯誤會被「business SQLite is closed」蓋掉）
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -30,20 +35,46 @@ test("錯 driver：DB_DRIVER 拼錯（postgress）＋ PG_URL ⇒ 拒絕", () => 
   assert.throws(() => assertRuntimeDbGuard({ DB_DRIVER: "postgresx", DATABASE_URL: PG_URL }), /啟動拒絕/);
 });
 
-// ② postgres + PG_SQLITE_FALLBACK=open ⇒ 拒絕；strict／未設 ⇒ 放行。
+// ② postgres + PG_SQLITE_FALLBACK=open ⇒ 拒絕（Owner :60 不收逃生門）。
 test("postgres + PG_SQLITE_FALLBACK=open ⇒ 拒絕（Owner :60 不收逃生門）", () => {
   assert.throws(
-    () => assertRuntimeDbGuard({ DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "open" }),
+    () => assertRuntimeDbGuard({ DB_DRIVER: "postgres", PG_URL, PG_NO_SQLITE_OPEN: "1", PG_SQLITE_FALLBACK: "open" }),
     /PG_SQLITE_FALLBACK=open/,
   );
 });
 
-test("postgres + PG_SQLITE_FALLBACK=strict ⇒ 放行", () => {
-  assert.doesNotThrow(() => assertRuntimeDbGuard({ DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "strict" }));
+// ④＋⑤ 正式部署規格＝「閘開（PG_NO_SQLITE_OPEN=1）＋ strict」；缺一鍵就拒絕啟動。
+test("postgres + 閘開=1 + PG_SQLITE_FALLBACK=strict ⇒ 放行（正式部署規格）", () => {
+  assert.doesNotThrow(() =>
+    assertRuntimeDbGuard({ DB_DRIVER: "postgres", PG_URL, PG_NO_SQLITE_OPEN: "1", PG_SQLITE_FALLBACK: "strict" }),
+  );
 });
 
-test("postgres + PG_SQLITE_FALLBACK 未設（closed）⇒ 放行", () => {
-  assert.doesNotThrow(() => assertRuntimeDbGuard({ DB_DRIVER: "postgres", PG_URL }));
+test("postgres + PG_NO_SQLITE_OPEN 未設／非 1 ⇒ 拒絕（訊息要讀出缺哪一鍵）", () => {
+  for (const env of [
+    { DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "strict" },
+    { DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "strict", PG_NO_SQLITE_OPEN: "0" },
+    { DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "strict", PG_NO_SQLITE_OPEN: "" },
+  ]) {
+    assert.throws(() => assertRuntimeDbGuard(env), /PG_NO_SQLITE_OPEN=1/, JSON.stringify(env));
+  }
+});
+
+test("postgres + 閘開但 PG_SQLITE_FALLBACK 未設（closed）／closed ⇒ 拒絕（只准 strict）", () => {
+  for (const env of [
+    { DB_DRIVER: "postgres", PG_URL, PG_NO_SQLITE_OPEN: "1" },
+    { DB_DRIVER: "postgres", PG_URL, PG_NO_SQLITE_OPEN: "1", PG_SQLITE_FALLBACK: "closed" },
+  ]) {
+    assert.throws(() => assertRuntimeDbGuard(env), /PG_SQLITE_FALLBACK=strict/, JSON.stringify(env));
+  }
+});
+
+// PGHOST 系列（不只 PG_URL）也走同一組開閘規則。
+test("PGHOST 系列也算「有 PG 連線 env」：缺閘／缺 strict 一樣拒絕", () => {
+  const host = { DB_DRIVER: "postgres", PGHOST: "192.168.0.140", PGDATABASE: "5151_shadow" };
+  assert.throws(() => assertRuntimeDbGuard({ ...host, PG_SQLITE_FALLBACK: "strict" }), /PG_NO_SQLITE_OPEN=1/);
+  assert.throws(() => assertRuntimeDbGuard({ ...host, PG_NO_SQLITE_OPEN: "1" }), /PG_SQLITE_FALLBACK=strict/);
+  assert.doesNotThrow(() => assertRuntimeDbGuard({ ...host, PG_NO_SQLITE_OPEN: "1", PG_SQLITE_FALLBACK: "strict" }));
 });
 
 // ③ sqlite + 無 PG 連線 ⇒ 放行（本機開發／npm test 不受影響）。
