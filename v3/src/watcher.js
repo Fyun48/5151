@@ -2,7 +2,6 @@ import {
   bindNotifyJobSnapshots,
   coveringPlan,
   findBySourceKey,
-  getCommunityCache,
   getListing,
   getSettings,
   getSystemCrawl,
@@ -20,7 +19,6 @@ import {
   db,
   saveSettings,
   commuteRushEnabled,
-  collectCommuteSettings,
   touchListingChecked,
   isCrawlSourceEnabled,
   persistHpListingFields,
@@ -29,6 +27,10 @@ import {
   routeJobKeyFor,
   pushPayloadFromEvents,
 } from "./db.js";
+// SQLite 退場 P1：`getCommunityCache`（同步讀本機 `community_cache`）換成 PG 版。
+// 原本 PG 模式下這一支讀節點本機，開閘時 `ingestListingGeo()` 的呼叫是未捕捉的 rejection，
+// 會直接把 worker 打掛（正式站 24 小時 1 次）。
+import { getCommunityCacheAsync } from "./communityCacheAsync.js";
 import { reserveCoveringPlan, completeCoveringPlan, crawlRuntimeAsync, recordCrawlSourceRoundAsync, readCrawlSourceStreaksAsync } from "./crawlScheduleAsync.js";
 // 第九十二批：來源連續失敗的容忍政策（Owner 2026-09-30 同意）。純函式在 crawlSourceStreaks.js，
 // 這裡只負責「逐輪餵結果、拿回誰還會阻擋完成紀錄」。
@@ -43,7 +45,11 @@ import {
 import { isSourceCoolingDown, SOURCE_BLOCK_COOLDOWN_MS } from "./crawlWatchdog.js";
 // 爬蟲基線寫入必須走 driver-aware 入口：PG 模式下只寫 SQLite 會讓基線永遠留在單一節點，
 // 其他節點讀不到 → 每次排程都重跑整輪（與 crawl_covers 同一個事故成因）。
-import { commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+// SQLite 退場 P1：`collectCommuteSettings()`（同步：全會員清單＋本機設定）換成 PG 版。
+// 正式站 24 小時 80 行 `business SQLite is closed ... reached at listUserIds` 全部來自
+// `backfillListingRoutes()` 這一行（上游是 async，能 await），被 server.js 的重試圈吞成
+// 「補路線失敗：」。PG 模式必須讀 PG 的會員與設定，否則清單只有本機那一台。
+import { collectCommuteSettingsAsync, commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
 // 通知決策要讀站上那一份的會員與信件範本（PG 模式下讀本機等於用別台節點的資料做決定）。
 import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
@@ -313,7 +319,10 @@ function classify(incoming, existing, siblings = null, candidates = null) {
 
 function detailOptions() {
   return {
-    getCommunity: getCommunityCache,
+    // SQLite 退場 P1：591 詳情問「這個社區釘過沒」時要讀**站上那一份**（PG）。
+    // client591.js 已經把這個回傳值 `await`，所以 async 版可以直接接（回傳值不是
+    // Promise 的同步函式也相容，await 一個純值不會變）。
+    getCommunity: getCommunityCacheAsync,
     // Fire-and-forget inside client591, so swallow a rejected write here (the async path already
     // falls back to SQLite on a PostgreSQL failure).
     saveCommunity: (community) => { setCommunityCacheAsync(community).catch(() => {}); },
@@ -372,7 +381,10 @@ export async function ingestListingGeo(postId) {
   }
   const commId = listingCommunityId(listing);
   if (commId) {
-    let community = getCommunityCache(commId);
+    // SQLite 退場 P1：這裡原本是同步讀（PG 模式讀本機、開閘時拋
+    // `business SQLite is closed`）。這一條是**未捕捉的 rejection**（`ingestListingGeo()`
+    // 的呼叫端只接 `located`），正式站因此把 worker 打掛一次。上游是 async，直接 await。
+    let community = await getCommunityCacheAsync(commId);
     if (!community || (community.lat == null && !community.address)) {
       community = await fetchCommunityLocation(commId);
       await setCommunityCacheAsync(community || { id: commId, name: listing.community_name, address: "", lat: null, lng: null });
@@ -1354,7 +1366,10 @@ async function finishRouteAttempt(row, direction, kind, reason, options = {}) {
 
 export async function backfillListingRoutes(settings = null, { limit = 20, priorityIds = [], ...options } = {}) {
   settings = settings || await getSettingsAsync(0, options);
-  const fallback = commuteWorkJobs([settings, ...collectCommuteSettings()])[0];
+  // SQLite 退場 P1：上游是 async，直接 await PG 版的通勤設定清單。
+  // ⚠️ 這一行原本就是正式站 80 行 `reached at listUserIds` 的來源（每次都先炸在這一行的
+  // 同步清單上，才輪到 `needingRouteAsync()`），所以兩個地方都要 PG 化才不會「拆一個露出下一個」。
+  const fallback = commuteWorkJobs([settings, ...(await collectCommuteSettingsAsync(options))])[0];
   if (limit <= 0) return { attempted: 0, located: 0, listings: [], postIds: [] };
   const rows = (await needingRouteAsync({ limit, priorityIds })).filter((row) => {
     const key = routeJobKey(row, "to_work", "distance");

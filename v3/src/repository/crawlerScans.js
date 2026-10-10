@@ -101,9 +101,14 @@ export async function selectMrtCandidates(exec, { deps, limit = 20 } = {}) {
 // page is answered from one route_jobs read and one route_cache read, both handed to the shared
 // routeRowNeed(). Returns { rows, cursor }: the caller owns the keyset cursor, because resuming a
 // full scan is the point of the page loop.
-export async function selectRouteCandidates(exec, { deps, limit = 40, priorityIds = [], cursor = 0, now } = {}) {
+//
+// SQLite 退場 P1：`plan` 可以由呼叫端算好傳進來（`crawlerReads.js:needingRouteAsync()` 在 PG 模式
+// 用 `db.js:routeScanPlanAsync()`，jobs／wantRush 來自 PG）。沒傳時沿用 `context.routeScanPlan()`
+// （原本的 bundle 路徑，sqlite 語意不變）——因為那個預設值會同步讀本機 SQLite，PG 的呼叫端
+// 一定要傳，不能靠這裡回退。
+export async function selectRouteCandidates(exec, { deps, plan: providedPlan, limit = 40, priorityIds = [], cursor = 0, now } = {}) {
   const context = deps || {};
-  const plan = context.routeScanPlan({ limit, priorityIds, cursor, now: now ?? Date.now() });
+  const plan = providedPlan || context.routeScanPlan({ limit, priorityIds, cursor, now: now ?? Date.now() });
   if (!plan.jobs.length) return { rows: [], cursor: 0 };
   const out = [];
   const seen = new Set();
