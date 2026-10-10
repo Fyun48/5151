@@ -318,3 +318,20 @@ test("非 postgres：三個入口都走同步路徑（不碰傳入的 exec）", 
   assert.deepEqual(await feedbackAsync.feedbackStatsAsync(sqlite), feedback.feedbackStats(lite));
   assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
 });
+
+// P5b：`feedbackStatsAsync()` 內層那個 `catch {}`（表還沒建時回全 0）以前連嚴重的 PG 錯誤
+// 也一起吞掉 ⇒ 後台看到的是「統計是 0」而不是「查詢壞了」（reviewer 實測：strict 下回 {total:0}）。
+// #699 的 admin-overview-pg-native.test.js:166 砸的是 listings 的 COUNT，守不到 feedback 這一支。
+test("PG 錯誤＋strict：feedbackStatsAsync 必須拋（不得吞成 total:0）", async () => {
+  const boom = async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:25433"); };
+  await assert.rejects(
+    () => feedbackAsync.feedbackStatsAsync({ ...PG, exec: boom }),
+    /ECONNREFUSED/,
+  );
+});
+
+test("PG 錯誤＋非 strict：維持既有回退語意（不因 P5b 改變）", async () => {
+  const boom = async () => { throw new Error("connect ECONNREFUSED 127.0.0.1:25433"); };
+  const out = await feedbackAsync.feedbackStatsAsync({ driver: "postgres", exec: boom });
+  assert.equal(typeof out.total, "number", "非 strict 仍走 SQLite 回退（本測試的 DATA_DIR 有真 handle）");
+});

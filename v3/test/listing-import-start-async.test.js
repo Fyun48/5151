@@ -180,8 +180,9 @@ test("PG 分支：591 匯入建立 ready_for_review 的草稿，而且匯入列�
   assert.equal(row.listing.post_id, Number(drafts[0].post_id), "回傳的 listing 要是 PG 那一列");
   assert.deepEqual(row.photos, JSON.parse(drafts[0].self_photos));
 
-  // 本機鏡射：還沒搬完的同步讀者看的是節點本機那一份。
-  assert.equal(localImports().length, 1, "本機也要有鏡射列");
+  // P5b：本機鏡射已移除。開閘後本機 handle 碰了就拋，鏡射只會把「PG 已經寫成功」的請求染成 500；
+  // 而且 `db.js` 的同步讀者（listingImport.js 那組）已經沒有真正的呼叫端。
+  assert.equal(localImports().length, 0, "本機不得再有鏡射列");
   assert.equal(handle().prepare("SELECT COUNT(*) AS n FROM listings WHERE listed_by_user_id = ?").get(USER).n, 1);
 });
 
@@ -194,7 +195,7 @@ test("同來源重複匯入回同一筆（reused），PG 不長第二列", async
   assert.equal(again.reused, true);
   assert.equal(pgImports(exec).length, 1, "進行中的匯入不得再建一列");
   assert.equal(pgDrafts(exec).length, 1, "也不得再建草稿");
-  assert.equal(localImports().length, 1);
+  assert.equal(localImports().length, 0, "本機不得再有鏡射列");
 });
 
 test("非贊助會員 403，PG 不留下任何匯入列（贊助條件在寫入之前）", async () => {
