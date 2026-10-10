@@ -1,6 +1,6 @@
 import {
   buildListRequestContextFromPg, buildPublicListingsClauses, buildPublicListingsRowsAsync,
-  decoratePublicListingsPage, GUEST_MAX_DISTRICTS,
+  decoratePublicListingsPage, GUEST_MAX_DISTRICTS, listingSearchBuildContext,
   listPublicListingsFast, preloadDecorationProviderAsync, publicSearchSettings,
 } from "./db.js";
 import { resolveDbDriver } from "./dbDriver.js";
@@ -11,7 +11,37 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { PUBLIC_LISTING_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 import { districtClosureIds } from "./listingSearchNodePg.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
+import { buildPublicListingsFoldSql } from "./listingSearchSql.js";
+import { normalizeCrawlSources } from "./crawlSources.js";
 import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
+
+// 訪客 SQL-first 折疊（PUBLIC_LISTINGS_SQL_FIRST=1 才啟用，預設 off）。回傳完整結果或 null（外框外）。
+async function tryPublicListingsSqlFirst({ exec, args, settings, districts, districtIds, context, loader }) {
+  if (process.env.PUBLIC_LISTINGS_SQL_FIRST !== "1") return null;
+  const enabledSources = normalizeCrawlSources(context.crawlSources.items).filter(x => x.enabled).map(x => x.id);
+  const deps = { ...listingSearchBuildContext({ asOf: args.asOf }), resolveUserId: () => 0, visibilityContext: context };
+  const built = buildPublicListingsFoldSql(
+    { kind: args.kind || "", sources: args.sources || "", q: args.q || "", districts, districtIds: districtIds ?? null,
+      sort: args.sort || "newest", settings, enabledSources, now: context.now },
+    deps,
+  );
+  if (!built.ok) return null;
+  const limit = Math.max(1, Math.min(Number(args.limit) || 40, 50));
+  const start = Math.max(0, Number(args.offset) || 0);
+  const countRow = await exec(built.countQuery.sql, built.countQuery.params);
+  const totalMatched = Number(countRow[0]?.n) || 0;
+  const plan = built.pageQuery({ limit, offset: start });
+  const page = await exec(plan.sql, plan.params);
+  const ids = page.map(row => Number(row.post_id));
+  const fullRows = ids.length ? await exec("SELECT * FROM listings WHERE post_id = ANY(?::bigint[])", [ids]) : [];
+  const pageProvider = await preloadDecorationProviderAsync({ exec, loader, rows: page, settings,
+    userId: 0, matchVoteUserId: 0, requestContext: context });
+  const listings = decoratePublicListingsPage(page, fullRows, { settings, provider: pageProvider,
+    now: context.now, requireProvider: true });
+  return { listings, totalMatched, hasMore: start + limit < totalMatched,
+    nextOffset: start + limit, queryVersion: 2, guest: true,
+    queryDetails: { engine: "sql_fold_pg", asOf: context.asOf, candidates: null } };
+}
 
 // Guest identity is always zero. Member flags, watch notes and supplied user IDs
 // are never inputs to this pipeline, including when the caller has a session.
@@ -30,9 +60,12 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
       const districts = (Array.isArray(args.districts) ? args.districts : String(args.districts || "").split(","))
         .map(x => String(x).trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
       const districtIds = await districtClosureIds(exec, { districtNames: districts, userId: 0 });
+      const loader = createDecorationDataLoader({ exec, driver: "postgres" });
+      // SQL-first 折疊（預設 off；外框外回 null → 走 Node 路徑）。
+      const sqlFirst = await tryPublicListingsSqlFirst({ exec, args, settings, districts, districtIds, context, loader });
+      if (sqlFirst) return sqlFirst;
       const built = buildPublicListingsClauses({ districts, settings, q: args.q, context, districtIds }, { sqliteDb: null });
       const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${PUBLIC_LISTING_CANDIDATE_COLUMNS} FROM listings ${built.where} ORDER BY post_id`), built.params);
-      const loader = createDecorationDataLoader({ exec, driver: "postgres" });
       const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings,
         userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
       const rows = await buildPublicListingsRowsAsync(raw, { settings, kind: args.kind, sources: args.sources,

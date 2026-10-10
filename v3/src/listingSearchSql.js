@@ -332,3 +332,279 @@ export function buildPublicListingSearchSql(args = {}, deps = {}) {
     deps,
   );
 }
+
+// 訪客（公開列表）SQL-first 折疊查詢產生器。
+//
+// 在既有 `buildListingSearchSql` 的基礎上補三個缺口，讓它與 Node 公開路徑逐位元一致：
+//   1. searchKeys=[]：訪客路徑 `searchWhere([])`（原先是 searchWhere(undefined) → 展開 28 鍵，
+//      少算 2,265 筆）。
+//   2. `COALESCE(hidden,0) != 1`：`listingMatchesListFilter("all")` 的 hidden 分支。
+//   3. 同屋源次卡（affiliate）折疊：用 fold_role CTE（window function 的 first-incident-edge，
+//      見 docs/same-house-fold-spec.md §4）在 SQL 內算 role，再排除 affiliate。
+//
+// 額外依賴（呼叫端注入）：args.enabledSources（enabled crawl source ids，text[]）、
+// args.now（與 Node 路徑同一個 asOf 的時間戳，bigint ms）。
+// 回傳與 buildListingSearchSql 同形（ok/countQuery/pageQuery/cursorOf/sort/…）。
+export function buildPublicListingsFoldSql(args = {}, deps = {}) {
+  assertListingSearchDeps(deps);
+  const { filter = "all", kind = "", sources = "", q = "", sort = "newest", settings = {}, districts = [], districtIds = null } = args;
+  const enabledSources = Array.isArray(args.enabledSources) ? args.enabledSources : [];
+  const now = Number(args.now) || Date.now();
+
+  if (filter !== "all") return outOfEnvelope("filter");
+  if (sources) return outOfEnvelope("sources");
+  if (!LISTING_SEARCH_SQL_SORTS.includes(sort)) return outOfEnvelope("sort");
+
+  const guestKm = Number(settings.guestCommuteKm) || 0;
+  const guestWorkLat = Number(settings.guestWorkLat);
+  const guestWorkLng = Number(settings.guestWorkLng);
+  if (guestKm > 0 && Number.isFinite(guestWorkLat) && Number.isFinite(guestWorkLng)) {
+    return outOfEnvelope("guest_commute");
+  }
+
+  // 這些 settings 尚未在 SQL 內鏡射（Node 路徑才有），維持外框外回退 Node。
+  if (
+    Number(settings.minBuildingFloors) > 0 ||
+    (settings.excludeKeywords || []).length || (settings.excludeAgents || []).length ||
+    (settings.excludeAgentIds || []).length || (settings.excludeBoxes || []).length ||
+    Number(settings.commuteKm) > 0
+  ) {
+    return outOfEnvelope("settings");
+  }
+
+  const clauses = [];
+  const params = [];
+  const projectionClauses = [];
+  const projectionParams = [];
+
+  // 訪客 searchKeys = []（與 buildPublicListingsClauses 的 searchWhere([], …) 一致）。
+  deps.searchWhere([], clauses, params, deps.visibilityContext || null);
+  deps.listingVisibilityClauses(clauses, params, deps.visibilityContext || null);
+  // 行政區：與 buildPublicListingsClauses 一致——用 districtClosureIds 的閉包（post_id = ANY），
+  // 而不是 appendDistrictCandidates 的 source_key 前綴。
+  if (Array.isArray(districtIds) && districtIds.length) {
+    clauses.push("post_id = ANY(?::bigint[])");
+    params.push(districtIds);
+  }
+  // priceMin/priceMax：精確鏡射 passesPriceFilter（用投影 rent/total_monthly_cost），
+  // 在「候選層」過濾（applyListingFilter 先於折疊），不是保守的 appendPriceCeilingCandidates。
+  const priceMin = Number(settings.priceMin) || 0;
+  const priceMax = Number(settings.priceMax) || 0;
+  if (priceMin > 0 || priceMax > 0) {
+    const includeExtras = settings.priceMaxIncludesExtras === true;
+    const costExpr = includeExtras ? "p.total_monthly_cost" : "p.rent";
+    const conds = [];
+    if (priceMin > 0) { conds.push(`${costExpr} >= ?`); params.push(priceMin); }
+    if (priceMax > 0) { conds.push(`${costExpr} <= ?`); params.push(priceMax); }
+    clauses.push(`post_id IN (SELECT post_id FROM listing_search_projection p WHERE (${costExpr} <= 0 OR (${conds.join(" AND ")})))`);
+  }
+  // areaMax：精確鏡射 passesAttributeFilters（area 為 null 不排除），候選層。
+  const areaMax = Number(settings.areaMax);
+  if (Number.isFinite(areaMax) && areaMax > 0) {
+    clauses.push("post_id IN (SELECT post_id FROM listing_search_projection p WHERE (p.area IS NULL OR p.area <= ?))");
+    params.push(areaMax);
+  }
+
+  // 投影層（p.*）子句：kind／wholeFloor（passesDisplayFilters ／ matchesHousingKind，折疊之後）。
+  appendKindClauses(kind, projectionClauses, projectionParams);
+  if (settings.wholeFloorOnly === true && !Boolean(kind)) {
+    projectionClauses.push("p.kind_keys LIKE ?");
+    projectionParams.push("%,whole,%");
+  }
+
+  appendQueryClauses(q, 0, clauses, params);
+
+  // filter === "all"：confirmed-offline / dup / hidden 排除（watched 訪客恆 0，不需子句）。
+  clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
+  clauses.push("(IFNULL(match_verdict, '') != 'yes')");
+  clauses.push("COALESCE(hidden, 0) != 1");
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+  // fold_role CTE：在候選集（post-where）上算 role。enabledSources/now 是額外參數，
+  // 其 `?` 出現在 cand 的 where 之後，故 params 順序為 [...candidate, enabledSources, now]。
+  const foldParams = [enabledSources, now];
+  const foldCte = foldRoleCte(where);
+
+  const cost = settings.priceMaxIncludesExtras === true ? "p.total_monthly_cost" : "p.rent";
+  const orderBy =
+    sort === "newest" ? "p.updated_at DESC, p.post_id ASC"
+      : sort === "price_desc"
+        ? `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END ASC, ${cost} DESC, p.updated_at DESC, p.post_id ASC`
+        : `CASE WHEN ${cost} > 0 THEN ${cost} ELSE 9223372036854775807 END ASC, p.updated_at DESC, p.post_id ASC`;
+
+  const districtWhere = districts.length
+    ? `p.district IN (${districts.map(() => "?").join(",")})`
+    : "";
+  const districtSql = districtWhere ? `AND ${districtWhere}` : "";
+  const displayFilter = sqlDisplayFilter(settings);
+  const projectionFilter = projectionClauses.length ? `AND ${projectionClauses.join(" AND ")}` : "";
+
+  const affiliateExclusion = `(f.role IS DISTINCT FROM 'affiliate' OR (f.role = 'affiliate' AND f.primary_offline = 1 AND f.offline <> 1))`;
+
+  const countQuery = {
+    sql: `${foldCte}
+SELECT COUNT(*) AS n FROM listing_search_projection p
+JOIN fold_role f ON f.post_id = p.post_id
+WHERE ${affiliateExclusion}
+${districtSql}
+${displayFilter}
+${projectionFilter}`,
+    params: [...params, ...foldParams, ...districts, ...projectionParams],
+  };
+
+  // 全量排序查詢（parity 用，不設 LIMIT）：回傳排序後的 post_id 序列。
+  const fullQuery = {
+    sql: `${foldCte}
+SELECT p.post_id FROM listing_search_projection p
+JOIN fold_role f ON f.post_id = p.post_id
+WHERE ${affiliateExclusion}
+${districtSql}
+${displayFilter}
+${projectionFilter}
+ORDER BY ${orderBy}`,
+    params: [...params, ...foldParams, ...districts, ...projectionParams],
+  };
+
+  const MAX_BIGINT = 9223372036854775807;
+  const rowCost = (row) => (settings.priceMaxIncludesExtras === true ? Number(row.total_monthly_cost) : Number(row.rent));
+  const sortCostExpr = `CASE WHEN ${cost} > 0 THEN ${cost} ELSE ${MAX_BIGINT} END`;
+  const costGroupExpr = `CASE WHEN ${cost} > 0 THEN 0 ELSE 1 END`;
+  let tupleExpr = "";
+  let cursorOf = null;
+  if (sort === "newest") {
+    tupleExpr = "(-p.updated_at, p.post_id)";
+    cursorOf = (row) => ({ updatedAt: Number(row.updated_at), postId: Number(row.post_id) });
+  } else if (sort === "price_asc") {
+    tupleExpr = `(${sortCostExpr}, -p.updated_at, p.post_id)`;
+    cursorOf = (row) => ({ sortCost: rowCost(row) > 0 ? rowCost(row) : MAX_BIGINT, updatedAt: Number(row.updated_at), postId: Number(row.post_id) });
+  } else {
+    tupleExpr = `(${costGroupExpr}, -${cost}, -p.updated_at, p.post_id)`;
+    cursorOf = (row) => ({ costGroup: rowCost(row) > 0 ? 0 : 1, cost: rowCost(row), updatedAt: Number(row.updated_at), postId: Number(row.post_id) });
+  }
+  const cursorParamsFor = (cursor) => {
+    if (cursor == null) return null;
+    if (sort === "newest") return [-Number(cursor.updatedAt), Number(cursor.postId)];
+    if (sort === "price_asc") return [Number(cursor.sortCost), -Number(cursor.updatedAt), Number(cursor.postId)];
+    return [Number(cursor.costGroup), -Number(cursor.cost), -Number(cursor.updatedAt), Number(cursor.postId)];
+  };
+
+  const pageQuery = ({ limit = 500, offset = 0, cursor = null } = {}) => {
+    const cursorParams = cursorParamsFor(cursor);
+    const useCursor = cursorParams != null;
+    const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+    const start = Math.max(0, Number(offset) || 0);
+    const cursorWhere = useCursor ? `AND ${tupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
+    const pageParams = useCursor
+      ? [...params, ...foldParams, ...districts, ...projectionParams, ...cursorParams, pageSize]
+      : [...params, ...foldParams, ...districts, ...projectionParams, pageSize, start];
+    const sql = `${foldCte}
+SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost FROM listing_search_projection p
+JOIN fold_role f ON f.post_id = p.post_id
+WHERE ${affiliateExclusion}
+${districtSql}
+${displayFilter}
+${projectionFilter}
+${cursorWhere}
+ORDER BY ${orderBy}
+LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
+    return { sql, params: pageParams, pageSize, start, useCursor };
+  };
+
+  return {
+    ok: true,
+    sort,
+    settings,
+    params,
+    where,
+    foldCte,
+    cost,
+    orderBy,
+    districtWhere,
+    displayFilter,
+    projectionFilter,
+    cursorOf,
+    countQuery,
+    fullQuery,
+    pageQuery,
+  };
+}
+
+// fold_role CTE：對候選集（cand，其 where 由呼叫端以 `?` 佔位、參數在前面）算 role。
+// enabledSources 與 now 各佔一個 `?`（出現在 display CTE），順序排在候選參數之後。
+export function foldRoleCte(candWhere) {
+  return `WITH cand AS (
+    SELECT post_id, source, source_id, url, last_seen_at, offline, match_post_id, match_verdict,
+           fold_rent_num, fold_refresh_kind, fold_refresh_rel_ms, fold_refresh_abs_ms
+    FROM listings ${candWhere}
+  ),
+  extras AS (
+    SELECT l.post_id, l.source, l.source_id, l.url, l.last_seen_at, l.offline, l.match_post_id, l.match_verdict,
+           l.fold_rent_num, l.fold_refresh_kind, l.fold_refresh_rel_ms, l.fold_refresh_abs_ms
+    FROM listings l
+    WHERE l.post_id IN (SELECT match_post_id FROM cand WHERE match_post_id IS NOT NULL AND match_post_id > 0 AND COALESCE(match_verdict, '') <> 'no')
+      AND l.post_id NOT IN (SELECT post_id FROM cand)
+  ),
+  display AS (
+    SELECT u.*,
+      (u.source = ANY(?::text[]) AND (u.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
+      (CASE WHEN u.fold_refresh_kind = 1 THEN ?::bigint - u.fold_refresh_rel_ms ELSE u.fold_refresh_abs_ms END) AS refresh_ms,
+      (u.source || ':' || COALESCE(NULLIF(u.source_id, ''), NULLIF(u.url, ''), NULLIF(u.post_id, 0)::text, '') || ':' || u.post_id::text) AS tie_key
+    FROM (SELECT * FROM cand UNION ALL SELECT * FROM extras) u
+    LEFT JOIN listing_prep p ON p.post_id = u.post_id
+  ),
+  edges AS (
+    SELECT d.post_id AS src, d.match_post_id AS dst
+    FROM display d
+    WHERE d.match_post_id IS NOT NULL AND d.match_post_id > 0 AND COALESCE(d.match_verdict, '') <> 'no'
+      AND d.post_id IN (SELECT post_id FROM cand)
+  ),
+  eff AS (
+    SELECT e.src, e.dst
+    FROM edges e JOIN display s ON s.post_id = e.src JOIN display d ON d.post_id = e.dst
+    WHERE s.display_ready AND d.display_ready AND COALESCE(d.match_verdict, '') <> 'no'
+  ),
+  inc AS (
+    SELECT src AS x, src AS ord, src, dst FROM eff
+    UNION ALL
+    SELECT dst AS x, src AS ord, src, dst FROM eff WHERE dst IN (SELECT post_id FROM cand)
+  ),
+  rk AS (
+    SELECT x, src, dst, row_number() OVER (PARTITION BY x ORDER BY ord ASC, dst ASC) AS rn FROM inc
+  ),
+  fe AS (SELECT x, src, dst FROM rk WHERE rn = 1),
+  winner AS (
+    SELECT fe.x,
+      CASE
+        WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NULL THEN a.post_id
+        WHEN b.fold_rent_num IS NOT NULL AND a.fold_rent_num IS NULL THEN b.post_id
+        WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NOT NULL AND a.fold_rent_num <> b.fold_rent_num
+          THEN CASE WHEN a.fold_rent_num < b.fold_rent_num THEN a.post_id ELSE b.post_id END
+        WHEN a.refresh_ms <> b.refresh_ms
+          THEN CASE WHEN a.refresh_ms > b.refresh_ms THEN a.post_id ELSE b.post_id END
+        WHEN COALESCE(b.last_seen_at, '') <> COALESCE(a.last_seen_at, '')
+          THEN CASE WHEN COALESCE(b.last_seen_at, '') < COALESCE(a.last_seen_at, '') THEN a.post_id ELSE b.post_id END
+        WHEN a.tie_key <> b.tie_key
+          THEN CASE WHEN a.tie_key < b.tie_key THEN a.post_id ELSE b.post_id END
+        ELSE CASE WHEN a.post_id <= b.post_id THEN a.post_id ELSE b.post_id END
+      END AS winner_id,
+      a.offline AS a_offline, b.offline AS b_offline,
+      fe.src AS src, fe.dst AS dst
+    FROM fe
+    JOIN display a ON a.post_id = fe.src
+    JOIN display b ON b.post_id = fe.dst
+  ),
+  role AS (
+    SELECT w.x AS post_id,
+      CASE WHEN w.winner_id = w.x THEN 'primary' ELSE 'affiliate' END AS role,
+      CASE WHEN w.winner_id = w.src THEN w.a_offline ELSE w.b_offline END AS primary_offline,
+      d.offline AS offline
+    FROM winner w
+    JOIN display d ON d.post_id = w.x
+  ),
+  fold_role AS (
+    SELECT c.post_id, r.role, r.primary_offline, c.offline AS offline
+    FROM cand c
+    LEFT JOIN role r ON r.post_id = c.post_id
+  )`;
+}
