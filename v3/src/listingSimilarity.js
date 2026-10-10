@@ -3,6 +3,7 @@
 
 import { matchVeto, scoreMatch } from "./match.js";
 import { loadEnabledProvider } from "./budgetGuard.js";
+import { refreshListingProjectionSync } from "./listingSearchProjection.js";
 import {
   PHASH_ALGO,
   PHASH_SIMILAR_MAX,
@@ -271,6 +272,8 @@ function maybeFillEmptyStructured(db, listing, hints) {
   try {
     db.prepare("UPDATE listings SET floor_name = ? WHERE post_id = ? AND IFNULL(floor_name, '') = ''")
       .run(String(hints.floor).slice(0, 40), listing.post_id);
+    // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影。
+    try { refreshListingProjectionSync(db, listing.post_id); } catch { /* projection best-effort */ }
     return "applied_empty";
   } catch {
     return "hint_only";

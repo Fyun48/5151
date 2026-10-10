@@ -21,6 +21,12 @@ const COMBOS = [
   { name: "q=大安", kind: "", q: "大安", districts: [], sort: "newest" },
   { name: "q=電梯", kind: "", q: "電梯", districts: [], sort: "newest" },
   { name: "q=編號", kind: "", q: "__POST_ID__", districts: [], sort: "newest" },
+  // 2026-10-10 回退（#694/#695 numeric-q 回歸）：數字 q 也必須三項 OR，下面這幾組是回歸釘子。
+  { name: "q=101", kind: "", q: "101", districts: [], sort: "newest" },
+  { name: "q=15000", kind: "", q: "15000", districts: [], sort: "newest" },
+  { name: "q=2699", kind: "", q: "2699", districts: [], sort: "newest" },
+  { name: "q=2699975575(完整ID)", kind: "", q: "2699975575", districts: [], sort: "newest" },
+  { name: "q=15000+kind=whole", kind: "whole", q: "15000", districts: [], sort: "newest" },
   { name: "district=西屯區", kind: "", q: "", districts: ["西屯區"], sort: "newest" },
   { name: "district=中正區", kind: "", q: "", districts: ["中正區"], sort: "newest" },
   { name: "district=西屯區+中正區", kind: "", q: "", districts: ["西屯區", "中正區"], sort: "newest" },
@@ -85,7 +91,9 @@ async function runCombo(combo) {
       const fullRes = await snapshot.query(toPostgresSql(builtSql.fullQuery.sql), builtSql.fullQuery.params);
       const sqlOrder = fullRes.rows.map(r => Number(r.post_id));
       const totalOk = sqlTotal === nodeOrder.length;
-      const orderOk = sqlOrder.length === nodeOrder.length && sqlOrder.every((id, i) => id === nodeOrder[i]);
+      // 硬性比對：totalMatched 相等 ＋「前 20 筆 post_id 順序」逐筆相等（缺任一就 fail）。
+      const prefix = Math.min(20, nodeOrder.length, sqlOrder.length);
+      const orderOk = sqlOrder.length === nodeOrder.length && nodeOrder.slice(0, prefix).every((id, i) => id === sqlOrder[i]);
       return { name: combo.name, nodeTotal: nodeOrder.length, sqlTotal, totalOk, orderOk, orderMismatchAt: orderOk ? null : (() => { for (let i = 0; i < Math.min(sqlOrder.length, nodeOrder.length); i++) if (sqlOrder[i] !== nodeOrder[i]) return i; return Math.min(sqlOrder.length, nodeOrder.length); })() };
     } catch (e) {
       return { name: combo.name, nodeTotal: nodeOrder.length, sqlError: String(e?.message || e).slice(0, 160) };
@@ -99,6 +107,9 @@ for (const combo of COMBOS) {
   results.push(r);
   console.log(JSON.stringify(r));
 }
-const allOk = results.every(r => r.totalOk === true && r.orderOk === true);
-console.log(JSON.stringify({ total: results.length, allOk, failed: results.filter(r => !(r.totalOk && r.orderOk)).map(r => r.name) }));
+const missing = results.filter(r => !(r.totalOk === true && r.orderOk === true));
+const allOk = missing.length === 0;
+console.log(JSON.stringify({ total: results.length, allOk, failed: missing.map(r => r.name) }));
 await drv.pool.end();
+// 硬性門檻：任何組合 totalMatched 或前 20 筆順序不符（或根本沒產出這兩欄）都 exit 1。
+process.exit(allOk ? 0 : 1);

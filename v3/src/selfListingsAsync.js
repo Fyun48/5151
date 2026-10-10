@@ -125,6 +125,7 @@ import { ownsMediaUrlAsync } from "./memberMediaAsync.js";
 import { copyResult } from "./listingTools.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
+import { refreshListingProjection } from "./listingSearchProjection.js";
 
 // 複製的冪等表（同步 `listingTools.js:copyOwnListing()` 用的同一組語句）。
 export const COPY_IDEMPOTENCY_HIT_SQL =
@@ -748,6 +749,8 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
       );
     }
     await persistListingValuesAsync(run, row.post_id, resolved.listingValues);
+    // 公開會改 title/floor_name/kind_name/tags/price/match_post_id 等投影輸入欄 ⇒ 立即刷新投影。
+    try { await refreshListingProjection(run, row.post_id); } catch { /* projection best-effort */ }
     // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經公開的刊登回錯。
     try {
       const { publishImportedDraftListing } = await import("./selfListings.js");

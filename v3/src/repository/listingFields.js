@@ -14,6 +14,8 @@
 //                the dialect (the SQLite `?` / IFNULL text is what the planners hand out).
 //                Statements the original wrapped in try/catch are marked `tolerant`, so a store
 //                that lacks the newer columns still gets the rest written.
+import { refreshListingProjection } from "../listingSearchProjection.js";
+
 async function applyStatement(exec, step) {
   if (!step) return false;
   try {
@@ -64,6 +66,9 @@ export async function setListingDetail(exec, { deps, listing, input = {} } = {})
       await applyStatement(exec, context.notifyReopenQuery(plan.postId, update.coordVersion));
     }
   }
+  // detail 會改 address／lat／lng／community／extra_fees（投影 district/kind/kind_keys/lat/lng/cost 的輸入）
+  // ⇒ 立即刷新投影，避免 stored 值過時。
+  try { await refreshListingProjection(exec, plan.postId); } catch { /* projection best-effort */ }
   return { feeChange: plan.feeChange ? { detail: plan.feeChange.detail, created_at: plan.feeChange.stamp } : null };
 }
 
@@ -72,6 +77,8 @@ export async function persistHpListingFields(exec, { deps, listing, next = {}, l
   const plan = (deps || {}).hpFieldsPlan(listing, next, { locationChanged });
   await applyChain(exec, plan.attempts);
   for (const step of plan.followUps) await applyStatement(exec, step);
+  // 5168 field patch 會改 row 欄位（address／floor_name／kind_name／tags 等，投影輸入欄）⇒ 立即刷新投影。
+  try { await refreshListingProjection(exec, plan.postId); } catch { /* projection best-effort */ }
   return { applied: true, postId: plan.postId, invalidateSearchKey: plan.invalidateSearchKey };
 }
 

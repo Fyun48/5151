@@ -58,20 +58,20 @@ function outOfEnvelope(reason) {
 // F3：q（關鍵字）下推。逐行鏡射 db.js 的四個比對（title／address／post_id／watch_note），
 // 但**包上 lower()**：實測原始 LIKE 在兩邊不同（SQLite 對 ASCII 不分大小寫、PG 分大小寫，
 // 6 案中 4 案不一致），改用 lower(x) LIKE lower(?) 後 6 案全部一致（含 CJK 與重音字）。
-// 2026-10-10（#694 加速包）：`CAST(post_id AS TEXT) LIKE` 無索引使整個 OR 被迫 Seq Scan
-// （evidence/sqlite-exit/perf-index-findings.md §3.1）。純數字 q 改走 `post_id = ?` 精確命中
-// （不再 LIKE）；否則只走 title/address（訪客 uid=0 無 watch_note，會員 uid>0 保留 watch_note）。
+//
+// 不准為了索引拆掉 post_id 子字串項：實測 `q=101` 會從 2,949 筆變成 0 筆
+// （2026-10-10 正式庫量測），且正式庫不建 trigram——「純數字 q 改走 post_id = ? 精確命中」
+// 唯一的實際效果是漏結果（貼半串 ID 或數字關鍵字的真實查詢全查不到）。
+// 因此 q 無論是否純數字，都維持三項 OR（title／address／post_id）；訪客 uid=0 無 watch_note，
+// 會員 uid>0 才保留 watch_note 比對。
 function appendQueryClauses(query, uid, clauses, params) {
   if (!query) return;
-  const trimmed = String(query).trim();
-  const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-  if (Number.isSafeInteger(numeric)) {
-    clauses.push("post_id = ?");
-    params.push(numeric);
-    return;
-  }
   const like = `%${query}%`;
-  const terms = ["lower(title) LIKE lower(?)", "lower(address) LIKE lower(?)"];
+  const terms = [
+    "lower(title) LIKE lower(?)",
+    "lower(address) LIKE lower(?)",
+    "lower(CAST(post_id AS TEXT)) LIKE lower(?)",
+  ];
   if (Number(uid) > 0) {
     terms.push(`lower(IFNULL((
       SELECT watch_note FROM user_listing_flags f
@@ -79,7 +79,7 @@ function appendQueryClauses(query, uid, clauses, params) {
     ), '')) LIKE lower(?)`);
   }
   clauses.push(`(${terms.join(" OR ")})`);
-  params.push(like, like);
+  params.push(like, like, like);
   if (Number(uid) > 0) params.push(uid, like);
 }
 

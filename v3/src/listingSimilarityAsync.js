@@ -58,6 +58,7 @@ import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { refreshListingProjection } from "./listingSearchProjection.js";
 
 // 與 listingSimilarity.js 相同的對外說明（兩邊輸出必須一致）。
 export const SIMILARITY_LEGAL =
@@ -452,6 +453,8 @@ async function maybeFillEmptyStructuredAsync(exec, listing, hints) {
   if (!emptyFloor) return "hint_only";
   try {
     await repo.applyFloorHint(exec, listing.post_id, hints.floor);
+    // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影。
+    await refreshListingProjection(exec, listing.post_id);
     return "applied_empty";
   } catch {
     return "hint_only";

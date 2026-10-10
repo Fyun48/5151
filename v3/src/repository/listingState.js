@@ -10,6 +10,8 @@
 //
 // None of the callers use the return value, so these return a small summary instead of the
 // decorated row db.js re-reads.
+import { refreshListingProjection } from "../listingSearchProjection.js";
+
 export const MARK_OFFLINE_SQL = `UPDATE listings
        SET offline = 1,
            offline_at = COALESCE(offline_at, ?),
@@ -75,6 +77,7 @@ export async function markListingOffline(exec, postId, { now = new Date().toISOS
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, offline: false };
   await runWithLegacyFallback(exec, MARK_OFFLINE_SQL, MARK_OFFLINE_LEGACY_SQL, [now, now, id], [now, now, id]);
+  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
   return { postId: id, offline: true, at: now };
 }
 
@@ -82,6 +85,7 @@ export async function restoreListingOnline(exec, postId, { now = new Date().toIS
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, offline: false };
   await runWithLegacyFallback(exec, RESTORE_ONLINE_SQL, RESTORE_ONLINE_LEGACY_SQL, [now, id], [now, id]);
+  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
   return { postId: id, offline: false, at: now };
 }
 
@@ -89,6 +93,7 @@ export async function markListingAlive(exec, postId, { now = new Date().toISOStr
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, restored: false };
   await runWithLegacyFallback(exec, MARK_ALIVE_SQL, MARK_ALIVE_LEGACY_SQL, [now, now, id], [now, now, id]);
+  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
   return { postId: id, restored: Boolean(wasOffline), at: now };
 }
 
