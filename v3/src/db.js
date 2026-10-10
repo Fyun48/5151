@@ -3972,7 +3972,9 @@ export function setListingMatch(postId, match) {
     refreshListingProjectionSync(db, postId);
     if (Number(match.match_post_id) > 0) refreshListingProjectionSync(db, Number(match.match_post_id));
   } catch {
-    // projection refresh is best-effort; the Node path remains the source of truth
+    // projection refresh is best-effort; the Node path remains the source of truth.
+    // 失敗要留下可查訊號（計數），不無聲吞掉。
+    try { bumpAnalytics(db, "projection_refresh_failed"); } catch {}
   }
   return getListing(postId);
 }
@@ -4971,7 +4973,7 @@ export function setListingDetail(postId, input = {}) {
   if (plan.location) applyListingLocation(postId, plan.location);
   const saved = getListing(postId);
   // detail 會改 address／lat／lng／community／extra_fees（投影輸入欄）⇒ 立即刷新投影，避免 stored 值過時。
-  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
+  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
   try {
     if (significantListingUpdate(listing, saved)) {
       reconcileListingById(postId, { reason: "detail_enrichment" });
@@ -5253,7 +5255,7 @@ export function markListingOffline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_offline",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
+  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
   return getListing(postId);
 }
 
@@ -5286,7 +5288,7 @@ export function restoreListingOnline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_online",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
+  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
   return getListing(postId);
 }
 
@@ -5323,7 +5325,7 @@ export function markListingAlive(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_alive",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
+  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
   return { listing: getListing(postId), restored: wasOffline };
 }
 

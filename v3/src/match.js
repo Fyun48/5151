@@ -142,6 +142,43 @@ export function computeFoldColumns(listing = {}) {
   };
 }
 
+// 同屋源折疊欄的寫入端 SQL 與參數綁定（唯一一份）：SQLite 與 PG 只差在執行器形狀
+// （PG 的 exec 會把 `?` 轉成 $n）。fold_* 的值仍只由 computeFoldColumns 決定，這裡不含任何公式。
+export function foldColumnsUpdateSql() {
+  return "UPDATE listings SET fold_rent_num = ?, fold_refresh_kind = ?, fold_refresh_rel_ms = ?, fold_refresh_abs_ms = ? WHERE post_id = ?";
+}
+
+export function bindFoldColumnValues(fold, postId) {
+  return [fold.fold_rent_num, fold.fold_refresh_kind, fold.fold_refresh_rel_ms, fold.fold_refresh_abs_ms, Number(postId) || 0];
+}
+
+// 單一漏斗（fold 刷新）：所有改到 fold 輸入欄（price／extra_fees／extra_fee_text／refresh_time／
+// last_seen_at…）的寫入路徑，在主列改完後都該呼叫這裡，用「回讀後的最終列」重算 fold_*，
+// 與投影的 refreshListingProjection(Sync) 同一原則。fold 值只由 computeFoldColumns 決定，本函式
+// 不複製任何公式；SQLite 與 PG 只差在執行器形狀。
+//
+//   refreshFoldColumns      — async，exec(sql, params) => rows|{rows}（PG 側，`?` 佔位由呼叫端轉譯）。
+//   refreshFoldColumnsSync  — sync，better-sqlite3 handle（SQLite 側）。
+export function refreshFoldColumnsSync(sqliteDb, postId) {
+  const id = Number(postId) || 0;
+  if (!id) return false;
+  const row = sqliteDb.prepare("SELECT * FROM listings WHERE post_id = ?").get(id);
+  if (!row) return false;
+  sqliteDb.prepare(foldColumnsUpdateSql()).run(...bindFoldColumnValues(computeFoldColumns(row), id));
+  return true;
+}
+
+export async function refreshFoldColumns(exec, postId) {
+  const id = Number(postId) || 0;
+  if (!id) return false;
+  const raw = await exec("SELECT * FROM listings WHERE post_id = ?", [id]);
+  const rows = Array.isArray(raw) ? raw : raw?.rows;
+  const row = rows?.[0];
+  if (!row) return false;
+  await exec(foldColumnsUpdateSql(), bindFoldColumnValues(computeFoldColumns(row), id));
+  return true;
+}
+
 function evidence(signals, extra = {}) {
   return {
     signals,

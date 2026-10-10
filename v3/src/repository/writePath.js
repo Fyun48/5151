@@ -19,7 +19,7 @@ import {
   computeListingProjection,
   listingProjectionUpsertSql,
 } from "../listingSearchProjection.js";
-import { computeFoldColumns } from "../match.js";
+import { bindFoldColumnValues, computeFoldColumns, foldColumnsUpdateSql } from "../match.js";
 
 // 同屋源折疊的比較輸入固化欄（讀取端 SQL 折疊用，見 docs/same-house-fold-spec.md §4.2）。
 // nullable、無 default ⇒ 加欄為 metadata-only；值由 computeFoldColumns 以既有解析函式算。
@@ -376,11 +376,8 @@ export function createWritePath({ driver = "sqlite", sqliteDb = null, pgDriver =
     // 同屋源折疊輸入固化：以「回讀後的最終列」算 fold_*（與讀取端 candidate 列同一欄位子集，
     // 不新增第二套解析）。peer 關係變動不影響這些輸入欄（role 是讀取時 SQL 現算），故不在此重算。
     async syncFoldColumns(row) {
-      const f = computeFoldColumns(row);
-      await exec(
-        "UPDATE listings SET fold_rent_num = ?, fold_refresh_kind = ?, fold_refresh_rel_ms = ?, fold_refresh_abs_ms = ? WHERE post_id = ?",
-        [f.fold_rent_num, f.fold_refresh_kind, f.fold_refresh_rel_ms, f.fold_refresh_abs_ms, Number(row?.post_id) || 0],
-      );
+      // 與 refreshFoldColumns(Sync) 共用同一支 SQL 與綁定，值一律由 computeFoldColumns 決定。
+      await exec(foldColumnsUpdateSql(), bindFoldColumnValues(computeFoldColumns(row), Number(row?.post_id) || 0));
     },
     // Mirrors dataRevision.bumpRevision(): the durable change-log row.
     async bumpRevision({ entityType, entityId = null, eventType, now = Date.now() } = {}) {

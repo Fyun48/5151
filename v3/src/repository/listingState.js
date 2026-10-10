@@ -11,6 +11,14 @@
 // None of the callers use the return value, so these return a small summary instead of the
 // decorated row db.js re-reads.
 import { refreshListingProjection } from "../listingSearchProjection.js";
+import { refreshFoldColumns } from "../match.js";
+import { bumpAnalyticsAsync } from "../rentalAnalyticsAsync.js";
+
+// 刷新失敗不可無聲吞掉：沿用既有的 rental_analytics_daily 計數（bumpAnalyticsAsync），
+// 讓「投影／fold 刷新失敗」成為容器外可讀的累加訊號。計數本身失敗也不得反過來打斷主寫入。
+function countRefreshFailure(exec, metric) {
+  return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
+}
 
 export const MARK_OFFLINE_SQL = `UPDATE listings
        SET offline = 1,
@@ -77,7 +85,8 @@ export async function markListingOffline(exec, postId, { now = new Date().toISOS
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, offline: false };
   await runWithLegacyFallback(exec, MARK_OFFLINE_SQL, MARK_OFFLINE_LEGACY_SQL, [now, now, id], [now, now, id]);
-  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
+  try { await refreshListingProjection(exec, id); } catch { await countRefreshFailure(exec, "projection_refresh_failed"); }
+  try { await refreshFoldColumns(exec, id); } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
   return { postId: id, offline: true, at: now };
 }
 
@@ -85,7 +94,8 @@ export async function restoreListingOnline(exec, postId, { now = new Date().toIS
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, offline: false };
   await runWithLegacyFallback(exec, RESTORE_ONLINE_SQL, RESTORE_ONLINE_LEGACY_SQL, [now, id], [now, id]);
-  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
+  try { await refreshListingProjection(exec, id); } catch { await countRefreshFailure(exec, "projection_refresh_failed"); }
+  try { await refreshFoldColumns(exec, id); } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
   return { postId: id, offline: false, at: now };
 }
 
@@ -93,7 +103,8 @@ export async function markListingAlive(exec, postId, { now = new Date().toISOStr
   const id = Number(postId) || 0;
   if (!id) return { postId: 0, restored: false };
   await runWithLegacyFallback(exec, MARK_ALIVE_SQL, MARK_ALIVE_LEGACY_SQL, [now, now, id], [now, now, id]);
-  try { await refreshListingProjection(exec, id); } catch { /* projection best-effort */ }
+  try { await refreshListingProjection(exec, id); } catch { await countRefreshFailure(exec, "projection_refresh_failed"); }
+  try { await refreshFoldColumns(exec, id); } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
   return { postId: id, restored: Boolean(wasOffline), at: now };
 }
 
