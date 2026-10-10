@@ -2,7 +2,14 @@
 // SQLite 退場「刪檔前最終證據固化」唯讀快照（P4）。
 //
 // 用途：在摘除三台節點的 `/data/v3.db*` **之前**，把「刪掉之後就再也拿不到」的證據固化成一份
-// markdown：三邊列數對照、檔案 size／mtime、關鍵時間戳、零資料缺口複核、刪除前置條件。
+// markdown：三邊列數對照、逐欄（欄名＋型別）SQLite ↔ PG 對照、檔案 size／mtime、關鍵時間戳、
+// 零資料缺口複核、刪除前置條件。
+//
+// 逐欄對照（§二）是**刪檔門禁**的一部分：涵蓋 P2 宣稱「無欄位缺口」的 7 張表
+// （`listings`／`listing_groups`／`listing_group_members`／`listing_import`／
+// `system_announcements`／`settings`／`maps_usage_daily`），SQLite 側用 `PRAGMA table_info`、
+// PG 側用 `information_schema.columns`，輸出「欄名集合差 ＋ 型別族對照」，
+// 結尾固定印一行 `逐欄差異＝N 項`（門禁要 0）。
 //
 // 家族（連線／開關／防呆一律照抄既有腳本，不自己發明）：
 //   - 連線與唯讀 SQLite：`v3/scripts/sqlite-consistency-snapshot.mjs:35`
@@ -10,6 +17,7 @@
 //   - PG 連線與 target 守衛：`v3/scripts/projection-freshness-check.mjs:13-17`
 //     （`createPostgresDriver({ env })` ＋ `assertPgTargetAllowed()`）。
 //   - 參數解析：`v3/scripts/cutover-backfill.mjs:50-63`（`--key value` 與 `--key=value` 皆可）。
+//   - 型別族判定沿用 `v3/src/pgSchema.js:8-34` 的 `TYPE_MAP`／`pgTypeFor()` 語意。
 //
 // 安全性（fail-closed，這一支不寫任何東西）：
 //   - 只做 `SELECT`／`PRAGMA`；每個語句進 DB 前先過 `assertReadOnlyStatement()`（結構性阻擋，
@@ -48,6 +56,125 @@ export const KEY_TABLES = [
 
 /** 預期「全為 0」的三張表（migration v11 建立，正式 PG 尚未有資料 ⇒ 不補）。 */
 export const ZERO_ROW_TABLES = ["member_support_code", "sponsor_entitlement_grant", "support_poll_cursor"];
+
+/**
+ * 逐欄（欄名＋型別）SQLite ↔ PG 對照的目標表。
+ * 這是 P2 宣稱「無欄位缺口」的那 7 張（刪檔門禁要求「逐欄差異＝0 項」）。
+ */
+export const COLUMN_TABLES = [
+  "listings",
+  "listing_groups",
+  "listing_group_members",
+  "listing_import",
+  "system_announcements",
+  "settings",
+  "maps_usage_daily",
+];
+
+/**
+ * 型別「族」：SQLite 的宣告型別與 PG 的 `data_type` 字面本來就會不同
+ * （`TEXT` vs `character varying`、`INTEGER` vs `bigint`），要判的是**同不同族**。
+ * 族判定沿用 `v3/src/pgSchema.js:8-34` 的 `TYPE_MAP`／`pgTypeFor()` 那套語意（不另外發明）。
+ */
+export function typeFamily(declared) {
+  const t = String(declared || "").trim().toUpperCase().replace(/^_/, "");
+  if (!t) return "TEXT"; // SQLite 的「無型別」欄位存什麼都可以（同 pgTypeFor 的註解）
+  if (/^(BIGINT|BIGSERIAL|INT|INTEGER|SMALLINT|SERIAL)$/.test(t)) return "INTEGER";
+  if (/^(TEXT|VARCHAR|CHARACTER VARYING|CHAR|CHARACTER|CLOB|UUID|JSON|JSONB)$/.test(t)) return "TEXT";
+  if (/^(TIMESTAMP.*|DATE|DATETIME)$/.test(t)) return "TIMESTAMP";
+  if (/^(REAL|FLOAT|DOUBLE|DOUBLE PRECISION|NUMERIC|DECIMAL)$/.test(t)) return "FLOAT";
+  if (/^(BLOB|BYTEA)$/.test(t)) return "BLOB";
+  if (/^(BOOL|BOOLEAN)$/.test(t)) return "BOOLEAN";
+  return t;
+}
+
+/** SQLite 側欄位內省（`PRAGMA table_info`，唯讀）。 */
+export function sqliteColumnFacts(sqlitePath, tables = COLUMN_TABLES) {
+  const out = {};
+  if (!existsSync(sqlitePath)) return out;
+  const db = new DatabaseSync(sqlitePath, { readOnly: true });
+  try {
+    for (const table of tables) {
+      try {
+        const rows = db.prepare(assertReadOnlyStatement(`PRAGMA table_info("${table}")`)).all();
+        // ⚠️ 表不存在時 `PRAGMA table_info` 回**空陣列**而不是丟錯 ⇒ 要自己轉成 null，
+        // 否則「PG 有、SQLite 沒有」會被誤判成「兩邊都沒有欄位」（等於漏掉整個缺口）。
+        out[table] = rows.length
+          ? rows.map((row) => ({ name: String(row.name), type: String(row.type || ""), pk: Number(row.pk) || 0 }))
+          : null;
+      } catch {
+        out[table] = null;
+      }
+    }
+  } finally {
+    db.close();
+  }
+  return out;
+}
+
+/** PG 側欄位內省（`information_schema.columns`，唯讀）。 */
+export async function pgColumnFacts(exec, tables = COLUMN_TABLES) {
+  const out = {};
+  for (const table of tables) {
+    const res = await exec(assertReadOnlyStatement(
+      "SELECT column_name, data_type, udt_name FROM information_schema.columns"
+      + " WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position",
+    ), [table]);
+    const rows = res?.rows || [];
+    out[table] = rows.length
+      ? rows.map((row) => ({
+        name: String(row.column_name),
+        type: String(row.data_type === "ARRAY" ? row.udt_name : row.data_type),
+      }))
+      : null; // 表不存在（或沒有任何欄位）
+  }
+  return out;
+}
+
+/** 兩邊欄名集合差＋型別族比對；回傳每張表的差異與總數（門禁要 0）。 */
+export function compareColumns(sqliteColumns, pgColumns, tables = COLUMN_TABLES) {
+  const perTable = [];
+  let diffTotal = 0;
+  let rawTypeDiffs = 0;
+  for (const table of tables) {
+    const s = sqliteColumns?.[table];
+    const p = pgColumns?.[table];
+    const entry = {
+      table,
+      sqliteColumns: Array.isArray(s) ? s.length : null,
+      pgColumns: Array.isArray(p) ? p.length : null,
+      onlySqlite: [],
+      onlyPg: [],
+      typeDiffs: [],
+      rawTypeDiffs: [],
+      absentBoth: !Array.isArray(s) && !Array.isArray(p),
+    };
+    if (Array.isArray(s) && Array.isArray(p)) {
+      const sMap = new Map(s.map((c) => [c.name, c.type]));
+      const pMap = new Map(p.map((c) => [c.name, c.type]));
+      entry.onlySqlite = [...sMap.keys()].filter((name) => !pMap.has(name));
+      entry.onlyPg = [...pMap.keys()].filter((name) => !sMap.has(name));
+      for (const [name, sType] of sMap) {
+        if (!pMap.has(name)) continue;
+        const pType = pMap.get(name);
+        if (typeFamily(sType) !== typeFamily(pType)) entry.typeDiffs.push({ name, sqlite: sType, pg: pType });
+        else if (String(sType).toUpperCase() !== String(pType).toUpperCase()) entry.rawTypeDiffs.push({ name, sqlite: sType, pg: pType });
+      }
+    } else if (Array.isArray(s)) {
+      // PG 端整張表不存在 ⇒ 每一個 SQLite 欄位都是一個缺口（不能只算 1 項）。
+      entry.onlySqlite = s.map((c) => c.name);
+    } else if (Array.isArray(p)) {
+      entry.onlyPg = p.map((c) => c.name);
+    }
+    // 兩邊都沒有這張表 ⇒ **不算差異**（不是缺口），但在報告裡標出來，免得被靜默忽略。
+    entry.diff = entry.onlySqlite.length + entry.onlyPg.length + entry.typeDiffs.length;
+    diffTotal += entry.diff;
+    rawTypeDiffs += entry.rawTypeDiffs.length;
+    perTable.push(entry);
+  }
+  return { tables: perTable, diffTotal, rawTypeDiffs };
+}
+
 
 /** 站內刊登的 6 個 `self_mrt_*` 查證欄位（見 `v3/src/selfListingsAsync.js:374-383`）。 */
 export const SELF_MRT_COLUMNS = [
@@ -343,9 +470,9 @@ export function interpretSqliteWrite(files, { now = new Date() } = {}) {
 // ---------------------------------------------------------------------------
 // 組報告與 markdown
 // ---------------------------------------------------------------------------
-export function buildSnapshot({ sqlite, pg = null, baseline = { path: null, counts: {} }, sample = null, meta = {} }) {
+export function buildSnapshot({ sqlite, pg = null, baseline = { path: null, counts: {} }, sample = null, columns = null, meta = {} }) {
   const write = interpretSqliteWrite(sqlite?.files, { now: meta.now instanceof Date ? meta.now : new Date() });
-  return { tool: TOOL, sqlite, pg, baseline, sample, write, meta };
+  return { tool: TOOL, sqlite, pg, baseline, sample, columns, write, meta };
 }
 
 function cell(value) {
@@ -407,8 +534,72 @@ export function renderMarkdown(snapshot) {
     lines.push("");
   }
 
-  // 二、檔案 size／mtime
-  lines.push("## 二、`v3.db` / `-wal` / `-shm` 的 size 與 mtime");
+  // 二、逐欄（欄名＋型別）對照
+  lines.push("## 二、逐欄（欄名＋型別）SQLite ↔ PG 對照");
+  lines.push("");
+  lines.push(`涵蓋 P2 宣稱「無欄位缺口」的 ${COLUMN_TABLES.length} 張表：`
+    + COLUMN_TABLES.map((t) => `\`${t}\``).join("、") + "。");
+  lines.push("");
+  if (!snapshot.columns || !pg) {
+    lines.push("> PG 未提供 ⇒ 逐欄對照 **n/a**（刪檔門禁不成立，請對正式 PG `5151_shadow` 再跑一次）。");
+    lines.push("");
+  } else {
+    const { tables: rows, diffTotal, rawTypeDiffs } = snapshot.columns;
+    lines.push("| 表 | SQLite 欄數 | PG 欄數 | 只在 SQLite | 只在 PG | 型別不同族 | 逐欄差異 |");
+    lines.push("|---|---|---|---|---|---|---|");
+    for (const row of rows) {
+      lines.push(`| \`${row.table}\` | ${cell(row.sqliteColumns)} | ${cell(row.pgColumns)} | `
+        + `${row.onlySqlite.length} | ${row.onlyPg.length} | ${row.typeDiffs.length} | ${row.diff} |`);
+    }
+    lines.push("");
+    const absentBoth = rows.filter((r) => r.absentBoth);
+    if (absentBoth.length) {
+      lines.push(`> ⚠️ 兩邊都沒有這張表（**不算差異**，但要有人看一眼是不是表名寫錯）：`
+        + `${absentBoth.map((r) => `\`${r.table}\``).join("、")}`);
+      lines.push("");
+    }
+    const details = rows.filter((r) => r.onlySqlite.length || r.onlyPg.length || r.typeDiffs.length);
+    lines.push("**差異明細**");
+    lines.push("");
+    if (!details.length) {
+      lines.push("- （無：7 張表的欄名集合與型別族完全一致）");
+    } else {
+      for (const row of details) {
+        if (row.onlySqlite.length) lines.push(`- \`${row.table}\` 只在 SQLite 有：${row.onlySqlite.map((c) => `\`${c}\``).join("、")}`);
+        if (row.onlyPg.length) lines.push(`- \`${row.table}\` 只在 PG 有：${row.onlyPg.map((c) => `\`${c}\``).join("、")}`);
+        for (const d of row.typeDiffs) lines.push(`- \`${row.table}.${d.name}\` 型別不同族：SQLite \`${d.sqlite}\` vs PG \`${d.pg}\``);
+      }
+    }
+    lines.push("");
+    lines.push(`**逐欄差異＝${diffTotal} 項**（刪檔門禁要 **0**；>0 就不准刪）。`
+      + `另註：型別「同族但字面不同」共 ${rawTypeDiffs} 項（例如 SQLite \`INTEGER\` vs PG \`bigint\`），`
+      + "那是兩邊型別體系本來就不同，**不列入門禁**。");
+    lines.push("");
+    lines.push("逐欄全表（`欄名: SQLite 宣告型別 → PG data_type`）：");
+    lines.push("");
+    lines.push("```text");
+    for (const table of COLUMN_TABLES) {
+      const s = snapshot.columns.raw?.sqlite?.[table];
+      const p = snapshot.columns.raw?.pg?.[table];
+      lines.push(`[${table}]`);
+      if (!Array.isArray(s) || !Array.isArray(p)) {
+        lines.push(`  SQLite=${Array.isArray(s) ? "有" : "不存在"}／PG=${Array.isArray(p) ? "有" : "不存在"} ⇒ 無法逐欄比對`);
+        lines.push("");
+        continue;
+      }
+      const pMap = new Map(p.map((c) => [c.name, c.type]));
+      for (const column of s) {
+        const pgType = pMap.has(column.name) ? pMap.get(column.name) : "（PG 沒有這一欄）";
+        lines.push(`  ${column.name}: ${column.type || "(無宣告型別)"} → ${pgType}`);
+      }
+      lines.push("");
+    }
+    lines.push("```");
+    lines.push("");
+  }
+
+  // 三、檔案 size／mtime
+  lines.push("## 三、`v3.db` / `-wal` / `-shm` 的 size 與 mtime");
   lines.push("");
   lines.push("| 檔案 | size | mtime | 用途／判讀 |");
   lines.push("|---|---|---|---|");
@@ -443,8 +634,8 @@ export function renderMarkdown(snapshot) {
   }
   lines.push("");
 
-  // 三、關鍵時間戳
-  lines.push("## 三、關鍵時間戳");
+  // 四、關鍵時間戳
+  lines.push("## 四、關鍵時間戳");
   lines.push("");
   const sm = sqlite.timestamps?.schemaMigrations || {};
   const pgSm = pg?.timestamps?.schemaMigrations || {};
@@ -458,8 +649,8 @@ export function renderMarkdown(snapshot) {
   lines.push(`- **最後一次 SQLite 寫入的解讀**：${write.text}`);
   lines.push("");
 
-  // 四、零資料缺口複核
-  lines.push("## 四、零資料缺口複核（刪檔前必須再次確認）");
+  // 五、零資料缺口複核
+  lines.push("## 五、零資料缺口複核（刪檔前必須再次確認）");
   lines.push("");
   lines.push("| 檢查項 | 節點 SQLite | PG | 預期 | 判定 |");
   lines.push("|---|---|---|---|---|");
@@ -485,16 +676,20 @@ export function renderMarkdown(snapshot) {
     + "任一項非 0 就先回到補遷（不補的裁決只涵蓋這三張零列的表與 7 個零值欄位）。");
   lines.push("");
 
-  // 五、刪除前置條件
+  // 六、刪除前置條件
   const archived = Boolean(meta.outPath);
-  lines.push("## 五、刪除前置條件（checklist）");
+  lines.push("## 六、刪除前置條件（checklist）");
   lines.push("");
   lines.push(`- [${archived ? "x" : " "}] **快照已存檔**${archived ? `（\`${meta.outPath}\`）` : "（本輪只印 stdout；正式固化請加 `--out=<file>`）"}`);
+  const columnGate = snapshot.columns && pg ? snapshot.columns.diffTotal : null;
+  lines.push(`- [${columnGate === 0 ? "x" : " "}] **逐欄差異＝0 項**（§二；`
+    + `${columnGate === null ? "本輪沒有 PG ⇒ 未驗證" : `實際 ${columnGate} 項`}，`
+    + "刪檔前必須對正式 PG `5151_shadow` 再確認一次）");
   lines.push("- [ ] **`docker logs` 的 `business SQLite is closed` 已歸 0**"
     + "（三台節點：`591-tracker-v3`／`5151-web-A`／`5151-web-B`；`PG_NO_SQLITE_OPEN=1` 生效後應不再出現）。");
   lines.push("- [ ] **Owner 已核准**摘除 `/data/v3.db*`（`/data` 掛載本身保留：`auth.env`／`vapid.json`／media 在裡面）。");
   lines.push("");
-  lines.push("> 三項全數打勾前**不得**刪除任何 `v3.db*`；本工具不執行也無法執行刪除。");
+  lines.push("> **每一項**都打勾之前**不得**刪除任何 `v3.db*`；本工具不執行也無法執行刪除。");
   lines.push("");
   return `${lines.join("\n")}`;
 }
@@ -549,11 +744,17 @@ export async function main(argv = process.argv.slice(2), { env = process.env, no
   }
 
   let pg = null;
+  let columns = null;
   if (pgUrl) {
     const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
     const driver = await createPostgresDriver({ env: { ...env, PG_URL: pgUrl, DATABASE_URL: "", POSTGRES_URL: "" } });
+    const exec = (sql, params) => driver.pool.query(sql, params);
     try {
-      pg = await collectPgFacts((sql, params) => driver.pool.query(sql, params));
+      pg = await collectPgFacts(exec);
+      // 逐欄（欄名＋型別）對照：SQLite `PRAGMA table_info` ↔ PG `information_schema.columns`。
+      const sqliteColumns = sqliteColumnFacts(sqlitePath);
+      const pgColumns = await pgColumnFacts(exec);
+      columns = { ...compareColumns(sqliteColumns, pgColumns), raw: { sqlite: sqliteColumns, pg: pgColumns } };
     } catch (error) {
       throw new Error(`${TOOL}：PG 唯讀查詢失敗：${redact(error?.message || error, pgUrl)}`);
     } finally {
@@ -566,6 +767,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, no
     pg,
     baseline,
     sample,
+    columns,
     meta: { now, label, outPath, pgDatabase, pgEnvName },
   });
   const markdown = renderMarkdown(snapshot);

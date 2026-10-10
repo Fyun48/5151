@@ -22,6 +22,11 @@ const {
   ZERO_ROW_TABLES,
   SELF_MRT_COLUMNS,
   assertReadOnlyStatement,
+  COLUMN_TABLES,
+  sqliteColumnFacts,
+  pgColumnFacts,
+  compareColumns,
+  typeFamily,
   collectSqliteFacts,
   collectPgFacts,
   buildSnapshot,
@@ -56,6 +61,10 @@ function makeSqliteFixture() {
       CREATE TABLE member_support_code (id INTEGER PRIMARY KEY);
       CREATE TABLE sponsor_entitlement_grant (id INTEGER PRIMARY KEY);
       CREATE TABLE support_poll_cursor (id INTEGER PRIMARY KEY);
+      CREATE TABLE listing_group_members (post_id INTEGER PRIMARY KEY, group_id INTEGER, source TEXT);
+      CREATE TABLE listing_import (id INTEGER PRIMARY KEY, user_id INTEGER, imported_title TEXT);
+      CREATE TABLE system_announcements (id INTEGER PRIMARY KEY, title TEXT, body TEXT);
+      CREATE TABLE maps_usage_daily (day TEXT PRIMARY KEY, calls INTEGER, cost REAL);
     `);
     // 7 筆房源：3 筆 fee_includes 非空、2 筆 self_mrt_state 非 NULL。
     for (let i = 1; i <= 7; i += 1) {
@@ -189,7 +198,7 @@ test("三邊對照表：SQLite／PG／既有基線各就各位，且 check 到�
     assert.match(md, /2026-10-09T09:39:00\.000Z/);
     assert.match(md, /PG `schema_migrations` 最後套用時間/);
     // 刪除前置條件
-    assert.match(md, /## 五、刪除前置條件/);
+    assert.match(md, /## 六、刪除前置條件/);
     assert.match(md, /快照已存檔/);
     assert.match(md, /business SQLite is closed/);
     assert.match(md, /Owner 已核准/);
@@ -247,6 +256,119 @@ test("compareSamples／normalizeBaseline：不動＝true，基線各種形狀都
   assert.deepEqual(normalizeBaseline({ count_listings: 115618, tables: { settings: 26 }, counts: { crawl_covers: 2 } }),
     { listings: 115618, settings: 26, crawl_covers: 2 });
   assert.deepEqual(normalizeBaseline(null), {});
+});
+
+test("逐欄對照：7 張門禁表都要在，SQLite PRAGMA 與 PG information_schema 兩邊都只讀", async () => {
+  // 這 7 張是 P2 宣稱「無欄位缺口」、也是刪檔門禁要「逐欄差異＝0」的那一組。
+  assert.deepEqual(COLUMN_TABLES, [
+    "listings", "listing_groups", "listing_group_members",
+    "listing_import", "system_announcements", "settings", "maps_usage_daily",
+  ]);
+  const src = readFileSync(SCRIPT, "utf8");
+  for (const table of COLUMN_TABLES) assert.ok(src.includes(`"${table}"`), `腳本要涵蓋 ${table}`);
+
+  const { dir, file } = makeSqliteFixture();
+  try {
+    const sqlite = sqliteColumnFacts(file);
+    assert.deepEqual(sqlite.listings.map((c) => c.name),
+      ["post_id", "fee_includes", "self_mrt_state", "self_mrt_station", "self_mrt_walk_m", "self_mrt_nearest_m", "self_mrt_source", "self_mrt_checked_at"]);
+    assert.deepEqual(sqliteColumnFacts(file, ["definitely_absent_table"]), { definitely_absent_table: null },
+      "SQLite 沒有的表要回 null（PRAGMA 回空陣列，不能靜默當成 0 欄）");
+
+    const seen = [];
+    const exec = async (sql, params = []) => {
+      assert.match(String(sql), READ_ONLY_SQL, `PG 只准收唯讀語句，收到：${sql}`);
+      seen.push(String(sql));
+      if (/information_schema\.columns/.test(sql)) {
+        if (params[0] === "listings") {
+          return { rows: [
+            { column_name: "post_id", data_type: "bigint" },
+            { column_name: "fee_includes", data_type: "text" },
+            { column_name: "self_mrt_state", data_type: "text" },
+            { column_name: "self_mrt_station", data_type: "text" },
+            { column_name: "self_mrt_walk_m", data_type: "double precision" },
+            { column_name: "self_mrt_nearest_m", data_type: "double precision" },
+            { column_name: "self_mrt_source", data_type: "text" },
+            { column_name: "self_mrt_checked_at", data_type: "text" },
+            { column_name: "pg_only_column", data_type: "text" }, // 故意多一欄
+          ] };
+        }
+        return { rows: [] };
+      }
+      throw new Error(`stub 未預期：${sql}`);
+    };
+    const pg = await pgColumnFacts(exec);
+    assert.ok(seen.length === COLUMN_TABLES.length, `7 張表都要查一次，實際 ${seen.length}`);
+    for (const sql of seen) assert.match(sql, /information_schema\.columns/, "PG 端只能查 information_schema");
+
+    const cmp = compareColumns(sqlite, pg);
+    const listings = cmp.tables.find((t) => t.table === "listings");
+    assert.deepEqual(listings.onlyPg, ["pg_only_column"], "PG 多的欄要被抓出來");
+    assert.deepEqual(listings.onlySqlite, []);
+    assert.equal(listings.typeDiffs.length, 0, "INTEGER vs bigint、TEXT vs text 屬同族，不算差異");
+    // 同族但字面不同（大小寫不計）：INTEGER→bigint 一項、REAL→double precision 兩項。
+    assert.equal(listings.rawTypeDiffs.length, 3, "同族但字面不同要另計（不列門禁）");
+    assert.deepEqual(listings.rawTypeDiffs.map((d) => d.name).sort(),
+      ["post_id", "self_mrt_nearest_m", "self_mrt_walk_m"]);
+    assert.equal(listings.diff, 1, "PG 多一欄 ⇒ 1 項");
+    // 其餘 6 張：stub 回空陣列 ⇒ PG 端整張表不存在 ⇒ 「每一個 SQLite 欄位都是一個缺口」。
+    const others = cmp.tables.filter((t) => t.table !== "listings");
+    assert.equal(others.length, 6);
+    for (const row of others) {
+      assert.equal(row.pgColumns, null, `${row.table} 的 PG 端應視為不存在`);
+      assert.equal(row.diff, row.sqliteColumns, `${row.table} 的缺口數要等於它的欄數`);
+      assert.equal(row.onlyPg.length, 0);
+    }
+    assert.equal(cmp.diffTotal, 1 + others.reduce((sum, row) => sum + row.diff, 0));
+    // 兩邊都沒有 ⇒ 不算差異
+    assert.equal(compareColumns({ t: null }, { t: null }, ["t"]).diffTotal, 0);
+    assert.equal(compareColumns({ t: null }, { t: null }, ["t"]).tables[0].absentBoth, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("型別族：INTEGER／TEXT／double precision 這些字面差不算差異", () => {
+  assert.equal(typeFamily("INTEGER"), "INTEGER");
+  assert.equal(typeFamily("bigint"), "INTEGER");
+  assert.equal(typeFamily(""), "TEXT");
+  assert.equal(typeFamily("TEXT"), "TEXT");
+  assert.equal(typeFamily("character varying"), "TEXT");
+  assert.equal(typeFamily("REAL"), "FLOAT");
+  assert.equal(typeFamily("double precision"), "FLOAT");
+  assert.equal(typeFamily("BLOB"), "BLOB");
+  assert.equal(typeFamily("bytea"), "BLOB");
+  assert.equal(typeFamily("timestamptz"), "TIMESTAMP");
+  assert.equal(typeFamily("TEXT") === typeFamily("BLOB"), false);
+});
+
+test("逐欄對照：完全一致時 diffTotal=0 且明細寫「無」", async () => {
+  const { dir, file } = makeSqliteFixture();
+  try {
+    writeFileSync(path.join(dir, "b.json"), "{}");
+    const sqlite = collectSqliteFacts(file);
+    const sqliteCols = sqliteColumnFacts(file);
+    const stub = makePgStub({ present: [...KEY_TABLES], counts: {}, columns: [] });
+    const pg = await collectPgFacts(stub.exec);
+    // 讓 PG 的欄位與 SQLite 完全一致（型別刻意用不同字面，驗證「同族不算差異」）。
+    const pgTypeForFamily = (declared) => ({ INTEGER: "bigint", FLOAT: "double precision", BLOB: "bytea" }[typeFamily(declared)] || "text");
+    const pgCols = Object.fromEntries(Object.entries(sqliteCols).map(([t, cols]) => [
+      t, cols ? cols.map((c) => ({ name: c.name, type: pgTypeForFamily(c.type) })) : null,
+    ]));
+    const snapshot = buildSnapshot({
+      sqlite, pg, baseline: { path: null, counts: {} },
+      columns: { ...compareColumns(sqliteCols, pgCols), raw: { sqlite: sqliteCols, pg: pgCols } },
+      meta: { now: new Date("2026-10-10T16:00:00.000Z"), outPath: "/tmp/unit.md", pgDatabase: "probe" },
+    });
+    const md = renderMarkdown(snapshot);
+    assert.match(md, /## 二、逐欄（欄名＋型別）SQLite ↔ PG 對照/);
+    assert.match(md, /\*\*逐欄差異＝0 項\*\*/);
+    assert.match(md, /（無：7 張表的欄名集合與型別族完全一致）/);
+    assert.match(md, /- \[x\] \*\*逐欄差異＝0 項\*\*/);
+    assert.match(md, /## 六、刪除前置條件/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("--help 可跑，且不會連任何 DB", () => {

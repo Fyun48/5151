@@ -254,6 +254,7 @@ SQL
 - 相關端點：`server.js:3162 /api/admin/overview`、`server.js:3174 /api/admin/data-health`、
   `server.js:3122`（GET）／`server.js:3129`（PUT）`/api/admin/system-crawl`；
   最後一組打到 `siteContentAsync.js:240`／`siteContentAsync.js:258` 的**未擋閘鏡射寫**。
+  （同一條線上的技術債見第 12 條。）
 
 ### 5. 匯入路徑有「半套寫入」
 
@@ -288,6 +289,13 @@ PG 走 `pgSchema.ensurePgSchema()` 的**鏡射**，再各自用模組內的 lazy
 接線在 `server.js:5451` 與 `watcher.js:732`，測試是 `v3/test/runtime-guards.test.js`。
 ⇒ §二 對照表第 4 列的落差已結案，不要再寫第二份啟動檢查。
 
+- 但它**還缺兩刀**（judgment 層已認定，2026-10-10）：目前只看得到 `DB_DRIVER` 解析結果、
+  「有 PG env 卻不是 postgres」、以及 `PG_SQLITE_FALLBACK=open`；**沒有**
+  （a）在有 PG 連線 env 時強制要求 `PG_NO_SQLITE_OPEN=1`、**也沒有**
+  （b）拒絕 `PG_SQLITE_FALLBACK` 停在預設的 `closed`（`closed` 仍然允許**讀取**回退本機 SQLite）。
+- **這兩刀由另一包（P5）做，本文件的讀者不要動 `v3/src/`**——本節只是把「已經有什麼、還缺什麼」寫清楚，
+  避免下一包又去重做一個已經存在的檢查。
+
 ### 9. 不追的清單（標待查、不推測、不阻塞退場）
 
 下面 6 張表的 PG 列數**少於凍結快照**，原因**尚未查證**：
@@ -320,9 +328,30 @@ PG 走 `pgSchema.ensurePgSchema()` 的**鏡射**，再各自用模組內的 lazy
    （唯讀；正式 PG 目標需 `ALLOW_PRODUCTION_PG_TARGET=1` 明確授權）。
 6. **（Owner 核准）** 摘除 `/data/v3.db`、`/data/v3.db-wal`、`/data/v3.db-shm`。
    **`/data` 掛載本身必須保留**——`auth.env`／`vapid.json`／media 都在裡面（見 §三 C(2)）。
+   - **順序裁決（2026-10-10）：先刪資料檔，source 檔留到最後。**
+     〔路〕`/data/v3.db*`：門禁全綠＋Owner 手動 → 現在就可以刪。
+     〔碼〕搬出來的同步分支 source 檔（P2 之後會出現的 `*Sqlite.js` 這類）：
+     **留到 C(3) 移除同步分支那一刀**才刪。
+   - 理由：`adminOverview.js` 是**模組載入期的 eager import**（現行是 `:3-13` 直接 `from "./db.js"`；
+     P2 拆檔之後同形的 eager import 會指向被搬出去的那支 `*Sqlite.js`）。
+     先刪 source 檔會讓 ESM 連結失敗 ⇒ **所有模式（含純 PG）都起不來**，
+     那會比「留著一個沒人呼叫的檔案」嚴重得多。
 7. 收尾：同步調整 `.github/workflows/build-production-image.yml:303-313` 的 build smoke
    （`test -f "$SMOKE_DIR/v3.db"` 在 `:303`，那段 `node:sqlite` 完整性檢查整段要拔掉或改成「不存在也要過」）；
    `production-predeploy-remote.sh` 已經支援 v3.db 不存在，不用另外改。
+
+### 12. 已知技術債（本次不改，記檔就好）：`scheduleTransaction` 不接受注入式 exec
+
+- `v3/src/crawlScheduleAsync.js:25 scheduleTransaction()` 的 PG 分支直接走
+  `driver.withTransaction(...)`（`:25-29`），**沒有 `options.exec` 注入口**。
+- 因此 `readCrawlSourceStreaksAsync()`（`v3/src/crawlScheduleAsync.js:136`）**不吃注入式 exec**
+  ⇒ 後台總覽在 PG 模式下**多開一個交易**才能讀 streak，而且測試想塞 stub 得另外繞。
+- 對照組（同一個 repo 已經做對的形狀）：`v3/src/adminOverviewAsync.js:31-42 pgExec()`，
+  在 `:32` 就有 `if (options.exec)`。
+- **沒有 correctness bug**：`v3/src/adminOverviewAsync.js:74-79` 把讀 streak 的失敗吞成 `streaks = {}`
+  （與 `lastSeen` 同樣的容忍度，後台總覽不會因此壞掉）。
+- 後續：**等 SQLite 模式全退之後**再把它改成吃 `options.exec`（那條路徑是純讀，本來也不需要交易）。
+  在那之前不動它——現在動會與 P1／P2／P3 三包撞車。
 
 > 這一節對 §二 對照表的更新：第 1、2 列（讀寫回退、無條件開庫）與第 4 列（啟動檢查）**已結案**；
 > 第 3 列（`/data` 保留、改為不開啟＋歸檔移除）**做法不變**；第 5 列（步驟 4 對帳 → 步驟 7 刪除）
