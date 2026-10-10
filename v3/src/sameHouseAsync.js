@@ -45,12 +45,23 @@ import { CONFIRM_ADMIN } from "./listingGroups.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 import { refreshListingProjection } from "./listingSearchProjection.js";
+import { refreshFoldColumns } from "./match.js";
+import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   MATCH_SPLIT_DAILY_LIMIT,
   pairConfidence,
   shouldPromoteGlobalSplit,
   votePair,
 } from "./matchVotes.js";
+
+function countRefreshFailure(exec, metric, error) {
+  // 先記行程內計數器（不碰 DB，同交易 aborted 也不失效）——唯一可靠的失敗訊號。
+  noteRefreshFailure(metric === "fold_refresh_failed" ? "fold" : "projection", error);
+  // 再盡力寫 rental_analytics_daily（第二副本）。⚠️ 不得依賴它：主寫入／刷新失敗常使同一個
+  // PG 交易進入 aborted（25P02），同交易的 bumpAnalytics 也會被擋；這裡允許失敗並吞掉。
+  return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
+}
 
 export async function mergeSameHouseForUserAsync(userId, postIds, { admin = false, ...options } = {}) {
   // 明確要求走某個 driver（測試用）時要尊重它，不要被環境變數蓋掉。
@@ -118,11 +129,14 @@ export async function confirmSameHouseAsAdminAsync(adminUserId, postIds, { now =
     const peer = listings[i === 0 ? 1 : 0];
     await exec(SET_MATCH_SQL, [peer.post_id, `管理員確認同房源 #${peer.post_id}`, listings[i].post_id]);
   }
-  // 配對會改 match_post_id（投影 primary_listing_id 的來源）⇒ 逐筆刷新投影，避免 stored 值過時。
-  // best-effort：隔離夾具可能沒有投影表，失敗不擋確認。
+  // 配對會改 match_post_id（投影 primary_listing_id 的來源）⇒ 逐筆刷新投影與 fold，避免 stored 值過時。
+  // best-effort：隔離夾具可能沒有投影表，失敗不擋確認，但失敗要計數。
   try {
     for (const row of listings) await refreshListingProjection(exec, row.post_id);
-  } catch { /* projection refresh is best-effort */ }
+  } catch (error) { await countRefreshFailure(exec, "projection_refresh_failed", error); }
+  try {
+    for (const row of listings) await refreshFoldColumns(exec, row.post_id);
+  } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   await writeGroupAudit(exec, {
     action: "admin_confirm_same_house",
     adminUserId,

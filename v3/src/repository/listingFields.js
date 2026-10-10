@@ -15,6 +15,19 @@
 //                Statements the original wrapped in try/catch are marked `tolerant`, so a store
 //                that lacks the newer columns still gets the rest written.
 import { refreshListingProjection } from "../listingSearchProjection.js";
+import { refreshFoldColumns } from "../match.js";
+import { bumpAnalyticsAsync } from "../rentalAnalyticsAsync.js";
+import { noteRefreshFailure } from "../listingRefreshHealth.js";
+
+// 刷新失敗不可無聲吞掉：沿用既有的 rental_analytics_daily 計數（bumpAnalyticsAsync），
+// 讓「投影／fold 刷新失敗」成為容器外可讀的累加訊號。計數本身失敗也不得反過來打斷主寫入。
+function countRefreshFailure(exec, metric, error) {
+  // 先記行程內計數器（不碰 DB，同交易 aborted 也不失效）——唯一可靠的失敗訊號。
+  noteRefreshFailure(metric === "fold_refresh_failed" ? "fold" : "projection", error);
+  // 再盡力寫 rental_analytics_daily（第二副本）。⚠️ 不得依賴它：主寫入／刷新失敗常使同一個
+  // PG 交易進入 aborted（25P02），同交易的 bumpAnalytics 也會被擋；這裡允許失敗並吞掉。
+  return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
+}
 
 async function applyStatement(exec, step) {
   if (!step) return false;
@@ -66,9 +79,10 @@ export async function setListingDetail(exec, { deps, listing, input = {} } = {})
       await applyStatement(exec, context.notifyReopenQuery(plan.postId, update.coordVersion));
     }
   }
-  // detail 會改 address／lat／lng／community／extra_fees（投影 district/kind/kind_keys/lat/lng/cost 的輸入）
-  // ⇒ 立即刷新投影，避免 stored 值過時。
-  try { await refreshListingProjection(exec, plan.postId); } catch { /* projection best-effort */ }
+  // detail 會改 address／lat／lng／community／extra_fees（投影 district/kind/kind_keys/lat/lng/cost 的輸入，
+  // 也是 fold_rent_num 的輸入）⇒ 立即刷新投影與 fold，避免 stored 值過時。
+  try { await refreshListingProjection(exec, plan.postId); } catch (error) { await countRefreshFailure(exec, "projection_refresh_failed", error); }
+  try { await refreshFoldColumns(exec, plan.postId); } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   return { feeChange: plan.feeChange ? { detail: plan.feeChange.detail, created_at: plan.feeChange.stamp } : null };
 }
 
@@ -77,8 +91,9 @@ export async function persistHpListingFields(exec, { deps, listing, next = {}, l
   const plan = (deps || {}).hpFieldsPlan(listing, next, { locationChanged });
   await applyChain(exec, plan.attempts);
   for (const step of plan.followUps) await applyStatement(exec, step);
-  // 5168 field patch 會改 row 欄位（address／floor_name／kind_name／tags 等，投影輸入欄）⇒ 立即刷新投影。
-  try { await refreshListingProjection(exec, plan.postId); } catch { /* projection best-effort */ }
+  // 5168 field patch 會改 row 欄位（address／floor_name／kind_name／tags 等，投影輸入欄）⇒ 立即刷新投影與 fold。
+  try { await refreshListingProjection(exec, plan.postId); } catch (error) { await countRefreshFailure(exec, "projection_refresh_failed", error); }
+  try { await refreshFoldColumns(exec, plan.postId); } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   return { applied: true, postId: plan.postId, invalidateSearchKey: plan.invalidateSearchKey };
 }
 

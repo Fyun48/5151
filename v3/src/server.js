@@ -599,6 +599,7 @@ import { appendAdminAudit, listAdminAudit } from "./adminAudit.js";
 import { appendAdminAuditAsync, listAdminAuditAsync } from "./adminAuditAsync.js";
 import { auditFailureStats } from "./adminAuditHealth.js";
 import { revisionBumpFailureStats } from "./dataRevisionHealth.js";
+import { refreshFailureStats } from "./listingRefreshHealth.js";
 // 後台設定（郵件／OAuth／贊助／品牌）的 driver-aware 入口。寫入的兩個
 // （saveAdminMailSettings／saveAdminOauthSettings）刻意還沒移植——它們會寫節點本機的 auth.env。
 // 第九十批補回 `getMailTemplatesAsync`：`queueSystemMailAsync()` 用它讀 PG 的範本
@@ -771,6 +772,10 @@ app.get("/api/health", (_req, res) => {
     // revision_bump_failures：data_revision bump 寫入的累計失敗數（訪客快取失效漏掉的直接原因）。
     // 與 audit_failures 同一契約：bump 失敗不得擋住主寫入，但監控要看得到這個數字。
     revision_bump_failures: revisionBumpFailureStats().failures,
+    // 投影／fold 刷新的失敗數（行程內計數器；與主寫入同交易的 DB 計數會因 25P02 失效，
+    // 所以這是唯一可靠的失敗訊號，正常為 0）。
+    projection_refresh_failures: refreshFailureStats().projection.failures,
+    fold_refresh_failures: refreshFailureStats().fold.failures,
   });
 });
 

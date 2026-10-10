@@ -1,9 +1,11 @@
 // 第 7 包：圖片指紋附屬表、同源建議、爬蟲洞察。不改 match.js 預設判決。
 // 不鏈式合併；人工判定優先；關開關＝舊路徑；原始資料保留。
 
-import { matchVeto, scoreMatch } from "./match.js";
+import { matchVeto, scoreMatch, refreshFoldColumnsSync } from "./match.js";
 import { loadEnabledProvider } from "./budgetGuard.js";
 import { refreshListingProjectionSync } from "./listingSearchProjection.js";
+import { bumpAnalytics } from "./rentalNotify.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   PHASH_ALGO,
   PHASH_SIMILAR_MAX,
@@ -273,7 +275,9 @@ function maybeFillEmptyStructured(db, listing, hints) {
     db.prepare("UPDATE listings SET floor_name = ? WHERE post_id = ? AND IFNULL(floor_name, '') = ''")
       .run(String(hints.floor).slice(0, 40), listing.post_id);
     // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影。
-    try { refreshListingProjectionSync(db, listing.post_id); } catch { /* projection best-effort */ }
+    // 刷新失敗不可無聲吞掉：floor_name 已落地，計數後仍回報 applied_empty。
+    try { refreshListingProjectionSync(db, listing.post_id); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+    try { refreshFoldColumnsSync(db, listing.post_id); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
     return "applied_empty";
   } catch {
     return "hint_only";
