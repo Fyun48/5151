@@ -206,3 +206,124 @@ SQL
 ```
 
 （本機側用同一份 `node -e` 的 SQLite 唯讀查詢，把上面六個表各 COUNT 一次即可。）
+
+---
+
+## 2026-10-10 夜間校正
+
+> **這一節不是修訂上文，而是把上文標成反面教材。** 前面 §一～§五 是 **2026-10-08** 的實測，
+> 原文保留不動；其中「本機 SQLite 仍被開、仍被寫」、「三台都沒有設 `PG_SQLITE_FALLBACK=strict`」、
+> 「`user_listing_flags` 是唯一還在長的活孤島」、「後台只是少資料」**這四項已全部失效**。
+> 以下逐條是 2026-10-10 夜間實測（＋v4-pro 覆核）的結論，行號以 `origin/master = 0b7716c` 為準；
+> 時間戳除另註外都是 UTC。
+>
+> 讀法：要判斷「現在還剩什麼」，只看本節；上文的價值在於記錄「閘還沒開之前的症狀長什麼樣」。
+
+### 1. 閘已全面生效：SQLite 已經不再被開、不再被寫
+
+- 三隻正式容器都設了 `PG_NO_SQLITE_OPEN=1`（`591-tracker-v3`、`5151-web-A`、`5151-web-B`），
+  `5151-web-A` 另加 `PG_SQLITE_FALLBACK=strict`；三台跑的是**同一個映像 digest**（`sha256:4b2b4e452ec7…`）。
+- 判準（不是靠感覺）：`-wal` 隔 **61 秒雙取樣、逐 byte 不動**，且 `/proc/*/fd` 掃過**沒有任何程序持有**
+  `/data/v3.db*` ⇒ **SQLite 已不再被寫入**。
+- 最後一次寫入落在 **2026-10-09 09:39**（tracker 節點）。
+- ⇒ 上文 §一.2（「仍被開、仍被寫」）、§一.3（活孤島）、§一.5（三台都 fail-open 沒開 strict）
+  與 §二 對照表第 1、2 列的現況描述**已作廢**。
+
+### 2. 仍在拋錯的同步讀取只剩 3 條（24 小時 82 行）
+
+| # | 爆點 | 呼叫鏈 | async 替身 |
+|---|---|---|---|
+| 1 | `watcher.js:1357 collectCommuteSettings()` | → `members.js:49 listUserIds()` | `settingsAsync.js:108`、`usersAsync.js:181`（**早已存在**） |
+| 2 | `db.js:6588-6589 routeScanPlan`（同步 `collectCommuteSettings()` ＋ `commuteRushEnabled()`） | 經 `db.js:3869` / `db.js:3903 crawlerReadsBuildContext` → `repository/crawlerScans.js:106` | `settingsAsync.js:108`、`settingsAsync.js:89` |
+| 3 | `db.js:8721 getCommunityCache()` | 呼叫者兩條：`watcher.js:375`，以及 `watcher.js:316` → `client591.js:424`（以 `getCommunity` 注入） | PG 端只有 async 寫 `crawlerWrites.js:213`（路徑是 **`v3/src/crawlerWrites.js`**，不是 `repository/`） |
+
+第 2 條原本被第 1 條的錯誤量遮住，是這一輪才分出來的——**它一直是同一條鏈的另一個出口**，
+只改第 1 條不會讓錯誤歸 0。
+
+### 3. `listUserIds` 其餘 4 個呼叫點是死路／已 async ⇒ 不得再動
+
+`db.js:4258`、`db.js:4338`、`db.js:5615`、`db.js:5705` 這四處**不要再改**：它們不是活路徑
+（或已由 async 版本承接）。改了會造迴歸——這是本輪明確的「不要動的清單」，不是待辦。
+
+### 4. 後台是「靜默 0」不是「少資料」
+
+- `adminOverview.js:29-35 countSql()` 的實作是 `try { … } catch { return 0 }`；
+  `adminOverview.js:157-167 sameHouseCounts()` 同一個形狀（`catch { /* schema may be fresh */ }`）。
+  ⇒ 閘開了之後，後台呈現的是**假的 0**，不是「資料變少」，兩者在畫面上長得一樣。
+- `adminOverview.js:187` 用的是**同步** `readSiteCatalogStats()`。
+- 相關端點：`server.js:3162 /api/admin/overview`、`server.js:3174 /api/admin/data-health`、
+  `server.js:3122`（GET）／`server.js:3129`（PUT）`/api/admin/system-crawl`；
+  最後一組打到 `siteContentAsync.js:240`／`siteContentAsync.js:258` 的**未擋閘鏡射寫**。
+
+### 5. 匯入路徑有「半套寫入」
+
+`listingImportAsync.js:320-322`／`:362-363`／`:407-408`：PG 寫成功之後，**沒有 try/catch**
+就再寫一次本機 SQLite（`sqliteHandle().prepare(…).run(…)`）。
+⇒ 開閘（SQLite 不可用）時的行為是「**PG 已經寫進去、使用者卻收到錯誤**」——資料是對的、體驗是壞的，
+而且重試會再做一次。這是 P3 包（鏡射寫移除）的主目標。
+
+### 6. 裁決：PG 缺的 7 欄與 3 張表「不補」
+
+- 7 欄＝`fee_includes` ＋ 6 個 `self_mrt_*`；3 張表＝`member_support_code`／
+  `sponsor_entitlement_grant`／`support_poll_cursor`。**兩邊都是零資料**（見 §四的快照複核），
+  補它沒有意義。
+- 而且 lazy-add 早就接線：
+  - `selfListingsAsync.js:374-383 SELF_LISTING_PG_COLUMNS`（`ALTER TABLE … ADD COLUMN IF NOT EXISTS`）
+    ＋ `selfListingsAsync.js:386 ensureSelfListingColumnsOnce()` ＋ `:410` 的呼叫點。
+  - `sponsorEntitlementAsync.js:31 ensureSponsorEntitlementStore()` ＋ `:50` 的呼叫點
+    （沒有可用 SQLite handle 時走 PG 原生 DDL）。
+- ⇒ 這一條是**已裁決**，不要再開「補欄／補表」的工作項。
+
+### 7. `schema_migrations` 的編號不需要對齊
+
+SQLite 走 `migrate.js` 的**編號 runner**（`SCHEMA_MIGRATIONS_DDL_SQLITE`，`applied_at` 是 TEXT）；
+PG 走 `pgSchema.ensurePgSchema()` 的**鏡射**，再各自用模組內的 lazy `CREATE/ALTER … IF NOT EXISTS`
+補欄補表（`SCHEMA_MIGRATIONS_DDL_PG` 幾乎沒被使用）。兩套體系本來就不相同，
+「PG 只有 5 版、SQLite 有 11 版」**不是缺口**，也不需要對齊。
+
+### 8. 啟動檢查已經存在，不要重做
+
+`v3/src/runtimeGuards.js` 的 `assertRuntimeDbGuard()`（commit `7d119c7`）已經在
+`PG_NO_SQLITE_OPEN`／`PG_SQLITE_FALLBACK=open` 這幾種「會悄悄退回本機 SQLite」的設定上 fail-closed；
+接線在 `server.js:5451` 與 `watcher.js:732`，測試是 `v3/test/runtime-guards.test.js`。
+⇒ §二 對照表第 4 列的落差已結案，不要再寫第二份啟動檢查。
+
+### 9. 不追的清單（標待查、不推測、不阻塞退場）
+
+下面 6 張表的 PG 列數**少於凍結快照**，原因**尚未查證**：
+
+| 表 | 差異 |
+|---|---|
+| `provider_usage_logs` | −49,710 |
+| `rental_analytics_daily` | −1 |
+| `rental_notify_prefs` | −1 |
+| `user_match_signals` | −2 |
+| `user_match_votes` | −2 |
+| `admin_audit` | −1 |
+
+處置：**標記待查**，不推測原因，也**不列為退場阻塞項**（沒有任何一條指向「SQLite 還留著獨有資料」）。
+
+### 10. 待架構層裁決的一條
+
+`crawlerReads.js:59 scan()` 只認 `options.strict`（`crawlerReads.js:67` 的 `if (options.strict) throw error;`），
+**不認** `fallbackMode` ⇒ 一旦把 `/data/v3.db*` 摘掉，這條 fail-open 會從「靜默回退」變成「直接 throw」。
+需要在影子站確認**沒有業務路徑依賴這條回退**之後，才由架構層決定「改成 throw」或「改走 async 替身」。
+
+### 11. 剩餘退場步驟與門禁
+
+1. 改碼三包：**P1** 同步讀（本節第 2 條那 3 條鏈）／**P2** 後台 async 讀（第 4 條）／
+   **P3** 鏡射寫移除（第 5 條）。
+2. 各自開 PR → **CI 綠**。
+3. **（Owner 核准）** 合併 → 發版（依 F-0013，代理人不得自行 merge／觸發 workflow）。
+4. `docker logs` 的 `business SQLite is closed` 等錯誤**歸 0**。
+5. 跑退場快照：`node v3/scripts/snapshot-sqlite-exit.mjs --sqlite=/data/v3.db --pg-url=PG_URL --out=<file> --sample-seconds=61`
+   （唯讀；正式 PG 目標需 `ALLOW_PRODUCTION_PG_TARGET=1` 明確授權）。
+6. **（Owner 核准）** 摘除 `/data/v3.db`、`/data/v3.db-wal`、`/data/v3.db-shm`。
+   **`/data` 掛載本身必須保留**——`auth.env`／`vapid.json`／media 都在裡面（見 §三 C(2)）。
+7. 收尾：同步調整 `.github/workflows/build-production-image.yml:303-313` 的 build smoke
+   （`test -f "$SMOKE_DIR/v3.db"` 在 `:303`，那段 `node:sqlite` 完整性檢查整段要拔掉或改成「不存在也要過」）；
+   `production-predeploy-remote.sh` 已經支援 v3.db 不存在，不用另外改。
+
+> 這一節對 §二 對照表的更新：第 1、2 列（讀寫回退、無條件開庫）與第 4 列（啟動檢查）**已結案**；
+> 第 3 列（`/data` 保留、改為不開啟＋歸檔移除）**做法不變**；第 5 列（步驟 4 對帳 → 步驟 7 刪除）
+> 的順序不變，只是「補遷」被第 6 條的裁決縮小成「零資料、不補」。
