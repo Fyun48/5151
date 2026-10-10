@@ -1,18 +1,21 @@
 /** Cheap guest listing cache. Identical queries reuse a short-lived payload. */
 
-// 訪客快取的兩個時間常數（2026-10-10，第 N+1 批）：
-//   - TTL_MS：單一 cache entry 的最長存活。
-//   - BUCKET_MS：PG 的 revision generation 讀取粗粒度 bucket（行程內 memo 的窗口）。
-// 最壞陳舊上限＝BUCKET_MS + TTL_MS ≤ 45_000（既有政策上限；實際可達到的陳舊 ≤ min(B,T)）。
+// 訪客快取的時間常數（2026-10-10，SWR 批次）：
+//   - TTL_MS：同 generation 的「新鮮命中」窗口（SQLite 路徑維持原語意：超過就重算）。
+//   - BUCKET_MS：PG revision generation 讀取的粗粒度 bucket（行程內 memo 的窗口）。
+//   - MAX_STALE_MS：SWR 的陳舊上限——entry 年齡 ≤ 45s 就先回舊值＋背景重算；
+//     超過 45s 才同步重算。這是「比現行 TTL 政策更寬」都不准的硬上限。
 export const TTL_MS = 20_000;
 export const BUCKET_MS = 20_000;
+export const MAX_STALE_MS = 45_000;
 const MAX_ENTRIES = 200;
 const cache = new Map();
-// 進行中的計算（single-flight）：同一 key 的併發請求共用同一個 in-flight promise，
-// 只跑一次 load()；只依「當下 namespace（含 generation）」為 key，不會跨 generation 共用。
+// 進行中的計算（single-flight）：同一 key 的併發請求（含 SWR 的背景重算）共用同一個
+// in-flight promise，只跑一次 load()。key 只看「參數」（不看 generation），
+// 因此背景重算與新的冷計算也會併流，不會對同 key 同時起兩個重算。
 const inflight = new Map();
 // PG 的 revision generation 行程內 bucket memo（{ revision, at }）。多節點各自維護，
-// generation 不同只會少命中、不會回錯資料（見 PR body）。
+// generation 不同只會多觸發 SWR 背景重算、不會回錯資料（見 PR body）。
 let revisionBucket = null;
 
 export function normalizePublicQuery(query = {}) {
@@ -54,53 +57,108 @@ export function publicListingsCacheSize() {
   return cache.size;
 }
 
-export function getCachedPublicListings(query, load, { namespace = "sqlite:guest:v2" } = {}) {
+export function getCachedPublicListings(query, load, { namespace = "sqlite:guest:v2", now = Date.now } = {}) {
   // `namespace: null` means "never hit, never write" (fail-closed) — the caller
   // must still serve the freshly-loaded payload. PostgreSQL resolves a real
   // generation (pg:guest:v${revision}) via resolveGuestCacheNamespace(); when the
   // revision cannot be read the caller passes null here.
-  const key = namespace == null ? null : `${namespace}:${normalizePublicQuery(query)}`;
-  const now = Date.now();
-  const hit = key == null ? null : cache.get(key);
-  if (hit && now - hit.at < TTL_MS) {
-    return {
-      ...hit.payload,
-      cache_hit: true,
-      cache_age_ms: now - hit.at,
-    };
-  }
-  const remember = payload => {
-    if (key != null) {
-      cache.set(key, { at: Date.now(), payload });
-      if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value);
+  if (namespace == null) {
+    const result = load();
+    if (result && typeof result.then === "function") {
+      return result.then((payload) => ({ ...payload, cache_hit: false, cache_age_ms: 0 }));
     }
-    return { ...payload, cache_hit: false, cache_age_ms: 0 };
-  };
-  // Single-flight：同一 key 正在算時，併發的請求共用同一個 in-flight promise，
-  // 不會各自再跑一次全量搜尋（repository/decorationData.js 的 memo 形狀）。
-  if (key != null && inflight.has(key)) {
+    return { ...result, cache_hit: false, cache_age_ms: 0 };
+  }
+
+  // 快取 key 只看參數、不看 generation：generation 換代不再把 key 換掉，
+  // 這樣「冷算 25s > bucket 20s」那種查詢才有機會被同一筆 entry 命中（SWR）。
+  const key = normalizePublicQuery(query);
+  const nowMs = now();
+  const hit = cache.get(key);
+
+  if (hit) {
+    const age = nowMs - hit.at;
+    const sameGeneration = hit.namespace === namespace;
+    if (sameGeneration && age < TTL_MS) {
+      // 同 generation 且仍在新鮮窗口：直接命中，不做背景重算。
+      return { ...hit.payload, cache_hit: true, cache_age_ms: age };
+    }
+    if (!sameGeneration && age <= MAX_STALE_MS) {
+      // generation 已換代、entry 年齡 ≤ MAX_STALE_MS：SWR——先回舊值，
+      // 同時背景重算（single-flight），重算完成才把 entry 換成新代。
+      revalidateInBackground(key, load, namespace, now);
+      return { ...hit.payload, cache_hit: true, stale: true, cache_age_ms: age };
+    }
+    // 其餘（年齡 > MAX_STALE_MS；或同 generation 但已過新鮮窗口）→ 同步重算。
+  }
+
+  // 同步重算（single-flight：同 key 正在算時，併發的請求共用同一個 in-flight promise，
+  // 不會各自再跑一次全量搜尋）。
+  if (inflight.has(key)) {
     return inflight.get(key);
   }
   const result = load();
   // Cache only resolved success. A rejected request must remain an error and
   // must not leave a Promise or an empty result in the public cache.
   if (result && typeof result.then === "function") {
-    const pending = result.then(remember);
-    if (key != null) {
-      inflight.set(key, pending);
-      pending.then(() => inflight.delete(key), () => inflight.delete(key));
-    }
+    const pending = result.then((payload) => rememberInto(key, namespace, now, payload));
+    inflight.set(key, pending);
+    pending.then(() => inflight.delete(key), () => inflight.delete(key));
     return pending;
   }
-  return remember(result);
+  return rememberInto(key, namespace, now, result);
+}
+
+function rememberInto(key, namespace, now, payload) {
+  cache.set(key, { at: now(), payload, namespace });
+  if (cache.size > MAX_ENTRIES) cache.delete(cache.keys().next().value);
+  return { ...payload, cache_hit: false, cache_age_ms: 0 };
+}
+
+// SWR 背景重算：只負責「算完把 entry 換成新代」，不回傳給當下這個請求。
+// 背景重算拋錯一律吞掉＋log，不得影響已回出的舊值。
+function revalidateInBackground(key, load, namespace, now) {
+  if (inflight.has(key)) return; // single-flight：同 key 已有冷計算或背景重算在跑。
+  let result;
+  try {
+    result = load();
+  } catch (error) {
+    logRevalidateError(error);
+    return;
+  }
+  if (result && typeof result.then === "function") {
+    // pending 本身會 reject（讓年齡 > 45s 的 inflight joiners 拿到正確錯誤，而非 undefined）；
+    // 這裡用「不 throw 的 rejection handler」把背景這條吞掉＋log，失敗不影響已回出的舊值。
+    const pending = result.then((payload) => rememberInto(key, namespace, now, payload));
+    inflight.set(key, pending);
+    pending.then(
+      () => inflight.delete(key),
+      (error) => { logRevalidateError(error); inflight.delete(key); },
+    );
+  } else {
+    try {
+      rememberInto(key, namespace, now, result);
+    } catch (error) {
+      logRevalidateError(error);
+    }
+  }
+}
+
+function logRevalidateError(error) {
+  try {
+    console.error("[guest-cache] background revalidate failed:", error && error.message ? error.message : error);
+  } catch {
+    /* 連 log 都不能把回應弄掛 */
+  }
 }
 
 /**
  * Guest-cache namespace (generation). In SQLite the namespace is the long-lived
  * `sqlite:guest:v2` (verbatim, #674). In PostgreSQL the durable `data_revision`
  * change-log is the generation: `pg:guest:v${MAX(id)}`. When a write bumps the
- * revision the namespace changes, so the next guest request is a guaranteed miss
- * against the previous generation's entries.
+ * revision the namespace changes, so the next guest request resolves a different
+ * namespace and the entry is treated as stale (SWR, ≤ MAX_STALE_MS) instead of a
+ * hard miss against the previous generation.
  *
  * A `null` namespace means "never hit, never write" (fail-closed) — the caller
  * must still serve the freshly-loaded payload.
@@ -137,8 +195,9 @@ async function readCurrentRevisionNative() {
  * 跨窗口才重讀。讀取失敗 ⇒ fail-closed 回 `null`（不回傳舊 generation、不命中、
  * 不寫入），呼叫端仍回傳正確資料。
  *
- * 多節點（web-A／web-B）各自有行程內 bucket memo：generation 不同只會少命中，
- * 不會回錯資料（快取鍵含 generation，且值只在同 generation 內存活 TTL_MS）。
+ * 多節點（web-A／web-B）各自有行程內 bucket memo：generation 不同時，年齡 ≤
+ * MAX_STALE_MS 的 entry 會先回舊值（SWR）＋背景重算，超過才同步重算；不會回錯資料
+ * （回舊值的前提是「同參數、年齡 ≤ MAX_STALE_MS」，且重算完成前舊值仍在上限內）。
  */
 export async function resolveGuestCacheNamespace({ driver = "sqlite", readRevision = null, now = Date.now } = {}) {
   if (driver !== "postgres") return "sqlite:guest:v2";

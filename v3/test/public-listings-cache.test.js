@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   BUCKET_MS,
+  MAX_STALE_MS,
   TTL_MS,
   getCachedPublicListings,
   guestCacheNamespace,
@@ -14,10 +15,11 @@ import {
 // PG 訪客快取的 revision-generation（粗粒度 bucket）＋ single-flight 行為。
 // cold/warm 毫秒與「bucket 內寫入仍回舊結果」的 live 驗證在隔離庫端到端做，這裡釘純函式語意。
 
-test("B + T 陳舊上限被釘住：20s bucket + 20s TTL = 40s ≤ 45s 現行上限", () => {
+test("SWR 陳舊上限被釘住：MAX_STALE_MS = 45s，且不超過現行 45s 政策", () => {
   assert.equal(BUCKET_MS, 20_000);
   assert.equal(TTL_MS, 20_000);
-  assert.ok(BUCKET_MS + TTL_MS <= 45_000, `B+T=${BUCKET_MS + TTL_MS} 必須 ≤ 45_000`);
+  assert.equal(MAX_STALE_MS, 45_000);
+  assert.ok(MAX_STALE_MS <= 45_000, `MAX_STALE_MS=${MAX_STALE_MS} 必須 ≤ 45_000`);
 });
 
 test("guest cache: first miss then same-parameter hit within the generation", async () => {
@@ -32,28 +34,29 @@ test("guest cache: first miss then same-parameter hit within the generation", as
   assert.deepEqual(second.listings, [{ post_id: 1 }]);
 });
 
-test("bucket 邊界（假時鐘 20s/21s）：bucket 內沿用同一 generation（hit），跨 bucket 重讀必 miss", async () => {
+test("bucket 邊界（假時鐘 20s/21s）：bucket 內沿用同一 generation（hit），跨 bucket 換代回舊值（SWR）", async () => {
   resetPublicListingsCache();
   let t = 0;
   const now = () => t;
   const ns1 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 5, now });
   assert.equal(ns1, "pg:guest:v5");
-  await getCachedPublicListings({ q: "x" }, async () => ({ listings: [1] }), { namespace: ns1 });
+  await getCachedPublicListings({ q: "x" }, async () => ({ listings: [1] }), { namespace: ns1, now });
 
   // bucket 內（t=10s < 20s）：不重讀 revision，沿用 v5 ⇒ hit。
   t = 10_000;
   const ns2 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => { throw new Error("must not re-read within bucket"); }, now });
   assert.equal(ns2, "pg:guest:v5");
-  const hit = await getCachedPublicListings({ q: "x" }, async () => assert.fail("bucket 內同 generation 應 hit"), { namespace: ns2 });
+  const hit = await getCachedPublicListings({ q: "x" }, async () => assert.fail("bucket 內同 generation 應 hit"), { namespace: ns2, now });
   assert.equal(hit.cache_hit, true);
 
-  // 跨 bucket（t=21s ≥ 20s）：重讀 revision → 6 ⇒ 換 generation ⇒ miss。
+  // 跨 bucket（t=21s ≥ 20s）：重讀 revision → 6 ⇒ 換 generation。年齡 21s ≤ 45s ⇒ SWR 回舊值＋背景重算。
   t = 21_000;
   const ns3 = await resolveGuestCacheNamespace({ driver: "postgres", readRevision: async () => 6, now });
   assert.equal(ns3, "pg:guest:v6");
-  const miss = await getCachedPublicListings({ q: "x" }, async () => ({ listings: [2] }), { namespace: ns3 });
-  assert.equal(miss.cache_hit, false);
-  assert.deepEqual(miss.listings, [2]);
+  const swr = await getCachedPublicListings({ q: "x" }, async () => ({ listings: [2] }), { namespace: ns3, now });
+  assert.equal(swr.cache_hit, true);
+  assert.equal(swr.stale, true);
+  assert.deepEqual(swr.listings, [1]);
 });
 
 test("revision read failure is fail-closed: miss + correct fresh data, never an old generation", async () => {
