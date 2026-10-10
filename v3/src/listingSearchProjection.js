@@ -170,6 +170,33 @@ export function deleteListingProjection(db, postId) {
   db.prepare(`DELETE FROM ${PROJECTION_TABLE} WHERE post_id = ?`).run(postId);
 }
 
+// 單一漏斗（投影刷新）：所有「改到 listings（含投影輸入欄）」的寫入路徑，在主列改完後都該呼叫
+// 這裡，用「回讀後的最終列」重算投影（與 persistListing 的 PG 路徑同一原則）。投影值只由
+// computeListingProjection 決定，本函式不複製任何公式；SQLite 與 PG 只差在執行器形狀。
+//
+//   refreshListingProjection      — async，exec(sql, params) => rows|{rows}（PG 側，`?` 佔位由呼叫端轉譯）。
+//   refreshListingProjectionSync  — sync，better-sqlite3 handle（SQLite 側）。
+export function refreshListingProjectionSync(sqliteDb, postId, { now = Date.now() } = {}) {
+  const id = Number(postId) || 0;
+  if (!id) return false;
+  const row = sqliteDb.prepare("SELECT * FROM listings WHERE post_id = ?").get(id);
+  if (!row) return false;
+  syncListingProjection(sqliteDb, row, now);
+  return true;
+}
+
+export async function refreshListingProjection(exec, postId, { now = Date.now() } = {}) {
+  const id = Number(postId) || 0;
+  if (!id) return false;
+  const raw = await exec("SELECT * FROM listings WHERE post_id = ?", [id]);
+  const rows = Array.isArray(raw) ? raw : raw?.rows;
+  const row = rows?.[0];
+  if (!row) return false;
+  const values = computeListingProjection(row, now);
+  await exec(listingProjectionUpsertSql(), bindProjectionValues(values));
+  return true;
+}
+
 export function rebuildListingSearchProjection(db, listingRows, now = Date.now()) {
   ensureListingSearchProjection(db);
   const insert = db.prepare(`INSERT INTO ${PROJECTION_TABLE} (${COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);

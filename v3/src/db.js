@@ -32,7 +32,7 @@ import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
-import { backfillListingSearchProjectionStep, ensureListingSearchProjection, projectionCounts, syncListingProjection, deleteListingProjection } from "./listingSearchProjection.js";
+import { backfillListingSearchProjectionStep, ensureListingSearchProjection, projectionCounts, syncListingProjection, deleteListingProjection, refreshListingProjectionSync } from "./listingSearchProjection.js";
 import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
@@ -3967,6 +3967,13 @@ export function setListingMatch(postId, match) {
     entityId: Number(postId) || 0,
     eventType: "same_house_match",
   });
+  // 配對會改 match_post_id（投影 primary_listing_id 的來源）⇒ 立即刷新投影，避免 stored 值過時。
+  try {
+    refreshListingProjectionSync(db, postId);
+    if (Number(match.match_post_id) > 0) refreshListingProjectionSync(db, Number(match.match_post_id));
+  } catch {
+    // projection refresh is best-effort; the Node path remains the source of truth
+  }
   return getListing(postId);
 }
 
@@ -4963,6 +4970,8 @@ export function setListingDetail(postId, input = {}) {
   }
   if (plan.location) applyListingLocation(postId, plan.location);
   const saved = getListing(postId);
+  // detail 會改 address／lat／lng／community／extra_fees（投影輸入欄）⇒ 立即刷新投影，避免 stored 值過時。
+  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
   try {
     if (significantListingUpdate(listing, saved)) {
       reconcileListingById(postId, { reason: "detail_enrichment" });
@@ -5244,6 +5253,7 @@ export function markListingOffline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_offline",
   });
+  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
   return getListing(postId);
 }
 
@@ -5276,6 +5286,7 @@ export function restoreListingOnline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_online",
   });
+  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
   return getListing(postId);
 }
 
@@ -5312,6 +5323,7 @@ export function markListingAlive(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_alive",
   });
+  try { refreshListingProjectionSync(db, postId); } catch { /* projection best-effort */ }
   return { listing: getListing(postId), restored: wasOffline };
 }
 
@@ -8115,18 +8127,12 @@ export function buildPublicListingsClauses({ districts = [], settings, q = "", c
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   if (q) {
-    // 2026-10-10（#694 加速包）：`CAST(post_id AS TEXT) LIKE` 無索引使整個 OR 被迫 Seq Scan。
-    // 純數字 q 改走 `post_id = ?` 精確命中；否則只走 title/address（訪客無 watch_note）。
-    const trimmed = String(q).trim();
-    const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-    if (Number.isSafeInteger(numeric)) {
-      clauses.push("post_id = ?");
-      params.push(numeric);
-    } else {
-      const like = `%${q}%`;
-      clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?))");
-      params.push(like, like);
-    }
+    // 不准為了索引拆掉 post_id 子字串項：實測 `q=101` 會從 2,949 筆變成 0 筆
+    // （2026-10-10 正式庫量測），且正式庫不建 trigram。q 無論是否純數字都維持三項 OR
+    // （title／address／post_id；訪客無 watch_note）。
+    const like = `%${q}%`;
+    clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?) OR CAST(post_id AS TEXT) LIKE ?)");
+    params.push(like, like, like);
   }
   return { where: `WHERE ${clauses.join(" AND ")}`, params, districtSet: new Set(requestedDistricts) };
 }

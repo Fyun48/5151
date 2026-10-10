@@ -25,6 +25,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { bumpRevisionPgClient, bumpRevisionPgExec } from "./revisionBumpAsync.js";
+import { refreshListingProjection } from "./listingSearchProjection.js";
 
 async function postgresExec(options = {}) {
   if (options.exec) return options.exec;
@@ -96,6 +97,12 @@ export async function setListingMatch(exec, postId, match = {}, client = null) {
       }
     }
   }
+  // 配對會改 match_post_id（投影 primary_listing_id 的來源）⇒ 在同一交易內刷新投影，避免 stored 值過時。
+  // best-effort：隔離夾具可能沒有投影表，失敗不擋配對（resync 工具會補齊）。
+  try {
+    await refreshListingProjection(exec, postId);
+    if (Number(match.match_post_id) > 0) await refreshListingProjection(exec, Number(match.match_post_id));
+  } catch { /* projection refresh is best-effort */ }
   // 配對會改 match_post_id／群組（同屋摺疊的裝飾），是訪客快取回應的一部分 ⇒ bump。
   // 真交易（有 client）用 SAVEPOINT 隔離；注入式 exec（測試）無交易，直接 best-effort。
   const payload = { entityType: "listing", entityId: Number(postId) || 0, eventType: "same_house_match" };
