@@ -13,6 +13,23 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 
+# 收檔自我檢查（**離線**、不需要 PG，所以放在「有沒有 PG」之前，兩種情境都會跑到）。
+#
+# 為什麼一定要有：下面的收檔方式是 `grep -rl PG_TEST_URL v3/test/*.test.js`——一支測試要不要被
+# 執行，取決於**檔內有沒有那個字串**。某支測試的檔頭一旦被清掉（或字串被改寫），那一支就
+# **永遠不再執行、而且 CI 全綠**（沒有紅燈、沒有 skip 訊息）。2026-10-10 的
+# `write-path-http-live-pg.test.js` 就是這種形狀（它的收檔依據只是檔頭一句話）。
+# `check-pg-collection.mjs` 會斷言：目標檔在清單內、KEEP 標記逐字還在、且以 master 的 69 支
+# 為基準沒有任何一支消失（多出來的只警告）。
+#
+# ⚠️ 這裡**刻意把它的 stdout 導到 stderr**：這支腳本「沒有 PG 時 stdout 必須是空的」是既有契約，
+#    `v3/test/domain-tool-guards.test.js`（「沒有 PG 要大聲 SKIP」那條）逐字在斷言它
+#    ⇒ 檢查報告走 stderr，stdout 只留給真正跑測試的那條路徑。
+if ! node v3/scripts/check-pg-collection.mjs >&2; then
+  echo "[pg] 收檔自我檢查失敗 ⇒ 不執行任何 PG 整合測試（原因見上方 [pg-collect] 訊息）" >&2
+  exit 1
+fi
+
 if [ -z "${PG_URL:-}${PG_TEST_URL:-}${PGHOST:-}" ] && [ "${DB_DRIVER:-}" != "postgres" ]; then
   # 第八十八批：原本這裡靜默 exit 0，於是「PG 整合測試通過」可能只是「根本沒跑」。
   # 現在明講 SKIP；需要「沒 PG 就失敗」的場合設 REQUIRE_PG=1（CI 的 PG job 就是這種）。
