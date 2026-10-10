@@ -61,8 +61,13 @@ import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { refreshListingProjection } from "./listingSearchProjection.js";
 import { refreshFoldColumns } from "./match.js";
 import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 
-function countRefreshFailure(exec, metric) {
+function countRefreshFailure(exec, metric, error) {
+  // 先記行程內計數器（不碰 DB，同交易 aborted 也不失效）——唯一可靠的失敗訊號。
+  noteRefreshFailure(metric === "fold_refresh_failed" ? "fold" : "projection", error);
+  // 再盡力寫 rental_analytics_daily（第二副本）。⚠️ 不得依賴它：主寫入／刷新失敗常使同一個
+  // PG 交易進入 aborted（25P02），同交易的 bumpAnalytics 也會被擋；這裡允許失敗並吞掉。
   return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
 }
 
@@ -464,8 +469,8 @@ async function maybeFillEmptyStructuredAsync(exec, listing, hints) {
   }
   // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影與 fold。
   // 刷新失敗不可無聲吞掉：floor_name 已落地，這裡只計數、不回退成 hint_only。
-  try { await refreshListingProjection(exec, listing.post_id); } catch { await countRefreshFailure(exec, "projection_refresh_failed"); }
-  try { await refreshFoldColumns(exec, listing.post_id); } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
+  try { await refreshListingProjection(exec, listing.post_id); } catch (error) { await countRefreshFailure(exec, "projection_refresh_failed", error); }
+  try { await refreshFoldColumns(exec, listing.post_id); } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   return "applied_empty";
 }
 

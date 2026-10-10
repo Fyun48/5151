@@ -1,13 +1,15 @@
-// fold 刷新失敗不可無聲吞掉（D）：寫入路徑的 fold 刷新失敗要累進 rental_analytics_daily，
-// 讓「fold_refresh_failed」成為容器外可讀的訊號。
+// fold 刷新失敗不可無聲吞掉（D）：寫入路徑的 fold 刷新失敗要同時累進
+//   (1) 行程內計數器（唯一可靠訊號，/api/health 的 fold_refresh_failures）；
+//   (2) rental_analytics_daily（第二副本；SQLite shim 下會成功，真 PG 同交易下會 25P02 失效）。
 //
 // 用 repository/listingState.js 的 markListingOffline（PG 路徑）＋注入式 exec 模擬一次
-// 「fold 欄缺失」的失敗：SQLite 的 listings 沒有 fold_* 欄，refreshFoldColumns 的 UPDATE 必然拋錯。
+// 「fold 欄缺失」的失敗：refreshFoldColumns 的 UPDATE 拋錯 → countRefreshFailure 累進。
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { refreshFailureStats, resetRefreshFailureStats } from "../src/listingRefreshHealth.js";
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-fold-count-"));
 process.env.DATA_DIR = dataDir;
@@ -19,10 +21,11 @@ after(() => {
   }
 });
 
-test("markListingOffline：fold 刷新失敗會讓 rental_analytics_daily 的 fold_refresh_failed 前進", async () => {
+test("markListingOffline：fold 刷新失敗會讓行程內計數器與 rental_analytics_daily 都前進", async () => {
   const app = await import("../src/db.js");
   const { markListingOffline } = await import("../src/repository/listingState.js");
   const db = app.sqliteHandle();
+  resetRefreshFailureStats();
 
   const postId = 950001;
   app.upsertListing({
@@ -66,6 +69,7 @@ test("markListingOffline：fold 刷新失敗會讓 rental_analytics_daily 的 fo
   const result = await markListingOffline(shim, postId);
 
   assert.equal(result.offline, true, "主寫入（offline=1）仍要成功");
-  assert.equal(counter(), before + 1, "fold 刷新失敗必須讓 fold_refresh_failed 前進");
+  assert.equal(counter(), before + 1, "fold 刷新失敗必須讓 rental_analytics_daily 的 fold_refresh_failed 前進");
+  assert.equal(refreshFailureStats().fold.failures, 1, "行程內計數器 fold 0→1");
   db.close();
 });

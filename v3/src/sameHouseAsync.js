@@ -47,6 +47,7 @@ import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 import { refreshListingProjection } from "./listingSearchProjection.js";
 import { refreshFoldColumns } from "./match.js";
 import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   MATCH_SPLIT_DAILY_LIMIT,
   pairConfidence,
@@ -54,7 +55,11 @@ import {
   votePair,
 } from "./matchVotes.js";
 
-function countRefreshFailure(exec, metric) {
+function countRefreshFailure(exec, metric, error) {
+  // 先記行程內計數器（不碰 DB，同交易 aborted 也不失效）——唯一可靠的失敗訊號。
+  noteRefreshFailure(metric === "fold_refresh_failed" ? "fold" : "projection", error);
+  // 再盡力寫 rental_analytics_daily（第二副本）。⚠️ 不得依賴它：主寫入／刷新失敗常使同一個
+  // PG 交易進入 aborted（25P02），同交易的 bumpAnalytics 也會被擋；這裡允許失敗並吞掉。
   return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
 }
 
@@ -128,10 +133,10 @@ export async function confirmSameHouseAsAdminAsync(adminUserId, postIds, { now =
   // best-effort：隔離夾具可能沒有投影表，失敗不擋確認，但失敗要計數。
   try {
     for (const row of listings) await refreshListingProjection(exec, row.post_id);
-  } catch { await countRefreshFailure(exec, "projection_refresh_failed"); }
+  } catch (error) { await countRefreshFailure(exec, "projection_refresh_failed", error); }
   try {
     for (const row of listings) await refreshFoldColumns(exec, row.post_id);
-  } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
+  } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   await writeGroupAudit(exec, {
     action: "admin_confirm_same_house",
     adminUserId,

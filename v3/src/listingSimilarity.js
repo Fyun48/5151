@@ -5,6 +5,7 @@ import { matchVeto, scoreMatch, refreshFoldColumnsSync } from "./match.js";
 import { loadEnabledProvider } from "./budgetGuard.js";
 import { refreshListingProjectionSync } from "./listingSearchProjection.js";
 import { bumpAnalytics } from "./rentalNotify.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   PHASH_ALGO,
   PHASH_SIMILAR_MAX,
@@ -275,8 +276,8 @@ function maybeFillEmptyStructured(db, listing, hints) {
       .run(String(hints.floor).slice(0, 40), listing.post_id);
     // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影。
     // 刷新失敗不可無聲吞掉：floor_name 已落地，計數後仍回報 applied_empty。
-    try { refreshListingProjectionSync(db, listing.post_id); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
-    try { refreshFoldColumnsSync(db, listing.post_id); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+    try { refreshListingProjectionSync(db, listing.post_id); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+    try { refreshFoldColumnsSync(db, listing.post_id); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
     return "applied_empty";
   } catch {
     return "hint_only";

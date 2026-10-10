@@ -128,8 +128,13 @@ import { bumpRevisionPgExec } from "./revisionBumpAsync.js";
 import { refreshListingProjection } from "./listingSearchProjection.js";
 import { refreshFoldColumns } from "./match.js";
 import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 
-function countRefreshFailure(exec, metric) {
+function countRefreshFailure(exec, metric, error) {
+  // 先記行程內計數器（不碰 DB，同交易 aborted 也不失效）——唯一可靠的失敗訊號。
+  noteRefreshFailure(metric === "fold_refresh_failed" ? "fold" : "projection", error);
+  // 再盡力寫 rental_analytics_daily（第二副本）。⚠️ 不得依賴它：主寫入／刷新失敗常使同一個
+  // PG 交易進入 aborted（25P02），同交易的 bumpAnalytics 也會被擋；這裡允許失敗並吞掉。
   return bumpAnalyticsAsync(metric, new Date(), 1, { exec, driver: "postgres" }).catch(() => {});
 }
 
@@ -234,7 +239,7 @@ export async function closeSelfListingAsync(userId, postId, { admin = false, now
   const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
   await exec(CLOSE_SELF_LISTING_SQL, [stamp, row.post_id]);
   // 關閉會改 last_seen_at（fold_refresh_abs_ms 的 fallback 輸入）⇒ 立即刷新 fold。
-  try { await refreshFoldColumns(exec, row.post_id); } catch { await countRefreshFailure(exec, "fold_refresh_failed"); }
+  try { await refreshFoldColumns(exec, row.post_id); } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
   // 與 `hideSelfListingAsync()` 同一個理由：本機的同步瀏覽路徑讀的是本機 `listings`。
   sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);
   try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住關閉 */ }
@@ -758,8 +763,8 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
     }
     await persistListingValuesAsync(run, row.post_id, resolved.listingValues);
     // 公開會改 title/floor_name/kind_name/tags/price/match_post_id 等投影輸入欄 ⇒ 立即刷新投影與 fold。
-    try { await refreshListingProjection(run, row.post_id); } catch { await countRefreshFailure(run, "projection_refresh_failed"); }
-    try { await refreshFoldColumns(run, row.post_id); } catch { await countRefreshFailure(run, "fold_refresh_failed"); }
+    try { await refreshListingProjection(run, row.post_id); } catch (error) { await countRefreshFailure(run, "projection_refresh_failed", error); }
+    try { await refreshFoldColumns(run, row.post_id); } catch (error) { await countRefreshFailure(run, "fold_refresh_failed", error); }
     // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經公開的刊登回錯。
     try {
       const { publishImportedDraftListing } = await import("./selfListings.js");
@@ -989,7 +994,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
   }
   await persistListingValuesAsync(run, postId, resolved.listingValues);
   // 站內刊登建立會寫 title/price/tags/match_post_id（投影與 fold 的輸入）⇒ 立即刷新 fold（投影由 publish 路徑處理）。
-  try { await refreshFoldColumns(run, postId); } catch { await countRefreshFailure(run, "fold_refresh_failed"); }
+  try { await refreshFoldColumns(run, postId); } catch (error) { await countRefreshFailure(run, "fold_refresh_failed", error); }
   // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的刊登回錯。
   try {
     const { insertOpenSelfListing } = await import("./selfListings.js");

@@ -37,6 +37,7 @@ import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } 
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, refreshFoldColumnsSync } from "./match.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
@@ -3972,16 +3973,17 @@ export function setListingMatch(postId, match) {
   try {
     refreshListingProjectionSync(db, postId);
     if (Number(match.match_post_id) > 0) refreshListingProjectionSync(db, Number(match.match_post_id));
-  } catch {
+  } catch (error) {
     // projection refresh is best-effort; the Node path remains the source of truth.
-    // 失敗要留下可查訊號（計數），不無聲吞掉。
+    // 失敗要留下可查訊號（計數），不無聲吞掉。先記行程內計數器（同交易 bumpAnalytics 會被 25P02 擋）。
+    noteRefreshFailure("projection", error);
     try { bumpAnalytics(db, "projection_refresh_failed"); } catch {}
   }
   // fold_* 同步刷新（match_post_id 在讀取端現算，此處維持與投影同形的刷新慣例）。
   try {
     refreshFoldColumnsSync(db, postId);
     if (Number(match.match_post_id) > 0) refreshFoldColumnsSync(db, Number(match.match_post_id));
-  } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   return getListing(postId);
 }
 
@@ -4747,7 +4749,7 @@ export function upsertListing(listing) {
     // projection is best-effort; the Node path remains the source of truth
   }
   // 同屋源折疊 fold_* 也同步刷新（SQLite 現在也有 fold_* 欄）。
-  try { refreshFoldColumnsSync(db, listing.post_id); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  try { refreshFoldColumnsSync(db, listing.post_id); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   try {
     // Durable change-log so a reconnecting Web node / SSE client can ask
     // "what changed since revision N?" (Phase 11).
@@ -4981,8 +4983,8 @@ export function setListingDetail(postId, input = {}) {
   if (plan.location) applyListingLocation(postId, plan.location);
   const saved = getListing(postId);
   // detail 會改 address／lat／lng／community／extra_fees（投影輸入欄）⇒ 立即刷新投影，避免 stored 值過時。
-  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
-  try { refreshFoldColumnsSync(db, postId); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  try { refreshListingProjectionSync(db, postId); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+  try { refreshFoldColumnsSync(db, postId); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   try {
     if (significantListingUpdate(listing, saved)) {
       reconcileListingById(postId, { reason: "detail_enrichment" });
@@ -5264,8 +5266,8 @@ export function markListingOffline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_offline",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
-  try { refreshFoldColumnsSync(db, postId); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  try { refreshListingProjectionSync(db, postId); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+  try { refreshFoldColumnsSync(db, postId); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   return getListing(postId);
 }
 
@@ -5298,8 +5300,8 @@ export function restoreListingOnline(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_online",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
-  try { refreshFoldColumnsSync(db, postId); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  try { refreshListingProjectionSync(db, postId); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+  try { refreshFoldColumnsSync(db, postId); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   return getListing(postId);
 }
 
@@ -5336,8 +5338,8 @@ export function markListingAlive(postId) {
     entityId: Number(postId) || 0,
     eventType: "listing_alive",
   });
-  try { refreshListingProjectionSync(db, postId); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
-  try { refreshFoldColumnsSync(db, postId); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
+  try { refreshListingProjectionSync(db, postId); } catch (error) { noteRefreshFailure("projection", error); try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+  try { refreshFoldColumnsSync(db, postId); } catch (error) { noteRefreshFailure("fold", error); try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
   return { listing: getListing(postId), restored: wasOffline };
 }
 
