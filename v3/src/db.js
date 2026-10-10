@@ -49,7 +49,7 @@ import {
 } from "./userSameHouse.js";
 import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
 import { ensureMrtCacheContractForRead } from "./mrtCacheSchema.js";
-import { createWritePath } from "./repository/writePath.js";
+import { createWritePath, foldColumnsDdlStatements } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
@@ -3581,11 +3581,11 @@ function loadUserSplitPairSet(userId) {
   }
 }
 
-function attachSameHouseRoles(...args) {
+export function attachSameHouseRoles(...args) {
   return runStepsSync(attachSameHouseRoleSteps(...args));
 }
 
-function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.now ?? Date.now()) {
+export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = provider?.now ?? Date.now()) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return list;
   const source = provider || sqliteDecorationProvider(voteUserId);
@@ -4739,6 +4739,17 @@ async function ensureChangeLogStoreOnce(pgDriver, sqliteDb = db) {
   changeLogSchemaReady.add(pgDriver);
 }
 
+// 同屋源折疊 fold_* 欄的冪等 DDL（PG 原生；正式庫 ALTER ADD COLUMN IF NOT EXISTS 為 metadata-only）。
+// 寫入路徑在第一次入庫前確保欄位存在，之後 syncFoldColumns 才能落值。
+const foldColumnsReady = new WeakSet();
+async function ensureFoldColumnsOnce(pgDriver) {
+  if (!pgDriver || foldColumnsReady.has(pgDriver)) return;
+  for (const statement of foldColumnsDdlStatements()) {
+    await pgDriver.exec(statement);
+  }
+  foldColumnsReady.add(pgDriver);
+}
+
 // 暴露給測試／診斷：直接驅動 PG 端 schema 準備（不傳 sqliteDb 即走 PG 原生 DDL）。
 export function ensureChangeLogStoreOnceForTest(pgDriver, sqliteDb) {
   return ensureChangeLogStoreOnce(pgDriver, sqliteDb);
@@ -4766,6 +4777,7 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
   }
   const pool = pgDriver || (await sharedPgDriver());
   await ensureChangeLogStoreOnce(pool);
+  await ensureFoldColumnsOnce(pool);
   // PR-B（F7／G9）：主列 upsert／backfill／投影／變更紀錄必須在同一個 PG 交易內完成；
   // 投影要用「交易中回讀後的最終列」計算，而不是傳入的 listing（backfill 會改欄位）。
   // 中間任一失敗就整筆回滾 → 不會再出現「主列寫入成功、搜尋投影永久缺席」的半套狀態。
@@ -4790,6 +4802,7 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
       console.warn("投影回讀 canonical row 失敗：", error?.message || error);
     }
     await writer.syncProjection(canonical);
+    await writer.syncFoldColumns(canonical);
     const event = existing ? "listing_updated" : "listing_added";
     // 變更紀錄是輔助資料，但 PG 內失敗會「毒化整個交易」→ 用 SAVEPOINT 隔離：
     // 失敗只回捲這一段，主列與投影仍會提交（否則 catch 起來後 COMMIT 會變成 ROLLBACK，變成靜默資料遺失）。

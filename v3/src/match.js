@@ -105,6 +105,43 @@ export function comparableRent(listing) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * 寫入端固化「同屋源折疊」所需的數值欄（供 SQL 折疊在讀取時算 role，不需重算解析）。
+ * 值一律由既有解析函式（comparableRent／listingRefreshParts）算出，**不新增第二套解析**。
+ *
+ * 刻意用「最小欄位子集」建 row 再算：讀取端 comparableRent 只看到候選列的欄位
+ * （listings 沒有 fee_blob 欄，listingBlob 的 fee_blob 永遠 undefined），寫入端若直接拿
+ * 爬蟲物件算，fee_blob 若存在會改變 extraMonthlyAmount，造成與讀取端不一致。
+ *
+ *   fold_rent_num          = comparableRent(listing)；不可比較 → NULL。
+ *   fold_refresh_kind      = 1 relative / 2 absolute / 0 missing。
+ *   fold_refresh_rel_ms    = relative 的倒退毫秒數（「剛剛／今日」為 0）；非 relative → NULL。
+ *   fold_refresh_abs_ms    = absolute 的絕對毫秒（或 last_seen_at fallback）；missing → 0；relative → NULL。
+ *
+ * 讀取端還原 listingRefreshAt(listing, now) =
+ *   CASE WHEN fold_refresh_kind = 1 THEN now - fold_refresh_rel_ms ELSE fold_refresh_abs_ms END。
+ */
+export function computeFoldColumns(listing = {}) {
+  const row = {
+    price: listing.price,
+    price_num: listing.price_num,
+    extra_fee: listing.extra_fee,
+    extra_fees: listing.extra_fees,
+    extra_fee_text: listing.extra_fee_text,
+    tags: listing.tags,
+    refresh_time: listing.refresh_time,
+    last_seen_at: listing.last_seen_at,
+  };
+  const rent = comparableRent(row);
+  const refresh = listingRefreshParts(row);
+  return {
+    fold_rent_num: rent,
+    fold_refresh_kind: refresh.kind === "relative" ? 1 : refresh.kind === "absolute" ? 2 : 0,
+    fold_refresh_rel_ms: refresh.kind === "relative" ? refresh.relMs : null,
+    fold_refresh_abs_ms: refresh.kind === "relative" ? null : refresh.absMs,
+  };
+}
+
 function evidence(signals, extra = {}) {
   return {
     signals,
@@ -330,24 +367,38 @@ function rentNum(listing) {
 
 /** 把 591「3小時前／昨日」轉成時間戳，越新越大。解析不到就用 last_seen_at。 */
 export function listingRefreshAt(listing, now = Date.now()) {
+  const parts = listingRefreshParts(listing);
+  return parts.kind === "relative" ? now - parts.relMs : parts.absMs;
+}
+
+/**
+ * 把 listingRefreshAt 的解析拆成「相對 offset／絕對 ms／missing」三態，供寫入端固化
+ * （fold_refresh_kind / fold_refresh_rel_ms / fold_refresh_abs_ms）使用。**不新增第二套解析**：
+ * listingRefreshAt 就是由本函式還原，兩者逐位元一致。
+ *   - relative：refresh_time 是相對字串（「16 小時內更新」），relMs 是倒退的毫秒數。
+ *   - absolute：refresh_time 是絕對時間（或 fallback last_seen_at），absMs 是絕對毫秒。
+ *   - missing：都解析不到，absMs = 0（與 listingRefreshAt 的 fallback 0 一致）。
+ */
+export function listingRefreshParts(listing) {
   const raw = String(listing?.refresh_time || "").trim();
   if (raw) {
-    if (/剛剛/.test(raw)) return now;
+    if (/剛剛/.test(raw)) return { kind: "relative", relMs: 0, absMs: null };
     let m = raw.match(/(\d+)\s*秒前/);
-    if (m) return now - Number(m[1]) * 1000;
+    if (m) return { kind: "relative", relMs: Number(m[1]) * 1000, absMs: null };
     m = raw.match(/(\d+)\s*分鐘前/);
-    if (m) return now - Number(m[1]) * 60 * 1000;
+    if (m) return { kind: "relative", relMs: Number(m[1]) * 60 * 1000, absMs: null };
     m = raw.match(/(\d+)\s*小時(?:前|內)/);
-    if (m) return now - Number(m[1]) * 3600 * 1000;
-    if (/今日|今天/.test(raw)) return now;
-    if (/昨日|昨天/.test(raw)) return now - 24 * 3600 * 1000;
+    if (m) return { kind: "relative", relMs: Number(m[1]) * 3600 * 1000, absMs: null };
+    if (/今日|今天/.test(raw)) return { kind: "relative", relMs: 0, absMs: null };
+    if (/昨日|昨天/.test(raw)) return { kind: "relative", relMs: 24 * 3600 * 1000, absMs: null };
     m = raw.match(/(\d+)\s*天前/);
-    if (m) return now - Number(m[1]) * 24 * 3600 * 1000;
+    if (m) return { kind: "relative", relMs: Number(m[1]) * 24 * 3600 * 1000, absMs: null };
     const abs = Date.parse(raw);
-    if (Number.isFinite(abs)) return abs;
+    if (Number.isFinite(abs)) return { kind: "absolute", relMs: null, absMs: abs };
   }
   const seen = Date.parse(listing?.last_seen_at || "");
-  return Number.isFinite(seen) ? seen : 0;
+  if (Number.isFinite(seen)) return { kind: "absolute", relMs: null, absMs: seen };
+  return { kind: "missing", relMs: null, absMs: 0 };
 }
 
 export function listingTieBreakKey(listing) {
