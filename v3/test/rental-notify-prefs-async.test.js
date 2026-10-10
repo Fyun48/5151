@@ -7,8 +7,10 @@
 //      （`publicRentalNotifyCaps()` 讀它）。PG 分支若跳過，會出現「站上明明開了通知，
 //      PG 站卻回 404 rental_notify_disabled」——那是**功能全滅**而不是小差異，
 //      所以這裡刻意讓「本機 settings」與「PG settings」不一致，驗 PG 版跟的是 PG。
-//   2. **兩個 store**：本機還有同步讀者（`planDeliveries()` 讀 prefs、worker 的摘要讀訂閱），
-//      所以 PG 寫完之後本機要有**同一組值**；反過來本機沒有那個 token 時不得亂寫
+//   2. **只有一個 store（2026-10-10 SQLite 退場 P5a 起）**：原本 PG 寫完之後還會把同一組值
+//      鏡射進本機（`planDeliveries()`／worker 摘要那時讀本機）。正式站開閘時那些鏡射必拋
+//      `business SQLite is closed`（會員按「儲存通知偏好」或按取消連結都回 400）⇒ 整條刪除，
+//      本檔對應的斷言改成「本機那一列**不得被動到**」；反過來本機沒有那個 token 時當然也不得亂寫
 //      （信件可能是別的節點寄的）。
 //   3. **取消連結只能用一次**（`used_at`），第二次回 already。
 //   4. **scope → 關哪些開關**：`all`／`new_match`／`digest`／`lifecycle` 四種都要與同步版相同。
@@ -162,7 +164,7 @@ test("prefs 讀取：預設值、caps、以及快取要跟 PG 的 settings 而�
   assert.equal(asyncView.lifecycle_reminder, true, "沒有設定列時回預設值");
 });
 
-test("prefs 寫入：兩個 store 同一組值、計數各記一次、只覆蓋已知鍵", async () => {
+test("prefs 寫入：只寫 PG、只記一次計數、只覆蓋已知鍵", async () => {
   const [disk, exec] = resetBoth((h) => setFlags(h, FLAGS_ON));
   const patch = { lifecycle_reminder: false, channel_mail: true, 不存在的鍵: "x" };
 
@@ -181,16 +183,18 @@ test("prefs 寫入：兩個 store 同一組值、計數各記一次、只覆蓋�
   for (const key of ["lifecycle_reminder", "new_match", "offer_transactional", "daily_digest", "channel_dock", "channel_mail", "channel_push", "timezone"]) {
     assert.equal(asyncView[key], syncView[key], `回傳的 ${key} 必須與同步版相同`);
     assert.equal(pgRow[key], syncRow[key], `PG 上的 ${key} 必須與同步版相同`);
-    assert.equal(diskRow[key], syncRow[key], `本機的 ${key} 必須追上（兩個 store 都要寫）`);
   }
+  // 🚫 P5a（2026-10-10）：本機鏡射已刪 ⇒ 本機**不得**出現這一列。
+  // 原本的斷言是「本機的 ${key} 必須追上（兩個 store 都要寫）」；正式站開閘時那一句
+  // `sqliteHandle().prepare(PREFS_UPSERT_SQL)` 必拋，使用者會收到 400。
+  assert.equal(diskRow, undefined, "本機那一列不得被 async 版寫入（PG 是唯一來源）");
   assert.equal(pgRow.lifecycle_reminder, 0, "patch 要生效（否則這條測試沒有鑑別力）");
   assert.equal(pgRow["不存在的鍵"], undefined, "未知的鍵不得被寫進表格（那會是 SQL 錯誤）");
   assert.equal(asyncView.enabled, true, "caps 必須在（`*For` 的形狀）");
   const pgAnalytics = analyticsRows(exec.raw);
   const diskAnalytics = analyticsRows(disk);
   assert.equal(pgAnalytics.length, 1, "PG 的計數一次");
-  assert.equal(diskAnalytics.length, 1, "本機的計數一次（不能多也不能少）");
-  assert.deepEqual(pgAnalytics, diskAnalytics, "兩個 store 的計數必須相同");
+  assert.equal(diskAnalytics.length, 0, "本機不得再計數（P5a 刪掉本機鏡射；原本斷言一次）");
   assert.equal(pgAnalytics[0].metric, "pref_updated");
 });
 
@@ -215,7 +219,7 @@ test("prefs 寫入：未登入 401、站上通知關閉時 404（兩個 driver �
   }
 });
 
-test("訂閱：讀取（沒有列回 off）、第一次 INSERT、第二次 UPDATE，兩個 store 同一個 token", async () => {
+test("訂閱：讀取（沒有列回 off）、第一次 INSERT、第二次 UPDATE，只寫 PG", async () => {
   const [disk, exec] = resetBoth((h) => {
     setFlags(h, FLAGS_ON);
     seedListing(h, { id: 900001, ownerId: 1 });
@@ -229,23 +233,26 @@ test("訂閱：讀取（沒有列回 off）、第一次 INSERT、第二次 UPDAT
 
   // 第一次（INSERT）
   const syncFirst = syncMod.saveMatchSubscription(disk, 1, 900001, "instant", new Date(NOW));
+  const localAfterSyncFirst = plain(subsRows(disk));
   const asyncFirst = await asyncMod.saveMatchSubscriptionAsync(1, 900001, "instant", { ...PG, exec, strict: true, now: NOW });
   assert.deepEqual(plain(maskRef(asyncFirst)), plain(maskRef(syncFirst)), "第一次的形狀必須相同（token 是隨機值）");
   assert.equal(asyncFirst.mode, "instant");
   assert.ok(asyncFirst.subscription_ref, "必須產生 public_token");
   assert.equal(subsRows(exec.raw).length, 1, "PG 上必須只有一列");
-  assert.equal(subsRows(disk).length, 1, "本機也要有一列");
-  assert.equal(subsRows(disk)[0].public_token, subsRows(exec.raw)[0].public_token, "兩個 store 的 token 必須相同");
+  // 🚫 P5a：async 版不得再寫本機訂閱。本機那一列是上面**同步版**留下的 ⇒ 必須原封不動
+  //（原本的斷言是「兩個 store 的 token 必須相同」）。
+  assert.deepEqual(plain(subsRows(disk)), localAfterSyncFirst, "async 版不得再寫本機訂閱");
+  assert.equal(subsRows(exec.raw)[0].public_token, asyncFirst.subscription_ref, "PG 上的 token 必須就是回傳的那一個");
 
   // 第二次（UPDATE，不得新增列）
   const syncSecond = syncMod.saveMatchSubscription(disk, 1, 900001, "daily_digest", new Date(NOW));
+  const localAfterSyncSecond = plain(subsRows(disk));
   const asyncSecond = await asyncMod.saveMatchSubscriptionAsync(1, 900001, "daily_digest", { ...PG, exec, strict: true, now: NOW });
   assert.deepEqual(plain(maskRef(asyncSecond)), plain(maskRef(syncSecond)), "第二次的形狀必須相同");
   assert.equal(asyncSecond.mode, "daily_digest");
   assert.equal(asyncSecond.subscription_ref, asyncFirst.subscription_ref, "UPDATE 不得換 token");
   assert.equal(subsRows(exec.raw).length, 1, "UPDATE 不得新增列");
-  assert.equal(subsRows(disk).length, 1);
-  assert.equal(subsRows(disk)[0].mode, "daily_digest", "本機也要追上");
+  assert.deepEqual(plain(subsRows(disk)), localAfterSyncSecond, "async 版不得改動本機訂閱（原本斷言「本機也要追上」）");
 });
 
 test("訂閱：不是自己的刊登／不存在／不合法的 mode，錯誤與結果都要與同步版相同", async () => {
@@ -307,12 +314,21 @@ test("取消訂閱：四種 scope 的效果與同步版相同，而且只能用�
     disk.prepare("INSERT INTO rental_match_subscriptions(public_token, owner_user_id, listing_id, mode, created_at, updated_at) VALUES ('tok-b',1,900012,'daily_digest',?,?)").run(OLD, OLD);
     disk.prepare("INSERT INTO rental_unsubscribe_tokens(token, user_id, scope, expires_at, used_at) VALUES (?, 1, ?, ?, NULL)").run(`tok-${scope}`, scope, FUTURE);
 
+    const localPrefsBefore = plain(prefsRow(disk, 1));
+    const localSubsBefore = plain(subsRows(disk));
+
     const asyncResult = await asyncMod.applyUnsubscribeTokenAsync(`tok-${scope}`, { ...PG, exec, strict: true, now: NOW });
     assert.deepEqual(asyncResult, syncResult, `回傳值必須相同（scope=${scope}）`);
     assert.deepEqual(plain(prefsRow(exec.raw, 1)), plain(syncPrefs), `PG 的 prefs 必須相同（scope=${scope}）`);
-    assert.deepEqual(plain(prefsRow(disk, 1)), plain(syncPrefs), `本機的 prefs 必須追上（scope=${scope}）`);
     assert.deepEqual(plain(subsRows(exec.raw)), plain(syncSubs), `PG 的訂閱必須相同（scope=${scope}）`);
-    assert.deepEqual(plain(subsRows(disk)), plain(syncSubs), `本機的訂閱必須追上（scope=${scope}）`);
+    // 🚫 P5a：本機鏡射已刪 ⇒ 本機的 prefs／訂閱／token 必須原封不動。
+    // 原本的斷言是「本機的 prefs／訂閱必須追上」（正式站開閘時那幾句必拋 ⇒ 公開的取消連結回 400）。
+    assert.deepEqual(plain(prefsRow(disk, 1)), localPrefsBefore, `本機的 prefs 不得被動到（scope=${scope}）`);
+    assert.deepEqual(plain(subsRows(disk)), localSubsBefore, `本機的訂閱不得被動到（scope=${scope}）`);
+    assert.equal(
+      disk.prepare("SELECT used_at FROM rental_unsubscribe_tokens WHERE token = ?").get(`tok-${scope}`).used_at, null,
+      `本機的 token 不得被標記已用（scope=${scope}）`,
+    );
     // 只能用一次
     const again = await asyncMod.applyUnsubscribeTokenAsync(`tok-${scope}`, { ...PG, exec, strict: true, now: NOW });
     assert.deepEqual(again, { ok: true, already: true }, `第二次必須回 already（scope=${scope}）`);
@@ -340,10 +356,17 @@ test("取消訂閱：過期／不像 token 的字串、以及本機沒有這個 
     h.prepare("INSERT INTO rental_unsubscribe_tokens(token, user_id, scope, expires_at, used_at) VALUES ('tok-off', 1, 'all', ?, NULL)").run(FUTURE);
   }
   const syncOff = dbMod.applyUnsubscribeTokenFor("tok-off", new Date(NOW));
+  // ⚠️ 上面那一行是**同步版**跑在本機（它當然會標記本機的 token 已用）⇒ 快照要在它之後、
+  // async 版之前取。🚫 P5a：async 版不得再動本機（原本會把本機的 token 也標記已用）。
+  const localUsedBeforeAsync = disk.prepare("SELECT used_at FROM rental_unsubscribe_tokens WHERE token = 'tok-off'").get().used_at;
   const asyncOff = await asyncMod.applyUnsubscribeTokenAsync("tok-off", { ...PG, exec, strict: true, now: NOW });
   assert.deepEqual(asyncOff, syncOff, "站上通知關閉時，取消連結的效果必須與同步版相同");
   assert.deepEqual(asyncOff, { ok: true, already: false });
   assert.equal(prefsRow(exec.raw, 1).channel_mail, 0, "PG 上的 prefs 必須真的被改到");
+  assert.equal(
+    disk.prepare("SELECT used_at FROM rental_unsubscribe_tokens WHERE token = 'tok-off'").get().used_at, localUsedBeforeAsync,
+    "本機的 token 不得被 async 版再動一次（PG 是唯一來源）",
+  );
 
   // ⚠️ 「本機沒有這個 token」：信件可能是**別的節點**寄的，PG 有、本機沒有。
   // 這一條要成功（PG 上真的生效），而且不得在本機亂寫。

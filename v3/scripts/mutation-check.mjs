@@ -455,15 +455,14 @@ const ADMSET_SRC = "v3/src/adminSettingsAsync.js";
 const CLOSE_SELF_SRC = "v3/src/selfListingsAsync.js";
 const CLOSESELF_MUTATIONS = [
   {
-    // ⚠️ 這一條的殺手在 `close-self-listing-async.test.js`（不是 report 那一支的測試檔）：
-    // 「本機也要追上」那一行是 2026-09-28 補的（`listings` 的狀態是本機同步瀏覽路徑在讀）。
-    name: "關閉站內刊登只寫 PG（本機清單還看得到已關閉的）",
-    file: "v3/src/selfListingsAsync.js",
-    from: "  sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);\n",
-    to: "",
-    // 殺手是第二條測試（「PG 分支自己就要把本機那一列關掉」）：第一條測試裡本機的 closed
-    // 是**同步版**寫的，所以那一條對這個變異沒有鑑別力。
-    expect: "PG 分支自己就要把本機那一列關掉",
+    // 🚫 SQLite 退場 P5a（2026-10-10）：原本這一條是「只寫 PG、不讓本機追上」（拿掉本機那圈
+    // 鏡射）。那圈鏡射已刪 ⇒ 錨點 0 次、整套變異會中止。改成驗**新的不變式**：PG 是唯一權威
+    // 來源，把 PG 那一句換成本機鏡射，測試必須抓到（PG 完全沒被更新）。
+    name: "關閉站內刊登只寫本機、不寫 PG（PG 是唯一權威來源）",
+    file: CLOSE_SELF_SRC,
+    from: "  await exec(CLOSE_SELF_LISTING_SQL, [stamp, row.post_id]);\n",
+    to: "  sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);\n",
+    expect: "本機那一列不得被動到",
   },
   {
     name: "不驗擁有權（別人的刊登也能關）",
@@ -614,11 +613,12 @@ const WISHLIFECYCLE_MUTATIONS = [
     expect: "第一次寫入是 INSERT",
   },
   {
-    name: "範例只寫 PG，不讓本機 handle 追上",
+    // 🚫 SQLite 退場 P5a：本機鏡射已刪 ⇒ 錨點 0 次。改成驗「第一次一定要 INSERT 進 PG」。
+    name: "第一次寫入不 INSERT 進 PG（只做 UPDATE）",
     file: WEX_SRC,
-    from: "    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {",
-    to: "    if (false) {",
-    expect: "兩個 store 的 payload",
+    from: "    else await exec(WISH_EXAMPLE_INSERT_SQL, [uid, payload, stamp, stamp]);\n",
+    to: "",
+    expect: "第一次寫入是 INSERT",
   },
   {
     name: "注入式 exec 的形狀只認一種（另一種會靜默回 null）",
@@ -627,13 +627,11 @@ const WISHLIFECYCLE_MUTATIONS = [
     to: "const rowsOf = (raw) => raw;",
     expect: "兩種形狀",
   },
-  {
-    name: "本機沒有這個帳號也硬寫本機那一份（PG 寫成功卻回 500：本機 FK）",
-    file: WEX_SRC,
-    from: "    const local = sqliteHandle();\n    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {\n      local.prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);\n    }",
-    to: "    sqliteHandle().prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);",
-    expect: "本機沒有這個帳號時仍要成功",
-  },
+  // 🚫 SQLite 退場 P5a：`saveWishExampleAsync()` 不再寫本機（連 `sqliteHandle` 都不 import 了）
+  // ⇒ 「本機沒有這個帳號也硬寫本機那一份（PG 寫成功卻回 500：本機 FK）」這個變異沒有可變的
+  // 目標（要塞回去就得引用已移除的 `WISH_EXAMPLE_UPSERT_SQL`，那會是無效變異）。
+  // 對應的測試 `範例：本機沒有這個帳號時仍要成功` 保留，作為「不得再寫本機」的守衛。
+
   {
     name: "範例的聯絡人快照不查 PG（用自己的聯絡人會變空白）",
     file: WEX_SRC,
@@ -690,18 +688,12 @@ const SURVEY_MUTATIONS = [
     expect: "不安全標記",
   },
   {
-    name: "只寫 PG，不讓本機 handle 追上（admin 的 drill-down 看不到）",
+    // 🚫 SQLite 退場 P5a：本機鏡射已刪 ⇒ 錨點 0 次。改成驗「那一列一定要落 PG」。
+    name: "問卷不落 PG（PG 那一列不見了）",
     file: SURVEY_SRC,
-    from: "    const local = sqliteHandle();\n    if (!local.prepare(SURVEY_BY_WISH_SQL).get(Number(raw.id), uid)) {\n      local.prepare(SURVEY_INSERT_SQL).run(token, Number(raw.id), uid, found, via, helpful, detail, stamp);\n    }\n",
+    from: "    await run(SURVEY_INSERT_SQL, [token, Number(raw.id), uid, found, via, helpful, detail, stamp]);\n",
     to: "",
-    expect: "送出：寫入 PG 與本機 handle",
-  },
-  {
-    name: "本機的計數不記（admin 的營運數字少一筆）",
-    file: SURVEY_SRC,
-    from: '    bumpAnalytics(sqliteHandle(), surveyMetric(found), now);\n',
-    to: "",
-    expect: "送出：寫入 PG 與本機 handle",
+    expect: "送出：只寫 PG",
   },
   {
     name: "PG 與本機的計數鍵用錯（跳過也記成 submitted）",
@@ -850,18 +842,13 @@ const NPREFSWRITE_MUTATIONS = [
     expect: "PG 說通知關閉",
   },
   {
-    name: "prefs 只寫 PG，不讓本機 handle 追上（同步的投遞規劃看到舊值）",
+    // 🚫 SQLite 退場 P5a：本機鏡射已刪（含本機的計數）⇒ 兩個錨點都 0 次。
+    // 改成驗「prefs 一定要落 PG」。
+    name: "prefs 不落 PG（PG 上沒有那一列）",
     file: NPREFSWRITE_SRC,
-    from: "  sqliteHandle().prepare(PREFS_UPSERT_SQL).run(...params);\n",
+    from: "  await run(PREFS_UPSERT_SQL, params);\n",
     to: "",
-    expect: "prefs 寫入：兩個 store",
-  },
-  {
-    name: "本機的計數不記（admin 的營運數字少一筆）",
-    file: NPREFSWRITE_SRC,
-    from: '  bumpAnalytics(sqliteHandle(), "pref_updated", now);\n',
-    to: "",
-    expect: "prefs 寫入：兩個 store",
+    expect: "prefs 寫入：只寫 PG",
   },
   {
     name: "訂閱不檢查所有權（可以訂閱別人的刊登）",
@@ -1082,16 +1069,18 @@ const SELFREPORT_MUTATIONS = [
     expect: "自己的刊登",
   },
   {
-    name: "隱藏只寫 PG，不讓本機 handle 追上（本機清單還看得到）",
+    // 🚫 SQLite 退場 P5a：隱藏與停權的本機鏡射都已刪 ⇒ 兩個錨點都 0 次。
+    // 改成驗「兩件事都必須落 PG」。
+    name: "隱藏不落 PG（PG 那一列還是 open）",
     file: SELFREPORT_SRC,
-    from: "  sqliteHandle().prepare(HIDE_SELF_LISTING_SQL).run(stamp, row.post_id);\n",
+    from: "  await exec(HIDE_SELF_LISTING_SQL, [stamp, row.post_id]);\n",
     to: "",
-    expect: "第一筆只寫檢舉不隱藏",
+    expect: "後台隱藏",
   },
   {
-    name: "停權只寫 PG（換一台節點就又能上傳）",
+    name: "停權不落 PG（PG 上沒有停權時間）",
     file: SELFREPORT_SRC,
-    from: "  try { sqliteHandle().prepare(BAN_SELF_PUBLISHER_SQL).run(until, row.listed_by_user_id); } catch { /* 本機可能還沒有這一欄 */ }\n",
+    from: "  await exec(BAN_SELF_PUBLISHER_SQL, [until, row.listed_by_user_id]);\n",
     to: "",
     expect: "停權之後",
   },

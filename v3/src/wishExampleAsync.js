@@ -7,10 +7,8 @@
 // 壞掉的 payload **不能**讓端點爆掉。
 import { resolveDbDriver } from "./dbDriver.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { sqliteHandle } from "./db.js";
 import {
   WISH_CONTACT_PROFILE_SQL,
-  WISH_EXAMPLE_UPSERT_SQL,
   contactFields,
   examplePayload,
   httpError,
@@ -33,8 +31,8 @@ export const WISH_EXAMPLE_DELETE_SQL = "DELETE FROM wish_room_example WHERE user
 //   2. 「先查再寫」在任何情況下都對，而且 `updated_at`／`created_at` 的行為與同步版相同。
 export const WISH_EXAMPLE_UPDATE_SQL =
   "UPDATE wish_room_example SET payload = ?, updated_at = ? WHERE user_id = ?";
-// 「本機有沒有這個帳號」——決定要不要寫本機那一份（理由見 `saveWishExampleAsync`）。
-export const WISH_EXAMPLE_LOCAL_USER_SQL = "SELECT id FROM users WHERE id = ?";
+// 🚫 `WISH_EXAMPLE_LOCAL_USER_SQL`（「本機有沒有這個帳號」）與本機 upsert 已隨
+// SQLite 退場 P5a 刪除：PG 寫成功之後不再碰節點 SQLite。
 export const PG_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS wish_room_example (
      user_id BIGINT PRIMARY KEY,
@@ -171,20 +169,10 @@ export async function saveWishExampleAsync(userId, input = {}, options = {}) {
     const existing = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));
     if (existing[0]) await exec(WISH_EXAMPLE_UPDATE_SQL, [payload, stamp, uid]);
     else await exec(WISH_EXAMPLE_INSERT_SQL, [uid, payload, stamp, stamp]);
-    // 本機 handle 追上：`wish_room_example` 在 PG 模式下的讀取有兩條線還沒搬完
-    // （同步版 `getWishExample()` 與 `wishRoomOwnerSummaryFor()` 的 `has_example`），
-    // 只寫 PG 會讓同一台節點的同步讀取看到舊範例。
-    //
-    // ⚠️ 2026-09-28（CI 的 PG job 抓到）：本機的 `wish_room_example` 有
-    // `FOREIGN KEY(user_id) REFERENCES users(id)`，但 PG 模式的帳號可能是在**別的節點**
-    // 建立的（session 走 `readSessionAsync()` 讀 PG，不看本機 `users`）。硬寫會讓一個
-    // **已經在 PG 寫成功**的請求變成 `FOREIGN KEY constraint failed` 的 500。
-    // 本機沒有這一列時「讓本機讀者追上」本來就沒有意義（那些讀者用同一個 `user_id` 查），
-    // 所以先確認再寫（本機 `users.id` 是主鍵，這一次查詢很便宜）。
-    const local = sqliteHandle();
-    if (local.prepare(WISH_EXAMPLE_LOCAL_USER_SQL).get(uid)) {
-      local.prepare(WISH_EXAMPLE_UPSERT_SQL).run(uid, payload, stamp, stamp);
-    }
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：原本會在 PG 寫成功後再查本機 `users` 並 upsert
+    // `wish_room_example`（同步版 `getWishExample()` 那時讀本機）。開閘時那兩句必拋
+    // `business SQLite is closed` ⇒ 會員按「儲存範例」收到 400（PG 其實已寫成功）。
+    // Owner 裁決：正式讀寫不回退節點 SQLite，PG 是唯一來源。
     const landed = rowsOf(await exec(WISH_EXAMPLE_SELECT_SQL, [uid]));
     return exampleFromRow(landed[0] || null);
   }, async () => (await import("./db.js")).saveWishExampleFor(uid, input));
