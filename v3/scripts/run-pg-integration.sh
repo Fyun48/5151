@@ -21,7 +21,11 @@ cd "$root"
 # `write-path-http-live-pg.test.js` 就是這種形狀（它的收檔依據只是檔頭一句話）。
 # `check-pg-collection.mjs` 會斷言：目標檔在清單內、KEEP 標記逐字還在、且以 master 的 69 支
 # 為基準沒有任何一支消失（多出來的只警告）。
-if ! node v3/scripts/check-pg-collection.mjs; then
+#
+# ⚠️ 這裡**刻意把它的 stdout 導到 stderr**：這支腳本「沒有 PG 時 stdout 必須是空的」是既有契約，
+#    `v3/test/domain-tool-guards.test.js`（「沒有 PG 要大聲 SKIP」那條）逐字在斷言它
+#    ⇒ 檢查報告走 stderr，stdout 只留給真正跑測試的那條路徑。
+if ! node v3/scripts/check-pg-collection.mjs >&2; then
   echo "[pg] 收檔自我檢查失敗 ⇒ 不執行任何 PG 整合測試（原因見上方 [pg-collect] 訊息）" >&2
   exit 1
 fi
