@@ -67,11 +67,9 @@ const reasonOf = (e) => `${e.status || "-"}/${e.message}`;
 test("關閉自己的刊登：落地 self_status='closed'，兩邊相同", async () => {
   const exec = resetBoth((h) => seed(h, 11));
   const pg = await asyncMod.closeSelfListingAsync(7, 11, { now: new Date("2026-06-01T00:00:00Z"), ...PG, exec });
-  // ⚠️ 順序：PG 分支先跑完，再把**本機那一列**退回 `open`，然後才跑同步版。
-  // 這樣「本機的 closed 是誰寫的」才有鑑別力——第一版是 PG 先、同步版後，於是本機的
-  // `closed` 其實是同步版寫的，把 async 版的本機鏡射拿掉也照樣綠（變異測試抓到的）。
-  db.prepare("UPDATE listings SET self_status = 'open' WHERE post_id = 11").run();
-  assert.equal(status(db, 11), "open", "起點：本機必須先退回 open");
+  // ⚠️ 順序與鑑別力（P5a 之後）：async 版**不碰本機**，所以跑完之後本機必須還是 `open`；
+  // 接著再跑同步版，本機才會變成 `closed`。這樣「本機的 closed 是誰寫的」一目了然。
+  assert.equal(status(db, 11), "open", "async 版不得寫本機（本機仍要是起點的 open）");
   const lite = syncDb.closeSelfListing(7, 11, {});
   assert.equal(pg.post_id, lite.post_id);
   assert.equal(pg.self_status, lite.self_status);
@@ -80,12 +78,14 @@ test("關閉自己的刊登：落地 self_status='closed'，兩邊相同", async
   assert.equal(status(exec.raw, 11), status(db, 11), "兩邊落地結果必須相同");
 });
 
-test("PG 分支自己就要把本機那一列關掉（不能只靠同步版跑過）", async () => {
+test("PG 分支只寫 PG：本機那一列不得被動到（不能只靠同步版跑過）", async () => {
   const exec = resetBoth((h) => seed(h, 12));
-  // 只跑 async 版：本機那一列必須變成 closed（`listings` 的狀態是本機同步瀏覽路徑在讀的）。
+  // 🚫 P5a（2026-10-10）：`closeSelfListingAsync()` 的**本機鏡射已刪**（正式站開閘時那一句
+  // 必拋 `business SQLite is closed`，會員按關閉會收到 400）。這一條原本斷言「本機也必須被
+  // async 版自己寫成 closed」，現在改成斷言**本機那一列不得被動到**（同 #700 的做法）。
   await asyncMod.closeSelfListingAsync(7, 12, { now: new Date("2026-06-01T00:00:00Z"), ...PG, exec });
   assert.equal(status(exec.raw, 12), "closed", "PG 落地必須是 closed");
-  assert.equal(status(db, 12), "closed", "本機也必須被 async 版自己寫成 closed");
+  assert.equal(status(db, 12), "open", "async 版不得再寫本機 listings（PG 是唯一來源）");
 });
 
 test("別人的刊登：非 admin 要 403，admin 可以關（兩邊訊息相同）", async () => {

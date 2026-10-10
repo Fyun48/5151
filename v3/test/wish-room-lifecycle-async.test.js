@@ -384,7 +384,7 @@ test("正規化前的行程內快取必須先用 PG 的資料灌好（否則會�
   assert.equal(syncMod.currentRentalMarketplaceFlags()?.wish?.lifecycle_enabled, false, "旗標快取必須與 PG 的 settings 一致");
 });
 
-test("範例：第一次寫入是 INSERT、第二次是 UPDATE，兩個 store 的 payload 都相同", async () => {
+test("範例：第一次寫入是 INSERT、第二次是 UPDATE，只寫 PG（本機不得被動到）", async () => {
   const [disk, exec] = resetBoth();
   const first = { districts: ["1-5"], rent_max: 25000, body: "第一次的範例", contact_name: "小明" };
   const second = { districts: ["1-7"], rent_max: 31000, body: "第二次的範例", contact_name: "小明" };
@@ -407,7 +407,10 @@ test("範例：第一次寫入是 INSERT、第二次是 UPDATE，兩個 store �
   assert.equal(afterFirst.created_at, syncRow.created_at, "INSERT 的 created_at 必須與同步版相同");
   assert.equal(pgRow.created_at, syncRow.created_at, "UPDATE 不得改寫 created_at");
   assert.equal(pgRow.payload, syncRow.payload, "PG 上的 payload 必須與同步版逐字相同");
-  assert.equal(diskRow.payload, syncRow.payload, "本機 handle 的 payload 必須追上（兩個 store 都要寫）");
+  // 🚫 P5a（2026-10-10）：`saveWishExampleAsync()` 的本機鏡射已刪 ⇒ 本機那一列**不得**出現
+  //（原本的斷言是「本機 handle 的 payload 必須追上（兩個 store 都要寫））」；正式站開閘時
+  // 那兩句（查本機 users ＋ upsert）必拋 ⇒ 會員按「儲存範例」收到 400）。
+  assert.equal(diskRow, undefined, "本機那一列不得被 async 版寫入（PG 是唯一來源）");
   assert.ok(pgRow.payload.includes("第二次的範例"), "第二次必須覆蓋第一次");
   assert.ok(pgRow.updated_at >= pgRow.created_at, "updated_at 不得早於 created_at");
 });
@@ -456,7 +459,8 @@ test("範例：注入式 exec 的兩種形狀（裸陣列／{ rows, rowCount }�
   assert.ok(asArray && asObject, "兩種形狀都必須讀到範例（讀不到會是靜默的 null）");
   assert.deepEqual(asObject, asArray, "兩種形狀的回傳值必須相同");
   assert.equal(asArray.updated_at, stored.updated_at, "回傳的 updated_at 必須是落地的那一列");
-  assert.equal(disk.prepare("SELECT COUNT(*) AS n FROM wish_room_example").get().n, 1, "本機 handle 也要有一列");
+  // 🚫 P5a：本機鏡射已刪 ⇒ 本機不得有那一列（原本的斷言是「本機 handle 也要有一列」）。
+  assert.equal(disk.prepare("SELECT COUNT(*) AS n FROM wish_room_example").get().n, 0, "本機那一列不得被 async 版寫入");
 });
 
 test("範例：本機沒有這個帳號時仍要成功（PG 已寫入，不得被本機 FK 變成 500）", async () => {

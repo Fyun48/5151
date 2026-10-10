@@ -174,7 +174,7 @@ test("讀取：沒有問卷回 submitted:false、有問卷逐鍵相同、別人�
   }
 });
 
-test("送出：寫入 PG 與本機 handle，而且兩個 store 的計數各記一次", async () => {
+test("送出：只寫 PG（本機那一列不得被動到），計數只記一次", async () => {
   const [disk, exec] = resetBoth((h) => seedWish(h, { id: 811, userId: 1 }));
   const input = { found_via_site: "yes", via_feature: "search", helpful: 4, detail: "  很好用  " };
 
@@ -198,17 +198,14 @@ test("送出：寫入 PG 與本機 handle，而且兩個 store 的計數各記�
     "回傳的 survey_ref 必須就是落地那一列的 token",
   );
   assert.deepEqual(pgRow, syncRow, "PG 上的那一列必須與同步版相同");
-  assert.deepEqual(diskRow, syncRow, "本機 handle 也要追上（兩個 store 都要寫）");
-  assert.equal(
-    disk.prepare("SELECT public_token FROM rental_completion_surveys WHERE wish_id = 811").get().public_token,
-    asyncView.survey_ref,
-    "兩個 store 的 public_token 必須是同一個（admin 的 drill-down 才不會兩個 ref）",
-  );
+  // 🚫 P5a（2026-10-10）：本機鏡射已刪 ⇒ 本機**不得**有這一列（原本的斷言是「本機 handle 也要追上」，
+  // 正式站開閘時那幾句必拋 `business SQLite is closed` ⇒ 會員送出問卷收到 400）。
+  assert.equal(diskRow, undefined, "本機那一列不得被 async 版寫入（PG 是唯一來源）");
   assert.equal(pgRow.detail, "很好用", "detail 必須被淨化（頭尾空白去掉）");
   assert.deepEqual(analyticsRows(exec.raw), syncAnalytics, "PG 的計數必須與同步版相同");
-  assert.deepEqual(analyticsRows(disk), syncAnalytics, "本機的計數也必須記一次（不能多也不能少）");
-  assert.equal(analyticsRows(disk).length, 1, "兩個 store 各一次、不是各兩次");
-  assert.equal(analyticsRows(disk)[0].metric, "survey_submitted");
+  assert.equal(analyticsRows(disk).length, 0, "本機不得再計數（原本斷言各記一次）");
+  assert.equal(analyticsRows(exec.raw).length, 1, "PG 只記一次、不是兩次");
+  assert.equal(analyticsRows(exec.raw)[0].metric, "survey_submitted");
 });
 
 test("送出：跳過要記成 survey_skipped，不合法的值一律降級", async () => {
@@ -230,7 +227,8 @@ test("送出：跳過要記成 survey_skipped，不合法的值一律降級", as
   assert.equal(asyncView.found_via_site, "skipped");
   assert.equal(syncAnalytics[0].metric, "survey_skipped", "跳過要記在 survey_skipped");
   assert.deepEqual(analyticsRows(exec.raw), syncAnalytics, "PG 的計數鍵必須相同");
-  assert.deepEqual(analyticsRows(disk), syncAnalytics, "本機的計數鍵必須相同");
+  // 🚫 P5a：本機不得再計數（原本斷言「本機的計數鍵必須相同」）。
+  assert.equal(analyticsRows(disk).length, 0, "本機不得被計數");
 });
 
 test("送出：重複送出回 already:true，而且不得再寫一列、不得再計數", async () => {
@@ -250,7 +248,9 @@ test("送出：重複送出回 already:true，而且不得再寫一列、不得�
   assert.equal(surveyCount(exec.raw), before, "不得再寫一列");
   assert.equal(surveyCount(exec.raw), 1);
   assert.equal(analyticsRows(exec.raw).length, 1, "already 不得再計數");
-  assert.equal(analyticsRows(disk).length, 1, "本機也不得再計數");
+  // 🚫 P5a：本機那一列／計數都不得被動到（原本斷言本機也不得再計數，前提是它本來會被寫）。
+  assert.equal(analyticsRows(disk).length, 0, "本機不得被計數（PG 是唯一來源）");
+  assert.equal(surveyCount(disk), 0, "本機不得有那一列");
 });
 
 test("送出：競態（23505）要當成 already，其他錯誤不得被吞掉", async () => {

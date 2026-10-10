@@ -16,6 +16,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import {
   APPLY_PATH,
@@ -69,7 +70,12 @@ export async function ensureSiteCommandStoreOnce(pgDriver) {
   // 🚨 `site_command_inbox` 是**延遲建立**的（同步版在第一次用到時才 `ensureSiteCommandInbox()`）
   // ⇒ 全新節點的本機 SQLite 還沒有它，直接鏡射會被 `ensurePgSchema()` 擋下
   // （第五十批加的那道守衛，會建出零欄表的那個坑）。這裡照同步版先把來源表準備好。
-  ensureSiteCommandInboxSync(sqlite);
+  //
+  // SQLite 退場 P5a：這一行是 **DDL**（不是鏡射業務資料），但開閘時 `sqliteHandle()` 是拋錯
+  // proxy ⇒ `ensureSiteCommandInbox()` 一碰就拋，`POST /api/ops/commands/apply` 回 409
+  // （`siteCommandApplyAsync.js` 的 `err.status || 409`）。加守衛：沒有可用的 handle 就跳過，
+  // 讓下面 `ensurePgSchema()` 自己走 no-open 分支（`pgSchema.js:181` → `ensurePgSchemaNative`）。
+  if (sqliteHandleIsUsable(sqlite)) ensureSiteCommandInboxSync(sqlite);
   const ready = (async () => {
     await ensurePgSchema(pgDriver, sqlite, { tables: SITE_COMMAND_TABLES, indexes: false });
     for (const sql of SITE_COMMAND_UNIQUE_INDEXES) await pgDriver.exec(sql);

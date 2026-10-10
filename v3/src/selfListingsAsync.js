@@ -100,7 +100,6 @@ import { getWishConditionsAsync } from "./rentalCatalogAsync.js";
 import { MRT_CACHE_CONTRACT } from "./mrt.js";
 import { matchCandidatesAsync } from "./crawlerReads.js";
 import { bestMatch } from "./match.js";
-import { isFixtureMaturityAuthorized } from "./stage1FixtureRegistry.js";
 import { lookupDistrict, normalizeWatchDistricts } from "./regions.js";
 import { isSelfPhotoPublicUrl } from "./selfPhotos.js";
 import { normalizeDeposit, normalizeSelfTraits } from "./selfTraits.js";
@@ -240,8 +239,9 @@ export async function closeSelfListingAsync(userId, postId, { admin = false, now
   await exec(CLOSE_SELF_LISTING_SQL, [stamp, row.post_id]);
   // 關閉會改 last_seen_at（fold_refresh_abs_ms 的 fallback 輸入）⇒ 立即刷新 fold。
   try { await refreshFoldColumns(exec, row.post_id); } catch (error) { await countRefreshFailure(exec, "fold_refresh_failed", error); }
-  // 與 `hideSelfListingAsync()` 同一個理由：本機的同步瀏覽路徑讀的是本機 `listings`。
-  sqliteHandle().prepare(CLOSE_SELF_LISTING_SQL).run(stamp, row.post_id);
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：`PG_NO_SQLITE_OPEN=1` 時 `sqliteHandle()` 是拋錯 proxy，
+  // 「PG 寫成功後再 prepare().run()」**必拋** `business SQLite is closed` ⇒ 會員按了關閉卻收到
+  // 400（資料其實已經進 PG）。正式讀寫一律不回退節點 SQLite（Owner 裁決）。
   try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住關閉 */ }
   return getSelfListingAsync(row.post_id, { viewerId: userId, ...options, exec });
 }
@@ -251,9 +251,10 @@ export async function closeSelfListingAsync(userId, postId, { admin = false, now
 // 對應 `selfListings.js` 的 `reportSelfListing()`（1249）與 `hideSelfListing()`（1238）。
 // 兩支都只碰 `listings` 與 `listing_reports`，語句與政策（達門檻才隱藏、停權幾天）全部共用。
 //
-// ⚠️ **停權寫的是 `users.self_ban_until`**（`banSelfPublisher()`）。PG 模式下 users 在 PG，
-// 但**同步**的建立路徑（`createSelfListing()` → `assertCanPublish()`）讀的是本機 handle
-// ⇒ 兩個 store 都要寫；只寫 PG 會讓被停權的人換一台節點就又能上傳。
+// ⚠️ **停權寫的是 `users.self_ban_until`**（`banSelfPublisher()`）。PG 模式下一律只寫 PG：
+// 路由走的是 `createSelfListingAsync()` → `assertCanPublishAsync()`，讀的就是 PG 的
+// `self_ban_until`（同步的 `createSelfListing()` 只在 SQLite 模式使用）。
+// Owner 裁決：正式讀寫不回退節點 SQLite ⇒ 本機鏡射（含停權）整條刪掉。
 export async function hideSelfListingAsync(postId, { now = new Date(), ...options } = {}) {
   if ((options.driver || resolveDbDriver()) !== "postgres") {
     return (await import("./db.js")).hideSelfListing(postId);
@@ -268,14 +269,12 @@ export async function hideSelfListingAsync(postId, { now = new Date(), ...option
     entityId: Number(row.post_id) || 0,
     eventType: "listing_hidden",
   });
-  // **兩個 store 都寫**：`listings` 的狀態是本機**同步**瀏覽路徑（`keepSelfListingForViewer()`）
-  // 在讀的，只寫 PG 會讓「已隱藏」的刊登還留在本機的清單裡。
-  sqliteHandle().prepare(HIDE_SELF_LISTING_SQL).run(stamp, row.post_id);
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：開閘時這一句必拋，會讓「後台隱藏／檢舉達門檻」
+  // 整條動作失敗（PG 其實已經寫成功）。PG 是唯一來源。
   // 跨模組的 hook（許願出價清掃）仍用本機 handle：那個模組還沒移植（與 closeSelfListingAsync 同）。
   try { getListingOfferHook()?.(sqliteHandle(), { listingId: row.post_id, now }); } catch { /* 清掃失敗不得擋住隱藏 */ }
   const until = selfBanStamp(now);
   await exec(BAN_SELF_PUBLISHER_SQL, [until, row.listed_by_user_id]);
-  try { sqliteHandle().prepare(BAN_SELF_PUBLISHER_SQL).run(until, row.listed_by_user_id); } catch { /* 本機可能還沒有這一欄 */ }
   return { ok: true, post_id: Number(row.post_id), hidden: true, ban_until: until };
 }
 
@@ -324,9 +323,7 @@ export async function updateImportedDraftListingAsync(userId, postId, input = {}
   const body = sanitizeListingBodyHtml(input.body != null ? input.body : row.self_body || "", SELF_BODY_MAX);
   const photos = input.photos != null ? normalizePhotoList(input.photos) : listingPhotoUrls(row);
   await exec(DRAFT_LISTING_UPDATE_SQL, [title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id]);
-  // 兩個 store 都寫（本機的同步瀏覽路徑讀 `listings`）。
-  sqliteHandle().prepare(DRAFT_LISTING_UPDATE_SQL)
-    .run(title || row.title, body, JSON.stringify(photos), photos[0] || "", row.post_id);
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：開閘時必拋，會員改匯入草稿會收到 400（PG 已寫成功）。
   return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
 }
 
@@ -344,7 +341,7 @@ export async function abandonImportedDraftListingAsync(userId, postId, { now = n
   }
   const stamp = (now instanceof Date ? now : new Date(now)).toISOString();
   await exec(ABANDON_DRAFT_LISTING_SQL, [stamp, row.post_id]);
-  sqliteHandle().prepare(ABANDON_DRAFT_LISTING_SQL).run(stamp, row.post_id);
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：開閘時必拋。
   return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec });
 }
 
@@ -469,11 +466,8 @@ export async function insertSelfDraftListingAsync(uid, fields = {}, options = {}
     await run(SELF_DRAFT_UPDATE_SQL, selfDraftUpdateParams({
       uid: id, postId, body, photos, traits, deposit, contactName, roleName, phone, lineUrl,
     }));
-    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的草稿變成錯誤。
-    try {
-      const { insertSelfDraftListing } = await import("./selfListings.js");
-      insertSelfDraftListing(sqliteHandle(), id, { ...fields, title, body, photos, rent, price_num: rent, address, area_name: areaName, layout, floor_name: floorName, kind_name: kindName, role_name: roleName, traits, deposit, contact_name: contactName, phone, line_url: lineUrl }, now);
-    } catch { /* 本機鏡射盡力而為 */ }
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：開閘時 `insertSelfDraftListing(sqliteHandle(), …)`
+    // 必拋；它以前被 try/catch 吞掉，但 Owner 裁決「不回退節點 SQLite」⇒ 整塊移除。
     return getSelfListingAsync(postId, { viewerId: id, ...options });
   }, async () => {
     const { insertSelfDraftListing } = await import("./selfListings.js");
@@ -519,11 +513,7 @@ export async function insertImportedDraftListingAsync(userId, input = {}, option
       // `community_name` 是選用欄位（舊庫還沒有）：與同步版同一個 try/catch。
       try { await run(IMPORT_DRAFT_COMMUNITY_SQL, [community, postId]); } catch { /* optional column */ }
     }
-    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的草稿變成錯誤。
-    try {
-      const { createImportedDraftListing } = await import("./selfListings.js");
-      createImportedDraftListing(sqliteHandle(), uid, input, now);
-    } catch { /* 本機鏡射盡力而為 */ }
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：理由同 `insertSelfDraftListingAsync`。
     return getSelfListingAsync(postId, { viewerId: uid, ...options });
   }, async () => {
     const { createImportedDraftListing } = await import("./selfListings.js");
@@ -618,7 +608,9 @@ export async function assertCanPublishAsync(run, userId, now = new Date(), { mat
     throw httpError(`因不實刊登暫停上傳，直到 ${when}`, 403);
   }
   const created = Date.parse(String(rowsOf(await run(USER_CREATED_AT_SQL, [uid]))[0]?.created_at || ""));
-  const skipWait = isFixtureMaturityAuthorized(sqliteHandle(), uid, now, maturity);
+  // 熱路徑上不得再碰本機 handle（SQLite 退場 P5a）：改用同一模組的 awaited PG 版。
+  // 生產 `maturity` 恆 undefined ⇒ 短路回 false，與同步版結果相同（不多打一次 DB）。
+  const skipWait = await isFixtureMaturityAuthorizedAsync(run, uid, now, maturity);
   if (!skipWait && Number.isFinite(created) && at - created < SELF_NEW_ACCOUNT_WAIT_MS) {
     throw httpError("新帳號註冊滿 24 小時後才能自行刊登，避免洗版", 403);
   }
@@ -765,13 +757,8 @@ export async function publishImportedDraftListingAsync(userId, postId, input = {
     // 公開會改 title/floor_name/kind_name/tags/price/match_post_id 等投影輸入欄 ⇒ 立即刷新投影與 fold。
     try { await refreshListingProjection(run, row.post_id); } catch (error) { await countRefreshFailure(run, "projection_refresh_failed", error); }
     try { await refreshFoldColumns(run, row.post_id); } catch (error) { await countRefreshFailure(run, "fold_refresh_failed", error); }
-    // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經公開的刊登回錯。
-    try {
-      const { publishImportedDraftListing } = await import("./selfListings.js");
-      publishImportedDraftListing(sqliteHandle(), uid, row.post_id, input, now, {
-        matchCandidates: () => [],
-      });
-    } catch { /* 本機鏡射盡力而為 */ }
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：`publishImportedDraftListing(sqliteHandle(), …)`
+    // 在開閘時必拋；PG 已經是唯一來源。
     return getSelfListingAsync(row.post_id, { viewerId: uid, ...options, exec: run, driver: "postgres", strict: true });
   } catch (error) {
     if (error?.status) throw error;
@@ -1003,12 +990,7 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
   //    形狀照 publish 路徑（本檔 :766）：同一個 try/catch ＋ 同一個失敗計數器。
   try { await refreshListingProjection(run, postId); } catch (error) { await countRefreshFailure(run, "projection_refresh_failed", error); }
   try { await refreshFoldColumns(run, postId); } catch (error) { await countRefreshFailure(run, "fold_refresh_failed", error); }
-  // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的刊登回錯。
-  try {
-    const { insertOpenSelfListing } = await import("./selfListings.js");
-    void insertOpenSelfListing;
-    const { createSelfListing } = await import("./selfListings.js");
-    createSelfListing(sqliteHandle(), id, input, now, { matchCandidates: () => [], maturity });
-  } catch { /* 本機鏡射盡力而為 */ }
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：開閘時 `createSelfListing(sqliteHandle(), …)` 必拋；
+  // 「建立即公開」的 PG 路徑就是唯一寫入處。
   return getSelfListingAsync(postId, { viewerId: id, ...options, exec: run, driver: "postgres", strict: true });
 }
