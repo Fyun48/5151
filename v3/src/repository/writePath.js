@@ -32,6 +32,19 @@ export function foldColumnsDdlStatements() {
   ];
 }
 
+// SQLite 版冪等 DDL：SQLite 不支援 `ADD COLUMN IF NOT EXISTS`，用 PRAGMA table_info 判斷。
+// 讓 fold_* 在兩個 driver 上都存在（PG 鏡射 SQLite schema 的 parity／integration 測試需要它）。
+export function ensureFoldColumnsSqlite(sqliteDb) {
+  const cols = new Set(sqliteDb.prepare("PRAGMA table_info(listings)").all().map((r) => r.name));
+  const ddl = [];
+  if (!cols.has("fold_rent_num")) ddl.push("ALTER TABLE listings ADD COLUMN fold_rent_num REAL");
+  if (!cols.has("fold_refresh_kind")) ddl.push("ALTER TABLE listings ADD COLUMN fold_refresh_kind INTEGER");
+  if (!cols.has("fold_refresh_rel_ms")) ddl.push("ALTER TABLE listings ADD COLUMN fold_refresh_rel_ms INTEGER");
+  if (!cols.has("fold_refresh_abs_ms")) ddl.push("ALTER TABLE listings ADD COLUMN fold_refresh_abs_ms INTEGER");
+  for (const sql of ddl) sqliteDb.exec(sql);
+  return ddl.length;
+}
+
 export const WRITE_PATH_SQL = {
   // personalFlags.js setUserListingFlags()
   upsertPersonalFlags: `INSERT INTO user_listing_flags (

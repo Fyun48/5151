@@ -1,7 +1,7 @@
 // 第 7 包：圖片指紋附屬表、同源建議、爬蟲洞察。不改 match.js 預設判決。
 // 不鏈式合併；人工判定優先；關開關＝舊路徑；原始資料保留。
 
-import { matchVeto, scoreMatch } from "./match.js";
+import { matchVeto, scoreMatch, refreshFoldColumnsSync } from "./match.js";
 import { loadEnabledProvider } from "./budgetGuard.js";
 import { refreshListingProjectionSync } from "./listingSearchProjection.js";
 import { bumpAnalytics } from "./rentalNotify.js";
@@ -276,6 +276,7 @@ function maybeFillEmptyStructured(db, listing, hints) {
     // floor_name 是投影 floor/total_floors/elevator/low_floor/kind_keys 的輸入 ⇒ 立即刷新投影。
     // 刷新失敗不可無聲吞掉：floor_name 已落地，計數後仍回報 applied_empty。
     try { refreshListingProjectionSync(db, listing.post_id); } catch { try { bumpAnalytics(db, "projection_refresh_failed"); } catch {} }
+    try { refreshFoldColumnsSync(db, listing.post_id); } catch { try { bumpAnalytics(db, "fold_refresh_failed"); } catch {} }
     return "applied_empty";
   } catch {
     return "hint_only";

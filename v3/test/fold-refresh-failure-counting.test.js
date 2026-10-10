@@ -57,9 +57,12 @@ test("markListingOffline：fold 刷新失敗會讓 rental_analytics_daily 的 fo
   };
   const before = counter();
 
-  // 注入式 exec：語句原樣跑在同一顆 SQLite（走 PG 路徑的程式碼），但 SQLite 的 listings 沒有 fold_* 欄
-  // ⇒ refreshFoldColumns 的 UPDATE 必然失敗 → countRefreshFailure 累進 fold_refresh_failed。
-  const shim = async (sql, params = []) => db.prepare(String(sql)).all(...params);
+  // 注入式 exec：語句原樣跑在同一顆 SQLite（走 PG 路徑的程式碼），但對 fold 的 UPDATE 拋錯
+  // （模擬 fold 欄缺失）⇒ refreshFoldColumns 失敗 → countRefreshFailure 累進 fold_refresh_failed。
+  const shim = async (sql, params = []) => {
+    if (/UPDATE listings SET fold_rent_num/.test(sql)) throw new Error("no such column: fold_rent_num");
+    return db.prepare(String(sql)).all(...params);
+  };
   const result = await markListingOffline(shim, postId);
 
   assert.equal(result.offline, true, "主寫入（offline=1）仍要成功");
