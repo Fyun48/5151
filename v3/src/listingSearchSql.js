@@ -55,21 +55,32 @@ function outOfEnvelope(reason) {
   return { ok: false, reason };
 }
 
-// F3：q（關鍵字）下推。逐行鏡射 db.js:6446-6456 的四個比對（title／address／post_id／watch_note），
+// F3：q（關鍵字）下推。逐行鏡射 db.js 的四個比對（title／address／post_id／watch_note），
 // 但**包上 lower()**：實測原始 LIKE 在兩邊不同（SQLite 對 ASCII 不分大小寫、PG 分大小寫，
 // 6 案中 4 案不一致），改用 lower(x) LIKE lower(?) 後 6 案全部一致（含 CJK 與重音字）。
+// 2026-10-10（#694 加速包）：`CAST(post_id AS TEXT) LIKE` 無索引使整個 OR 被迫 Seq Scan
+// （evidence/sqlite-exit/perf-index-findings.md §3.1）。純數字 q 改走 `post_id = ?` 精確命中
+// （不再 LIKE）；否則只走 title/address（訪客 uid=0 無 watch_note，會員 uid>0 保留 watch_note）。
 function appendQueryClauses(query, uid, clauses, params) {
   if (!query) return;
+  const trimmed = String(query).trim();
+  const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+  if (Number.isSafeInteger(numeric)) {
+    clauses.push("post_id = ?");
+    params.push(numeric);
+    return;
+  }
   const like = `%${query}%`;
-  clauses.push(`(
-    lower(title) LIKE lower(?) OR lower(address) LIKE lower(?)
-    OR lower(CAST(post_id AS TEXT)) LIKE lower(?)
-    OR lower(IFNULL((
+  const terms = ["lower(title) LIKE lower(?)", "lower(address) LIKE lower(?)"];
+  if (Number(uid) > 0) {
+    terms.push(`lower(IFNULL((
       SELECT watch_note FROM user_listing_flags f
       WHERE f.post_id = listings.post_id AND f.user_id = ?
-    ), '')) LIKE lower(?)
-  )`);
-  params.push(like, like, like, uid, like);
+    ), '')) LIKE lower(?)`);
+  }
+  clauses.push(`(${terms.join(" OR ")})`);
+  params.push(like, like);
+  if (Number(uid) > 0) params.push(uid, like);
 }
 
 // kind_keys LIKE '%,key,%'（kind_keys 由 listingKindKeys() 用同一支 listingMatchesKindKey 產生）。
@@ -511,6 +522,41 @@ LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
     return { sql, params: pageParams, pageSize, start, useCursor };
   };
 
+  // 單趟折疊（2026-10-10 #694 加速包）：fold_role 已標 MATERIALIZED（見 foldRoleCte），
+  // 再物化「折疊後 + 投影層過濾」的 matched；count 用 scalar subquery 讀 matched、分頁也讀
+  // 同一個 matched ⇒ 折疊只執行一次，count 與分頁共用同一份物化結果（不靠 planner 運氣）。
+  // total_count 重複出現在每列；頁內無列（offset 越過結尾）時回傳 0 列 ⇒ total 視為 0。
+  const pageWithCountQuery = ({ limit = 500, offset = 0, cursor = null } = {}) => {
+    const cursorParams = cursorParamsFor(cursor);
+    const useCursor = cursorParams != null;
+    const pageSize = Math.max(1, Math.min(Number(limit) || 500, 500));
+    const start = Math.max(0, Number(offset) || 0);
+    const matchedSql = `${foldCte},
+matched AS MATERIALIZED (
+  SELECT p.post_id, p.updated_at, p.rent, p.total_monthly_cost
+  FROM listing_search_projection p
+  JOIN fold_role f ON f.post_id = p.post_id
+  WHERE ${affiliateExclusion}
+  ${districtSql}
+  ${displayFilter}
+  ${projectionFilter}
+)`;
+    // 外層查詢作用在 materialized 的 matched 上（欄位別名 p. → m.）。
+    const mOrderBy = orderBy.replace(/p\./g, "m.");
+    const mTupleExpr = useCursor ? tupleExpr.replace(/p\./g, "m.") : "";
+    const mCursorWhere = useCursor ? `AND ${mTupleExpr} > (${cursorParams.map(() => "?").join(", ")})` : "";
+    const pageParams = useCursor
+      ? [...params, ...foldParams, ...districts, ...projectionParams, ...cursorParams, pageSize]
+      : [...params, ...foldParams, ...districts, ...projectionParams, pageSize, start];
+    const sql = `${matchedSql}
+SELECT m.post_id, m.updated_at, m.rent, m.total_monthly_cost, (SELECT COUNT(*) FROM matched) AS total_count
+FROM matched m
+WHERE 1=1 ${mCursorWhere}
+ORDER BY ${mOrderBy}
+LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
+    return { sql, params: pageParams, pageSize, start, useCursor };
+  };
+
   return {
     ok: true,
     sort,
@@ -527,11 +573,22 @@ LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
     countQuery,
     fullQuery,
     pageQuery,
+    pageWithCountQuery,
   };
 }
 
 // fold_role CTE：對候選集（cand，其 where 由呼叫端以 `?` 佔位、參數在前面）算 role。
 // enabledSources 與 now 各佔一個 `?`（出現在 display CTE），順序排在候選參數之後。
+//
+// 與讀取端 attachSameHouseRoles（db.js）的三道「不對稱跳過」逐條對應，**不可移除任一**（
+// 合成列 fixture `v3/scripts/fold-shape-fixtures.mjs` 對四種邊形各一條斷言，repro 100%＋
+// 正式庫唯讀 100% 才算過）：
+//   1. 對端 verdict='no' 跳過：`eff` 的 `COALESCE(d.match_verdict,'') <> 'no'`（d=對端）。
+//   2. 兩側 display-ready：`eff` 的 `s.display_ready AND d.display_ready`；display_ready 的
+//      定義＝`source=ANY(enabled) AND (非 houseprice OR listing_prep.display_ready=1)`，與
+//      housepriceNotDisplayReady 的 `decorationSourceEnabled + listingIsDisplayable` 等價。
+//   3. 只有入邊（dst 不在候選集）不算：`inc` 的 `dst IN (SELECT post_id FROM cand)`，對應
+//      Node 的 `assignRole(byId.get(mid))` 只標記「在同一個 list 裡」的對端。
 export function foldRoleCte(candWhere) {
   return `WITH cand AS (
     SELECT post_id, source, source_id, url, last_seen_at, offline, match_post_id, match_verdict,
@@ -602,7 +659,7 @@ export function foldRoleCte(candWhere) {
     FROM winner w
     JOIN display d ON d.post_id = w.x
   ),
-  fold_role AS (
+  fold_role AS MATERIALIZED (
     SELECT c.post_id, r.role, r.primary_offline, c.offline AS offline
     FROM cand c
     LEFT JOIN role r ON r.post_id = c.post_id

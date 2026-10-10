@@ -4414,12 +4414,44 @@ export async function buildSearchKeysFromPg(exec, settingsTable = "settings", gl
   // Still read all required context tables above, but avoid a whole-catalog
   // DISTINCT scan whose output would not be consumed by this request.
   if (Array.isArray(data.resolvedSearchKeys)) return [...data.resolvedSearchKeys];
-  // ✗ 跨請求 TTL memo 已撤回（astra 裁決 §2.3）：模組全域快取沒有 database／schema／交易範圍
-  // ⇒ 第一個請求取得的 keys 會被後續（甚至另一個 executor／快照）沿用，破壞 PG 單一快照契約 ✗
-  //（反例：第二個 executor 本來會回 new-key，實際仍拿到 old-key 且**呼叫 0 次** ✓）。
-  // 必要重用只留在**同一 request／同一 PG transaction**；要跨請求快取必須另做版本化設計 ✓。
-  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  // 2026-10-10（#694 加速包）：`SELECT DISTINCT search_key FROM listings` 讀全表、只回 ~20 個 key
+  //（evidence/sqlite-exit/perf-index-findings.md §6.1），索引救不了。改用 **data_revision 版本化**
+  // 行程內快取：revision（data_revision.MAX(id)）換代才重讀，不再有「無版本 memo 被爬蟲打穿」問題。
+  const stored = await storedSearchKeysFromPg(exec);
   return expandSearchKeysAgainst(stored, keys);
+}
+
+let pgStoredSearchKeysCache = { revision: null, stored: null };
+
+// data_revision 版本化的 DISTINCT search_key 快取（見 buildSearchKeysFromPg）。
+// 用 to_regclass 先探表（不 throw）：data_revision 延遲建立、CI 測試庫可能沒有；表不存在或
+// 空表（MAX(id) IS NULL）都不緩存、每次現讀——空表沒有可靠的版本號，跨請求快取會讓
+// 「第一個請求」的結果被後續沿用（快照契約）。
+async function storedSearchKeysFromPg(exec) {
+  let revision = null;
+  try {
+    const hasTable = await exec("SELECT to_regclass('data_revision') IS NOT NULL AS has_table");
+    if (!hasTable?.[0]?.has_table) {
+      return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+    }
+    const revRows = await exec("SELECT MAX(id) AS n FROM data_revision");
+    if (revRows?.[0]?.n == null) {
+      return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+    }
+    revision = Number(revRows[0].n) || 0;
+  } catch {
+    return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  }
+  if (pgStoredSearchKeysCache.revision === revision && pgStoredSearchKeysCache.stored) {
+    return pgStoredSearchKeysCache.stored;
+  }
+  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  pgStoredSearchKeysCache = { revision, stored };
+  return stored;
+}
+
+export function resetStoredSearchKeysFromPg() {
+  pgStoredSearchKeysCache = { revision: null, stored: null };
 }
 
 let searchKeyMemo = { at: 0, stored: null };
@@ -8083,9 +8115,18 @@ export function buildPublicListingsClauses({ districts = [], settings, q = "", c
   clauses.push("NOT (IFNULL(offline, 0) = 1 AND IFNULL(offline_confirmed, 0) = 1)");
   clauses.push("(IFNULL(match_verdict, '') != 'yes')");
   if (q) {
-    const like = `%${q}%`;
-    clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?) OR CAST(post_id AS TEXT) LIKE ?)");
-    params.push(like, like, like);
+    // 2026-10-10（#694 加速包）：`CAST(post_id AS TEXT) LIKE` 無索引使整個 OR 被迫 Seq Scan。
+    // 純數字 q 改走 `post_id = ?` 精確命中；否則只走 title/address（訪客無 watch_note）。
+    const trimmed = String(q).trim();
+    const numeric = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+    if (Number.isSafeInteger(numeric)) {
+      clauses.push("post_id = ?");
+      params.push(numeric);
+    } else {
+      const like = `%${q}%`;
+      clauses.push("(lower(title) LIKE lower(?) OR lower(address) LIKE lower(?))");
+      params.push(like, like);
+    }
   }
   return { where: `WHERE ${clauses.join(" AND ")}`, params, districtSet: new Set(requestedDistricts) };
 }

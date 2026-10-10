@@ -28,10 +28,16 @@ async function tryPublicListingsSqlFirst({ exec, args, settings, districts, dist
   if (!built.ok) return null;
   const limit = Math.max(1, Math.min(Number(args.limit) || 40, 50));
   const start = Math.max(0, Number(args.offset) || 0);
-  const countRow = await exec(built.countQuery.sql, built.countQuery.params);
-  const totalMatched = Number(countRow[0]?.n) || 0;
-  const plan = built.pageQuery({ limit, offset: start });
-  const page = await exec(plan.sql, plan.params);
+  // 折疊查詢會做多次 hash/sort（cand UNION extras、edges self-join、winner 的 row_number），
+  // 預設 work_mem(4MB) 會頻繁 spill 到 disk；提高到此交易內 64MB，避免 spill（repro 實測快 ~150ms）。
+  await exec("SET LOCAL work_mem = '64MB'");
+  // 單趟折疊：fold_role 標 MATERIALIZED、再物化 matched，count 用 scalar subquery 讀同一個
+  // matched（fold 只跑一次），total 從該 subquery 取。
+  const plan = built.pageWithCountQuery({ limit, offset: start });
+  const rawPage = await exec(plan.sql, plan.params);
+  const totalMatched = Number(rawPage[0]?.total_count) || 0;
+  // 去掉 count 專用欄位，避免 total_count 經 decorateListingLite 的 `...row` 外洩到回應。
+  const page = rawPage.map(({ total_count, ...row }) => row);
   const ids = page.map(row => Number(row.post_id));
   const fullRows = ids.length ? await exec("SELECT * FROM listings WHERE post_id = ANY(?::bigint[])", [ids]) : [];
   const pageProvider = await preloadDecorationProviderAsync({ exec, loader, rows: page, settings,
@@ -55,7 +61,10 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
       const exec = (sql, params = [], {batch = false} = {}) => batch
         ? readPgRows(snapshot, toPostgresSql(sql), params)
         : snapshot.query(toPostgresSql(sql), params).then(r => r.rows);
-      const context = await buildListRequestContextFromPg(exec, { asOf: args.asOf });
+      // 訪客路徑不建 searchKeys：searchWhere([]) 根本用不到（#694 加速包），
+      // resolvedSearchKeys=[] 讓 buildSearchKeysFromPg 跳過 `SELECT DISTINCT search_key FROM listings`
+      // 的全表掃描（~1s）。
+      const context = await buildListRequestContextFromPg(exec, { asOf: args.asOf, resolvedSearchKeys: [] });
       const settings = args.settings || publicSearchSettings(args);
       const districts = (Array.isArray(args.districts) ? args.districts : String(args.districts || "").split(","))
         .map(x => String(x).trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
