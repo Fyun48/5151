@@ -125,16 +125,19 @@ test("建立：PG 版與同步版的落地欄位相同（狀態 open、到期日
   seedWorld();
   const exec = pgFixture();
   const opts = { ...PG, exec };
-  const sync = plain(selfListings.createSelfListing(handle(), OWNER, INPUT, new Date(), { matchCandidates: () => [] }));
+  // ⚠️ 順序（P5a 之後）：先跑 async 版並確認**本機沒有**那一列，再跑同步版（它會寫本機）。
+  // 兩個版本算出來的 post_id 相同（PG 夾具與本機都是空的），所以先跑誰都不影響下面的比對。
   const async_ = plain(await selfAsync.createSelfListingAsync(OWNER, INPUT, opts));
+  // 🚫 P5a（2026-10-10）：`createSelfListingAsync()` 的本機鏡射已刪 ⇒ async 版建立的那一列
+  // **不得**出現在本機（原本的斷言是「本機要鏡射」；正式站開閘時那一句必拋 ⇒ 會員送出刊登拿到 400）。
+  assert.equal(handle().prepare("SELECT 1 AS n FROM listings WHERE post_id = ?").get(async_.post_id), undefined, "本機不得再被鏡射寫入（PG 是唯一來源）");
+  const sync = plain(selfListings.createSelfListing(handle(), OWNER, INPUT, new Date(), { matchCandidates: () => [] }));
   assert.deepEqual(shapeOf(async_), shapeOf(sync), "建立後的落地欄位必須逐欄位相同");
   // ⚠️ `getSelfListing()` 回的是裝飾過的視圖（不含 `self_status`）⇒ 直接查 PG 那一列。
   const row = exec.raw.prepare("SELECT self_status, self_expires_at, fixture_namespace FROM listings WHERE post_id = ?").get(async_.post_id);
   assert.equal(row.self_status, "open", "建立後就是公開狀態");
   assert.ok(Date.parse(row.self_expires_at) > Date.now(), "PG 上要有未來的到期日");
   assert.ok(!String(row.fixture_namespace || "").trim(), "一般建立不得帶夾具命名空間");
-  // 本機鏡射也要有那一列（還沒搬完的讀取看的是它）
-  assert.ok(handle().prepare("SELECT 1 AS n FROM listings WHERE post_id = ?").get(async_.post_id), "本機要鏡射");
 });
 
 test("參數驗證：六種錯誤的形狀與同步版逐字相同", async () => {

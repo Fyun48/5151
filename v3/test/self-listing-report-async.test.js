@@ -137,6 +137,8 @@ test("檢舉：第一筆只寫檢舉不隱藏，第二筆（不同人）才隱�
   clearWorld(disk);
   seedUsers(disk);
   seedListing(disk);
+  const localListingBefore = plain(listingRow(disk));
+  const localBanBefore = banUntil(disk, OWNER);
 
   const first = await asyncMod.reportSelfListingAsync(REPORTER_A, LISTING_ID, "廣告", { ...PG, exec, strict: true, now: NOW });
   assert.deepEqual(plain(first), plain(syncFirst), "第一筆的回傳值必須相同");
@@ -149,10 +151,12 @@ test("檢舉：第一筆只寫檢舉不隱藏，第二筆（不同人）才隱�
   assert.equal(reportRows(disk).length, 0, "檢舉列不需要本機鏡射（島上沒有同步讀者）");
   assert.deepEqual(plain(listingRow(exec.raw)), plain(syncListing), "PG 上的隱藏狀態必須相同");
   assert.equal(listingRow(exec.raw).self_status, "hidden", "達門檻必須真的隱藏");
-  assert.equal(listingRow(disk).self_status, "hidden", "本機也要追上（同步的讀取還在看它）");
   assert.equal(banUntil(exec.raw, OWNER), syncBan, "PG 上的停權時間必須與同步版相同");
   assert.ok(banUntil(exec.raw, OWNER), "停權時間必須有值");
-  assert.equal(banUntil(disk, OWNER), syncBan, "本機的停權時間也要追上（同步的建立路徑讀它）");
+  // 🚫 P5a（2026-10-10）：隱藏與停權的**本機鏡射已刪** ⇒ 本機那一列與本機的停權時間都必須原封不動。
+  // 原本的斷言是「本機也要追上（同步的讀取還在看它）」與「本機的停權時間也要追上」。
+  assert.deepEqual(plain(listingRow(disk)), localListingBefore, "本機的 listings 那一列不得被動到");
+  assert.equal(banUntil(disk, OWNER), localBanBefore, "本機的停權時間不得被動到");
 });
 
 test("檢舉：同一人重複檢舉不得寫第二列（PG 沒有唯一鍵，靠先查再寫）", async () => {
@@ -197,12 +201,16 @@ test("後台隱藏：立刻隱藏＋停權，找不到時 404", async () => {
   clearWorld(disk);
   seedUsers(disk);
   seedListing(disk);
+  const localListingBefore = plain(listingRow(disk));
+  const localBanBefore = banUntil(disk, OWNER);
   const result = await asyncMod.hideSelfListingAsync(LISTING_ID, { ...PG, exec, strict: true, now: NOW });
   assert.deepEqual(plain(result), plain(syncResult), "回傳值必須相同");
   assert.deepEqual(plain(listingRow(exec.raw)), plain(syncListing), "PG 上的隱藏狀態必須相同");
-  assert.deepEqual(plain(listingRow(disk)), plain(syncListing), "本機也要追上");
   assert.equal(banUntil(exec.raw, OWNER), syncBan, "PG 上的停權時間必須相同");
-  assert.equal(banUntil(disk, OWNER), syncBan, "本機的停權時間也要追上");
+  // 🚫 P5a：本機鏡射已刪 ⇒ 本機那一列與本機的停權時間必須原封不動
+  //（原本的斷言是「本機也要追上」）。
+  assert.deepEqual(plain(listingRow(disk)), localListingBefore, "本機那一列不得被 async 版隱藏");
+  assert.equal(banUntil(disk, OWNER), localBanBefore, "本機不得被寫入停權時間");
 
   const syncErr = syncErrorShape(() => syncMod.hideSelfListing(disk, 799999, new Date(NOW)));
   const asyncErr = await errorShape(() => asyncMod.hideSelfListingAsync(799999, { ...PG, exec, strict: true, now: NOW }));
@@ -210,12 +218,21 @@ test("後台隱藏：立刻隱藏＋停權，找不到時 404", async () => {
   assert.deepEqual(asyncErr, syncErr, "找不到的錯誤形狀必須相同");
 });
 
-test("停權之後：同步的建立路徑必須擋下來（證明本機那一份真的寫了）", async () => {
+test("停權之後：PG 的建立路徑必須擋下來（停權只寫 PG，本機不被動到）", async () => {
   const [disk, exec] = resetBoth((h) => seedListing(h));
   await asyncMod.hideSelfListingAsync(LISTING_ID, { ...PG, exec, strict: true, now: NOW });
-  assert.ok(banUntil(disk, OWNER), "本機必須有停權時間");
-  // `createSelfListing()` 是**同步**路徑（還在 SQLite 上），它讀的是本機的 `self_ban_until`。
-  const blocked = syncErrorShape(() => dbMod.createSelfListing(OWNER, { district: "1-8", rent: 25000, ping: 18, kind: "whole", role: "owner", floor: 3, total_floors: 5, rooms: 2, living: 1, bath: 1, contact_name: "林先生", address: "台北市士林區中正路100號", phone: "0912345678", title: "停權後還想再上傳的刊登", body: "近捷運、可入住、有洗衣機。", accept_pledge: true }));
+  assert.ok(banUntil(exec.raw, OWNER), "PG 上必須有停權時間");
+  // 🚫 P5a：本機鏡射已刪 ⇒ 本機不得被寫入停權時間（原本的斷言是「本機必須有停權時間」，
+  // 那個前提在正式站開閘時根本走不到——那一句必拋）。
+  assert.equal(banUntil(disk, OWNER), "", "本機那一列不得被動到（PG 是唯一來源）");
+  // `assertCanPublishAsync()`（PG 的建立路徑）讀的是 PG 的 `self_ban_until`。
+  let blocked = null;
+  try {
+    await asyncMod.assertCanPublishAsync(exec, OWNER, new Date(NOW));
+    blocked = "沒有被擋";
+  } catch (error) {
+    blocked = { status: error.status, message: error.message };
+  }
   assert.equal(blocked?.status, 403, `被停權者不得再上傳（實際：${JSON.stringify(blocked)}）`);
   assert.match(blocked?.message || "", /暫停上傳/, "錯誤訊息要是「暫停上傳」那一則");
   // 對照組：沒有被停權的人不受影響（否則這條測試可能只是「建立本來就會失敗」）

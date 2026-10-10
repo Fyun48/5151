@@ -171,6 +171,9 @@ test("公開草稿：PG 版與同步版的落地欄位相同（公開後狀態�
   const exec = pgFixture();
   const opts = { ...PG, exec };
   const sync = plain(selfListings.publishImportedDraftListing(handle(), OWNER, draftId, PUBLISH_INPUT, new Date()));
+  // ⚠️ 鑑別力（P5a 之後）：同步版剛把本機那一列寫成 `open`，這裡先退回 `draft`，這樣
+  // 「async 版有沒有碰本機」才看得出來——原本的斷言是「本機鏡射也要追上」。
+  handle().prepare("UPDATE listings SET self_status = 'draft' WHERE post_id = ?").run(draftId);
   const async_ = plain(await selfAsync.publishImportedDraftListingAsync(OWNER, draftId, PUBLISH_INPUT, opts));
   assert.deepEqual(shapeOf(async_), shapeOf(sync), "公開後的落地欄位必須逐欄位相同");
   assert.equal(
@@ -178,8 +181,8 @@ test("公開草稿：PG 版與同步版的落地欄位相同（公開後狀態�
     "PG 上的狀態要變成 open",
   );
   assert.equal(
-    handle().prepare("SELECT self_status FROM listings WHERE post_id = ?").get(draftId).self_status, "open",
-    "本機鏡射也要追上",
+    handle().prepare("SELECT self_status FROM listings WHERE post_id = ?").get(draftId).self_status, "draft",
+    "本機那一列不得被 async 版公開（P5a 刪掉本機鏡射）",
   );
 });
 

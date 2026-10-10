@@ -6,9 +6,11 @@
 //
 // 為什麼這一包便宜：`rentalSurvey.js` 只有 72 行，而且兩個前置條件都已經在島上
 // ——`getDemandPostAsync()`（同步版走 `db.js getDemand()`）與 `bumpAnalyticsAsync()`
-// （第三十六批 36.5 就搬好了）。這裡只補「跑語句」與「兩個 store」。
+// （第三十六批 36.5 就搬好了）。這裡只補「跑語句」。
 //
-// ⚠️ 三個一定要處理的地方：
+// ⚠️ 三個一定要處理的地方（原本的「第四個：兩個 store 的鏡射」已於 2026-10-10 SQLite 退場 P5a
+// 刪除：正式站 `PG_NO_SQLITE_OPEN=1` 時那幾句必拋 `business SQLite is closed`，會員送出問卷
+// 會拿到 400。Owner 裁決：正式讀寫不回退節點 SQLite，PG 是唯一來源）。
 //
 //   1. **`rental_completion_surveys` 的唯一鍵在 PG 上不存在**。SQLite 的 DDL 是
 //      `wish_id INTEGER NOT NULL UNIQUE` 與 `public_token TEXT NOT NULL UNIQUE`——
@@ -30,7 +32,7 @@ import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { ensurePgSchema } from "./pgSchema.js";
 import { getDemandPostAsync } from "./demandAsync.js";
 import { bumpAnalyticsAsync } from "./rentalAnalyticsAsync.js";
-import { bumpAnalytics, rentalNotifyHttpError } from "./rentalNotify.js";
+import { rentalNotifyHttpError } from "./rentalNotify.js";
 // ⚠️ 與 `demandAsync.js` 同一個理由：同步版的包裝（`db.js getCompletionSurveyFor()`）
 // 第一件事是 `getWishConditions()`；`getDemandPostAsync()` 本身不灌行程內快取，
 // 但 `getDemandPost`／`decoratePostWith` 的公開視圖會用到那些旗標，所以照抄同樣的順序。
@@ -136,8 +138,8 @@ export async function submitCompletionSurveyAsync(userId, wishRef, input = {}, o
     if (existing) return publicSurvey(existing, { already: true });
     const { found, via, helpful, detail } = surveyFields(input);
     const stamp = now.toISOString();
-    // `public_token` 兩個 store 用**同一個**（同步版是各自產生）；這樣 admin 的 drill-down
-    // 不管從哪個 store 讀，看到的 `survey_ref` 都一樣。
+    // `public_token`（`survey_ref`）由這裡產生、直接落地到 PG——PG 是唯一來源。
+    // 🚫 原本還會「兩個 store 用同一個 token」鏡射寫本機 SQLite，2026-10-10（P5a）已刪。
     const token = randomBytes(16).toString("base64url");
     try {
       await run(SURVEY_INSERT_SQL, [token, Number(raw.id), uid, found, via, helpful, detail, stamp]);
@@ -148,17 +150,11 @@ export async function submitCompletionSurveyAsync(userId, wishRef, input = {}, o
       }
       throw error;
     }
-    // 本機 handle 追上：`rental_completion_surveys` 還有**同步**的讀者
-    // （`rentalOpsSummary()`／`rentalOpsDrilldown()` 那兩條 admin 路由還沒搬，見 40.5）。
-    // 先查再寫是為了避開本機的唯一鍵（同一則許願房在這一台節點已經有一列時不要撞）。
-    const local = sqliteHandle();
-    if (!local.prepare(SURVEY_BY_WISH_SQL).get(Number(raw.id), uid)) {
-      local.prepare(SURVEY_INSERT_SQL).run(token, Number(raw.id), uid, found, via, helpful, detail, stamp);
-    }
-    // 計數也兩個 store 各記一次：PG 是真的來源，本機是給還沒搬完的 admin 讀者。
-    // `bumpAnalyticsAsync()` 的 PG 分支不會碰本機 handle，所以各一次、不會重複。
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：原本會在 PG 寫成功後再查／寫本機
+    // `rental_completion_surveys`（`rentalOpsSummary()` 那時讀本機）。開閘時那幾句必拋
+    // `business SQLite is closed` ⇒ 會員送出問卷收到 400（PG 其實已寫成功）。
+    // Owner 裁決：不回退節點 SQLite，PG 是唯一來源。
     await bumpAnalyticsAsync(surveyMetric(found), now, 1, nested(options, run));
-    bumpAnalytics(sqliteHandle(), surveyMetric(found), now);
     return publicSurvey(one((await run(SURVEY_BY_WISH_SQL, [Number(raw.id), uid])).rows), { already: false });
   }, async () => (await import("./db.js")).submitCompletionSurveyFor(uid, wishRef, input, now));
 }
