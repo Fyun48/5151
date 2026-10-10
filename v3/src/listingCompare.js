@@ -159,7 +159,7 @@ const COMPARE_FIELDS = [
   ["balcony", "陽台", (row) => (
     Number(row.has_balcony) === 1 ? "有" : yesNoFromHay(row, /有陽台/, /無陽台|沒有陽台/)
   )],
-  ["furnish", "家具設備", furnishText],
+  ["furnish", "家俱設備", furnishText],
   ["restriction", "入住限制", (row) => String(row.move_in_limit || row.restriction || "").trim()],
   ["subsidy", "租補", (row) => yesNoFromHay(row, /可租補|符合租補/, /不適用租補/)],
   ["available", "可入住日", (row) => String(row.available_date || row.move_in_date || "").trim()],

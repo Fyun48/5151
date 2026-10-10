@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
   compareHouseGroup,
@@ -214,4 +215,11 @@ test("cost change payload is omitted when nothing was recorded", () => {
     type: "price_update",
     detail: "價格 32000 → 34000",
   });
+});
+
+// 比價表的欄位標籤也要跟全站一致（「家俱設備」）；這行是純渲染標籤，不影響比對邏輯。
+test("listingCompare：家俱欄位標籤用「家俱」", () => {
+  const src = readFileSync(new URL("../src/listingCompare.js", import.meta.url), "utf8");
+  assert.match(src, /\["furnish", "家俱設備"/);
+  assert.doesNotMatch(src, /\["furnish", "家具設備"/);
 });
