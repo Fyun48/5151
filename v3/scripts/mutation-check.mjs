@@ -944,9 +944,12 @@ const SYSCRAWL_MUTATIONS = [
     expect: "partial patch 只覆蓋有給的鍵",
   },
   {
-    name: "PG 只寫不讓本機追上（爬蟲繼續用舊設定跑）",
+    // SQLite 退場 P3（2026-10-10）：原本這裡是「PG 只寫不讓本機追上」（拿掉本機 `settings` 的
+    // 那圈 upsert）。那圈鏡射已經移除 ⇒ 錨點不存在，整套變異會中止。改成驗**新的不變式**：
+    // 五個鍵一定要落 PG，把落地那一句拿掉，測試必須抓到。
+    name: "系統爬蟲設定不落 PG（五個鍵都沒寫進去）",
     file: SYSCRAWL_SRC,
-    from: "  const local = sqliteHandle();\n  for (const [key, value] of Object.entries(nextValues)) {\n    local.prepare(SETTINGS_UPSERT_SQL).run(key, JSON.stringify(value));\n  }\n",
+    from: "    await setSiteSettingAsync(key, value, options);\n",
     to: "",
     expect: "partial patch 只覆蓋有給的鍵",
   },
@@ -1142,10 +1145,13 @@ const IMPLIFE_MUTATIONS = [
     expect: "修改：狀態不是 ready_for_review",
   },
   {
-    name: "修改只寫 PG，不讓本機追上",
+    // SQLite 退場 P3（2026-10-10）：原本這裡是「只寫 PG，不讓本機追上」（拿掉本機鏡射那一句）。
+    // 那句鏡射已經移除 ⇒ 錨點不存在，整套變異會中止。改成驗**新的不變式**：
+    // PG 是唯一權威來源，把 PG 那一句換成寫本機，測試必須抓到（PG 完全沒被更新）。
+    name: "改標題只寫本機、不寫 PG（PG 是唯一權威來源）",
     file: IMPLIFE_SRC,
-    from: "    sqliteHandle().prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);\n",
-    to: "",
+    from: "    await run(IMPORT_TITLE_TEXT_UPDATE_SQL, [title, text, row.id]);\n",
+    to: "    sqliteHandle().prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);\n",
     expect: "修改：標題與內容會淨化",
   },
   {
