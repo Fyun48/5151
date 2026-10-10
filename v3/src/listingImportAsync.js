@@ -316,9 +316,10 @@ export async function reviewListingImportAsync(userId, id, input = {}, options =
     if (row.listing_id) {
       listing = await updateImportedDraftListingAsync(userId, row.listing_id, { title, body: text, photos: keep }, IMPORT_ROW_OPTIONS(options, run));
     }
+    // 只有 PG 這一份（SQLite 退場 P3）：這裡原本還會同步寫一次節點本機的 `listing_import`，
+    // 但 PG 是唯一權威來源，而正式站三隻都開著 `PG_NO_SQLITE_OPEN=1` ⇒ 那句鏡射會**直接拋錯**，
+    // 使用者看到失敗、資料卻已經進了 PG（半套寫入）。已移除，不做 try/catch 吞錯、也不留活口。
     await run(IMPORT_TITLE_TEXT_UPDATE_SQL, [title, text, row.id]);
-    // 本機追上（後台的匯入清單還有同步讀者時才看得到；與其他批次同一個紀律）。
-    sqliteHandle().prepare(IMPORT_TITLE_TEXT_UPDATE_SQL).run(title, text, row.id);
     return publicImportAsync({ ...row, imported_title: title, imported_text: text }, { listing }, options, run);
   }, async () => (await import("./db.js")).reviewListingImportFor(userId, id, input), { write: true });
 }
@@ -359,8 +360,9 @@ export async function cancelListingImportAsync(userId, id, options = {}) {
         // 已被引用或已刪（與同步版的 cleanupImportedMedia 同義）
       }
     }
+    // 只有 PG 這一份（SQLite 退場 P3）：原本還會同步寫一次節點本機的 `listing_import`。
+    // 開閘時那句會直接拋錯 ⇒ PG 已取消、使用者卻收到失敗。已移除。
     await run(IMPORT_STATUS_UPDATE_SQL, [IMPORT_STATUSES.CANCELLED, row.id]);
-    sqliteHandle().prepare(IMPORT_STATUS_UPDATE_SQL).run(IMPORT_STATUSES.CANCELLED, row.id);
     return publicImportAsync(await readImportRow(run, row.id), {}, rest, run);
   }, async () => (await import("./db.js")).cancelListingImportFor(userId, id), { write: true });
 }
@@ -404,8 +406,9 @@ export async function confirmListingImportAsync(userId, id, input = {}, options 
       source: "import",
     }, { now, ...IMPORT_ROW_OPTIONS(rest, run) });
     const params = [IMPORT_STATUSES.CONFIRMED, current.id, current.version, current.content_hash, now instanceof Date ? now.toISOString() : new Date(now).toISOString(), row.id];
+    // 只有 PG 這一份（SQLite 退場 P3）：原本還會同步寫一次節點本機的 `listing_import`。
+    // 開閘時那句會直接拋錯，但同意紀錄 `recordConsentAsync()` 已經進了 PG ⇒ 半套寫入。已移除。
     await run(IMPORT_CONFIRM_UPDATE_SQL, params);
-    sqliteHandle().prepare(IMPORT_CONFIRM_UPDATE_SQL).run(...params);
     return publicImportAsync(await readImportRow(run, row.id), {}, rest, run);
   }, async () => (await import("./db.js")).confirmListingImportFor(userId, id, input), { write: true });
 }
