@@ -12,6 +12,8 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+// SQLite 退場 P1：開閘時不再回退同步版（見 `run()` 的 catch）。
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import {
   DISCLAIMER_VERSION,
   assertMemberDeletable,
@@ -75,6 +77,19 @@ async function run(options, runPostgres, runSqlite) {
     const exec = async (sql, params = []) => normalizeResult(await pgDriver.query(toPostgresSql(sql), params));
     return await runPostgres(exec);
   } catch (error) {
+    // SQLite 退場 P1：開閘（沒有可用的 SQLite handle）時**不回退**同步版，把 PG 的原始錯誤
+    // 往上丟。回退只會讓 `sqliteHandle()` 的 proxy 丟出更難懂的
+    // 「business SQLite is closed」，把真正的原因（連不上 PG）蓋掉——正式站的
+    // `listUserIds` 錯誤就是這樣長出來的（`demandAsync.js:188`／`dataRevisionAsync.js:96`
+    // 同一個慣例）。
+    //
+    // ⚠️ 這一支刻意排在 `sqliteFallbackAllowed()` **前面**：兩個判斷的結果矩陣完全等價
+    // （見下表），但順序反過來會動到 `v3/scripts/mutation-check.mjs` 釘住的錨點
+    // （`if (!sqliteFallbackAllowed(options, {})) throw error;\n return runSqlite();`
+    // 必須恰好出現一次）。
+    //   handle 可用 ＋ fallback 允許 → 回退；    handle 可用 ＋ 不允許 → 丟原始錯誤
+    //   handle 不可用 ＋ 允許／不允許 → 丟原始錯誤（開閘，不回退）
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (!sqliteFallbackAllowed(options, {})) throw error;
     return runSqlite();
   }
