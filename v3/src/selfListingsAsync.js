@@ -993,7 +993,15 @@ export async function insertOpenSelfListingAsync(run, uid, input = {}, now = new
     await run(MATCH_SET_SQL, [hit.listing.post_id, hit.level, hit.detail, postId]);
   }
   await persistListingValuesAsync(run, postId, resolved.listingValues);
-  // 站內刊登建立會寫 title/price/tags/match_post_id（投影與 fold 的輸入）⇒ 立即刷新 fold（投影由 publish 路徑處理）。
+  // 站內刊登建立會寫 title/price/tags/match_post_id（**投影與 fold 的輸入**）⇒ 兩者都要立刻刷新。
+  // ⚠️ 這裡原本**只刷新 fold**（原註解寫「投影由 publish 路徑處理」），但這一條路徑本身就是
+  //    「建立即公開」：訪客搜尋讀的是 `listing_search_projection`（`listingSearchSql.js` 的
+  //    計數／成本／區域過濾全部 `FROM listing_search_projection p` 且是 INNER JOIN）⇒
+  //    沒有那一列，剛刊登成功的物件在搜尋結果裡**完全看不到**。
+  //    （2026-10-10 由 HTTP 層寫入路徑測試 `write-path-http-live-pg.test.js` 量到：
+  //      端點回 200 之後投影列 0 列、訪客搜尋來源命中 0。）
+  //    形狀照 publish 路徑（本檔 :766）：同一個 try/catch ＋ 同一個失敗計數器。
+  try { await refreshListingProjection(run, postId); } catch (error) { await countRefreshFailure(run, "projection_refresh_failed", error); }
   try { await refreshFoldColumns(run, postId); } catch (error) { await countRefreshFailure(run, "fold_refresh_failed", error); }
   // 本機鏡射（還沒搬完的讀取看的是它）；失敗不該讓已經寫進 PG 的刊登回錯。
   try {
