@@ -15,6 +15,8 @@ import { performance } from "node:perf_hooks";
 import { buildListRequestContextFromPg } from "../src/db.js";
 import { sharedPgDriver, closeSharedPgDriver } from "../src/pgSharedDriver.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
+import { searchListingsAsync } from "../src/listingSearchAsync.js";
+import { loadPgListingStatsInputs, listingStatsAsync } from "../src/listingStatsAsync.js";
 
 const argv = process.argv.slice(2);
 const flag = (name, fallback = null) => {
@@ -132,6 +134,48 @@ function timingContractViolations(page) {
 }
 
 const useAllKeys = process.env.MATRIX_ALL_SEARCH_KEYS !== "0";
+const onePassFlag = process.env.MEMBER_LIST_ONEPASS ?? "(default on)";
+const threeWay = process.argv.includes("--three-way");
+
+/**
+ * 三向等價（A 方案的驗收斷言）：同一個案例分別用
+ *   ① `list-only`  ：只跑 list 管線（沒有 stats 的 `reusableCandidates`，自己下候選查詢）
+ *   ② `stats-only` ：只跑 stats 管線（自己掃自己的範圍）
+ *   ③ `one-pass`   ：共趟掃描（`MEMBER_LIST_ONEPASS=1` 的完整頁面）
+ * 算一次，然後逐案例比對**三件事**：`totalMatched`、stats 的**每個 bucket**、第一頁 post_id 序列。
+ *
+ * 為什麼要三向而不是只有 before/after：共趟掃描改的是「候選從哪裡來」，若沒有把兩側單獨算過的
+ * 基準擺在一起，任何一側多算或少算都會被另一側掩蓋。
+ */
+async function threeWayCheck(name, args, settings, searchKeys, page) {
+  const requestContext = await buildListRequestContextFromPg(exec, { asOf: null, resolvedSearchKeys: searchKeys || undefined });
+  const common = { driver: "postgres", pgDriver: pg, requestContext };
+  const listArgs = {
+    filter: "all", kind: "", sources: "", q: "", limit: 20, offset: 0,
+    userId: uid, matchVoteUserId: uid, sameHouse: true,
+    settings, ...(searchKeys ? { searchKeys } : {}), ...args,
+  };
+  const statsArgs = { searchKeys, userId: uid, settings, asOf: null, diagnostics: {} };
+  const listOnly = await searchListingsAsync(listArgs, common);
+  const inputs = await loadPgListingStatsInputs(statsArgs, common);
+  const statsOnly = await listingStatsAsync(statsArgs, { ...common, preloadedStatsInputs: inputs });
+  const failures = [];
+  const pageIds = (rows) => JSON.stringify(rows.map((r) => Number(r.post_id)));
+  if (listOnly.totalMatched !== page.timing.dataset) {
+    failures.push(`totalMatched：list-only ${listOnly.totalMatched} vs 共趟 ${page.timing.dataset}`);
+  }
+  if (pageIds(listOnly.listings) !== pageIds(page.listings)) {
+    failures.push(`第一頁 post_id 序列：list-only 與共趟不同`);
+  }
+  const pageStats = { ...page.stats };
+  delete pageStats.matched; // 頁面層額外掛上的欄位，stats 管線本身沒有
+  const statsKeys = new Set([...Object.keys(statsOnly), ...Object.keys(pageStats)]);
+  for (const key of statsKeys) {
+    const a = statsOnly[key], b = pageStats[key];
+    if (JSON.stringify(a) !== JSON.stringify(b)) failures.push(`stats.${key}：stats-only ${JSON.stringify(a)} vs 共趟 ${JSON.stringify(b)}`);
+  }
+  return { failures, bucketsCompared: statsKeys.size, listOnlyMatched: listOnly.totalMatched, statsOnlyTotal: statsOnly.total };
+}
 
 async function runCase(name, args, settings, searchKeys) {
   const stats = [];
@@ -156,6 +200,8 @@ async function runCase(name, args, settings, searchKeys) {
     contract = timingContractViolations(page);
   }
   if (contract?.failures.length) throw new Error(`${name}: ${contract.failures.join("；")}`);
+  const threeWayResult = threeWay ? await threeWayCheck(name, args, settings, searchKeys, last) : null;
+  if (threeWayResult?.failures.length) throw new Error(`${name}（三向等價）：${threeWayResult.failures.join("；")}`);
   return {
     case: name,
     totalMatched: last.timing.dataset,
@@ -166,6 +212,7 @@ async function runCase(name, args, settings, searchKeys) {
     pageIds: last.listings.map((row) => Number(row.post_id)),
     // 輸出契約的逐案例證據（`--compare` 會逐案例比對這兩個鍵集合）。
     pageKeys: contract.pageKeys,
+    threeWayBuckets: threeWayResult ? threeWayResult.bucketsCompared : null,
     timingKeys: contract.timingKeys,
     payloadHasStageNames: contract.failures.length > 0,
     runs: stats,
@@ -192,7 +239,8 @@ const payload = {
   // 「矩陣不是假表」的自證：totalMatched 的相異值個數（必須 > 1）。
   distinctTotalMatched: new Set(cases.map((c) => c.totalMatched)).size,
   prefilterEnabled: process.env.MEMBER_DISTRICT_PREFILTER ?? "(default on)",
-  allSearchKeys: useAllKeys, generatedAt: new Date().toISOString(), matrix: cases,
+  allSearchKeys: useAllKeys, threeWay, onePassEnabled: onePassFlag,
+  generatedAt: new Date().toISOString(), matrix: cases,
 };
 if (outPath) { writeFileSync(outPath, JSON.stringify(payload, null, 2)); console.log(`wrote ${outPath} (${cases.length} cases)`); }
 else console.log(JSON.stringify(payload, null, 2));

@@ -245,7 +245,45 @@ export async function loadSearchCandidateRows(pgDriver, {candidateColumns, built
   })));
 }
 
-async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null, requestContext = null, reusableCandidates = null } = {}) {
+/**
+ * 本請求的「list 範圍」整段準備：行政區名稱 → 投影預篩 → 關係閉包 → builder。
+ *
+ * 為什麼要抽成公開函式（2026-10-11 第二刀・A 方案）：`computeListingPage` 必須在**掃描之前**
+ * 同時拿到 list 與 stats 兩份 WHERE，才能用同一趟掃描
+ * `(stats_where) OR (list_where)` ＋ `in_list_scope` 旗標，取代
+ * 「stats 掃一次寬候選 → list 再下一次 id-only」的兩趟。
+ * 抽出來之後語意完全不變：`searchListingsNodePgInner` 沒有拿到 `scope` 時呼叫的是同一支。
+ */
+export async function prepareListScope(exec, args = {}, { settings = null, context = null, uid = 0, voteUid = null } = {}) {
+  if (!context?.isolation) throw new Error("prepareListScope requires the PG request context（isolation）");
+  const userId = Number(uid) || 0;
+  const vote = voteUid == null ? userId : Number(voteUid) || 0;
+  const { filter, kind, sources } = normalizeListQuery(args.filter, args.kind, args.sources);
+  // 行政區名稱（單一來源：與 builder 的 districtSet 同一支解析函式）。
+  const districtNames = resolveListDistrictNames({ districts: args.districts, settings, uid: userId });
+  // 投影預篩（裁決 §4.1 P1）：用 idx_proj_district 先取 id 集合，取代 `split_part(source_key…)`
+  // 的 seq scan。取不到（投影滯後／缺列／關閉）時是 null ⇒ builder 沿用原本表達式。
+  const districtPrefilter = filter === "watched"
+    ? null
+    : await loadDistrictPrefilterIds(exec, { districtNames });
+  const built = buildListListingsClauses({
+    filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
+    districts: args.districts, settings, uid: userId, voteUid: vote,
+    context,
+    // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
+    districtProjectedIds: districtPrefilter ? districtPrefilter.postIds : null,
+    districtRelatedIds: filter === "watched" ? null : await districtClosureIds(exec, {
+      districtNames,
+      userId: vote,
+      relatedOnly: true,
+    }),
+    // astra 2026-09-25 §2.1：明確表示「這裡沒有 SQLite 可讀」——隔離子句必須來自 context，
+    // 缺 context.isolation 時 builder 會直接拋錯，不得靜默降級或偷讀 SQLite。
+  }, { sqliteDb: null });
+  return { filter, kind, sources, districtNames, districtPrefilter, built };
+}
+
+async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decorationLoader = null, requestContext = null, reusableCandidates = null, scope = null, candidates = null } = {}) {
   if (!pgDriver || typeof pgDriver.query !== "function") {
     throw new Error("searchListingsNodePg requires pgDriver");
   }
@@ -278,33 +316,28 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   queryDetails.asOf = context.asOf;
   // 可選資料的降級清單（缺表時為非空）——放進 queryDetails 讓它可被量測與告警，不得靜默 ✗。
   queryDetails.contextDegraded = context.degraded || [];
-  // 行政區名稱（單一來源：與 builder 的 districtSet 同一支解析函式）。
-  const districtNames = resolveListDistrictNames({ districts: args.districts, settings, uid });
-  // 投影預篩（裁決 §4.1 P1）：用 idx_proj_district 先取 id 集合，取代 `split_part(source_key…)`
-  // 的 seq scan。取不到（投影滯後／缺列／關閉）時是 null ⇒ builder 沿用原本表達式。
-  const districtPrefilter = filter === "watched"
-    ? null
-    : await loadDistrictPrefilterIds(exec, { districtNames });
-  const built = buildListListingsClauses({
-    filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
-    districts: args.districts, settings, uid, voteUid,
-    context,
-    // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
-    districtProjectedIds: districtPrefilter ? districtPrefilter.postIds : null,
-    districtRelatedIds: filter === "watched" ? null : await districtClosureIds(exec, {
-      districtNames,
-      userId: voteUid,
-      relatedOnly: true,
-    }),
-    // astra 2026-09-25 §2.1：明確表示「這裡沒有 SQLite 可讀」——隔離子句必須來自 context，
-    // 缺 context.isolation 時 builder 會直接拋錯，不得靜默降級或偷讀 SQLite。
-  }, { sqliteDb: null });
+  // A 方案：呼叫端（`computeListingPage`）已經在**同一趟掃描**裡算好 list 範圍與候選列時，
+  // 這裡直接沿用（`scope.built` 逐字等於本函式自己會建出來的那一份），不再自己建、也不再掃。
+  const prepared = scope || await prepareListScope(exec, args, { settings, context, uid, voteUid });
+  // `prepared.filter/kind/sources` 與上面 `normalizeListQuery(args.filter, args.kind, args.sources)`
+  // 是同一支函式、同一組輸入 ⇒ 逐字相同（`prepareListScope` 也用它）。這裡只取 `built`，
+  // 並在帶著外部 scope 時斷言三者一致，避免兩份 builder 參數靜默漂移。
+  if (scope) {
+    // `sources` 是陣列（`parseListingSources`）⇒ 逐值比對，不能用 `!==`。
+    if (scope.filter !== filter || scope.kind !== kind
+      || JSON.stringify(scope.sources) !== JSON.stringify(sources)) {
+      throw new Error("searchListingsNodePg: 外部 list scope 的 filter/kind/sources 與 args 不一致");
+    }
+  }
+  const { built } = prepared;
   markStage("prepare_ms");
   // 取「全部」候選：不在這裡 LIMIT，否則 totalMatched 會被候選上限截斷。
   // astra §5.5（B4）：明確候選順序。Node 後處理（同戶角色、配對）會依輸入列順序走訪，
   // 沒有 ORDER BY 時順序由 PG 掃描計畫決定 ⇒ 不可重現。以 post_id 排序固定輸入，
   // 使「同一份資料＋同一組 args＋同一個 asOf」得到同一個結果。
-  const raw = await loadSearchCandidateRows(pgDriver, {candidateColumns, built, reusableCandidates});
+  const raw = Array.isArray(candidates)
+    ? orderCandidateRowsByPostId(candidates, postIdColumnIndex(candidateColumns))
+    : await loadSearchCandidateRows(pgDriver, {candidateColumns, built, reusableCandidates});
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
   queryDetails.engine = "node_pg";
