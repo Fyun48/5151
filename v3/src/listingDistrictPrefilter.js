@@ -91,14 +91,25 @@ export async function districtProjectionVerified(exec, { districtNames = [], all
       const prefix = districtKeyPrefixExpression("pg");
       const placeholders = (n, offset) => Array.from({ length: n }, (_, i) => `$${i + offset}`).join(",");
       const row = await one(
-        // 兩個證明用**同一次 listings 掃描**（LEFT JOIN 投影）取得：分開寫會掃兩次，
-        // repro 冷啟動實測多付約 80ms。
+        // 兩個證明**語意不變**（2026-10-11 第二刀：只改查詢形狀，不動判定）：
+        //   missing    —— 以 `listings` 側驅動的 anti-join（投影 `post_id` 是主鍵 ⇒ 一對一）。
+        //   mismatched —— 改由**投影側驅動**：投影表 71MB、listings 335MB，先掃小的那一邊，
+        //                 再用 `post_id`（兩邊都是主鍵）回查 listings 套前綴述詞。
+        //                 原本的 `LEFT JOIN listings × project` 會整表掃 184k 列。
+        // repro 實測：206–214ms → 136–147ms（同一組參數、同一個 revision）。
+        //
+        // 兩種寫法的判定完全相同：`p.district = ANY(...)` 為 NULL 時（投影沒有行政區），
+        // 原版 `NOT (NULL)` ＝ NULL ⇒ FILTER 不算；新版 `... IS NOT TRUE` 也排除 NULL ⇒ 一致。
         `SELECT
-           COUNT(*) FILTER (WHERE p.post_id IS NULL) AS missing,
-           COUNT(*) FILTER (WHERE p.post_id IS NOT NULL
-                              AND (${prefix} IN (${placeholders(keys.length, 1)}))
-                              AND NOT (p.district = ANY($${keys.length + 1}::text[]))) AS mismatched
-           FROM listings l LEFT JOIN ${TABLE} p ON p.post_id = l.post_id`,
+           (SELECT COUNT(*) FROM listings l WHERE NOT EXISTS (
+              SELECT 1 FROM ${TABLE} p WHERE p.post_id = l.post_id)) AS missing,
+           (SELECT COUNT(*) FROM ${TABLE} p
+             WHERE (p.district = ANY($${keys.length + 1}::text[])) IS NOT TRUE
+               AND EXISTS (
+                 SELECT 1 FROM listings l
+                 WHERE l.post_id = p.post_id
+                   AND (${prefix} IN (${placeholders(keys.length, 1)}))
+               )) AS mismatched`,
         [...keys, names],
       );
       const missing = Number(row?.missing);

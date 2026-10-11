@@ -1,0 +1,44 @@
+(node:1096) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+P1_default__default_newest: matched=977 statsTotal=1471 ids=20 list=1815 stats=1524 total=3339
+P1_default__district_price_asc: matched=719 statsTotal=1471 ids=20 list=1673 stats=834 total=2507
+P1_default__districts_price_desc: matched=229 statsTotal=1471 ids=20 list=1669 stats=681 total=2350
+P1_default__default_fit_desc: matched=977 statsTotal=1471 ids=20 list=1523 stats=517 total=2041
+P1_default__unseen_newest: matched=987 statsTotal=1471 ids=20 list=1687 stats=566 total=2253
+P1_default__same_house_off: matched=977 statsTotal=1471 ids=20 list=1510 stats=521 total=2031
+P1_default__kind_whole: matched=976 statsTotal=1471 ids=20 list=1814 stats=634 total=2448
+P1_default__multi_district: matched=934 statsTotal=1471 ids=20 list=2136 stats=741 total=2877
+P2_all_search_keys__default_newest: matched=977 statsTotal=1471 ids=20 list=1426 stats=646 total=2072
+P2_all_search_keys__district_price_asc: matched=719 statsTotal=1471 ids=20 list=1180 stats=683 total=1863
+P2_all_search_keys__districts_price_desc: matched=229 statsTotal=1471 ids=20 list=970 stats=530 total=1501
+P2_all_search_keys__default_fit_desc: matched=977 statsTotal=1471 ids=20 list=1602 stats=606 total=2208
+P2_all_search_keys__unseen_newest: matched=987 statsTotal=1471 ids=20 list=1499 stats=610 total=2109
+P2_all_search_keys__same_house_off: matched=977 statsTotal=1471 ids=20 list=1600 stats=631 total=2231
+P2_all_search_keys__kind_whole: matched=976 statsTotal=1471 ids=20 list=1334 stats=488 total=1823
+P2_all_search_keys__multi_district: matched=934 statsTotal=1471 ids=20 list=1426 stats=463 total=1889
+P3_broad_regions__default_newest: matched=3378 statsTotal=4813 ids=20 list=7284 stats=11202 total=18486
+P3_broad_regions__district_price_asc: matched=719 statsTotal=4813 ids=20 list=1276 stats=9925 total=11201
+P3_broad_regions__districts_price_desc: matched=229 statsTotal=4813 ids=20 list=1336 stats=9076 total=10412
+P3_broad_regions__default_fit_desc: matched=3378 statsTotal=4813 ids=20 list=5512 stats=9614 total=15126
+P3_broad_regions__unseen_newest: matched=3388 statsTotal=4813 ids=20 list=6933 stats=11936 total=18869
+P3_broad_regions__same_house_off: matched=3378 statsTotal=4813 ids=20 list=7093 stats=12716 total=19809
+P3_broad_regions__kind_whole: matched=3376 statsTotal=4813 ids=20 list=6495 stats=8579 total=15074
+P3_broad_regions__multi_district: matched=934 statsTotal=4813 ids=20 list=1502 stats=8581 total=10083
+P4_no_floor_rules__default_newest: matched=2233 statsTotal=3261 ids=20 list=1329 stats=997 total=2326
+P4_no_floor_rules__district_price_asc: matched=1879 statsTotal=3261 ids=20 list=1116 stats=538 total=1654
+P4_no_floor_rules__districts_price_desc: matched=700 statsTotal=3261 ids=20 list=1165 stats=554 total=1719
+P4_no_floor_rules__default_fit_desc: matched=2233 statsTotal=3261 ids=20 list=1582 stats=514 total=2096
+P4_no_floor_rules__unseen_newest: matched=2243 statsTotal=3261 ids=20 list=1758 stats=628 total=2386
+P4_no_floor_rules__same_house_off: matched=2233 statsTotal=3261 ids=20 list=1488 stats=769 total=2257
+P4_no_floor_rules__kind_whole: matched=1068 statsTotal=3261 ids=20 list=2086 stats=770 total=2856
+P4_no_floor_rules__multi_district: matched=2510 statsTotal=3261 ids=20 list=1773 stats=713 total=2486
+P5_no_commute__default_newest: matched=2734 statsTotal=3849 ids=20 list=1002 stats=375 total=1376
+P5_no_commute__district_price_asc: matched=805 statsTotal=3849 ids=20 list=887 stats=469 total=1356
+P5_no_commute__districts_price_desc: matched=518 statsTotal=3849 ids=20 list=869 stats=347 total=1216
+P5_no_commute__default_fit_desc: matched=2734 statsTotal=3849 ids=20 list=1012 stats=291 total=1303
+P5_no_commute__unseen_newest: matched=2746 statsTotal=3849 ids=20 list=1008 stats=292 total=1300
+P5_no_commute__same_house_off: matched=2734 statsTotal=3849 ids=20 list=1069 stats=319 total=1388
+P5_no_commute__kind_whole: matched=2733 statsTotal=3849 ids=20 list=951 stats=263 total=1214
+P5_no_commute__multi_district: matched=1132 statsTotal=3849 ids=20 list=1379 stats=370 total=1749
+wrote /home/cline/lab/5151-stats/v3/evidence/member-list-stats-prepare/matrix-before.json (40 cases)
