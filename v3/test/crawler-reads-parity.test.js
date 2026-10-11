@@ -361,11 +361,19 @@ test("the crawler reads go through the driver-aware entry point", async () => {
   );
   // Every backfill scan awaits its driver-aware twin...
   for (const call of [
-    /const existing = await listingForWatchAsync\(listing\.post_id\);/,
+    // 2026-10-12（背景逐筆讀取瘦身）：逐筆讀取改帶「當輪快照」（`roundOptions`），
+    // 不再每一筆自己讀一次 `SELECT key, value FROM settings`（見 settings-hot-read-diet.test.js）。
+    /const existing = await listingForWatchAsync\(listing\.post_id, undefined, roundOptions\);/,
+    /const saved = \(await listingForWatchAsync\(listing\.post_id, undefined, roundOptions\)\) \|\| listing;/,
     /siblings = await watchSiblings\(listing\.source_key, listing\.post_id\);/,
     /candidates = await matchCandidatesAsync\(listing\.post_id, listing\);/,
     /classify\(listing, existing, siblings, candidates\)/,
     /function classify\(incoming, existing, siblings = null, candidates = null\)/,
+    /const listing = await listingForWatchAsync\(row\.post_id, undefined, listingOptions \|\| \{\}\);/,
+    /const listing = await listingForWatchAsync\(row\.post_id, undefined, roundOptions\);/,
+    /const listing = await listingForWatchAsync\(event\.post_id, userId \|\| undefined, options\);/,
+    /await ingestListingGeoBatch\(freshIds, roundOptions\);/,
+    /await ingestListingGeoBatch\(ids, options\);/,
     /const rows = await needingAliveCheckAsync\(\{ excludeIds: \[\.\.\.seenIds\], limit \}\);/,
     /const pendingRecheck = await needingOfflineRecheckAsync\(\{ limit: 8 \}\);/,
     /const pendingFees = await needingFeeDetailAsync\(\{ limit: needsListingGeo\(settings\) \? 30 : 20 \}\);/,

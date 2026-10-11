@@ -15,8 +15,14 @@ export async function crawlRuntimeAsync(options={}) {
     const rows=await exec('SELECT key,value FROM settings');
     const system=systemCrawlFromRows(rows);
     const stored=parseSettingRows(rows);
+    // 這一輪已經讀到的原始列（`globalRows`）一併回傳：同一輪裡**逐筆**呼叫的
+    // `listingForWatchAsync()`（`getListingAsync()`）與它的裝飾資料可以沿用同一批列，
+    // 不必每一筆再各讀一次 `SELECT key, value FROM settings`
+    //（`getSettingsAsync()` 的 `options.globalRows`、裝飾的 `options.requestContext`）。
+    // ⚠️ 只活在**這一輪的呼叫鏈**內，不是跨輪／跨 tick 的快取：下一輪一定會重讀。
     return {settings:settingsFromRows({globalRows:rows,system}),system,
-      sourceEnabled:id=>crawlSourceEnabled(stored.crawlSources,id)};
+      sourceEnabled:id=>crawlSourceEnabled(stored.crawlSources,id),
+      globalRows:rows};
   });
 }
 

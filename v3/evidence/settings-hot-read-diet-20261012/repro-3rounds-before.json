@@ -1,0 +1,84 @@
+{
+ "label": "before",
+ "windowMs": 52233,
+ "totalQueries": 2080,
+ "totalMs": 5161.45,
+ "globalSettingsReads": 267,
+ "bySql": {
+  "SELECT key, value FROM settings": {
+   "count": 258,
+   "ms": 249.52,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1251 <- v3/scripts/settings-hot-read-count.mjs:67": 50,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:696 <- v3/src/watcher.js:870 <- v3/scripts/settings-hot-read-count.mjs:67": 48,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:696 <- v3/src/watcher.js:870 <- v3/scripts/settings-hot-read-count.mjs:67": 48,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1251 <- v3/scripts/settings-hot-read-count.mjs:67": 48,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1165 <- v3/scripts/settings-hot-read-count.mjs:67": 20,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1165 <- v3/scripts/settings-hot-read-count.mjs:67": 20,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1270 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1270 <- v3/scripts/settings-hot-read-count.mjs:67": 12
+   }
+  },
+  "SELECT value FROM settings WHERE key = $1": {
+   "count": 16,
+   "ms": 16.98,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 14,
+    "v3/scripts/settings-hot-read-count.mjs:47": 2
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value": {
+   "count": 15,
+   "ms": 24.09,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:130 <- v3/src/watcher.js:1076 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:112 <- v3/src/watcher.js:1226 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:113 <- v3/src/watcher.js:1226 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:112 <- v3/src/watcher.js:1308 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:113 <- v3/src/watcher.js:1308 <- v3/scripts/settings-hot-read-count.mjs:67": 3
+   }
+  },
+  "SELECT key,value FROM settings": {
+   "count": 9,
+   "ms": 9.68,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:15 <- v3/src/crawlScheduleAsync.js:28 <- v3/src/watcher.js:769 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:98 <- v3/src/watcher.js:1226 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:98 <- v3/src/watcher.js:1308 <- v3/scripts/settings-hot-read-count.mjs:67": 3
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($1,$2) ON CONFLICT(key) DO NOTHING": {
+   "count": 9,
+   "ms": 5.86,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:43 <- v3/src/crawlScheduleAsync.js:127 <- v3/src/crawlScheduleAsync.js:28 <- v3/src/watcher.js:1076 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:43 <- v3/src/crawlScheduleAsync.js:88 <- v3/src/crawlScheduleAsync.js:28 <- v3/src/watcher.js:1226 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:43 <- v3/src/crawlScheduleAsync.js:88 <- v3/src/crawlScheduleAsync.js:28 <- v3/src/watcher.js:1308 <- v3/scripts/settings-hot-read-count.mjs:67": 3
+   }
+  },
+  "SELECT value FROM settings WHERE key=$1 FOR UPDATE": {
+   "count": 9,
+   "ms": 7.96,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:44 <- v3/src/crawlScheduleAsync.js:127 <- v3/src/watcher.js:1076 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:44 <- v3/src/crawlScheduleAsync.js:88 <- v3/src/watcher.js:1226 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+    "v3/src/crawlScheduleAsync.js:29 <- v3/src/crawlScheduleAsync.js:44 <- v3/src/crawlScheduleAsync.js:88 <- v3/src/watcher.js:1308 <- v3/scripts/settings-hot-read-count.mjs:67": 3
+   }
+  }
+ },
+ "driverSettingsSites": {
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1251 <- v3/scripts/settings-hot-read-count.mjs:67": 60,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1251 <- v3/scripts/settings-hot-read-count.mjs:67": 60,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:696 <- v3/src/watcher.js:870 <- v3/scripts/settings-hot-read-count.mjs:67": 36,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:696 <- v3/src/watcher.js:870 <- v3/scripts/settings-hot-read-count.mjs:67": 36,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1270 <- v3/scripts/settings-hot-read-count.mjs:67": 18,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1270 <- v3/scripts/settings-hot-read-count.mjs:67": 18,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1165 <- v3/scripts/settings-hot-read-count.mjs:67": 15,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1165 <- v3/scripts/settings-hot-read-count.mjs:67": 15,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 15,
+  "query v3/scripts/settings-hot-read-count.mjs:47": 1,
+  "query v3/scripts/settings-hot-read-count.mjs:57": 1,
+  "query v3/scripts/settings-hot-read-count.mjs:82": 1
+ },
+ "driverCallsTotal": 1796
+}

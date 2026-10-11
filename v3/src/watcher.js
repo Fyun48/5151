@@ -375,8 +375,8 @@ async function applyCommunityPin(listing, community) {
 }
 
 /** 先走社區超連結（同一棟只打一次社區 API），不夠再抓物件詳情／HTML。 */
-export async function ingestListingGeo(postId) {
-  let listing = await listingForWatchAsync(postId);
+export async function ingestListingGeo(postId, options = {}) {
+  let listing = await listingForWatchAsync(postId, undefined, options);
   if (!listing) return { located: false };
   if (String(listing.source || "591") !== "591") {
     return { located: listingHasTrustedPin(listing) };
@@ -412,10 +412,15 @@ export async function ingestListingGeo(postId) {
   }
 }
 
-async function ingestListingGeoBatch(postIds) {
+async function ingestListingGeoBatch(postIds, options = {}) {
   const ids = [...new Set((postIds || []).map(Number).filter((id) => id > 0))];
   if (!ids.length) return { attempted: 0, located: 0 };
-  const results = await mapPool(ids, { concurrency: detailConcurrency(), gapMs: 80 }, ingestListingGeo);
+  // `mapPool` 會把 index 當第二個參數傳給 fn，所以這裡要包一層，不能直接傳 `ingestListingGeo`。
+  const results = await mapPool(
+    ids,
+    { concurrency: detailConcurrency(), gapMs: 80 },
+    (id) => ingestListingGeo(id, options),
+  );
   return {
     attempted: ids.length,
     located: results.filter((row) => row?.located).length,
@@ -650,7 +655,7 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
     if (seen.has(event.post_id)) continue;
     seen.add(event.post_id);
     const userId = Number(event.user_id) || 0;
-    const listing = await listingForWatchAsync(event.post_id, userId || undefined);
+    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);
     if (!listing) continue;
     const userSettings = userId ? await getSettingsAsync(userId, options) : settings;
     if (!shouldNotify(userSettings, listing, event)) continue;
@@ -660,15 +665,15 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
     }) !== "pending") continue;
     ids.push(event.post_id);
   }
-  await ingestListingGeoBatch(ids);
+  await ingestListingGeoBatch(ids, options);
   if (!withRoute) return;
   for (const postId of ids) {
-    const listing = await listingForWatchAsync(postId);
+    const listing = await listingForWatchAsync(postId, undefined, options);
     if (listing) await resolveListingRoute(listing, settings, options);
   }
 }
 
-async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS, system = null } = {}) {
+async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS, system = null, listingOptions = null } = {}) {
   // 開閘後不得再退回同步讀 getSystemCrawl()（那會碰本機 SQLite handle）；沒傳 system 就 async 讀。
   const systemCrawl = system || await getSystemCrawlAsync();
   const confirmDays = normalizeOfflineConfirmDays(systemCrawl.offlineConfirmDays);
@@ -693,7 +698,7 @@ async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN
   for (const row of rows) {
     throwIfCrawlCancelled();
     if (overScanBudget()) { stopOnBudget(); break; }
-    const listing = await listingForWatchAsync(row.post_id);
+    const listing = await listingForWatchAsync(row.post_id, undefined, listingOptions || {});
     if (!listing) continue;
     checked += 1;
     try {
@@ -728,7 +733,7 @@ async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN
     if (!shouldRecheckOffline(row, { days: confirmDays, now })) continue;
     throwIfCrawlCancelled();
     if (overScanBudget()) { stopOnBudget(); break; }
-    const listing = await listingForWatchAsync(row.post_id);
+    const listing = await listingForWatchAsync(row.post_id, undefined, listingOptions || {});
     if (!listing) continue;
     rechecked += 1;
     try {
@@ -785,6 +790,24 @@ export async function runWatch(options = {}) {
     };
   }
   const settings = runtime.settings;
+  // 這一輪的「逐筆讀取」共用一份快照。`listingForWatchAsync()` 是**逐筆**（逐房源、逐事件）
+  // 被呼叫的，每一筆都會自己讀一次 `SELECT key, value FROM settings`
+  //（`getListingAsync()` 的 settings 與它的裝飾資料各一次，見 `listingDetailAsync.js:60/63`），
+  // 而這些逐筆迴圈（下架掃描、明細補抓、來源套件、待通知定位）都有 400ms 的節奏
+  // ⇒ 正式站變成每秒 8 次的常態讀取。這一輪已經在 `crawlRuntimeAsync()` 讀到同一批列了
+  //（`runtime.globalRows`），往下傳就不必逐筆重讀：
+  //   * `getSettingsAsync()` 認 `options.globalRows`（`settingsAsync.js:85`）
+  //   * 裝飾資料認 `options.requestContext`（`db.js:preloadDecorationProviderAsync()`）
+  // ⚠️ 一個 crawl round 一份，**不是跨輪／跨 tick 的快取** ⇒ 後台改了設定，下一輪就看到新值。
+  // `globalRows` 拿不到時（測試替身）整包退回原本的 `options`，行為逐字不變。
+  const roundRows = Array.isArray(runtime.globalRows) ? runtime.globalRows : null;
+  const roundOptions = roundRows
+    ? {
+      ...options,
+      globalRows: options.globalRows || roundRows,
+      requestContext: options.requestContext || decorationRequestContextFromRows(roundRows),
+    }
+    : options;
   // 第九十六批 B：開工前先看哪些來源還在冷卻期（上一輪被擋到停工）。
   // 讀不到就當作沒有（維持原本行為，不讓診斷狀態擋住整輪）。
   const cooling = new Set();
@@ -871,6 +894,7 @@ export async function runWatch(options = {}) {
       limit: options.skipHeavyGeo ? 12 : 40,
       budgetMs: options.sweepScanBudgetMs,
       system: runtime.system,
+      listingOptions: roundOptions,
     });
   } catch (error) {
     if (isCrawlCancelled()) throw error;
@@ -1162,7 +1186,7 @@ export async function runWatch(options = {}) {
       // Awaited so change detection reads the same store persistListing() writes to
       // (crawlerReads.js). `siblings` and `candidates` are only needed when the row is new, and
       // they are what classify() would otherwise read synchronously from SQLite.
-      const existing = await listingForWatchAsync(listing.post_id);
+      const existing = await listingForWatchAsync(listing.post_id, undefined, roundOptions);
       let siblings = null;
       let candidates = null;
       if (!existing) {
@@ -1182,7 +1206,7 @@ export async function runWatch(options = {}) {
       upserts += 1;
       if (!existing) freshIds.push(listing.post_id);
       if (String(listing.source || "") === "houseprice") {
-        await enqueueListingEnrichAsync(db, (await listingForWatchAsync(listing.post_id)) || listing, { via: "scheduler" });
+        await enqueueListingEnrichAsync(db, (await listingForWatchAsync(listing.post_id, undefined, roundOptions)) || listing, { via: "scheduler" });
       }
       if (upserts % 20 === 0) await yieldEventLoop();
 
@@ -1209,7 +1233,7 @@ export async function runWatch(options = {}) {
       if (type === "seen" || isBaseline || isSearchBaseline) continue;
 
       // 非特別關注的內容微差（地址補齊來回等）不要進通知佇列
-      const saved = (await listingForWatchAsync(listing.post_id)) || listing;
+      const saved = (await listingForWatchAsync(listing.post_id, undefined, roundOptions)) || listing;
       // 5168 全新房源等資料準備完成再通知，避免舊庫回填大量「全新」
       if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
@@ -1239,22 +1263,22 @@ export async function runWatch(options = {}) {
   if (rakuyaProgress.length) await saveRakuyaPageCursorsAsync(rakuyaProgress);
 
   if (needsListingGeo(settings) && freshIds.length > 0 && freshIds.length <= LIST_PAGE_SIZE) {
-    await ingestListingGeoBatch(freshIds);
+    await ingestListingGeoBatch(freshIds, roundOptions);
   }
 
-  await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true, ...options });
+  await resolvePendingNotifyLocations(settings, { withRoute: options.skipHeavyGeo !== true, ...roundOptions });
 
   setCrawlPhase("明細補抓");
   const pendingFees = await needingFeeDetailAsync({ limit: needsListingGeo(settings) ? 30 : 20 });
   for (const row of pendingFees) {
     try {
-      const listing = await listingForWatchAsync(row.post_id);
+      const listing = await listingForWatchAsync(row.post_id, undefined, roundOptions);
       if (!listing) continue;
       const detail = await fetchListingDetail(row.post_id, detailOptions());
       await applyFetchedDetail(listing, detail);
     } catch (error) {
       if (isListingGoneError(error)) {
-        const listing = await listingForWatchAsync(row.post_id);
+        const listing = await listingForWatchAsync(row.post_id, undefined, roundOptions);
         await markOfflineAndNotify(row.post_id, { wasOnline: !listing?.offline });
       }
       // 詳情失敗下次再試，不中斷本輪追蹤
@@ -1267,7 +1291,7 @@ export async function runWatch(options = {}) {
   const pendingSourceKit = await needingSourceKitAsync({ limit: 8 });
   for (const row of pendingSourceKit) {
     try {
-      const listing = await listingForWatchAsync(row.post_id);
+      const listing = await listingForWatchAsync(row.post_id, undefined, roundOptions);
       if (!listing) continue;
       if (skipBlockedKit.has(listing.source)) continue;
       const kit = await fetchSourceKit(listing);
