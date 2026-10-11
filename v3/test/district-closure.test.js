@@ -53,10 +53,12 @@ test('related-only closure keeps cross-district components and leaves unrelated 
   const edges = [[1, 99], [2, 99], [2, 3], [20, 21]];
   let seedSql = null;
   let seedParams = null;
+  const seedPredicates = [];
   const exec = async (sql, params) => {
     if (/split_part/.test(sql)) {
       seedSql = sql;
       seedParams = params;
+      seedPredicates.push(String(sql));
       return seeds.map(post_id => ({ post_id }));
     }
     if (/match_post_id/.test(sql)) return edges.map(([post_id, match_post_id]) => ({ post_id, match_post_id }));
@@ -72,7 +74,16 @@ test('related-only closure keeps cross-district components and leaves unrelated 
   // 交集改在 Node 端做，語意相同但少一趟大參數往返。
   assert.equal(seedSql.includes('post_id = ANY(?::bigint[])'), false,
     '種子查詢不得再帶 endpoint 陣列參數');
-  assert.ok(!seedParams.some((p) => Array.isArray(p)), '不得再有陣列參數進種子查詢');
+  // 2026-10-11（第二刀）：種子述詞拆成兩條查詢（`prefix = ANY(allowed)` 與
+  // `NOT (prefix = ANY(allKeys))`），各自走 `004` 的表達式索引／部分索引。
+  // 允許的陣列參數是**有界的行政區鍵清單**（≤ `regions.js` 的行政區總數），
+  // 不是 2016 那條無界的 endpoint 清單 ⇒ 舊斷言「完全不得有陣列參數」在此放寬為「有界」。
+  for (const p of seedParams) {
+    if (Array.isArray(p)) assert.ok(p.length <= 512, `種子查詢的陣列參數必須有界（實得 ${p.length}）`);
+  }
+  // 兩條述詞都要出現（缺一條就會少算種子）。
+  assert.ok(seedPredicates.some(sql => sql.includes('= ANY(?::text[])')), '缺少 `prefix = ANY(allowed)` 那條');
+  assert.ok(seedPredicates.some(sql => sql.includes('NOT (')), '缺少 `NOT (prefix = ANY(allKeys))` 那條');
 });
 
 test('related-only closure needs no district ID scan when there are no relation edges', async () => {

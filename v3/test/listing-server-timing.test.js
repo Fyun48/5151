@@ -65,6 +65,18 @@ test("完全沒有度量時回傳空字串（呼叫端不設標頭）", () => {
   assert.equal(buildListingServerTimingHeader(undefined), "");
 });
 
+// 輸出契約（2026-10-11 第二刀新增）：payload 的欄位集合是**逐字固定**的常數，不是
+// 「跟輸入物件比」的循環論證。`timing` 與其下的階段欄位屬於 #714 既有的診斷契約，
+// 不得因為新增階段取樣而多一個鍵；階段計時**只能**出現在這裡（或 header），
+// 不得被複製到 payload 的頂層／`stats`／`listings`。
+const EXPECTED_PAYLOAD_KEYS = Object.freeze(["hasMore", "listings", "nextCursor", "nextOffset", "queryVersion", "stats", "timing"]);
+const EXPECTED_TIMING_KEYS = Object.freeze(["dataset", "query_ms", "stages", "stats_ms", "stats_stages", "total_ms"]);
+
+test("輸出契約：payload／timing 欄位集合是固定常數", () => {
+  assert.deepEqual([...EXPECTED_PAYLOAD_KEYS].sort(), ["hasMore", "listings", "nextCursor", "nextOffset", "queryVersion", "stats", "timing"]);
+  assert.deepEqual([...EXPECTED_TIMING_KEYS].sort(), ["dataset", "query_ms", "stages", "stats_ms", "stats_stages", "total_ms"]);
+});
+
 // HTTP 層：header 有階段、body 逐字不變（鍵集合與序列化內容都不含新度量）。
 test("新欄位只進 header：JSON payload 不出現任何 Server-Timing 度量鍵", async () => {
   const page = Object.freeze({
@@ -93,11 +105,29 @@ test("新欄位只進 header：JSON payload 不出現任何 Server-Timing 度量
     const body = await response.json();
     assert.deepEqual(Object.keys(body).sort(), pageKeys, "payload 頂層鍵集合不變");
     assert.deepEqual(Object.keys(body.timing).sort(), timingKeys, "payload timing 鍵集合不變");
+    // 對照固定常數（前面那兩行是「與輸入同構」，這裡才是真正的契約）。
+    assert.deepEqual(Object.keys(body).sort(), [...EXPECTED_PAYLOAD_KEYS].sort(), "payload 頂層欄位集合必須逐字不變");
+    assert.deepEqual(Object.keys(body.timing).sort(), [...EXPECTED_TIMING_KEYS].sort(), "timing 欄位集合必須逐字不變");
     assert.deepEqual(Object.keys(body.timing.stages).sort(), Object.keys(TIMING.stages).sort());
     // 度量名（cand/filter/rows）不得出現在 payload 任何一層
     const serialized = JSON.stringify(body);
     for (const name of ["stats_cand", "stats_provider", "stats_count"]) {
       assert.equal(serialized.includes(name), false, `${name} 不得進 payload`);
+    }
+    // 階段計時的鍵只能住在 `timing.stages`／`timing.stats_stages`：
+    // 把它們從 timing 拿掉之後，payload 其餘部分不得再出現任何階段鍵名。
+    const withoutTimingStages = JSON.stringify({
+      stats: body.stats,
+      listings: body.listings,
+      hasMore: body.hasMore,
+      nextOffset: body.nextOffset,
+      nextCursor: body.nextCursor,
+      queryVersion: body.queryVersion,
+      timing: { ...body.timing, stages: undefined, stats_stages: undefined },
+    });
+    for (const key of ["prepare_ms", "sql_ms", "stats_cand", "stats_provider", "stats_count",
+      "profile_sync_ms", "count_sync_ms", "reduce_ms", "provider_ms"]) {
+      assert.equal(withoutTimingStages.includes(`"${key}"`), false, `${key} 只能進 header／timing.stages`);
     }
   } finally { await new Promise(resolve => server.close(resolve)); }
 });

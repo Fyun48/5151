@@ -37,10 +37,30 @@ if (flag("compare")) {
     if (a.totalMatched !== b.totalMatched) failures.push(`${b.case}: totalMatched ${b.totalMatched} -> ${a.totalMatched}`);
     if (JSON.stringify(a.pageIds) !== JSON.stringify(b.pageIds)) failures.push(`${b.case}: 回傳頁 post_id 序列不同`);
     if (a.statsTotal !== b.statsTotal) failures.push(`${b.case}: stats.total ${b.statsTotal} -> ${a.statsTotal}`);
+    // 輸出契約（第二刀新增）：`timing` 欄位集合與 payload 頂層欄位集合前後必須逐字相同。
+    if (JSON.stringify(a.timingKeys) !== JSON.stringify(b.timingKeys)) {
+      failures.push(`${b.case}: timing 欄位集合不同 ${JSON.stringify(b.timingKeys)} -> ${JSON.stringify(a.timingKeys)}`);
+    }
+    if (JSON.stringify(a.pageKeys) !== JSON.stringify(b.pageKeys)) {
+      failures.push(`${b.case}: payload 頂層欄位集合不同 ${JSON.stringify(b.pageKeys)} -> ${JSON.stringify(a.pageKeys)}`);
+    }
+    if (a.payloadHasStageNames !== false || b.payloadHasStageNames !== false) {
+      failures.push(`${b.case}: payload 出現階段計時欄位（階段只能進 Server-Timing header）`);
+    }
   }
-  const report = { cases: before.matrix.length, identical: failures.length === 0, failures };
+  // 「矩陣不是假表」的證明：比對到的案例數 > 0，且 totalMatched 真的有縮（相異值 > 1）。
+  const distinctTotalMatched = new Set(before.matrix.map((c) => c.totalMatched)).size;
+  const report = {
+    cases: before.matrix.length,
+    compared: before.matrix.length,
+    identical: failures.length === 0,
+    distinctTotalMatched,
+    failures,
+  };
+  if (report.cases === 0) report.identical = false;
+  if (distinctTotalMatched <= 1) { report.identical = false; report.failures.push("totalMatched 只有一種值 ⇒ 矩陣沒有真的篩選"); }
   console.log(JSON.stringify(report, null, 2));
-  process.exit(failures.length === 0 ? 0 : 1);
+  process.exit(failures.length === 0 && report.cases > 0 && distinctTotalMatched > 1 ? 0 : 1);
 }
 
 process.env.DB_DRIVER = process.env.DB_DRIVER || "postgres";
@@ -71,19 +91,52 @@ const PROFILES = {
   P5_no_commute: () => ({ ...baseSettings, commuteKm: 0, workLat: null, workLng: null }),
 };
 
-// 4 組 districts／sort
+// 4 組 districts／sort（原矩陣）＋ 4 組 filter／sameHouse／kind／多行政區
+// （2026-10-11 第二刀：stats／prepare 的改動必須在**每一條分支**上逐案例相同，
+//   所以矩陣從 5×4 擴到 5×8 ＝ 40 案例 ≥ 24）。
 const COMBOS = [
   { name: "default_newest", args: { districts: [], sort: "newest" } },
   { name: "district_price_asc", args: { districts: ["中山區"], sort: "price_asc" } },
   { name: "districts_price_desc", args: { districts: ["松山區", "信義區"], sort: "price_desc" } },
   { name: "default_fit_desc", args: { districts: [], sort: "fit_desc" } },
+  { name: "unseen_newest", args: { districts: [], sort: "newest", filter: "unseen" } },
+  { name: "same_house_off", args: { districts: [], sort: "newest", sameHouse: false } },
+  { name: "kind_whole", args: { districts: [], sort: "newest", kind: "whole" } },
+  { name: "multi_district", args: { districts: ["中山區", "大安區"], sort: "newest" } },
 ];
+
+// 輸出契約（不得改變；逐字固定，不是「跟輸入物件比」的循環論證）。
+const EXPECTED_PAGE_KEYS = ["hasMore", "listings", "nextCursor", "nextOffset", "queryVersion", "stats", "timing"];
+const EXPECTED_TIMING_KEYS = ["dataset", "query_ms", "stages", "stats_ms", "stats_stages", "total_ms"];
+// 階段計時**只能**出現在 `timing.stages`／`timing.stats_stages`（#714 既有的診斷欄），
+// 不得被複製到 payload 的頂層或 `stats`／`listings` 內。
+const FORBIDDEN_PAYLOAD_STAGE_KEYS = [
+  "prepare_ms", "sql_ms", "filter_ms", "rows_ms", "cand_ms", "stats_cand_ms", "stats_provider_ms", "stats_count_ms",
+];
+
+function timingContractViolations(page) {
+  const failures = [];
+  const pageKeys = Object.keys(page).sort();
+  const timingKeys = Object.keys(page.timing || {}).sort();
+  if (JSON.stringify(pageKeys) !== JSON.stringify([...EXPECTED_PAGE_KEYS].sort())) {
+    failures.push(`payload 頂層欄位集合改變：${JSON.stringify(pageKeys)}`);
+  }
+  if (JSON.stringify(timingKeys) !== JSON.stringify([...EXPECTED_TIMING_KEYS].sort())) {
+    failures.push(`timing 欄位集合改變：${JSON.stringify(timingKeys)}`);
+  }
+  const top = JSON.stringify({ ...page, timing: undefined, listings: (page.listings || []).length });
+  for (const key of FORBIDDEN_PAYLOAD_STAGE_KEYS) {
+    if (top.includes(key)) failures.push(`payload 不得含階段計時欄位：${key}`);
+  }
+  return { pageKeys, timingKeys, failures };
+}
 
 const useAllKeys = process.env.MATRIX_ALL_SEARCH_KEYS !== "0";
 
 async function runCase(name, args, settings, searchKeys) {
   const stats = [];
   let last = null;
+  let contract = null;
   for (let i = 0; i < runs; i += 1) {
     const started = performance.now();
     const page = await loadListingPage({
@@ -100,7 +153,9 @@ async function runCase(name, args, settings, searchKeys) {
       stats_stages: page.timing.stats_stages || {},
     });
     last = page;
+    contract = timingContractViolations(page);
   }
+  if (contract?.failures.length) throw new Error(`${name}: ${contract.failures.join("；")}`);
   return {
     case: name,
     totalMatched: last.timing.dataset,
@@ -109,6 +164,10 @@ async function runCase(name, args, settings, searchKeys) {
     nextOffset: last.nextOffset ?? null,
     listings: last.listings.length,
     pageIds: last.listings.map((row) => Number(row.post_id)),
+    // 輸出契約的逐案例證據（`--compare` 會逐案例比對這兩個鍵集合）。
+    pageKeys: contract.pageKeys,
+    timingKeys: contract.timingKeys,
+    payloadHasStageNames: contract.failures.length > 0,
     runs: stats,
     warm: stats[stats.length - 1],
   };
@@ -130,6 +189,8 @@ for (const [profileName, makeSettings] of Object.entries(PROFILES)) {
 
 const payload = {
   label, memberUid: uid, runs, cases: cases.length,
+  // 「矩陣不是假表」的自證：totalMatched 的相異值個數（必須 > 1）。
+  distinctTotalMatched: new Set(cases.map((c) => c.totalMatched)).size,
   prefilterEnabled: process.env.MEMBER_DISTRICT_PREFILTER ?? "(default on)",
   allSearchKeys: useAllKeys, generatedAt: new Date().toISOString(), matrix: cases,
 };

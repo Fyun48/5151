@@ -48,7 +48,6 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0,
   const { allowed, allKeys } = districtKeyLists(districtNames);
   if (!allowed.length || allowed.length === allKeys.length) return null;
   const prefix = districtKeyPrefixExpression("pg");
-  const marks = (n) => Array.from({ length: n }, () => "?").join(",");
 
   // (2) 關係邊：配對雙向（無向圖）＋（選用）該使用者的同屋源群組。
   //     不把 id 清單當 SQL 參數（closure 可達數萬筆，會撐爆參數協定）；改在 Node 端算連通分量。
@@ -86,10 +85,29 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0,
   // 語意逐字相同（同一組基底列、同一組 endpoint、同一個交集），但不再搬 10 萬個 bigint。
   const endpointSet = relatedOnly ? new Set(edges.flat()) : null;
   if (relatedOnly && !endpointSet.size) return [];
-  const seedRows = await exec(
-    `SELECT post_id FROM listings WHERE (${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
-    [...allowed, ...allKeys], {batch:true},
+  // 2026-10-11（第二刀，prepare）：種子述詞**拆成兩條**查詢，語意逐字不變
+  // （`A OR B` ＝ 兩邊各自取列後聯集，兩邊都只回 `post_id`，Node 端也是同一個 Set）。
+  //
+  // 為什麼要拆：`A OR B` 的形狀讓兩顆索引都用不上（`NOT IN` 不可能是索引條件，planner
+  // 只能對整個 OR 做 seq scan）。拆開之後：
+  //   A `prefix = ANY(allowed)` 走 `idx_listings_district_prefix_pg`（表達式索引）
+  //     repro 實測：全表掃描的一部份 → Bitmap Index Scan 16ms。
+  //   B `NOT (prefix = ANY(allKeys))` 走 `idx_listings_unknown_district_prefix_pg`
+  //     （把 367 個鍵烘進謂詞的**部分索引**）repro 實測：186ms → 4.5ms。
+  //   合計 281ms → 約 20ms（不含來回）。索引由
+  //   `v3/migrations/004_member_listing_stats_indexes.sql` 建立（Owner 套在正式庫）。
+  //
+  // 沒有索引時這條路徑**不會變慢**（同一組述詞、同樣兩次掃描；repro 實測與原本的
+  // 單一 OR 掃描相當），所以程式與遷移可以分開部署。
+  const districtSeeds = await exec(
+    `SELECT post_id FROM listings WHERE ${prefix} = ANY(?::text[])`,
+    [allowed], {batch:true},
   );
+  const unknownPrefixSeeds = await exec(
+    `SELECT post_id FROM listings WHERE NOT (${prefix} = ANY(?::text[]))`,
+    [allKeys], {batch:true},
+  );
+  const seedRows = [...districtSeeds, ...unknownPrefixSeeds];
   const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows
     .map(row => Number(row.post_id))
     .filter(id => Boolean(id) && (!endpointSet || endpointSet.has(id)))));
