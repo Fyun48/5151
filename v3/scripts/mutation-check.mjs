@@ -6404,10 +6404,31 @@ const MEMBERREADREPLICA_MUTATIONS = [
     expect: "剛寫過",
   },
   {
+    name: "待機複製衝突不重跑（直接把 40001 當失敗往外丟）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "    const code = standbyConflictCode(error);",
+    to: "    const code = \"\";",
+    expect: "重跑一次",
+  },
+  {
+    name: "任何錯誤都當成待機衝突重跑（掩蓋真正的錯誤）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "    if (!code) throw error;",
+    to: "    if (false) throw error;",
+    expect: "非衝突的錯誤",
+  },
+  {
+    name: "衝突錯誤不追 cause 鏈（被 list 管線包一層就認不得）",
+    file: "v3/src/pgReadReplica.js",
+    from: "    current = current.cause;",
+    to: "    current = null;",
+    expect: "cause 鏈",
+  },
+  {
     name: "待機拿不到連線就讓整個請求失敗（fail-safe 退回 primary 失效）",
     file: "v3/src/pgReadSnapshot.js",
-    from: "    } catch {\n      // 待機拿不到連線 ⇒ **整趟**退回 primary（router 已記一條可搜尋的 warning）。\n      // 絕對不可以改成「一部分讀 primary、一部分讀待機」：那會是同一個請求兩個快照。\n      source = 'primary';\n    }",
-    to: "    } catch {\n      throw new Error('read replica unavailable');\n    }",
+    from: "  } catch {\n    // 待機拿不到連線 ⇒ **整趟**退回 primary（router 已記一條可搜尋的 warning）。\n    // 絕對不可以改成「一部分讀 primary、一部分讀待機」：那會是同一個請求兩個快照。\n    router.noteRoute?.('primary');\n    return runSnapshotOn(await driver.pool.connect(), driver, run, memberReadSnapshot);\n  }",
+    to: "  } catch {\n    throw new Error('read replica unavailable');\n  }",
     expect: "待機拿不到連線",
   },
   {

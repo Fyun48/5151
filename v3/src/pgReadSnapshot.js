@@ -3,8 +3,8 @@ import { readCandidateContent } from './pgCandidateContent.js';
 import { currentWorkDiagnostics, yieldWork } from './workDiagnostics.js';
 import { isMemberWriteFresh } from './memberWriteRecency.js';
 import {
-  planSnapshotRoute, readReplicaConfigured, sharedReadReplica,
-  SNAPSHOT_SOURCE_REPLICA,
+  planSnapshotRoute, readReplicaConfigured, sharedReadReplica, standbyConflictCode,
+  SNAPSHOT_SOURCE_REPLICA, READ_REPLICA_CONFLICT_WARNING,
 } from './pgReadReplica.js';
 
 // 每次 `FETCH FORWARD` 的批次大小上限。
@@ -96,26 +96,56 @@ export async function withPgReadSnapshot(driver, run, options = {}) {
   const env = options.env || process.env;
   const router = options.readReplicaRouter || sharedReadReplica;
   // 「進快照之前一次決定」：決定之後整條快照（list 段與 stats 段、含共趟掃描）只用這**一條**連線。
-  let source = planSnapshotRoute({
+  const source = planSnapshotRoute({
     memberReadSnapshot,
     replicaConfigured: readReplicaConfigured(env),
     memberWriteFresh: memberReadSnapshot && isMemberWriteFresh(options.userId),
   });
-  let client = null;
-  let storeDriver = driver;
-  if (source === SNAPSHOT_SOURCE_REPLICA) {
-    try {
-      const routed = await router.connect();
-      client = routed.client;
-      storeDriver = routed.driver;
-    } catch {
-      // 待機拿不到連線 ⇒ **整趟**退回 primary（router 已記一條可搜尋的 warning）。
-      // 絕對不可以改成「一部分讀 primary、一部分讀待機」：那會是同一個請求兩個快照。
-      source = 'primary';
-    }
+  if (source !== SNAPSHOT_SOURCE_REPLICA) {
+    router.noteRoute?.('primary');
+    return runSnapshotOn(await driver.pool.connect(), driver, run, memberReadSnapshot);
   }
-  if (!client) client = await driver.pool.connect();
-  router.noteRoute?.(source === SNAPSHOT_SOURCE_REPLICA ? SNAPSHOT_SOURCE_REPLICA : 'primary');
+  let replicaClient = null;
+  let replicaDriver = null;
+  try {
+    const routed = await router.connect();
+    replicaClient = routed.client;
+    replicaDriver = routed.driver;
+  } catch {
+    // 待機拿不到連線 ⇒ **整趟**退回 primary（router 已記一條可搜尋的 warning）。
+    // 絕對不可以改成「一部分讀 primary、一部分讀待機」：那會是同一個請求兩個快照。
+    router.noteRoute?.('primary');
+    return runSnapshotOn(await driver.pool.connect(), driver, run, memberReadSnapshot);
+  }
+  router.noteRoute?.(SNAPSHOT_SOURCE_REPLICA);
+  const started = performance.now();
+  try {
+    return await runSnapshotOn(replicaClient, replicaDriver, run, memberReadSnapshot);
+  } catch (error) {
+    // 待機的複製衝突（`hot_standby_feedback=off` ＋ `max_standby_streaming_delay=30s`：
+    // 待機為了追上 WAL 會**直接砍掉**查詢）。對策是**整個快照退回 primary 重跑一次**，
+    // 不是逐條重試（逐條重試又會變成同一個請求兩個 snapshot）；這一趟的結果一律丟棄。
+    // 用 SQLSTATE 判（40001／25006／55006），不比對訊息字串；**不准**把它吞掉當成功。
+    const code = standbyConflictCode(error);
+    if (!code) throw error;
+    const elapsed = Math.round(performance.now() - started);
+    router.noteConflict?.({ code, userId: options.userId, elapsed });
+    // 註：若有 work-diagnostics scope（benchmark），這裡會多出第一趟的 `pg.*` 觀測值與
+    // `pg.declare`／`pg.fetch` 計數；回傳值本身一定來自第二趟（第一趟的結果被丟棄）。
+    console.warn(`${READ_REPLICA_CONFLICT_WARNING}：整趟退回 PG_URL 重跑一次`
+      + `（uid=${Number(options.userId) || 0}, sqlstate=${code}, 第一次嘗試 ${elapsed}ms）`);
+    router.noteRoute?.('primary');
+    return runSnapshotOn(await driver.pool.connect(), driver, run, memberReadSnapshot);
+  }
+}
+
+/**
+ * 在**一條**連線上跑完整條快照（一個交易、一個 snapshot）。
+ *
+ * 抽成獨立函式是為了讓「待機複製衝突 ⇒ 整趟退回 primary 重跑一次」能重跑同一段程式：
+ * 兩次嘗試各自有自己的連線與交易，任一次內部都不會混到另一個來源。
+ */
+async function runSnapshotOn(client, storeDriver, run, memberReadSnapshot) {
   const diagnostics = currentWorkDiagnostics();
   const guard = (sql) => {
     // 只有會員列表那條路開守門；其他快照（公開搜尋／診斷腳本）維持原本的自由度。

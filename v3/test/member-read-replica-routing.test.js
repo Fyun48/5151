@@ -17,11 +17,13 @@ import express from "express";
 
 import {
   createReadReplicaRouter, planSnapshotRoute, readReplicaConfigured, readReplicaUrl,
-  readReplicaPoolOptions, sharedReadReplica, READ_REPLICA_FALLBACK_WARNING,
-  SNAPSHOT_SOURCE_PRIMARY, SNAPSHOT_SOURCE_REPLICA,
+  readReplicaPoolOptions, sharedReadReplica, sharedReadReplicaStats, READ_REPLICA_FALLBACK_WARNING,
+  SNAPSHOT_SOURCE_PRIMARY, SNAPSHOT_SOURCE_REPLICA, standbyConflictCode, isStandbyConflictError,
+  READ_REPLICA_CONFLICT_WARNING, STANDBY_CONFLICT_CODES,
   DEFAULT_READ_REPLICA_CONNECT_TIMEOUT_MS, READ_REPLICA_APPLICATION_NAME_SUFFIX,
 } from "../src/pgReadReplica.js";
 import { createMemberWriteRecency, memberWriteRecency, markMemberWrite } from "../src/memberWriteRecency.js";
+
 import { memberWriteMiddleware } from "../src/memberWriteMiddleware.js";
 import {
   withPgReadSnapshot, assertSnapshotStatementAllowed, isReadOnlySnapshotViolation,
@@ -42,12 +44,36 @@ function fakeClient(name) {
     async query(sql) {
       const text = typeof sql === "string" ? sql : sql.text;
       queries.push(text);
-      return { rows: [], fields: [], rowCount: 0 };
+      // 回一列帶「我在哪個 client」的資料：用來證明重跑後的結果來自 primary 那一趟。
+      return { rows: [{ who: name, sql: text }], fields: [], rowCount: 1 };
     },
     release(error) { this.released = error ?? null; },
     on() {},
     removeListener() {},
   };
+}
+
+/** 讓某個 client 在符合述詞的語句上丟出指定 SQLSTATE（模擬待機複製衝突）。 */
+function failOnQuery(client, predicate, { code = "40001", message = "canceling statement due to conflict with recovery", wrap = false } = {}) {
+  const original = client.query.bind(client);
+  client.query = async (sql) => {
+    const text = typeof sql === "string" ? sql : sql.text;
+    if (predicate(text)) {
+      // 語句確實送出去了（只是被伺服器取消）⇒ 仍然記進 queries。
+      client.queries.push(text);
+      const pgError = new Error(message);
+      pgError.code = code;
+      if (!wrap) throw pgError;
+      // list／stats 管線會把 PG 錯誤包成 SEARCH_UNAVAILABLE（cause 鏈）——真實形狀。
+      const wrappedError = new Error(`listing search unavailable on the postgres driver: ${message}`);
+      wrappedError.name = "ListingSearchUnavailableError";
+      wrappedError.code = "SEARCH_UNAVAILABLE";
+      wrappedError.cause = pgError;
+      throw wrappedError;
+    }
+    return original(sql);
+  };
+  return client;
 }
 
 function fakePool(name, client) {
@@ -225,6 +251,144 @@ test("非會員快照（公開搜尋／診斷腳本）不受影響：不守門�
   assert.equal(created, 0, "沒有 memberReadSnapshot ⇒ 不得路由到待機");
   assert.equal(primary.pool.connectCalls, 1);
   assert.ok(primary.client.queries.includes("CREATE TEMP TABLE t(i int)"));
+});
+
+// ── 2b. 待機複製衝突（recovery conflict）────────────────────────────────────
+test("待機複製衝突：SQLSTATE 家族判定（直接碼、cause 鏈、未知碼、深度上限）", () => {
+  const direct = new Error("canceling statement due to conflict with recovery");
+  direct.code = "40001";
+  assert.equal(standbyConflictCode(direct), "40001");
+  assert.equal(isStandbyConflictError(direct), true);
+  // 待機上會遇到的同家族錯誤。
+  for (const code of ["40001", "25006", "55006"]) {
+    const error = new Error("x");
+    error.code = code;
+    assert.equal(isStandbyConflictError(error), true, `${code} 應被視為待機衝突家族`);
+  }
+  // list／stats 管線會包一層（cause 鏈）也要認得。
+  const wrapped = new Error("listing search unavailable");
+  wrapped.code = "SEARCH_UNAVAILABLE";
+  wrapped.cause = direct;
+  assert.equal(standbyConflictCode(wrapped), "40001");
+  // 不是衝突家族的一律回空字串（不得偷偷重試）。
+  for (const code of ["57014", "08006", "SEARCH_UNAVAILABLE", "", undefined]) {
+    const error = new Error("x");
+    if (code) error.code = code;
+    assert.equal(standbyConflictCode(error), "", `${code} 不該被當成待機衝突`);
+  }
+  assert.equal(standbyConflictCode(null), "");
+  assert.equal(standbyConflictCode({}), "");
+});
+
+test("待機複製衝突 ⇒ 整個快照退回 primary 重跑一次（丟棄待機那趟、不混合、記 warning）", async () => {
+  memberWriteRecency.clear();
+  const primary = fakeDriver("primary");
+  const replica = fakeDriver("replica");
+  failOnQuery(replica.client, (text) => text === "SELECT 1 AS one", { code: "40001" });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  const env = { PG_URL: "postgres://u@primary/db", PG_RO_URL: "postgres://u@standby/db" };
+  const router = routerFor({ env, driver: { pool: replica.pool, candidateContent: null } });
+  try {
+    const who = await withPgReadSnapshot(primary, async (snapshot) => {
+      const result = await snapshot.query("SELECT 1 AS one");
+      return result.rows[0].who;
+    }, { memberReadSnapshot: true, userId: 7, env, readReplicaRouter: router });
+
+    // 回傳值必須來自**重跑那一趟**（primary），不能是待機那趟的任何殘留。
+    assert.equal(who, "primary");
+    // 第一趟：在待機上 BEGIN → 查詢被取消 → 收尾 ROLLBACK（同一條連線、同一個快照）。
+    assert.deepEqual(replica.client.queries, [READ_ONLY_BEGIN, ...SETTINGS, "SELECT 1 AS one", "ROLLBACK"]);
+    // 第二趟：整條快照在 primary 的**一條**連線上重跑（不是接續待機那一趟）。
+    assert.deepEqual(primary.client.queries, [READ_ONLY_BEGIN, ...SETTINGS, "SELECT 1 AS one", "ROLLBACK"]);
+    assert.equal(primary.pool.connectCalls, 1);
+    // 可搜尋的 warning：含 uid、sqlstate 與第一次嘗試的耗時。
+    assert.equal(warnings.length, 1, `expected one conflict warning, got ${JSON.stringify(warnings)}`);
+    assert.ok(warnings[0].includes(READ_REPLICA_CONFLICT_WARNING), warnings[0]);
+    assert.match(warnings[0], /sqlstate=40001/);
+    assert.match(warnings[0], /uid=7/);
+    assert.match(warnings[0], /\d+ms/);
+    assert.equal(router.stats().standbyConflicts, 1);
+    assert.equal(router.stats().replicaReads, 1);
+    assert.equal(router.stats().primaryReads, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("待機複製衝突被包在 cause 鏈裡（list 管線的 SEARCH_UNAVAILABLE）也要重跑", async () => {
+  memberWriteRecency.clear();
+  const primary = fakeDriver("primary");
+  const replica = fakeDriver("replica");
+  failOnQuery(replica.client, (text) => text === "SELECT 1 AS one", { code: "40001", wrap: true });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  const env = { PG_URL: "postgres://u@primary/db", PG_RO_URL: "postgres://u@standby/db" };
+  const router = routerFor({ env, driver: { pool: replica.pool, candidateContent: null } });
+  try {
+    const who = await withPgReadSnapshot(primary, async (snapshot) => {
+      const result = await snapshot.query("SELECT 1 AS one");
+      return result.rows[0].who;
+    }, { memberReadSnapshot: true, userId: 7, env, readReplicaRouter: router });
+    assert.equal(who, "primary");
+    assert.equal(router.stats().standbyConflicts, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("非衝突的錯誤不得偷偷重試（該失敗就失敗，primary 池完全不碰）", async () => {
+  memberWriteRecency.clear();
+  const primary = fakeDriver("primary");
+  const replica = fakeDriver("replica");
+  failOnQuery(replica.client, (text) => text === "SELECT 1 AS one", { code: "57014", message: "canceling statement due to statement timeout" });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  const env = { PG_URL: "postgres://u@primary/db", PG_RO_URL: "postgres://u@standby/db" };
+  const router = routerFor({ env, driver: { pool: replica.pool, candidateContent: null } });
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => withPgReadSnapshot(primary, async (snapshot) => { await snapshot.query("SELECT 1 AS one"); },
+        { memberReadSnapshot: true, userId: 7, env, readReplicaRouter: router }),
+      (error) => { captured = error; return true; },
+    );
+    assert.equal(captured.code, "57014");
+    assert.equal(primary.pool.connectCalls, 0, "非衝突錯誤不得退回 primary 重跑");
+    assert.deepEqual(warnings.filter((line) => line.includes("standby conflict")), []);
+    assert.equal(router.stats().standbyConflicts, 0);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("重跑時又衝突 ⇒ 原樣往外丟（不得無限重試）", async () => {
+  memberWriteRecency.clear();
+  const primary = fakeDriver("primary");
+  const replica = fakeDriver("replica");
+  failOnQuery(replica.client, (text) => text === "SELECT 1 AS one", { code: "40001" });
+  failOnQuery(primary.client, (text) => text === "SELECT 1 AS one", { code: "40001" });
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  const env = { PG_URL: "postgres://u@primary/db", PG_RO_URL: "postgres://u@standby/db" };
+  const router = routerFor({ env, driver: { pool: replica.pool, candidateContent: null } });
+  try {
+    let captured = null;
+    await assert.rejects(
+      () => withPgReadSnapshot(primary, async (snapshot) => { await snapshot.query("SELECT 1 AS one"); },
+        { memberReadSnapshot: true, userId: 7, env, readReplicaRouter: router }),
+      (error) => { captured = error; return true; },
+    );
+    assert.equal(captured.code, "40001");
+    assert.equal(replica.pool.connectCalls, 1, "只試一次待機");
+    assert.equal(primary.pool.connectCalls, 1, "只重跑一次 primary（不無限重試）");
+    assert.equal(router.stats().standbyConflicts, 1);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 // ── 3. 寫入守門 ────────────────────────────────────────────────────────────
@@ -451,6 +615,74 @@ test("live PG：PG_RO_URL 指向連不上的位址 ⇒ 整趟退回 primary（wa
     delete process.env.PG_RO_URL;
     delete process.env.PG_RO_CONNECT_TIMEOUT_MS;
     await sharedReadReplica.close();
+  }
+});
+
+test("live PG：真伺服器的 SQLSTATE 與我們的衝突家族判定一致（25006 家族）", { skip: liveSkip }, async () => {
+  // 待機的「與 recovery 衝突」在 PostgreSQL 是 serialization_failure(40001)，只有真的串流待機
+  // 才生得出來（lab 不碰正式機 ⇒ 不重現）。這裡驗的是**真伺服器回傳的錯誤形狀**：
+  // 唯讀交易裡的寫入一定是 `read_only_sql_transaction`，正是我們家族裡的另一員
+  // ⇒ 證明「用 SQLSTATE 判」在真 PG 上拿得到、也對得上（不是我們自己編的字串比對）。
+  const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const driver = await createPostgresDriver({ connectionString: RAW });
+  const client = await driver.pool.connect();
+  let captured = null;
+  try {
+    await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    try {
+      await client.query("INSERT INTO user_listing_flags (user_id, post_id, watched) VALUES (-1, -1, 1)");
+    } catch (error) { captured = error; }
+    await client.query("ROLLBACK");
+  } finally {
+    client.release();
+    await driver.close();
+  }
+  assert.ok(captured, "唯讀交易裡的寫入必須被伺服器拒絕");
+  assert.equal(captured.code, "25006", `真 PG 的 read-only 錯誤碼：${captured.code}`);
+  assert.ok(STANDBY_CONFLICT_CODES.includes(captured.code));
+  assert.equal(isStandbyConflictError(captured), true);
+  const wrapped = new Error("listing search unavailable"); wrapped.code = "SEARCH_UNAVAILABLE"; wrapped.cause = captured;
+  assert.equal(standbyConflictCode(wrapped), "25006", "被管線包一層也要認得");
+});
+
+test("live PG：真會員列表管線在 PG_RO_URL 開啟時跑得完（整條快照在 -ro 池上、寫入守門開著）", { skip: liveSkip, timeout: 240_000 }, async () => {
+  const previousUrl = process.env.PG_RO_URL;
+  const previousDriver = process.env.DB_DRIVER;
+  const previousPgUrl = process.env.PG_URL;
+  process.env.PG_RO_URL = RAW;
+  process.env.PG_URL = RAW;
+  process.env.DB_DRIVER = "postgres";
+  const { closeSharedPgDriver } = await import("../src/pgSharedDriver.js");
+  await sharedReadReplica.close();
+  await closeSharedPgDriver();
+  try {
+    const { loadListingPage } = await import("../src/listingSearchPage.js");
+    const args = {
+      filter: "all", kind: "", sources: "", q: "", sort: "newest", limit: 20, offset: 0,
+      districts: [], userId: 1, matchVoteUserId: 1, sameHouse: true,
+    };
+    const page = await loadListingPage(args, { driver: "postgres" });
+    assert.ok(Array.isArray(page.listings), "真管線必須回得出 listings");
+    assert.ok(page.stats && typeof page.stats === "object");
+    assert.ok(sharedReadReplicaStats().replicaReads >= 1, "整條請求的快照必須在待機池上（-ro）");
+    assert.equal(sharedReadReplicaStats().standbyConflicts, 0, "這台隔離庫不該有複製衝突");
+    // B：走了一趟掃描時，`scan_ms` 必須是整數毫秒（述詞不共用前綴時不會有這個鍵 ⇒ 不強制存在）。
+    const scanMs = page.timing?.stats_stages?.scan_ms;
+    if (scanMs != null) {
+      assert.equal(Number.isInteger(scanMs), true, "scan_ms 必須是整數毫秒");
+      assert.ok(scanMs >= 0);
+    }
+    // 既有度量語意不變：stats_ms 仍是 statsPrepareMs + 計數段（只驗型別與存在）。
+    assert.equal(typeof page.timing.stats_ms, "number");
+    assert.equal(typeof page.timing.query_ms, "number");
+  } finally {
+    await sharedReadReplica.close();
+    await closeSharedPgDriver();
+    if (previousUrl == null) delete process.env.PG_RO_URL; else process.env.PG_RO_URL = previousUrl;
+    if (previousDriver == null) delete process.env.DB_DRIVER; else process.env.DB_DRIVER = previousDriver;
+    if (previousPgUrl == null) delete process.env.PG_URL; else process.env.PG_URL = previousPgUrl;
+    markMemberWrite(1); // 真管線跑過寫入提示的路徑也不會壞（不是斷言，只是不要把提示表留在半路）
+    memberWriteRecency.clear();
   }
 });
 

@@ -7,6 +7,10 @@
 //   463ms → 172ms、kind_name 分面 354ms → 128ms、42 欄取 11k 列 220ms → 65ms，
 //   待機複製延遲 0.88 秒（`pg_is_in_recovery()=true`、replay 已追平 receive）。
 //
+// ⚠️ 這些數字不代表「設了 `PG_RO_URL` 就會變快」：Owner 2026-10-12 07:10 實讀顯示 `25434` **今天仍落
+// primary**（`in_recovery=false`，與 25433 同速），要等 HA 的 `pg_ro` 後端排序改好、流量才會真的到待機。
+// 本模組只負責「設了就用它」；未設／連不上／冷卻中一律走原路，不假設 HA 已改。
+//
 // 契約（紅線）：
 //   1. **未設 `PG_RO_URL` ⇒ 完全走原路**：連這裡的池都不會建立，`loadListingPage` 的連線
 //      字串與行為逐字相同。
@@ -42,6 +46,36 @@ export const DEFAULT_READ_REPLICA_CONNECT_TIMEOUT_MS = 2000;
 
 export const SNAPSHOT_SOURCE_PRIMARY = "primary";
 export const SNAPSHOT_SOURCE_REPLICA = "replica";
+
+// ── 待機「複製衝突」（recovery conflict）─────────────────────────────────────
+//
+// 正式機兩台的 GUC 實讀（Owner 2026-10-12 07:10）：`hot_standby = on`、
+// `hot_standby_feedback = off`、`max_standby_streaming_delay = 30000ms`、
+// `max_standby_archive_delay = 30000ms`、`wal_level = replica`。
+//
+// 這種設定下，會員唯讀快照要跑好幾秒 ⇒ 待機只有兩條路：
+//   ① 為了不把 WAL 套用拖超過 30 秒，**直接砍掉查詢**（我們要處理的就是這一條）；
+//   ② 拖住 WAL 套用 ⇒ 複製延遲暴漲（全站讀取都變舊、primary 的死列也清不掉）。
+// PostgreSQL 對「與 recovery 衝突」的取消用的是 `serialization_failure`（40001）；
+// 待機上還會遇到的同家族錯誤：`read_only_sql_transaction`（25006）、`object_in_use`（55006，
+// 例如查詢持鎖時主庫要 DROP）。**用 SQLSTATE 判，不比對訊息字串**。
+export const STANDBY_CONFLICT_CODES = Object.freeze(["40001", "25006", "55006"]);
+export const READ_REPLICA_CONFLICT_WARNING = "[pg-read] standby conflict";
+
+/** 這是不是「待機複製衝突」？會沿著 `cause` 鏈找（list／stats 管線會把原始錯誤包一層）。 */
+export function standbyConflictCode(error) {
+  let current = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    const code = String(current.code || "");
+    if (STANDBY_CONFLICT_CODES.includes(code)) return code;
+    current = current.cause;
+  }
+  return "";
+}
+
+export function isStandbyConflictError(error) {
+  return standbyConflictCode(error) !== "";
+}
 
 export class ReadReplicaUnavailableError extends Error {
   constructor(message, { cause = null, cooldown = false } = {}) {
@@ -112,7 +146,7 @@ export function createReadReplicaRouter({
   let coolingUntil = 0;
   let lastError = "";
   let announced = false;
-  const stats = { replicaReads: 0, primaryReads: 0, fallbacks: 0, cooldownSkips: 0 };
+  const stats = { replicaReads: 0, primaryReads: 0, fallbacks: 0, cooldownSkips: 0, standbyConflicts: 0 };
 
   async function ensureDriver() {
     const url = readReplicaUrl(env);
@@ -172,6 +206,8 @@ export function createReadReplicaRouter({
       if (source === SNAPSHOT_SOURCE_REPLICA) stats.replicaReads += 1;
       else stats.primaryReads += 1;
     },
+    /** 待機複製衝突 ⇒ 整個快照退回 primary 重跑一次（呼叫端負責記 warning）。 */
+    noteConflict() { stats.standbyConflicts += 1; },
     stats() { return { ...stats }; },
     lastError() { return lastError; },
     coolingDown() { return now() < coolingUntil; },
