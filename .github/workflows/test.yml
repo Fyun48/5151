@@ -60,6 +60,8 @@ jobs:
             -v "$PWD/deploy/shadow-ha/haproxy:/cfg:ro" \
             haproxy:2.9-alpine \
             haproxy -c -f /cfg/haproxy.cfg
+          echo "haproxy -c OK: deploy/shadow-ha/haproxy/haproxy.cfg 語法有效"
+          echo "(haproxy -c 成功時不吐字，所以補這行讓 log 看得出真的驗過；失敗時會 exit 1 並印 ALERT)"
 
       - name: Run Test Suite
         shell: bash
