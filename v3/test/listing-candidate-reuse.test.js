@@ -16,7 +16,7 @@ test('list IDs determine membership and order even when counter candidates have 
   const calls = [];
   const driver = { readRows: async (sql, params) => {
     calls.push({ sql, params });
-    if (/SELECT post_id FROM/.test(sql)) return [{ post_id: 1 }, { post_id: 2 }, { post_id: 3 }];
+    if (/SELECT post_id FROM/.test(sql)) return [{ post_id: 3 }, { post_id: 1 }, { post_id: 2 }];
     assert.deepEqual(params, [[2, 3]]);
     return [{ post_id: 3, title: 'list-only row 3' }, { post_id: 2, title: 'list-only row 2' }];
   } };
@@ -26,7 +26,10 @@ test('list IDs determine membership and order even when counter candidates have 
   assert.deepEqual(rows.map(row => row.post_id), [1, 2, 3]);
   assert.equal(rows[0], retained);
   assert.equal(rows[1].title, 'list-only row 2');
-  assert.match(calls[0].sql, /WHERE search_key = \$1 ORDER BY post_id/);
+  // 順序契約改由 Node 排序提供（SQL 端 ORDER BY 會在 work_mem 不足時溢寫磁碟）；
+  // 這裡同時釘住「SQL 不帶 ORDER BY」與「回傳值仍是 post_id 遞增」。
+  assert.doesNotMatch(calls[0].sql, /ORDER BY/);
+  assert.match(calls[0].sql, /WHERE search_key = \$1/);
   assert.deepEqual(calls[0].params, ['member-scope']);
   assert.equal(calls.length, 2);
   assert.deepEqual(outside, { post_id: 4, title: 'counter-only row' });
@@ -48,13 +51,21 @@ test('a missing row within the same snapshot fails instead of silently shortenin
   }), /candidate missing/);
 });
 
-test('standalone search still reads the full ordered candidate query', async () => {
-  const expected = [{ post_id: 3, title: 'standalone' }];
+test('standalone search reads the same candidate query and returns it in post_id order', async () => {
+  const stored = [{ post_id: 3, title: 'standalone 3' }, { post_id: 1, title: 'standalone 1' }];
   const driver = { readRows: async (sql, params, options) => {
-    assert.match(sql, /SELECT post_id, title FROM listings WHERE search_key = \$1 ORDER BY post_id/);
+    assert.match(sql, /SELECT post_id, title FROM listings WHERE search_key = \$1/);
+    assert.doesNotMatch(sql, /ORDER BY/);
     assert.deepEqual(params, ['member-scope']);
     assert.deepEqual(options, { arrayRows: true });
-    return expected;
+    return stored;
   } };
-  assert.equal(await loadSearchCandidateRows(driver, { candidateColumns: 'post_id, title', built }), expected);
+  const rows = await loadSearchCandidateRows(driver, { candidateColumns: 'post_id, title', built });
+  assert.deepEqual(rows.map(row => row.post_id), [1, 3]);
+});
+
+test('a positional (array) candidate row is sorted by the post_id column, not by row index', async () => {
+  const driver = { readRows: async () => [[7, 'b'], [2, 'a'], [5, 'c']] };
+  const rows = await loadSearchCandidateRows(driver, { candidateColumns: 'post_id, title', built });
+  assert.deepEqual(rows.map(row => row[0]), [2, 5, 7]);
 });
