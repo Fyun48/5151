@@ -294,7 +294,9 @@ test("併發合併／輪轉的接線：server.js 的守門與 watcher 的游標�
     /const rows = await needing591GeoAsync\(\{ limit: cap, cursor: geo591ScanCursor \}\);/,
     "watcher 一定要把輪轉游標傳下去，否則會退回『每輪都在同一批 head 打轉』",
   );
-  assert.match(watcher, /geo591ScanCursor = rows\.length \? Number\(rows\[rows\.length - 1\]\.post_id\) \|\| 0 : 0;/);
+  // 游標推進已抽成 `geo591Cursor.js`（起點隨機／GEO591_CURSOR_SEED 固定）：這裡只斷言 watcher
+  // 用的是那一支；起點範圍與 bigint 安全由 geo591-cursor-start.test.js 釘住。
+  assert.match(watcher, /geo591ScanCursor = nextGeo591Cursor\(rows\);/);
 });
 
 test("清單入口：listingsNeeding591Geo() 已經是有界批次（不再把整張表撈回 Node）", () => {

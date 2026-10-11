@@ -58,6 +58,8 @@ import { noteConsecutiveTimeout, withBudget } from "./crawlWatchdog.js";
 import { currentCrawlExecution, isCrawlCancelled, throwIfCrawlCancelled } from "./crawlExecution.js";
 import { crawlTelemetry, setCrawlPhase, newCrawlRoundId, logDeadlineStop } from "./crawlTelemetry.js";
 import { fetchCommunityLocation, fetchListingDetail, fetchListings, isListingGoneError, LIST_PAGE_SIZE, mergeFeeRows, probeListingAlive } from "./client591.js";
+// 591 補座標掃描的輪轉起點（隨機／GEO591_CURSOR_SEED 固定）；bigint 安全作法見該檔檔首。
+import { geo591CursorStart, nextGeo591Cursor } from "./geo591Cursor.js";
 import { probeListingAliveBySource } from "./probe.js";
 import { classifyListingProbeWrite } from "./probeOutcomes.js";
 import { processListingEnrichBatch } from "./listingEnrichQueue.js";
@@ -1343,8 +1345,10 @@ function geo591BatchLimit(requested) {
 // ——L-0249 就是這樣來的（同一筆每 15 分鐘重試、實測 386 次），後面真正補得動的列一列都輪不到。
 // 改成「看過 `post_id` 就從它之後接著看」：同一個循環內每一列都會被看到一次，補不到的最多多看
 // 一輪；回傳 0 列代表這個循環走完了，游標歸零、下一輪從頭再走一次（不會有人被永久跳過）。
-let geo591ScanCursor = 0;
-
+// 起點在**進程啟動時**決定一次：預設隨機（3 個節點不會一起從最小的 post_id 低頭、對同一批欠補
+// 物件重複發外部 591 抓取），測試與量測用 `GEO591_CURSOR_SEED` 固定起點
+// （理由與 bigint 安全作法見 `geo591Cursor.js` 檔首，測試見 `v3/test/geo591-cursor-start.test.js`）。
+let geo591ScanCursor = geo591CursorStart();
 
 export async function backfillListingCoords(settings = null, { limit = LIST_PAGE_SIZE, ...options } = {}) {
   // PG 模式下 `getSettings()` 讀的是節點本機 ⇒ 預設值改成向 PG 問（`getSettingsAsync`）。
@@ -1352,7 +1356,7 @@ export async function backfillListingCoords(settings = null, { limit = LIST_PAGE
   if (!needsListingGeo(settings) || limit <= 0) return { attempted: 0, located: 0 };
   const cap = geo591BatchLimit(limit);
   const rows = await needing591GeoAsync({ limit: cap, cursor: geo591ScanCursor });
-  geo591ScanCursor = rows.length ? Number(rows[rows.length - 1].post_id) || 0 : 0;
+  geo591ScanCursor = nextGeo591Cursor(rows);
   return ingestListingGeoBatch(rows.map((row) => row.post_id));
 }
 
