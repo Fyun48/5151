@@ -3,6 +3,7 @@
 // The point of this test is that the SAME statement text produces the same values on both
 // drivers, because that is what lets the PostgreSQL hot path reuse the existing pure
 // decorators instead of forking the listing response.
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -24,6 +25,10 @@ import {
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { ensurePgSchema, importTable } from "../src/pgSchema.js";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("decoration-data");
 
 const TABLES = [
   "user_listing_flags",
@@ -221,7 +226,7 @@ test("the loader memoises one read per user and per id set", async () => {
 });
 
 test("PostgreSQL returns the same decoration data as SQLite", async (t) => {
-  if (!process.env.PG_TEST_URL) return t.skip("PG_TEST_URL not set");
+  if (GUARD_SKIP || !process.env.PG_TEST_URL) return t.skip(GUARD_SKIP || "PG_TEST_URL not set");
   const db = createFixtureDb();
   const schema = `decoration_parity_${process.pid}`;
   const driver = await createPostgresDriver({

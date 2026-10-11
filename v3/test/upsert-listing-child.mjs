@@ -171,6 +171,9 @@ assert.deepEqual(
 // through the adapter and then prove the loop closes - the freshly written listing must show up in
 // the PostgreSQL list query the app would run.
 if (process.env.PG_TEST_URL) {
+  // ⚠️ 安全：守衛必須在建立連線之前——PG_TEST_URL 在本機指向正式庫 5151_shadow。
+  const { assertPgTargetAllowed } = await import("../src/domainToolGuards.js");
+  assertPgTargetAllowed("upsert-listing-child", process.env.PG_TEST_URL, { env: process.env });
   const schema = `upsert_listing_${process.pid}`;
   const pgDriver = await createPostgresDriver({
     connectionString: process.env.PG_TEST_URL,

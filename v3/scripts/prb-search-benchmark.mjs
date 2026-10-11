@@ -45,6 +45,11 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 seedBase(db);
 try {
   if(!process.env.PG_TEST_URL) throw new Error('PG_TEST_URL must name a disposable test database');
+  // ⚠️ 安全：守衛必須在建立連線之前——PG_TEST_URL 在本機指向正式庫 5151_shadow。
+  {
+    const { assertPgTargetAllowed } = await import("../src/domainToolGuards.js");
+    assertPgTargetAllowed("prb-search-benchmark", process.env.PG_TEST_URL, { env: process.env });
+  }
   await withPgFixture(db,async driver=>{
     evidence.postgres=(await driver.query('SHOW server_version')).rows[0].server_version;
     await driver.query('DELETE FROM listings');

@@ -49,6 +49,9 @@ export function args(extra = {}) {
 }
 export async function withPgFixture(db, fn, { tables = SEARCH_TABLES } = {}) {
   if (!process.env.PG_TEST_URL) throw new Error('PG_TEST_URL is required for an isolated fixture');
+  // ⚠️ 安全：守衛必須在建立連線之前——PG_TEST_URL 在本機指向正式庫 5151_shadow。
+  const { assertPgTargetAllowed } = await import('../../src/domainToolGuards.js');
+  assertPgTargetAllowed('prb-search-fixture', process.env.PG_TEST_URL, { env: process.env });
   const schema = `prb_${randomUUID().replaceAll('-', '')}`;
   const driver = await createPostgresDriver({ connectionString: process.env.PG_TEST_URL,
     poolOptions: { max: 6, options: `-c search_path=${schema}`, application_name: '5151-prb-fixture' } });

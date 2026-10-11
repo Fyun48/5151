@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import {test,after} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
@@ -77,7 +78,12 @@ test('第九十一批：逐批完成記錄（單一 job、memberRequirements 空
  assert.equal(db.prepare('SELECT COUNT(*) n FROM crawl_covers').get().n,1);
 });
 
-test('real PG persistent schedule, atomic reservations and cumulative member completion without SQLite I/O',{skip:!process.env.PG_TEST_URL},async()=>{
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("crawl-schedule");
+const LIVE_SKIP = GUARD_SKIP || (!process.env.PG_TEST_URL ? "PG_TEST_URL is not set (real PG crawler schedule)" : false);
+
+test('real PG persistent schedule, atomic reservations and cumulative member completion without SQLite I/O',{ skip: LIVE_SKIP },async()=>{
  seed();
  await withPgFixture(db,async driver=>withoutSqliteIO(db,async()=>{
   const opts={driver:'postgres',pgDriver:driver};

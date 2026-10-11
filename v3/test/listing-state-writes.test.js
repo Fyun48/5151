@@ -6,6 +6,7 @@
 // otherwise "this listing went offline" (or came back) never reaches PostgreSQL.
 // crawlerWrites.js gives them one async entry point; the SQLite driver delegates to db.js, so
 // production behaviour is unchanged.
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -28,7 +29,11 @@ after(() => {
 });
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL state writes)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-state-writes");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL state writes)");
 
 // Everything the state write touches plus what the decorated read of it needs.
 const TABLES = [

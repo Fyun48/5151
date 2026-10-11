@@ -8,11 +8,16 @@
 //
 // ⚠️ 金額路徑的重點不是「有沒有紅」，而是兩邊的**數字**要一模一樣，所以步驟紀錄把
 // bucket 的 (limit, reserved, settled) 與 reservation.job_state 全部寫進字串比對。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("budget-parity");
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-budget-"));
 process.env.DATA_DIR = dataDir;
@@ -169,8 +174,8 @@ test("postgres 路徑（離線 exec）與 sqlite 路徑的步驟紀錄完全相�
 
 test("live：預算 store 在 PostgreSQL 上真的保留、結算、釋放", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live budget store)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live budget store)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -124,7 +125,12 @@ test("PG crawler statement rolls back after in-flight cancellation; no cancelled
   await driver.close();
 });
 
-test("real PG rolls back crawler writes when its deadline expires during SQL", { skip: !process.env.PG_TEST_URL }, async () => {
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("crawl-cancellation");
+const LIVE_SKIP = GUARD_SKIP || (!process.env.PG_TEST_URL ? "PG_TEST_URL is not set (real PG crawler cancellation)" : false);
+
+test("real PG rolls back crawler writes when its deadline expires during SQL", { skip: LIVE_SKIP }, async () => {
   const driver = await createPostgresDriver({ connectionString: process.env.PG_TEST_URL, poolOptions: { max: 1 } });
   try {
     await driver.query("CREATE TEMP TABLE crawl_abort_fixture (value INTEGER)");

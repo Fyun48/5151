@@ -4,12 +4,17 @@
 // watch_note）複製到新 post_id。原本只走 db.js copyUserFlags() → personalFlags.copyUserFlagsForRelist(db, …)，
 // `db` 是節點本機 SQLite handle；正式站 DB_DRIVER=postgres 時站上讀 PG ⇒ 這筆寫入落在沒人讀的本機庫
 // （無聲孤島寫入）。這裡釘住 async 入口在兩個 driver 上與同步版等價，並確認 watcher 已改呼叫 async 版。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("user-flags-relist-parity");
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-relist-flags-"));
@@ -128,8 +133,8 @@ test("watcher 已改呼叫 async 版，且不再呼叫同步 copyUserFlags", () 
 
 test("live：PG 模式來源讀 PG、寫 PG，且不落本機 SQLite（無 PG_TEST_URL 時 skip）", async (t) => {
   const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-  if (!PG_TEST_URL) {
-    t.skip("PG_TEST_URL is not set (live user flags relist copy)");
+  if (GUARD_SKIP || !PG_TEST_URL) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live user flags relist copy)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

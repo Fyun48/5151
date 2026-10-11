@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPostgresDriver } from '../src/dbDriverPostgres.js';
@@ -6,8 +7,11 @@ import { withPgReadSnapshot, readPgRows } from '../src/pgReadSnapshot.js';
 import { createWorkDiagnostics, withWorkDiagnostics } from '../src/workDiagnostics.js';
 
 const connectionString = process.env.PG_TEST_URL || '';
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("pg-candidate-array");
 test('live PG: narrow reads retain all rows across bounded replies and report batch work',
-  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+  { skip: GUARD_SKIP || (!connectionString && 'PG_TEST_URL is not set') }, async () => {
     const driver = await createPostgresDriver({ connectionString });
     const diagnostics = createWorkDiagnostics();
     try {
@@ -23,7 +27,7 @@ test('live PG: narrow reads retain all rows across bounded replies and report ba
     } finally { await driver.close(); }
   });
 test('live PG: complete-read planner settings remain local after success and failure',
-  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+  { skip: GUARD_SKIP || (!connectionString && 'PG_TEST_URL is not set') }, async () => {
     const driver = await createPostgresDriver({ connectionString, poolOptions:{max:1} });
     const settings = "SELECT current_setting('jit') AS jit, current_setting('cursor_tuple_fraction') AS fraction";
     try {
@@ -40,7 +44,7 @@ test('live PG: complete-read planner settings remain local after success and fai
     } finally { await driver.close(); }
   });
 test('live PG: candidate array batches preserve every row, field, numeric value and text',
-  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+  { skip: GUARD_SKIP || (!connectionString && 'PG_TEST_URL is not set') }, async () => {
     const driver = await createPostgresDriver({ connectionString });
     try {
       await withPgReadSnapshot(driver, async snapshot => {
@@ -63,7 +67,7 @@ test('live PG: candidate array batches preserve every row, field, numeric value 
   });
 
 test('live PG: the complete candidate shape keeps the typed value in every named column',
-  { skip: !connectionString && 'PG_TEST_URL is not set' }, async () => {
+  { skip: GUARD_SKIP || (!connectionString && 'PG_TEST_URL is not set') }, async () => {
     const driver = await createPostgresDriver({ connectionString });
     try {
       await withPgReadSnapshot(driver, async snapshot => {

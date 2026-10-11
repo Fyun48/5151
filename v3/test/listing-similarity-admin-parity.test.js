@@ -4,6 +4,7 @@
 // v3.db」。listingSimilarityAsync.js 讓那幾條路徑在 PostgreSQL 上跑同一份語句文字；這條測試把兩邊
 // 的輸出釘在一起。離線那段的 PostgreSQL exec 是「$n 還原成 ? 再跑同一個 SQLite fixture」，
 // 所以真正的 SQL 文字與組裝都被跑到（作法同 notify-enqueue-parity.test.js）。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -204,7 +205,11 @@ test("postgres 路徑：reviewSimilarity 的驗證與回傳與 sqlite 相同", a
 });
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live similarity/insight admin)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-similarity-admin-parity");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live similarity/insight admin)");
 
 // 真表、真 $n：同一組斷言再對 shadow PostgreSQL 跑一次（PG_TEST_URL 沒設就 skip）。
 test("live shadow PostgreSQL：同一組 admin 斷言", { skip }, async () => {

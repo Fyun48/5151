@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync as Database } from 'node:sqlite';
@@ -45,8 +46,13 @@ test('flag existence predicates keep missing, zero, nonbinary, NULL and viewer i
   } finally { db.close(); }
 });
 
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-input-optimizations");
+const LIVE_SKIP = GUARD_SKIP || (!process.env.PG_TEST_URL ? "PG_TEST_URL is not set (live PostgreSQL listing-input optimizations)" : false);
+
 test('live PG: production flag predicates match SQLite reference with nonbinary and NULL flags',
-  {skip:!process.env.PG_TEST_URL && 'PG_TEST_URL is not set'}, async () => {
+  { skip: LIVE_SKIP }, async () => {
     const driver = await createPostgresDriver({connectionString:process.env.PG_TEST_URL,poolOptions:{max:1}});
     const client = await driver.pool.connect();
     try {

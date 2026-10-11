@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -25,8 +26,11 @@ test('candidate content store bounds rows/bytes and refuses mutable PG values', 
 });
 
 const connectionString = process.env.PG_TEST_URL || '';
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("pg-candidate-content");
 test('live PG: reused content belongs to the visible row version and full column contract',
-  { skip: !connectionString && 'PG_TEST_URL is not set' }, async t => {
+  { skip: GUARD_SKIP || (!connectionString && 'PG_TEST_URL is not set') }, async t => {
     const schema = `content_${randomUUID().replaceAll('-', '')}`;
     const other = `${schema}_other`;
     const role = `${schema}_reader`;

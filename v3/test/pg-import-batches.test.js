@@ -5,6 +5,7 @@
 // (bounded by PostgreSQL's 65535 bind-parameter limit). These tests pin the statement shape and
 // the chunking without a server, and - when PG_TEST_URL is set - assert that both paths write the
 // same rows on the real shadow cluster.
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -20,7 +21,11 @@ import {
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL import parity)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("pg-import-batches");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL import parity)");
 
 // A SQLite stand-in for importTable's reads: PRAGMA table_info, then rowid-keyset chunks (the
 // importer streams, so the fake has to page like the real handle does).
