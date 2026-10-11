@@ -265,7 +265,10 @@ function assertScanFixture(app, routeRows = null) {
   assert.ok(kit.includes(KIT_SINYI) && kit.includes(KIT_RAKUYA), "one page per source");
   assert.ok(!kit.includes(KIT_HBH_RETRY), "a future retry hides the row");
   assert.ok(!kit.includes(KIT_OFFLINE), "an offline row is not kit work");
-  const geo = ids(app.listingsNeeding591Geo(20));
+  // 591 座標掃描改成「輪轉（`ORDER BY post_id`）＋有界批次」之後，前 20 筆不再是
+  // `watched-first` 的那幾筆；這裡要比的是「fixture 的每一種分支都真的落在工作清單裡」，
+  // 所以放寬到涵蓋整份 fixture（`GEO_COMMUNITY_CACHED` 仍然必須被排除）。
+  const geo = ids(app.listingsNeeding591Geo(80));
   assert.ok(geo.includes(GEO_NO_COORDS) && geo.includes(GEO_COMMUNITY_MISSING));
   assert.ok(!geo.includes(GEO_COMMUNITY_CACHED), "a cached community satisfies the pin");
   const address = ids(app.listingsNeedingAddressGeo(20));
@@ -367,7 +370,7 @@ test("the crawler reads go through the driver-aware entry point", async () => {
     /const pendingRecheck = await needingOfflineRecheckAsync\(\{ limit: 8 \}\);/,
     /const pendingFees = await needingFeeDetailAsync\(\{ limit: needsListingGeo\(settings\) \? 30 : 20 \}\);/,
     /const pendingSourceKit = await needingSourceKitAsync\(\{ limit: 8 \}\);/,
-    /const rows = await needing591GeoAsync\(\{ limit \}\);/,
+    /const rows = await needing591GeoAsync\(\{ limit: cap, cursor: geo591ScanCursor \}\);/,
     /const rows = \(await needingRouteAsync\(\{ limit, priorityIds \}\)\)\.filter\(/,
     /const rows = await needingAddressGeoAsync\(\{ limit \}\);/,
     /const rows = await needingAddressEnrichAsync\(\{ limit: Math\.max\(0, limit - \(hp\.processed \|\| 0\)\) \}\);/,

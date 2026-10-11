@@ -56,19 +56,24 @@ export async function selectSourceKitCandidates(exec, { deps, limit = 8 } = {}) 
   return context.pickSourceKitRows(collected, { limit });
 }
 
-// listingsNeeding591Geo(): the community-cache membership test becomes one extra read of
-// community_cache instead of one query per candidate.
-export async function select591GeoCandidates(exec, { deps, limit = 20 } = {}) {
+// listingsNeeding591Geo(): 條件下推＋有界批次。舊版把整張 `listings`（正式庫每次約 16 萬列）送回
+// Node，才由 `pick591GeoRows()` 挑出 20 筆，而且 `community_cache` 是**整張撈回 Node** 再判；現在
+// 述詞（含 `community_cache` 的 `NOT EXISTS` 反連接）與 ORDER BY 全部由 db.js 的
+// `geo591RotationQuery()` 產生，PG 端沿主鍵索引掃到 `limit` 筆就停，回傳列數 = 批次大小。
+//
+// `cursor` 由呼叫端持有（`crawlerReads.needing591GeoAsync()` 的參數 → `watcher.backfillListingCoords()`）：
+// 一般呼叫傳 `{ limit }` 時游標是 0，與 SQLite 的 `listingsNeeding591Geo()` 逐列相同；帶游標呼叫時
+// 只回傳 `post_id > cursor` 的下一批，掃到結尾自然回傳空陣列，呼叫端把游標歸零重新循環。
+export async function select591GeoCandidates(exec, { deps, limit = 20, cursor = 0 } = {}) {
   const context = deps || {};
-  const { sql, params } = context.geo591ScanQuery();
+  const cap = Math.max(1, Number(limit) || 20);
+  const { sql, params } = context.geo591RotationQuery({ limit: cap, cursor, dialect: "postgres" });
   const rows = await exec(sql, params);
-  const cacheQuery = context.communityCacheIdsQuery();
-  const cached = await exec(cacheQuery.sql, cacheQuery.params);
-  const communityIds = new Set((cached || []).map((row) => Number(row.community_id)));
-  return context.pick591GeoRows(rows, {
-    limit,
-    hasCommunity: (communityId) => communityIds.has(Number(communityId)),
-  });
+  // ⚠️ 這裡**不要**再套一次 `pick591GeoRows()`：PG 端沒有 community_cache 的內容（那正是被下推掉的
+  // 讀取），拿 `hasCommunity: () => true` 去餵它會把 `needsCommunity` 那一半全部當成「已經有快取」
+  // 而濾掉——看起來像安全網，實際上是把「要補社區」的列整批吃掉。述詞的正確性由
+  // `geo591-bounded-batch.test.js` 的逐批等價測試釘住（SQLite／PG 各跑一次），這裡只做形狀轉換。
+  return rows.map((row) => ({ post_id: row.post_id }));
 }
 
 export async function selectAddressGeoCandidates(exec, { deps, limit = 20 } = {}) {

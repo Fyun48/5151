@@ -7,7 +7,7 @@ import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
 import { createAttributeFilter, passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
 import { listingKitFrom, mergeKitColumns, parseStoredFurnish } from "./listingKit.js";
-import { addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
+import { TRUSTED_GEO_SOURCES, addressPrecision, isTrustedGeoSource, listingCommunityId, preferListingAddress, sourceCommunityLinked, sqlTrustedGeoSource } from "./location.js";
 import { commuteNetworkHint, makeRouteKey, roundCoord } from "./route.js";
 import {
   COMMUTE_STATES,
@@ -3931,6 +3931,9 @@ export function crawlerReadsBuildContext() {
     sourceKitLegacyScanQuery,
     pickSourceKitRows,
     geo591ScanQuery,
+    geo591BatchQuery,
+    geo591RotationQuery,
+    sql591GeoNeedyPredicate,
     communityCacheIdsQuery,
     pick591GeoRows,
     addressGeoScanQuery,
@@ -5206,19 +5209,157 @@ export function markSourceKitRetry(postId, { error = "", delayMs = 15 * 60 * 100
 // 591 座標／社區補齊的掃描。`community_cache` 是否已有該社區（決定要不要再打社區 API）是唯一的
 // 額外讀取，所以 pick 把它當成注入的 predicate：SQLite 傳 hasCommunityCache()，PostgreSQL 傳由
 // communityCacheIdsQuery() 一次撈回來的集合。
+//
+// ⚠️ 這一支是**沒有下推述詞、也沒有 LIMIT** 的舊掃描（全表回 Node 再挑），保留給
+// `listingsNeeding591Geo()` 的 SQLite 路徑與「逐批等價」測試當作對照組；正式庫的路徑走
+// `geo591BatchQuery()`／`geo591RotationQuery()`。ORDER BY 末端補上 `post_id ASC` 只為了讓
+// 同分（watched、last_seen_at 都相同）的順序變成確定，LIMIT 才不會挑到不穩定的那 20 筆。
 export function geo591ScanQuery() {
   return {
     sql: `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
        WHERE IFNULL(hidden, 0) = 0
          AND IFNULL(offline, 0) = 0
          AND ${sql591Source()}
-       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC`,
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC, post_id ASC`,
     params: [],
   };
 }
 
 export function communityCacheIdsQuery() {
   return { sql: "SELECT community_id FROM community_cache", params: [] };
+}
+
+// `location.js:parseCommunityIdFromSourceKey()` 的 SQL 版：`source_key` 的第 3 個 `|` 欄位，
+// 形狀必須是 `c<digits>`。`instr()` 由 `sqlDialect.toPostgresSql()` 翻成 PG 的 `strpos()`。
+// 尾端先補一個 `|`：第 3 段一定被 `|` 收尾，不必再處理「字串結束」那一種邊界。
+// 少於 3 段時（找不到第 2 個 `|`，或第 3 段是空的）＝ 空字串，與 JS `split("|")[2]` 的
+// `undefined` 走同一條路。
+function sqlSourceKeyCommunityBit(column = "source_key") {
+  const padded = `(IFNULL(${column}, '') || '|')`;
+  const first = `instr(${padded}, '|')`;
+  const afterFirst = `substr(${padded}, ${first} + 1)`;
+  const second = `instr(${afterFirst}, '|')`;
+  const afterSecond = `(CASE WHEN ${second} = 0 THEN '' ELSE substr(${afterFirst}, ${second} + 1) END)`;
+  const third = `instr(${afterSecond}, '|')`;
+  // `third <= 1` 也要含進去：`substr(x, 1, -1)` 在 PG 是錯誤（負長度），在 SQLite 是「往回數」。
+  return `(CASE WHEN ${third} <= 1 THEN '' ELSE substr(${afterSecond}, 1, ${third} - 1) END)`;
+}
+
+// `/^c(\d+)$/` 的 SQL 版：第一個字元是小寫 `c`、長度大於 1、其餘全部是 ASCII 數字。
+// 「全部是數字」用十個 `replace()` 把 0–9 依序剝掉再比長度（LIKE 的樣式類別 SQLite 不支援，
+// 而且 SQLite 的 LIKE 對大小寫不敏感、PG 的敏感 ⇒ 不能用 LIKE 判 `c` 開頭）。前導零在兩邊
+// 都算合法（JS `Number("012")` 與 `CAST('012' AS NUMERIC)` 都是 12）。
+// ⚠️ 只能用 NUMERIC 不能只寫 INTEGER：PG 對超長的純數字字串（例如 20 位）`CAST(… AS INTEGER)`
+// 會丟 `value out of range`，整個掃描會直接失敗；NUMERIC 不會溢位，SQLite 的 NUMERIC 親和性
+// 也會給回整數。JS 的 `Number()` 對同一個字串是 1e20，兩邊都只是「不會命中 community_cache」。
+//
+// `dialect = "postgres"` 走 PG 原生的 `split_part()` ＋ 正則（一句 C 函式呼叫，與 JS 的
+// `/^c(\d+)$/` 等價）；`"sqlite"`（預設）走 `instr`/`substr` 鏈。
+// 為什麼要分兩份：PG **會對運算式做 JIT**，而 `instr`/`substr` 鏈為了複製
+// `split("|")[2]` 的三段邊界得層層 `CASE`，展開後是數百個節點；repro 實測光是
+// `JIT … Total 1715.725ms`（Optimization 778ms ＋ Emission 829ms）就把 3ms 的掃描吃掉，
+// 每次呼叫仍是 1.3–1.7 秒。換成 `split_part` 之後整棵述詞縮到幾十個節點（見 PR 的前後量測）。
+export function sql591GeoSourceKeyCommunityId(column = "source_key", { dialect = "sqlite" } = {}) {
+  if (dialect === "postgres") {
+    const bit = `split_part(COALESCE(${column}, ''), '|', 3)`;
+    return `(CASE WHEN ${bit} ~ '^c[0-9]+$' THEN CAST(substr(${bit}, 2) AS NUMERIC) ELSE 0 END)`;
+  }
+  const bit = sqlSourceKeyCommunityBit(column);
+  const digits = `substr(${bit}, 2)`;
+  const stripped = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    .reduce((acc, digit) => `replace(${acc}, '${digit}', '')`, digits);
+  return `(CASE WHEN substr(${bit}, 1, 1) = 'c' AND length(${bit}) > 1`
+    + ` AND length(${stripped}) = 0`
+    + ` THEN CAST(${digits} AS NUMERIC) ELSE 0 END)`;
+}
+
+// `sqlTrustedGeoSource()` 的可估價版本：`IFNULL(geo_source,'') IN (…)` 對 planner 來說是「運算式
+// 比較」⇒ 一律套用 0.5% 的預設選擇率。清單本身逐字沿用（`location.js:TRUSTED_GEO_SOURCES`，
+// 沒有另外抄一份），只是改寫成欄位比較：
+//   `IFNULL(geo_source,'')` 只有在 geo_source 是 NULL 或空字串時才是 `''`，而 `''` 不在清單裡
+//   ⇒ NULL 與 `''` 都必須落在「不可信」。所以 trusted = `geo_source IS NOT NULL AND geo_source IN (…)`。
+function sql591GeoTrustedGeoSource(column = "listings.geo_source") {
+  return `(${column} IS NOT NULL AND ${column} IN (${TRUSTED_GEO_SOURCES.map((id) => `'${id}'`).join(", ")}))`;
+}
+
+// `geo_source !== "community"`（JS 的嚴格比較）的可估價版本：NULL 在 JS 是「不等於」，
+// 在 SQL 是 UNKNOWN，所以 NULL 要明確列舉，否則整條 OR 會變成 NULL（＝false，列會被漏掉）。
+function sql591GeoNotCommunitySource(column = "listings.geo_source") {
+  return `(${column} IS NULL OR ${column} <> 'community')`;
+}
+
+// 新掃描的基底條件：與 `geo591ScanQuery()` 的 `IFNULL(hidden,0)=0 AND IFNULL(offline,0)=0
+// AND COALESCE(source,'591')='591'` 逐字等價，只是不寫 COALESCE（理由同上：PG 對 COALESCE
+// 比較一律 0.5%，三個疊起來是 1.25e-7 ⇒ 估計列數被夾成 1，planner 就放棄主鍵索引）。
+function sql591GeoBaseFilter() {
+  return `(listings.hidden IS NULL OR listings.hidden = 0)
+         AND (listings.offline IS NULL OR listings.offline = 0)
+         AND (listings.source IS NULL OR listings.source = '591')`;
+}
+
+// `pick591GeoRows()` 的述詞，逐字改寫成 SQL、可以直接下推到 PG：
+//   missing       = lat == null || lng == null || !isTrustedGeoSource(geo_source)
+//   needsCommunity = 有效社區 id > 0 && geo_source !== 'community' && !hasCommunity(id)
+// `hasCommunity()` 在正式庫原本是「先把整張 community_cache 撈回 Node 再判」，這裡改成
+// `NOT EXISTS` 反連接（同一個索引查詢，一次都不需要把 community_cache 搬進 Node）。
+// 只給 `FROM listings`（沒有任何別名）的查詢使用。
+//
+// ⚠️ 述詞裡的欄位一定要寫成 `listings.*`：反連接是 `NOT EXISTS (SELECT 1 FROM community_cache cc …)`，
+// 不寫表名時 `community_id` 會解析成**子查詢自己**的 `cc.community_id`（子查詢的表優先於外層），
+// 反連接就退化成沒有相關性的 `cc.community_id = cc.community_id` ⇒ 只要 community_cache 有任一列，
+// 所有「需要補社區」的列都會被誤判成已經有快取而整批消失（這個 bug 由第 9 支測試抓到）。
+//
+// ⚠️ `needsCommunity` 一定要拆成**兩條腿**（欄位／由 source_key 推），不能寫成一個
+// `CASE … END > 0`：
+//   1. 估價：`CASE` 在述詞裡讓 PG 估不出選擇率，整條述詞的 estimated cost 會膨脹到上千萬。
+//   2. 索引：`CASE` 的兩個分支型別不同時 PG 會把整串提升成 `numeric`，於是反連接變成
+//      `cc.community_id::numeric = …`，community_cache 的主鍵索引當場失效（每列一次 Seq Scan）。
+//      拆腿之後第一條腿是 `bigint = bigint`，索引用得到；第二條腿（source_key 推）在正式庫
+//      實測命中 0 列，貴的那一段幾乎不會被執行。
+export function sql591GeoNeedyPredicate({ dialect = "sqlite" } = {}) {
+  const trusted = sql591GeoTrustedGeoSource();
+  const notCommunity = sql591GeoNotCommunitySource();
+  const derived = sql591GeoSourceKeyCommunityId("listings.source_key", { dialect });
+  // ⚠️ `NOT (... IN ...)` 的括號不能省：SQLite 會把 `NOT x IN (...)` 讀成 `(NOT x) IN (...)`
+  // （`NOT ''` 是 1，於是整條變成 `1 IN ('591', ...)`＝false，所有缺座標的列都會被濾掉）。
+  return `( listings.lat IS NULL OR listings.lng IS NULL OR NOT (${trusted})`
+    + ` OR ( listings.community_id > 0 AND ${notCommunity}`
+    + ` AND NOT EXISTS (SELECT 1 FROM community_cache cc WHERE cc.community_id = listings.community_id) )`
+    + ` OR ( (listings.community_id IS NULL OR listings.community_id <= 0) AND ${notCommunity}`
+    + ` AND ${derived} > 0`
+    + ` AND NOT EXISTS (SELECT 1 FROM community_cache cc WHERE cc.community_id = ${derived}) ) )`;
+}
+
+// 條件下推＋有界批次（優先序版）：述詞與 ORDER BY 與 `geo591ScanQuery()` 相同，只多了 LIMIT ⇒
+// 回傳的必定是舊路徑「全撈回 Node 再挑」的前 `limit` 筆（`geo591-bounded-batch.test.js` 逐批比對）。
+export function geo591BatchQuery({ limit = 20, dialect = "sqlite" } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
+  return {
+    sql: `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
+       WHERE ${sql591GeoBaseFilter()}
+         AND ${sql591GeoNeedyPredicate({ dialect })}
+       ORDER BY ${sqlWatchedFirst()}, last_seen_at DESC, post_id ASC
+       LIMIT ?`,
+    params: [cap],
+  };
+}
+
+// 條件下推＋有界批次（輪轉版，正式庫走這條）：改成 `ORDER BY post_id`，PG 端沿著主鍵索引往前
+// 掃到 `limit` 筆就停，不必排序整批候選（也不再產生 external merge 的 temp file）。游標由呼叫端
+// 持有（`watcher.js:backfillListingCoords()`）：`post_id > cursor` 保證同一列在一個循環內只會被
+// 看一次，掃到結尾回 0 從頭再來 ⇒ 補不到的列不會把 head 佔住、其他列也不會被餓死（L-0249）。
+export function geo591RotationQuery({ limit = 20, cursor = 0, dialect = "sqlite" } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
+  const after = Math.max(0, Number(cursor) || 0);
+  return {
+    sql: `SELECT post_id, community_id, source_key, lat, lng, geo_source FROM listings
+       WHERE ${sql591GeoBaseFilter()}
+         AND ${sql591GeoNeedyPredicate({ dialect })}
+         AND post_id > ?
+       ORDER BY post_id ASC
+       LIMIT ?`,
+    params: [after, cap],
+  };
 }
 
 export function pick591GeoRows(rows, { limit = 20, hasCommunity = () => false } = {}) {
@@ -5237,9 +5378,14 @@ export function pick591GeoRows(rows, { limit = 20, hasCommunity = () => false } 
   return out;
 }
 
-export function listingsNeeding591Geo(limit = 20) {
-  const { sql, params } = geo591ScanQuery();
-  return pick591GeoRows(db.prepare(sql).all(...params), { limit, hasCommunity: hasCommunityCache });
+// SQLite 版的「591 座標／社區補齊」工作清單：條件下推＋有界批次，回傳形狀與舊版相同
+// （`[{ post_id }]`）。`cursor` 是輪轉游標，預設 0（不帶狀態，測試與呼叫端都自己持有）。
+// 這裡刻意保留 `hasCommunityCache()` 當第二層（SQL 的反連接已經判過一次；≤ limit 列的逐列查詢
+// 成本可以忽略），所以這一支的結果必須與 `pick591GeoRows()` 的定義完全一致。
+export function listingsNeeding591Geo(limit = 20, { cursor = 0 } = {}) {
+  const cap = Math.max(1, Number(limit) || 20);
+  const { sql, params } = geo591RotationQuery({ limit: cap, cursor });
+  return pick591GeoRows(db.prepare(sql).all(...params), { limit: cap, hasCommunity: hasCommunityCache });
 }
 
 /** 該物件是否已有可信座標（供外站爬蟲跳過已定位者，把補明細的預算留給還沒座標的物件）。 */
