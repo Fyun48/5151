@@ -1,0 +1,5 @@
+(node:3348) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+churn run0: list=1229 stats=748 total=1977 district_ms=237 cand_ms=159 matched=977
+churn run1: list=1298 stats=700 total=1998 district_ms=205 cand_ms=158 matched=977
+churn run2: list=1154 stats=708 total=1862 district_ms=210 cand_ms=155 matched=977

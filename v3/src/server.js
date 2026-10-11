@@ -8,6 +8,7 @@ import { resolveDbDriver } from "./dbDriver.js";
 import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { loadListingPage } from "./listingSearchPage.js";
+import { buildListingServerTimingHeader } from "./listingStageTiming.js";
 import { sendListingSearchUnavailable } from "./listingSearchHttp.js";
 import {
   armMemberExternalFetchAsync,
@@ -4935,7 +4936,9 @@ app.get("/api/listings", async (req, res) => {
   };
   try {
     const page = await loadListingPage(args);
-    res.setHeader("Server-Timing", `list;dur=${page.timing.query_ms}, stats;dur=${page.timing.stats_ms}`);
+    // 階段取樣診斷：`list`／`stats` 兩個既有度量語意不變，另外把各階段鏡射成
+    // `cand`／`filter`／`rows`／`stats_cand`… 等度量。**只進 header**，payload 逐字不變。
+    res.setHeader("Server-Timing", buildListingServerTimingHeader(page.timing));
     page.timing.total_ms = Date.now() - started;
     res.json(page);
   } catch (error) {

@@ -16,6 +16,8 @@ import { runStepsAsync, transformChunks } from "../cooperative.js";
 import { numberFromPg } from "../dbDriverPostgres.js";
 import { toPostgresSql } from "../sqlDialect.js";
 import { buildListRequestContextFromPg } from "../db.js";
+import { appendDistrictProjectedCandidates } from "../listDistrictSql.js";
+import { loadDistrictPrefilterIds } from "../listingDistrictPrefilter.js";
 import { WATCHED_COUNT_SQL } from "../watchLimits.js";
 import { loadPersonalFlagMap } from "./decorationData.js";
 import { LIST_CANDIDATE_COLUMNS } from "../listingCandidateRow.js";
@@ -176,7 +178,18 @@ export function createListingStatsRepository({
         params,
       );
       markStage("status_ms");
-      context.appendDistrictCandidates(context.memberRegionDistrictNames(settings), clauses, params, {driver:"postgres"});
+      // 行政區投影預篩（與會員列表同一條）：`memberRegionDistrictNames` 是同一份清單，
+      // 拿得到投影就用 `post_id = ANY(...)`，拿不到就退回 `split_part` 表達式（不得靜默少算）。
+      const statsDistrictNames = context.memberRegionDistrictNames(settings);
+      const statsDistrictPrefilter = await loadDistrictPrefilterIds(run, { districtNames: statsDistrictNames });
+      const projectedDistrictHandled = appendDistrictProjectedCandidates(
+        statsDistrictNames, clauses, params,
+        { driver: "postgres", projectedIds: statsDistrictPrefilter ? statsDistrictPrefilter.postIds : null },
+      );
+      if (!projectedDistrictHandled) {
+        context.appendDistrictCandidates(statsDistrictNames, clauses, params, { driver: "postgres" });
+      }
+      markStage("district_ms");
       context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
       const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true, arrayRows: true});

@@ -51,20 +51,28 @@ test("closure：個人同屋源群組會把同群成員納入（userId > 0）", 
 test('related-only closure keeps cross-district components and leaves unrelated district IDs in SQL', async () => {
   const seeds = [1, 100, 101, 102];
   const edges = [[1, 99], [2, 99], [2, 3], [20, 21]];
-  let seedParams;
+  let seedSql = null;
+  let seedParams = null;
   const exec = async (sql, params) => {
     if (/split_part/.test(sql)) {
-      assert.match(sql, /post_id = ANY\(\?::bigint\[\]\)/);
-      seedParams = params[0];
-      return seeds.filter(id => params[0].includes(id)).map(post_id => ({ post_id }));
+      seedSql = sql;
+      seedParams = params;
+      return seeds.map(post_id => ({ post_id }));
     }
     if (/match_post_id/.test(sql)) return edges.map(([post_id, match_post_id]) => ({ post_id, match_post_id }));
     return [];
   };
   const ids = await districtClosureIds(exec, { districtNames: ['士林區'], relatedOnly: true });
   assert.deepEqual(ids.sort((a, b) => a - b), [1, 2, 3, 99]);
-  assert.ok(!seedParams.includes(100));
-  assert.ok(!seedParams.includes(101));
+  // 沒有邊的行政區種子（100／101／102）不得被納入：它們不在任何連通分量裡，
+  // 而直接相符的列由 SQL 端的行政區子句負責，不需要繞一圈進 Node。
+  for (const id of [100, 101, 102]) assert.ok(!ids.includes(id), `${id} 不該出現`);
+  // 2026-10-11（會員列表效能包）：種子查詢**不再**把 endpoint 清單當參數送進 SQL
+  // （原本是 100,328 個 bigint 的 `= ANY(?::bigint[])`，repro 實測該查詢 284ms）。
+  // 交集改在 Node 端做，語意相同但少一趟大參數往返。
+  assert.equal(seedSql.includes('post_id = ANY(?::bigint[])'), false,
+    '種子查詢不得再帶 endpoint 陣列參數');
+  assert.ok(!seedParams.some((p) => Array.isArray(p)), '不得再有陣列參數進種子查詢');
 });
 
 test('related-only closure needs no district ID scan when there are no relation edges', async () => {

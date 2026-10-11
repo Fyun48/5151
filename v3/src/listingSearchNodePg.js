@@ -20,6 +20,7 @@ import {
   resolveListDistrictNames,
 } from "./db.js";
 import { districtKeyLists, districtKeyPrefixExpression } from "./listDistrictSql.js";
+import { loadDistrictPrefilterIds } from "./listingDistrictPrefilter.js";
 import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -78,59 +79,87 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0,
   // need a Node closure: unrelated district IDs must not make a round trip to
   // Node and back as a large array parameter. The legacy full-ID contract is
   // retained for direct callers; the page explicitly opts into relatedOnly.
-  const endpoints = relatedOnly ? [...new Set(edges.flat())] : null;
-  if (relatedOnly && !endpoints.length) return [];
+  //
+  // 2026-10-11（效能包）：`relatedOnly` 這條原本把 **100,328 個 endpoint** 當成一個
+  // `= ANY(?::bigint[])` 參數送進 SQL（repro 實測該查詢 284ms，其中多數是參數協定與
+  // 執行計畫的成本）。改成「先取行政區前綴基底列、再在 Node 端與 endpoint 集合取交集」：
+  // 語意逐字相同（同一組基底列、同一組 endpoint、同一個交集），但不再搬 10 萬個 bigint。
+  const endpointSet = relatedOnly ? new Set(edges.flat()) : null;
+  if (relatedOnly && !endpointSet.size) return [];
   const seedRows = await exec(
-    `SELECT post_id FROM listings WHERE ${relatedOnly ? "post_id = ANY(?::bigint[]) AND " : ""}(${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
-    [...(relatedOnly ? [endpoints] : []), ...allowed, ...allKeys], {batch:true},
+    `SELECT post_id FROM listings WHERE (${prefix} IN (${marks(allowed.length)}) OR ${prefix} NOT IN (${marks(allKeys.length)}))`,
+    [...allowed, ...allKeys], {batch:true},
   );
-  const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows.map(row => Number(row.post_id)).filter(Boolean)));
+  const seeds = await runStepsAsync(transformChunks(seedRows, rows => rows
+    .map(row => Number(row.post_id))
+    .filter(id => Boolean(id) && (!endpointSet || endpointSet.has(id)))));
 
   // (3) 只在「含種子的連通分量」內取全部 id（＝原本 recursive UNION 的遞移閉包語意）。
   //
   // ⚠️ astra6 2026-09-25 §3.2：原版 union-find 沒有 path compression／union-by-size，
   // 在鏈狀輸入下每次 find 都要走完整條鏈（他實測：1,000 節點 → 999,000 次 parent 走訪）。
   // 這裡補上 path compression ＋ union-by-size（迭代版，避免長鏈遞迴爆堆疊）。
-  const parent = new Map();
-  const size = new Map();
+  //
+  // 2026-10-11（效能包）：repro 實測這一整段在正式站的資料量（74,363 條邊、100,328 個節點）
+  // 約 300–450ms，全部是 **Map／物件配置**的成本（Map<number,number> 的 get/set 在 V8 很貴）。
+  // 改成「邊壓成 Float64Array ＋ 節點用緊湊索引 ＋ parent/size 用 Int32Array」，
+  // 語意（連通分量 ∪ 種子所在的那些分量）逐字不變 —— 見
+  // `v3/test/member-district-closure-parity.test.js` 對舊版實作的逐筆比對。
+  const edgeCount = edges.length;
+  // ⚠️ 邊表**不可以**用 Int32Array：repro 實測 `post_id` 已經超過 2^31-1（例：2,507,462,476），
+  // Int32Array 會靜默截斷成負數，閉包結果就會多出一堆不存在的 id（實測 onlyNew=6,362）。
+  // 用 Float64Array：post_id 是安全整數（< 2^53），可精確表示。
+  // （`parent`／`size` 用的是 0..n-1 的緊湊索引，仍在 Int32 範圍內。）
+  const ea = new Float64Array(edgeCount);
+  const eb = new Float64Array(edgeCount);
+  const nodeIndex = new Map();
+  // 先配節點索引：0..n-1 為「有邊的節點」；沒有邊的節點不可能被邊走到，不佔索引。
+  for (let i = 0; i < edgeCount; i += 1) {
+    const a = edges[i][0];
+    const b = edges[i][1];
+    if (!nodeIndex.has(a)) nodeIndex.set(a, nodeIndex.size);
+    if (!nodeIndex.has(b)) nodeIndex.set(b, nodeIndex.size);
+    ea[i] = a;
+    eb[i] = b;
+  }
+  const n = nodeIndex.size;
+  const parent = new Int32Array(n);
+  const size = new Int32Array(n);
+  for (let i = 0; i < n; i += 1) { parent[i] = i; size[i] = 1; }
   const find = (x) => {
-    let root = parent.get(x) ?? x;
-    while (parent.get(root) !== undefined && parent.get(root) !== root) root = parent.get(root);
+    let root = x;
+    while (parent[root] !== root) root = parent[root];
     // path compression：把路徑上所有節點直接接到 root
     let cur = x;
-    while (cur !== root) {
-      const next = parent.get(cur) ?? cur;
-      parent.set(cur, root);
-      if (next === cur) break;
-      cur = next;
-    }
-    parent.set(x, root);
+    while (parent[cur] !== root) { const next = parent[cur]; parent[cur] = root; cur = next; }
     return root;
   };
   const union = (a, b) => {
-    if (!parent.has(a)) { parent.set(a, a); size.set(a, 1); }
-    if (!parent.has(b)) { parent.set(b, b); size.set(b, 1); }
     let ra = find(a);
     let rb = find(b);
     if (ra === rb) return;
     // union-by-size：小的接到大的，避免鏈化
-    if ((size.get(ra) || 1) < (size.get(rb) || 1)) { const t = ra; ra = rb; rb = t; }
-    parent.set(rb, ra);
-    size.set(ra, (size.get(ra) || 1) + (size.get(rb) || 1));
+    if (size[ra] < size[rb]) { const t = ra; ra = rb; rb = t; }
+    parent[rb] = ra;
+    size[ra] += size[rb];
   };
-  for (const [a, b] of edges) union(a, b);
+  for (let i = 0; i < edgeCount; i += 1) union(nodeIndex.get(ea[i]), nodeIndex.get(eb[i]));
   const seedRoots = new Set();
   const ids = new Set();
   await runStepsAsync((function* () {
     let visited = 0;
     for (const id of seeds) {
-      seedRoots.add(parent.has(id) ? find(id) : id); ids.add(id);
+      const idx = nodeIndex.get(id);
+      // 沒有索引＝沒有邊＝不屬於任何分量，只可能是種子本身（不會再被邊走到）。
+      if (idx !== undefined) seedRoots.add(find(idx));
+      ids.add(id);
       if (++visited % 256 === 0) yield;
     }
   })());
-  for (const [a, b] of edges) {
-    if (seedRoots.has(find(a))) { ids.add(a); ids.add(b); }
-    if (seedRoots.has(find(b))) { ids.add(a); ids.add(b); }
+  // 舊版對每條邊跑兩次 `find(a)`／`find(b)`，結果是同一組；邊是無向的，掃一次即可。
+  // （74k 次整數運算，不需要讓出事件迴圈；先前版本也沒有在這一段 yield。）
+  for (let i = 0; i < edgeCount; i += 1) {
+    if (seedRoots.has(find(nodeIndex.get(ea[i])))) { ids.add(ea[i]); ids.add(eb[i]); }
   }
   return [...ids];
 }
@@ -231,13 +260,21 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   queryDetails.asOf = context.asOf;
   // 可選資料的降級清單（缺表時為非空）——放進 queryDetails 讓它可被量測與告警，不得靜默 ✗。
   queryDetails.contextDegraded = context.degraded || [];
+  // 行政區名稱（單一來源：與 builder 的 districtSet 同一支解析函式）。
+  const districtNames = resolveListDistrictNames({ districts: args.districts, settings, uid });
+  // 投影預篩（裁決 §4.1 P1）：用 idx_proj_district 先取 id 集合，取代 `split_part(source_key…)`
+  // 的 seq scan。取不到（投影滯後／缺列／關閉）時是 null ⇒ builder 沿用原本表達式。
+  const districtPrefilter = filter === "watched"
+    ? null
+    : await loadDistrictPrefilterIds(exec, { districtNames });
   const built = buildListListingsClauses({
     filter, kind, sources, q: args.q, searchKeys: args.searchKeys,
     districts: args.districts, settings, uid, voteUid,
     context,
     // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
+    districtProjectedIds: districtPrefilter ? districtPrefilter.postIds : null,
     districtRelatedIds: filter === "watched" ? null : await districtClosureIds(exec, {
-      districtNames: resolveListDistrictNames({ districts: args.districts, settings, uid }),
+      districtNames,
       userId: voteUid,
       relatedOnly: true,
     }),

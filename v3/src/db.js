@@ -30,7 +30,7 @@ import {
 } from "./mapsBilling.js";
 import { sameSearch } from "./client591.js";
 import { CITIES, districtNameFromListing, districtsFromSearchUrls, lookupDistrict, normalizeWatchDistricts } from "./regions.js";
-import { appendDistrictCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
+import { appendDistrictCandidates, appendDistrictProjectedCandidates, ensureDistrictCandidateIndex } from "./listDistrictSql.js";
 import { appendPriceCeilingCandidates } from "./listPriceSql.js";
 import { backfillListingSearchProjectionStep, ensureListingSearchProjection, projectionCounts, syncListingProjection, deleteListingProjection, refreshListingProjectionSync } from "./listingSearchProjection.js";
 import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
@@ -7267,7 +7267,7 @@ export function resolveListDistrictNames({ districts = [], settings = null, uid 
 export function buildListListingsClauses({
   filter = "all", kind = "", sources = "", q = "", searchKeys,
   districts = [], settings: settingsParam = null, uid = 0, voteUid = 0,
-  districtIds = null, districtRelatedIds = null, context = null,
+  districtIds = null, districtRelatedIds = null, districtProjectedIds = null, context = null,
 } = {}, { sqliteDb = db } = {}) {
   if (sqliteDb == null) {
     if (!context?.isolation) throw new Error("PG search requires context.isolation");
@@ -7285,9 +7285,17 @@ export function buildListListingsClauses({
   if (filter !== "watched") {
     listingVisibilityClauses(clauses, params, context, { sqliteDb });
     if (Array.isArray(districtRelatedIds)) {
-      appendDistrictCandidates(districtNames, clauses, params, {
-        driver: "postgres", relatedIds: districtRelatedIds,
+      // 投影預篩先接手（有 projectedIds 時）；沒有就退回原本的 `split_part` 表達式。
+      // ⚠️ 取不到投影（滯後／缺列／開關關閉）時 `districtProjectedIds` 是 null，
+      // 這裡會走 appendDistrictCandidates，**絕不靜默少算**。
+      const handled = appendDistrictProjectedCandidates(districtNames, clauses, params, {
+        driver: "postgres", relatedIds: districtRelatedIds, projectedIds: districtProjectedIds,
       });
+      if (!handled) {
+        appendDistrictCandidates(districtNames, clauses, params, {
+          driver: "postgres", relatedIds: districtRelatedIds,
+        });
+      }
     } else if (Array.isArray(districtIds)) {
       // B3b：呼叫端（PG-fed Node）已算好行政區 closure，這裡只放 id 集合。
       // ⚠️ 這條子句是 **PG 專屬**（`= ANY(?)`）：只有 PG-fed Node 路徑會傳 districtIds；
