@@ -190,11 +190,13 @@ export function needingSourceKitAsync({ limit = 8 } = {}, options = {}) {
 }
 
 // db.js listingsNeeding591Geo(): the 591 listings still without a trusted pin.
-export function needing591GeoAsync({ limit = 20 } = {}, options = {}) {
+// `cursor` 是輪轉游標（`post_id > cursor`）；不帶時是 0 ⇒ 兩個 driver 逐列相同（parity 測試靠這個）。
+// 正式路徑由 `watcher.backfillListingCoords()` 持有游標，每一輪都往後看不同的列（見該處註解）。
+export function needing591GeoAsync({ limit = 20, cursor = 0 } = {}, options = {}) {
   return scan(
     options,
-    (exec, deps) => select591GeoCandidates(exec, { deps, limit }),
-    () => listingsNeeding591Geo(limit),
+    (exec, deps) => select591GeoCandidates(exec, { deps, limit, cursor }),
+    () => listingsNeeding591Geo(limit, { cursor }),
   );
 }
 
