@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,7 +21,11 @@ import { createJobQueue, POSTGRES_JOB_QUEUE_DDL } from "../src/jobQueue.js";
 // the streamed schema is visible on the standby.
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
 const PG_TEST_STANDBY_URL = (process.env.PG_TEST_STANDBY_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL integration test)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("pg-live-integration");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL integration test)");
 // Every table the SQL-first statement touches, including the visibility clauses'
 // dependencies (listing_prep for the houseprice display gate).
 const TABLES = ["listings", "listing_prep", "listing_search_projection", "user_listing_flags"];

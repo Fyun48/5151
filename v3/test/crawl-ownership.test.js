@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
@@ -100,7 +101,12 @@ test('nested driver transactions reject explicitly instead of deadlocking the ow
  assert.equal(await withPgCrawlOwner(driver,async()=>42),42);
  await driver.close();
 });
-test('real PG ownership excludes a second pool and releases on success and failure',{skip:!process.env.PG_TEST_URL},async()=>{
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("crawl-ownership");
+const LIVE_SKIP = GUARD_SKIP || (!process.env.PG_TEST_URL ? "PG_TEST_URL is not set (real PG crawler ownership)" : false);
+
+test('real PG ownership excludes a second pool and releases on success and failure',{ skip: LIVE_SKIP },async()=>{
  const a=await createPostgresDriver({connectionString:process.env.PG_TEST_URL,poolOptions:{max:2}});
  const b=await createPostgresDriver({connectionString:process.env.PG_TEST_URL,poolOptions:{max:2}});
  const entered=deferred(),finish=deferred();

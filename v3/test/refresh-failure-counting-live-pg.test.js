@@ -8,6 +8,7 @@
 //   (d) ROLLBACK 後資料庫不留痕（rental_analytics_daily 該日該 metric 的 value 未變）。
 //
 // 場域：repro／tracker_test（domainToolGuards 允許清單；本測試不寫資料，仍只對隔離庫連線）。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
@@ -17,7 +18,11 @@ import { toPostgresSql } from "../src/sqlDialect.js";
 import { taipeiDay } from "../src/rentalNotify.js";
 
 const PG_URL = (process.env.PG_TEST_URL || process.env.PG_LIVE_REPRO_URL || "").trim();
-const skip = PG_URL ? false : "PG_TEST_URL / PG_LIVE_REPRO_URL not set (live PostgreSQL refresh-failure counting)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("refresh-failure-counting-live-pg", PG_URL);
+
+const skip = GUARD_SKIP || (PG_URL ? false : "PG_TEST_URL / PG_LIVE_REPRO_URL not set (live PostgreSQL refresh-failure counting)");
 
 test("refresh 失敗：同交易 DB 計數拿 25P02，行程內計數器 0→1，ROLLBACK 不留痕", { skip }, async () => {
   const drv = await createPostgresDriver({ connectionString: PG_URL, poolOptions: { max: 2 } });

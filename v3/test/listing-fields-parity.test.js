@@ -5,6 +5,7 @@
 // its work from PostgreSQL, these writes decide what the site shows - so crawlerWrites.js gives
 // them one async entry point (the same repository dispatch the state writes use) and this suite
 // pins the result to the SQLite answer on both drivers.
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -30,7 +31,11 @@ after(() => {
 });
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL field writes)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-fields-parity");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL field writes)");
 
 // Everything the field writes touch plus what the decorated read of them needs.
 const TABLES = [

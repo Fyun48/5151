@@ -6,6 +6,7 @@
 //
 // 離線：用 SQLite fixture 當 PG 替身（語句共通），釘住「寫哪裡」與「讀回來一樣」。
 // live：PG_TEST_URL 有設才跑（沒設會 skip）。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -27,7 +28,11 @@ after(() => {
 });
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL settings parity)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("settings-driver-parity");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL settings parity)");
 const UID = 710001;
 
 function fixture() {

@@ -4,6 +4,7 @@
 // route_jobs) against an injected executor. This test drives the same sequence of upserts through
 // both drivers and compares what repository/decorationData.js reads back - the read loaders are the
 // same ones the decorated list path uses, so a match here means the two stores stay in step.
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -16,6 +17,10 @@ import {
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { ensurePgSchema, importTable } from "../src/pgSchema.js";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("write-path-parity");
 
 const TABLES = ["user_listing_flags", "route_cache", "route_jobs"];
 
@@ -120,7 +125,7 @@ test("the hot-path writes land the expected rows on SQLite", async () => {
 });
 
 test("PostgreSQL writes read back identically to SQLite", async (t) => {
-  if (!process.env.PG_TEST_URL) return t.skip("PG_TEST_URL not set");
+  if (GUARD_SKIP || !process.env.PG_TEST_URL) return t.skip(GUARD_SKIP || "PG_TEST_URL not set");
   const db = createFixtureDb();
   const schema = `write_path_parity_${process.pid}`;
   const pgDriver = await createPostgresDriver({

@@ -1,9 +1,14 @@
 // 2.3b 第一段 parity：listing enrich 的讀取與後台統計在兩個 driver 上一致。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-enrich-parity");
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-enrich-"));
 process.env.DATA_DIR = dataDir;
@@ -64,8 +69,8 @@ test("postgres 路徑（離線 exec）給出與 sqlite 相同的統計", async (
 
 test("live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_URL 決定）", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live listing enrich stats)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live listing enrich stats)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
@@ -261,8 +266,8 @@ test("種子查詢：來源停用時不播種（sync 與 async 一致）", async
 
 test("live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metrics 與回收", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live listing enrich writes)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live listing enrich writes)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
@@ -325,8 +330,8 @@ test("live：PostgreSQL 的寫入路徑可以排入、搶到、收尾、記 metr
 //   • 結束自行清理 ✓
 test("live：種子查詢在 PG（CI fixture 自建候選）挑得到，且不寫本機 SQLite", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set（本測試為 PG job 的 fixture 版；不需要影子站 ✓）");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set（本測試為 PG job 的 fixture 版；不需要影子站 ✓）");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

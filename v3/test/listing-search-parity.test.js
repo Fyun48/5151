@@ -1,3 +1,4 @@
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -11,7 +12,11 @@ const app = await import('../src/db.js');
 const {searchListingsAsync} = await import('../src/listingSearchAsync.js');
 const {AS_OF, BASE, KEY, SETTINGS, DISTRICTS, args, seedBase, seedListing, withPgFixture, withoutSqliteIO} = await import('./fixtures/prb-search.mjs');
 const db = app.sqliteHandle();
-const skip = process.env.PG_TEST_URL ? false : 'PG_TEST_URL not set; covered by the PG integration job';
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-search-parity");
+
+const skip = GUARD_SKIP || (process.env.PG_TEST_URL ? false : 'PG_TEST_URL not set; covered by the PG integration job');
 after(() => rmSync(dataDir, {recursive:true, force:true}));
 beforeEach(() => {
   for (const table of ['user_listing_flags','user_same_house_members','user_match_votes','listing_group_members','listing_search_projection','listings','route_cache']) db.exec(`DELETE FROM ${table}`);

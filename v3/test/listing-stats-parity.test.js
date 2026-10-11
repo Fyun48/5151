@@ -6,6 +6,7 @@
 // that exercises every counter, then compares the two answers field by field - always on
 // SQLite, and on the real shadow PostgreSQL when PG_TEST_URL is set (same gate as
 // pg-live-integration.test.js).
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -31,7 +32,11 @@ after(() => {
 });
 
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL listing-stats parity)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("listing-stats-parity");
+
+const skip = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL listing-stats parity)");
 
 // Every table the stats path reads, plus the ones the decoration preload it runs touches
 // (personal flags, same-house index, votes, groups, prep, route/MRT caches, route jobs) and the

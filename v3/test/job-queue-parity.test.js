@@ -3,11 +3,16 @@
 // 這支測試刻意用「步驟紀錄」比對：每一步的結果寫成一行文字，兩邊最後要比出同一串。
 // 離線段只跑 SQLite（PG 版的 claim 用到 FOR UPDATE SKIP LOCKED，離線替身跑不動）；
 // PG 版的 claim／reclaim 由 live 段在有 PG_TEST_URL 時驗證。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("job-queue-parity");
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-jobq-"));
 process.env.DATA_DIR = dataDir;
@@ -71,8 +76,8 @@ test("job 佇列：SQLite 佇列介面與原本的同步函式等價", async () 
 
 test("live：PostgreSQL 佇列可以排入、搶到、完成、失敗與回收", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live job_queue)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live job_queue)");
     return;
   }
   const { withPgFixture } = await import("./fixtures/prb-search.mjs");

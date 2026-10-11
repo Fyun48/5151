@@ -2,6 +2,7 @@
 //
 // 這一組最在意的是**刪到哪一個 store**：同步版把 DELETE 全下在本機 SQLite，PG 模式下站上
 // （讀 PG）什麼都沒清掉、畫面卻回「已清除」。所以每一條都把「PG 夾具」與「本機」分開看。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -153,7 +154,11 @@ test("兩條路由都用 PG 島嶼（同步版不得再出現）", () => {
 // 所以這裡絕不碰 public schema 的表）。
 // ---------------------------------------------------------------------------
 const PG_TEST_URL = (process.env.PG_TEST_URL || "").trim();
-const skipLive = PG_TEST_URL ? false : "PG_TEST_URL is not set (live site reset)";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("site-reset-async");
+
+const skipLive = GUARD_SKIP || (PG_TEST_URL ? false : "PG_TEST_URL is not set (live site reset)");
 
 test("live PostgreSQL：清除全部資料真的清空該 schema（且不動別的 schema）", { skip: skipLive }, async (t) => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");

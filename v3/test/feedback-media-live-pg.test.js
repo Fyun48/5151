@@ -8,27 +8,23 @@
 // ⚠️ 安全設計：只認 `PG_LIVE_REPRO_URL`，或 `PG_TEST_URL` **且資料庫名在允許清單內**
 //   （CI 的拋棄式容器會同時餵兩者；開發機的 PG_TEST_URL 指向正式庫，會被清單擋掉）。
 process.env.PG_TEST_URL = process.env.PG_TEST_URL || "";
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, existsSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const ALLOWED_DB = new Set(["repro", "tracker_test", "repro2"]);
 const pickUrl = () => {
   const live = String(process.env.PG_LIVE_REPRO_URL || "").trim();
   if (live) return live;
-  const shared = String(process.env.PG_TEST_URL || "").trim();
-  if (!shared) return "";
-  try {
-    const db = new URL(shared).pathname.replace(/^\//, "");
-    return ALLOWED_DB.has(db) ? shared : "";
-  } catch {
-    return "";
-  }
+  return String(process.env.PG_TEST_URL || "").trim();
 };
 const RAW = pickUrl();
-const skip = RAW ? false : "沒有可用的隔離 PG（PG_LIVE_REPRO_URL，或資料庫名在允許清單內的 PG_TEST_URL）";
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = RAW ? await livePgTargetSkip("feedback-media-live-pg", RAW) : false;
+const skip = GUARD_SKIP || (RAW ? false : "沒有可用的隔離 PG（PG_LIVE_REPRO_URL，或資料庫名在允許清單內的 PG_TEST_URL）");
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-feedback-media-live-"));
 process.env.DATA_DIR = dataDir;

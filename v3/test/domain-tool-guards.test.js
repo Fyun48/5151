@@ -86,6 +86,7 @@ test("v3/scripts 的 PG 工具都接上目標庫守衛（而且 import 真的在
     ["v3/scripts/pg-import.mjs", "pg-import"],
     ["v3/scripts/pg-integration-setup.mjs", "pg-integration-setup"],
     ["v3/scripts/pg-columns-ab.mjs", "pg-columns-ab"],
+    ["v3/scripts/purge-test-fixtures.mjs", "purge-test-fixtures"],
   ];
   for (const [file, tool] of cases) {
     const src = read(file);

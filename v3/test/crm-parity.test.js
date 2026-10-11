@@ -4,11 +4,16 @@
 // 路徑在 PostgreSQL 上跑同一份語句文字；這條測試把兩邊的輸出釘在一起（作法同 ④ 的 parity 測試）。
 // 離線那段的 PostgreSQL exec 是「$n 還原成 ? 再跑同一個 SQLite fixture」，所以真正的 SQL 文字與
 // 組裝都會被跑到。
+import { livePgTargetSkip } from "./helpers/livePgTarget.js";
 import { after, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// ⚠️ 安全：PG_TEST_URL 在本機指向正式庫 5151_shadow，目標庫不在允許清單就整支 skip。
+//    守衛必須在建立連線之前（見 v3/test/helpers/livePgTarget.js）。
+const GUARD_SKIP = await livePgTargetSkip("crm-parity");
 
 const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-crm-parity-"));
 process.env.DATA_DIR = dataDir;
@@ -200,8 +205,8 @@ test("第九十批：enqueueCrmFromFeedback 在兩個 driver 上排出同一份 
 
 test("live shadow PostgreSQL：同一組 CRM 讀取斷言", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live CRM admin reads)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live CRM admin reads)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
@@ -366,8 +371,8 @@ test("第二段：投遞控制（停止旗標與統計）在 PostgreSQL 也讀�
 
 test("live：影子站的 crm_outbox 可以搶到工作（rowCount 正確）", async (t) => {
   const url = process.env.PG_TEST_URL;
-  if (!url) {
-    t.skip("PG_TEST_URL is not set (live crm_outbox)");
+  if (GUARD_SKIP || !url) {
+    t.skip(GUARD_SKIP || "PG_TEST_URL is not set (live crm_outbox)");
     return;
   }
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
