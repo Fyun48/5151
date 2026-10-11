@@ -110,19 +110,49 @@ test("haproxy.cfg web_nodes: 既有健康檢查與 redispatch/retry-on 不得被
   assert.doesNotMatch(cfg, /^\s*server\s+pg-b\s.*weight\s/m);
 });
 
-test("haproxy.cfg 是 template：render 後不得殘留 ${...}（HAProxy 會把 ${CASAOS_HOST} 當主機名，後端全 DOWN）", () => {
+test("haproxy.cfg 不得殘留 ${...} 佔位符：本檔已是實體 IP（2026-10-12 起不是 template）", () => {
   const raw = readFileSync(cfgPath, "utf8");
-  // 模擬 render-and-run.sh 的 sed（同一組取代字串）。
-  const rendered = raw.replaceAll("${CASAOS_HOST}", "192.168.0.140").replaceAll("${SYNOLOGY_HOST}", "192.168.0.220");
-  const leftovers = rendered
+  // 2026-10-12 實查後改正：正式機的容器是把這份 cfg **單檔 bind mount** 進
+  // /usr/local/etc/haproxy/haproxy.cfg（`-f` 直接指它），**沒有** render-and-run.sh 那一層。
+  // 所以這裡不再模擬 sed 展開，而是直接要求檔內不得出現 ${...}——
+  // 一旦殘留，就代表有人把舊的 template 版檔案放回來（HAProxy 會把 ${CASAOS_HOST} 當主機名）。
+  const leftovers = raw
     .split("\n")
     .map((line, i) => [i + 1, line])
     .filter(([, line]) => !isComment(line) && line.includes("${"));
-  assert.deepEqual(leftovers, [], `render 後仍有未展開的 \${...}：${JSON.stringify(leftovers)}`);
-  // 兩個 server 行都要真的被展開成 IP，不是留著變數。
-  const block = backendBlock(rendered, "web_nodes");
+  assert.deepEqual(leftovers, [], `未預期的 \${...} 佔位符（本檔應為實體 IP）：${JSON.stringify(leftovers)}`);
+  // 兩個 server 行都要是實體 IP。
+  const block = backendBlock(raw, "web_nodes");
   assert.match(block, /^\s*server web-a 192\.168\.0\.140:15153 .*weight 30$/m);
   assert.match(block, /^\s*server web-b 192\.168\.0\.220:15153 .*weight 70$/m);
+});
+
+test("haproxy.cfg PG 路由：pg_rw→pg_primary、pg_ro→pg_standby_first；pg_primary 用 agent-check 且 pg-b 不帶 backup", () => {
+  const cfg = readFileSync(cfgPath, "utf8");
+  // 「寫入只能到 primary」是本專案最硬的約束——前端到 backend 的對應不准被改錯。
+  assert.match(cfg, /^frontend pg_rw\n\s+bind \*:25433\n\s+default_backend pg_primary$/m);
+  assert.match(cfg, /^frontend pg_ro\n\s+bind \*:25434\n\s+default_backend pg_standby_first$/m);
+  const primary = backendBlock(cfg, "pg_primary");
+  // 角色由 agent-check 判定（2026-10-09 實上線、2026-10-12 同步回本檔）。
+  assert.match(primary, /^\s*balance first$/m);
+  assert.match(primary, /^\s*server pg-a \S+ check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s$/m);
+  assert.match(primary, /^\s*server pg-b \S+ check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s$/m);
+  // pg_primary 內不准出現 `backup`：靜態備援標記會在「沒有任何節點自稱 primary」時讓待命庫接到寫入。
+  const primaryEffective = primary.split("\n").filter((l) => !isComment(l)).join("\n");
+  assert.doesNotMatch(primaryEffective, /(?:^|\s)backup(?:\s|$)/);
+  // 讀取端點仍保留 pg-b 為 backup（pg_ro 的讀取備援）。
+  const standby = backendBlock(cfg, "pg_standby_first");
+  assert.match(standby, /^\s*server pg-b \S+ check inter 3s fall 3 rise 2 backup$/m);
+});
+
+test("haproxy.cfg 有 listen internal_stats（容器內 bind :8404、唯讀）", () => {
+  const cfg = readFileSync(cfgPath, "utf8");
+  assert.match(cfg, /^listen internal_stats$/m);
+  const block = cfg.slice(cfg.search(/^listen internal_stats$/m));
+  assert.match(block, /^\s*bind :8404$/m, "容器內必須綁全介面（127.0.0.1:8404 會被 Docker 轉發擋住）");
+  assert.match(block, /^\s*mode http$/m);
+  assert.match(block, /^\s*stats enable$/m);
+  assert.match(block, /^\s*stats admin if FALSE$/m, "stats 必須唯讀（無 admin）");
 });
 
 test("haproxy.cfg web_nodes 的加權註解要寫到三個理由（不是 50/50／漸進／web-a 保留 30）", () => {

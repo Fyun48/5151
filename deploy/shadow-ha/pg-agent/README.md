@@ -88,20 +88,28 @@ down」不是可有可無的修飾，而是唯一的抗抖機制。別把 `PG_AG
 4. 改 HAProxy（下一節那幾行）並 reload。
 5. 驗證經 `25433` 的寫入只到 primary。
 
-## HAProxy 要加的幾行（`deploy/shadow-ha/haproxy/haproxy.cfg` 的 `backend pg_primary`）
+## HAProxy 的 `backend pg_primary`（2026-10-12 起：已在權威檔內，不再是「要加」的片段）
+
+> 這幾行**已經在** `deploy/shadow-ha/haproxy/haproxy.cfg`（也已在兩台正式機上生效）。
+> 下面是**現行內容**；要改它請走 `docs/runbooks/haproxy-web-weight.md` 的就地改寫＋USR2 流程，
+> 不要照「新增片段」的方式貼進去。
 
 ```haproxy
 backend pg_primary
-    option pgsql-check user postgres
     balance first
-    server pg-a ${CASAOS_HOST}:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s
-    server pg-b ${SYNOLOGY_HOST}:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s
+    option pgsql-check user postgres
+    server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s
+    server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s
 ```
 
-- 每台 server 加：`agent-check agent-port 25436 agent-inter 2s`（25436＝該節點 responder 的
-  **primary 埠**）。**不要寫 `agent-rise`／`agent-fall`**——2.9.15 會報 unknown keyword。
-- 拿掉原本的 `backup`；加 `balance first` 當同名條件的 fallback。
+- 每台 server 都有：`agent-check agent-port 25436 agent-inter 2s`（25436＝該節點 responder 的
+  **primary 埠**）。**不要寫 `agent-rise`／`agent-fall`**——2.9.15 會報 unknown keyword
+  （CI 的 `haproxy -c` 也會擋）。
+- `pg-b` **不帶** `backup`：角色由 agent 判定，`backup` 是靜態標記，會在沒有任何節點自稱 primary
+  時把寫入放到待命庫（違反「寫入只能到 primary」）。`balance first` ＋ agent 全 down ＝ fail-closed。
 - `pg_ro`（25434）的 `backend pg_standby_first` **本包不動**（見下方已知限制）。
+- 檔內一律實體 IP（`192.168.0.140`=casa-nas、`192.168.0.220`=syn-nas）：這份 cfg **不是 template**，
+  沒有 `${CASAOS_HOST}` 佔位符、容器啟動時也沒有展開步驟。
 
 ## 驗收指令
 

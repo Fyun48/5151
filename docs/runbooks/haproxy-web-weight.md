@@ -1,28 +1,49 @@
-# Runbook：HAProxy `backend web_nodes` 加權（web-a 30 ／ web-b 70）
+# Runbook：HAProxy 權威設定（`deploy/shadow-ha/haproxy/haproxy.cfg`）的套用、加權與回滾
 
-> 適用對象：要在**正式機**上套用或回退 `deploy/shadow-ha/haproxy/haproxy.cfg` 加權的人（planner）。
-> 本檔是 2026-10-12 那次量測與改動的正式程序；**程式面改動只有一個檔案**（那份 cfg），
-> 這個 runbook 不含任何 `v3/src` 的修改。
-> ⚠️ 本 PR **只改 repo 與文件**，不碰正式機；下面的指令一律由 planner／Owner 執行。
+> 適用對象：要在**正式機**上套用或回退 `deploy/shadow-ha/haproxy/haproxy.cfg` 的人（planner／Owner）。
+> ⚠️ CI **不會**把 repo 檔蓋到正式機（`.github/workflows/deploy-v3.yml` 只做部署後 health check），
+> 套用一律手動：**就地改寫**（同一個 inode）＋容器內 `haproxy -c`＋`kill -s USR2 1`。
+> 2026-10-12 起 repo 檔＝兩台正式機現行檔（拿掉註解與空行後**逐字相同、差異 0**）；
+> 舊版本 runbook 寫的 `.cfg.tmpl`／`render-and-run.sh`／`/tmp/haproxy.cfg` 那一套**與現實不符，已作廢**。
 
-## 0. 先確認「要套用的檔」與「現行檔」差在哪
-
-repo 的 `deploy/shadow-ha/haproxy/haproxy.cfg` 是權威來源，但 NAS 上的兩份現行檔（見 §1）先前有
-**未被同步回 repo 的 Owner 核准設定**（2026-10-10 的訪客黏滯 `stick-table`／`stick on`）。
-本 PR 已把它逐字同步回 repo，因此現在：
-
-- **repo 檔 ＝ 現行檔 ＋ 這次的 `weight 30`／`weight 70`**（其餘逐字相同）。
-- 套用前**務必先 diff 一次**，確認除了 `weight` 沒有別的差異（若多了別的差異，先停下來問，不要直接覆蓋）：
-
-```bash
-# 在 NAS 上（唯讀，先不看內容只看差異清單）
-diff -u /opt/5151-shadow/haproxy/haproxy.cfg deploy/shadow-ha/haproxy/haproxy.cfg
-```
+## 0. 現況事實（2026-10-12 以 `docker inspect`／`ps` 實查）
 
 | 現行檔位置 | 主機 | 容器 | 掛載方式 |
 |---|---|---|---|
-| `/opt/5151-shadow/haproxy/haproxy.cfg` | casa-nas（192.168.0.140） | `5151-haproxy` | 掛成 `…/haproxy.cfg.tmpl`，容器啟動時由 `render-and-run.sh` 展開成 `/tmp/haproxy.cfg` |
-| `~/5151-shadow/haproxy/haproxy.cfg` | syn-nas（192.168.0.220） | `5151-haproxy-B` | 直接掛成 `…/haproxy.cfg`（已在機上展開過） |
+| `/opt/5151-shadow/haproxy/haproxy.cfg` | casa-nas（192.168.0.140） | `5151-haproxy` | **單檔 bind mount** → `/usr/local/etc/haproxy/haproxy.cfg` |
+| `/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg` | syn-nas（192.168.0.220） | `5151-haproxy-B` | **單檔 bind mount** → `/usr/local/etc/haproxy/haproxy.cfg` |
+
+- 兩台容器命令都是 `haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg`。
+- **沒有** `.cfg.tmpl`、**沒有** `render-and-run.sh`、容器內**沒有** `/tmp/haproxy.cfg`。
+  檔內一律**實體 IP**（`192.168.0.140`＝casa、`192.168.0.220`＝syn），沒有 `${CASAOS_HOST}` 這類佔位符，
+  啟動時也沒有任何展開步驟 ⇒ **這份 cfg 不是 template**。
+- `haproxy.cfg` 是**單檔 bind mount**（綁 inode），而且 compose 以 `:ro` 掛進容器：
+  **改檔只能在宿主（NAS）上「就地改寫」**，`docker exec … > cfg` 會是 `Read-only file system`；
+  `awk … > f.new && mv f.new f`／`sed -i` 這類會換 inode 的作法，容器仍看到舊檔。
+- 驗證語法要用**容器內路徑**：`docker exec <c> haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`
+  （給宿主路徑會 `Cannot open configuration file`）。
+- 改設定後零中斷 reload：`kill -s USR2 1`（master/worker 換設定；只有**加／改埠映射**才需要重建容器）。
+  正常的判讀：`pg_primary/pg-b = DOWN (agent)` 是**預期**（待命庫被踢出寫入池），
+  同一台在 `pg_standby_first` 是 `UP bck=1`；`pg_primary/pg-a` 應為 `UP`。
+
+### 0.1 套用前必做：先確認「repo 檔」與「現行檔」沒有別的差異
+
+```bash
+diff <(ssh casa-nas "grep -avE '^\s*#|^\s*$' /opt/5151-shadow/haproxy/haproxy.cfg") \
+     <(grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg)      # casa vs repo
+diff <(ssh syn-nas  "grep -avE '^\s*#|^\s*$' /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg") \
+     <(grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg)      # syn vs repo
+diff <(ssh casa-nas "grep -avE '^\s*#|^\s*$' /opt/5151-shadow/haproxy/haproxy.cfg") \
+     <(ssh syn-nas  "grep -avE '^\s*#|^\s*$' /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg")
+```
+
+- ✅ 預期：三個都**沒有輸出**（差異 0）。有輸出差異就先停下來查，不要直接覆蓋。
+- ⛔ **PG 段絕不能被 repo 檔整份覆蓋**：`backend pg_primary`（`balance first` ＋ 兩條
+  `agent-check agent-port 25436 agent-inter 2s`、**pg-b 不帶 `backup`**）、`backend pg_standby_first`
+  與 `listen internal_stats` 是**寫入路由與角色判定**的核心。正式機上可能還有尚未同步回 repo 的
+  Owner 核准設定，**整份複製 repo 檔上去等於把它們無聲退回舊版**（語法合法、不報錯，只是行為變了）。
+  一律「只改你要改的那幾行」，改完把變更逐字同步回 repo 檔（本檔就是為此存在的鏡像）。
+  `frontend pg_rw → backend pg_primary`、`frontend pg_ro → backend pg_standby_first` **不准改**。
 
 ## 1. 為什麼要加權（決策依據，2026-10-12 02:26–02:28 實測）
 
@@ -36,121 +57,113 @@ diff -u /opt/5151-shadow/haproxy/haproxy.cfg deploy/shadow-ha/haproxy/haproxy.cf
 - 差距來源是**同機資源競爭**：casa-nas 上 `591-tracker-v3` 34.9% ＋ `5151-postgres-A` 約 46%
   ＋ `web-A` 27.6% CPU，4 核 `loadavg ≈ 4.0`。不是 web-A 的程式或設定比較差。
 - 所以 `roundrobin`（50/50）等於把約一半的**新**訪客送去慢的那台 → 中位數被拉高約 25%。
+- 結果：`backend web_nodes` 的 `server web-a … weight 30`／`server web-b … weight 70`
+  （已生效，也在 repo 檔內）。
 
-## 2. 套用步驟（零中斷）
+## 2. 套用／改動流程（零中斷；兩台都要做，順序：先 casa 再 syn）
 
-> **兩個前提先確認**：① §0 的 diff 只有 `weight` 的差；② 下面的「就地改寫」務必用會**改同一個 inode**
-> 的方式（python `open(path,'w')`）。用 `awk … > f.new && mv f.new f` 換檔，容器仍看到舊 inode，
-> 改了等於沒改（`docs/runbooks/postgres-manual-failover.md` §6 有完整踩坑記錄）。
+> **兩個不變式**：① §0.1 的三個 diff 必須為 0；② 改檔一律**就地改寫同一個 inode**
+> （`open(path,'w')` 截斷後重寫），**不要**用 `sed -i`／`awk > new && mv`（換 inode → 容器仍看到舊檔）。
 
 ### 2.1 casa-nas（`5151-haproxy`）
 
 ```bash
-# (1) 就地改寫主機上的正本：只改這兩個 server 行（同 inode）
-docker exec 5151-haproxy python3 - <<'PY'
+# (1) 在宿主就地改寫「正在掛載的那份」＋先留備份（備份是新檔，沒差；正本必須同 inode）
+python3 - <<'PY'
 import re, shutil, time
-p = "/usr/local/etc/haproxy/haproxy.cfg.tmpl"
-s = open(p).read()
-shutil.copy2(p, f"{p}.bak-weight-{time.strftime('%Y%m%d%H%M%S')}")
+p = "/opt/5151-shadow/haproxy/haproxy.cfg"
+shutil.copy2(p, f"{p}.bak-{time.strftime('%Y%m%d%H%M%S')}")
+s = open(p).read()                                   # 只改下面這兩行（範例＝2026-10-12 加權）
 s2 = re.sub(r"(server web-a \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 30", s)
 s2 = re.sub(r"(server web-b \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 70", s2)
-open(p, "w").write(s2)          # 就地覆寫，不改 inode
-print("web-a:", re.search(r"server web-a.*", s2).group(0))
-print("web-b:", re.search(r"server web-b.*", s2).group(0))
+open(p, "w").write(s2)                               # 就地覆寫（同 inode）
+print([l.strip() for l in s2.splitlines() if l.strip().startswith("server ")])
 PY
 
-# (2) 因為容器只掛到 .cfg.tmpl，不能在容器內用 .cfg 驗證（那是舊的、且是尚未展開的 template）：
-#     用 render-and-run.sh 的同一組 sed 展開到暫存檔再驗。
-docker exec 5151-haproxy sh -c '
-  sed -e "s|\${CASAOS_HOST}|192.168.0.140|g" -e "s|\${SYNOLOGY_HOST}|192.168.0.220|g" \
-      /usr/local/etc/haproxy/haproxy.cfg.tmpl > /tmp/haproxy.cfg.check
-  haproxy -c -f /tmp/haproxy.cfg.check && echo "RENDER-CHECK OK"'
+# 宿主沒有 python3 時：用一次性容器改同一顆 inode（-v 綁的是宿主檔案，容器寫入＝宿主就地寫入）
+# docker run --rm -i -v /opt/5151-shadow/haproxy:/cfg python:3-alpine python - <<'PY'
+# p = "/cfg/haproxy.cfg"; s = open(p).read(); open(p, "w").write(s.replace(...)); print("ok")
+# PY
 
-# (3) 就地改寫「正在跑的那份」（/tmp/haproxy.cfg）——重載時 haproxy 讀的是它，不是 template
-docker exec 5151-haproxy python3 - <<'PY'
-import re
-p = "/tmp/haproxy.cfg"
-s = open(p).read()
-s = re.sub(r"(server web-a \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 30", s)
-s = re.sub(r"(server web-b \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 70", s)
-open(p, "w").write(s)
-print([l.strip() for l in s.splitlines() if l.strip().startswith("server web-")])
-PY
+# (2) 語法：容器內路徑（必須 "Configuration file is valid"）
+docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
-# (4) 零中斷 reload（PID 1 = haproxy master-worker，SIGUSR2=零中斷換設定）
+# (3) 零中斷 reload，然後看日誌
 docker exec 5151-haproxy kill -s USR2 1 && sleep 1
-docker exec 5151-haproxy sh -c 'tail -5 /proc/1/fd/1 2>/dev/null || true'
+docker logs 5151-haproxy --tail 20            # 應看到 "New worker forked"／"Loading success"
 ```
-
-> 若 (4) 之後 `docker logs 5151-haproxy --tail 20` 出現設定錯誤，**立刻執行 §3 回滾**；
-> 真的 reload 不過時，最後手段是 `docker compose -f /opt/5151-shadow/haproxy/docker-compose.yml
-> up -d --force-recreate`（容器 entrypoint 會重新 render 並啟動，用 (1) 改好的 template）——
-> 這招會短暫斷 25433/25434 的 PG 連線（數秒），只在 reload 失敗時用。
 
 ### 2.2 syn-nas（`5151-haproxy-B`）
 
-這台是**直接掛 `.cfg`**，所以只要就地改寫再接 HUP：
-
 ```bash
+export PATH=/usr/local/bin:$PATH              # Synology 的 docker 不在非登入 shell 的 PATH
 python3 - <<'PY'
 import re, shutil, time
 p = "/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg"
+shutil.copy2(p, f"{p}.bak-{time.strftime('%Y%m%d%H%M%S')}")
 s = open(p).read()
-shutil.copy2(p, f"{p}.bak-weight-{time.strftime('%Y%m%d%H%M%S')}")
-s = re.sub(r"(server web-a \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 30", s)
-s = re.sub(r"(server web-b \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 70", s)
-open(p, "w").write(s)
-print([l.strip() for l in s.splitlines() if l.strip().startswith("server web-")])
+s2 = re.sub(r"(server web-a \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 30", s)
+s2 = re.sub(r"(server web-b \S+ check inter 3s fall 3 rise 2)(?! weight)", r"\1 weight 70", s2)
+open(p, "w").write(s2)
+print([l.strip() for l in s2.splitlines() if l.strip().startswith("server ")])
 PY
 
 docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
 docker exec 5151-haproxy-B kill -s USR2 1
+docker logs 5151-haproxy-B --tail 20
 ```
 
-## 3. 回滾（把 weight 拿掉，回到 roundrobin）
-
-「拿掉 weight」就等於回退這次改動（其餘設定完全沒動）：
+### 2.3 只有「加／改埠映射」才需要重建容器（例：`127.0.0.1:25154:8404` 的 stats）
 
 ```bash
-# casa-nas：主機正本 + 正在跑的那份都要改（否則下次重啟或 reload 又會生效）
-docker exec 5151-haproxy python3 - <<'PY'
+# 會短暫中斷 25433/25434/25153 數秒；改 cfg 本身不要用這招
+cd /opt/5151-shadow/haproxy && docker compose up -d --force-recreate      # casa
+cd ~/5151-shadow/haproxy    && docker compose up -d --force-recreate      # syn
+```
+
+> `docker logs <c> --tail 20` 若出現設定錯誤（`unknown keyword`／`unable to find`…），**立刻執行 §3 回滾**。
+
+## 3. 回滾
+
+```bash
+# (a) 用備份整份回退（cp 是就地覆寫，不是換 inode）＋重新驗證＋reload
+# casa：ls -t /opt/5151-shadow/haproxy/haproxy.cfg.bak-* 挑一份
+cat /opt/5151-shadow/haproxy/haproxy.cfg.bak-<TS> > /opt/5151-shadow/haproxy/haproxy.cfg
+docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+docker exec 5151-haproxy kill -s USR2 1
+
+# syn
+cat /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg.bak-<TS> \
+  > /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg
+docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
+docker exec 5151-haproxy-B kill -s USR2 1
+
+# (b) 只回退「加權」這一項（等價於回 roundrobin：weight 拿掉＝預設 1／1），兩台都要做：
+python3 - <<'PY'
 import re
-for p in ("/usr/local/etc/haproxy/haproxy.cfg.tmpl", "/tmp/haproxy.cfg"):
+for p in ("/opt/5151-shadow/haproxy/haproxy.cfg",            # casa
+          "/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg"):  # syn
     s = open(p).read()
     s2 = re.sub(r"(server web-[ab] \S+ check inter 3s fall 3 rise 2) weight \d+", r"\1", s)
     open(p, "w").write(s2)
     print(p, [l.strip() for l in s2.splitlines() if l.strip().startswith("server web-")])
 PY
-docker exec 5151-haproxy sh -c '
-  sed -e "s|\${CASAOS_HOST}|192.168.0.140|g" -e "s|\${SYNOLOGY_HOST}|192.168.0.220|g" \
-      /usr/local/etc/haproxy/haproxy.cfg.tmpl > /tmp/haproxy.cfg.check
-  haproxy -c -f /tmp/haproxy.cfg.check && echo "RENDER-CHECK OK"'
-docker exec 5151-haproxy kill -s USR2 1
-
-# syn-nas
-python3 - <<'PY'
-import re
-p = "/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg"
-s = re.sub(r"(server web-[ab] \S+ check inter 3s fall 3 rise 2) weight \d+", r"\1", open(p).read())
-open(p, "w").write(s)
-print([l.strip() for l in s.splitlines() if l.strip().startswith("server web-")])
-PY
-docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
-docker exec 5151-haproxy-B kill -s USR2 1
+# 之後各自 haproxy -c ＋ kill -s USR2 1（同 §2）
 ```
 
 回滾後立刻做 §4 的驗證（重點：兩台仍 UP、0 個 5xx、weight 回到 1／1）。
-回滾也別忘了把 repo 檔一起退（否則下次套用又會加回來）：`git revert <本 PR 的 merge commit>`，
-或手動把那兩行改回 `server web-a … rise 2`／`server web-b … rise 2` 並開一個 PR。
 
 > ⚠️ **回滾時不要刪 `stick-table`／`stick on`**（Owner 2026-10-10 核准的訪客黏滯），
 > 也不要把 `option redispatch`／`retry-on` 一起拿掉——那兩條是 2026-09-23 演練的成果。
+> 也**不要**把 `backend pg_primary` 的 `balance first`／`agent-check` 拿掉（角色判定會失效），
+> 更不要把 `backup` 加回 `pg-b`。
 
 ## 4. 驗證（套用與回滾都要跑同一套）
 
 ```bash
-# (1) 語法（casa-nas 用展開後的暫存檔；syn-nas 直接驗 .cfg）——必須 "Configuration file is valid"
-docker exec 5151-haproxy sh -c 'sed -e "s|\${CASAOS_HOST}|192.168.0.140|g" -e "s|\${SYNOLOGY_HOST}|192.168.0.220|g" /usr/local/etc/haproxy/haproxy.cfg.tmpl > /tmp/c && haproxy -c -f /tmp/c'
+# (1) 語法（兩台都用**容器內路徑**；必須回 "Configuration file is valid"）
+docker exec 5151-haproxy   haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
+docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
 # (2) 唯讀 stats（宿主只綁 127.0.0.1:25154）：看兩台的 weight／status／平均耗時
 #     輸出是 CSV，長相：表頭 `# pxname,svname,…`，之後 proxy 列 `web_nodes,FRONTEND,…`、
@@ -159,6 +172,7 @@ echo "show stat" | nc -q1 127.0.0.1 25154 | awk -F, '
   NR==1 { for (i=1;i<=NF;i++) if ($i=="weight"||$i=="status"||$i=="rtime"||$i=="svname") h[i]=$i; next }
   ($1=="web_nodes" && $2!="FRONTEND") || $1=="" {
     printf "svname=%s status=%s weight=%s rtime=%s\n", $2, $18, $19, $62 }'
+# 另外確認寫入路由：pg_primary/pg-a=UP、pg_primary/pg-b=DOWN(agent)、pg_standby_first/pg-b=UP(bck=1)
 
 # (3) 端到端連續打（0 個 5xx；兩台都還是 UP）
 for i in $(seq 1 20); do printf "%s " "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:25153/api/health)"; done; echo
@@ -174,15 +188,27 @@ for i in $(seq 1 15); do curl -s -o /dev/null -w '%{time_total}\n' 'http://127.0
   要看的是「新黏滯有沒有往 web-B 偏」，以及漸進期後的中位數。
 - 若 p50 沒改善但 weight 正確、兩台都 UP，那不是失敗，是漸進期；隔 30 分鐘後再量一次。
 
-## 5. 離線守護（CI）
+## 5. 離線守護（CI；不碰正式機）
 
-`test/haproxy-web-nodes-weight.test.js`（`npm test` 會跑）靜態檢查這份 cfg：
+`.github/workflows/test.yml` 的 `Run Tests` job 有兩層守護：
 
-- `web_nodes` 必須正好兩條 `server`、**每條都有非 0 的 `weight`**，且 `web-b` 的 weight 必須大於 `web-a`；
-- `option redispatch`／`retry-on`／`httpchk`／`stick-table`／`stick on` 不得被覆蓋；
-- template 展開後不得殘留 `${...}`；`pg-a`／`pg-b` 不得出現 `weight`；
-- 最後一個 test 用突變（拿掉 weight／50-50／歸零／刪 server／對調）證明這個檢查**真的會紅**。
+1. **真語法檢查**（2026-10-12 新增，步驟 `Validate HAProxy config`）——用官方映像離線跑：
 
-改壞 50/50 的驗證方式：把兩條 server 行的 weight 拿掉後跑
-`node --test test/haproxy-web-nodes-weight.test.js`，第一個 test 會以
-`no explicit "weight <n>"` 失敗（本 PR 的紅→綠證據就是這樣產生的）。
+   ```bash
+   docker run --rm -v "$PWD/deploy/shadow-ha/haproxy:/cfg:ro" \
+     haproxy:2.9-alpine haproxy -c -f /cfg/haproxy.cfg
+   ```
+
+   任何 `unknown keyword`／語法錯誤都會讓 PR 紅。本步驟的紅→綠證據：把某行打成
+   `agent-fall`（2.9.x 會報 `unknown keyword 'agent-fall'`）跑一次，再改回。
+2. **靜態檢查** `test/haproxy-web-nodes-weight.test.js`（`npm test` 會跑）：
+
+   - `web_nodes` 必須正好兩條 `server`、**每條都有非 0 的 `weight`**，且 `web-b` 的 weight 必須大於 `web-a`；
+   - `option redispatch`／`retry-on`／`httpchk`／`stick-table`／`stick on` 不得被覆蓋；
+   - 檔內不得殘留 `${...}`（本檔已是實體 IP，會殘留就代表有人把 template 版的檔案放回來）；
+     `pg-a`／`pg-b` 不得出現 `weight`；
+   - 最後一個 test 用突變（拿掉 weight／50-50／歸零／刪 server／對調）證明這個檢查**真的會紅**。
+
+   改壞 50/50 的驗證方式：把兩條 server 行的 weight 拿掉後跑
+   `node --test test/haproxy-web-nodes-weight.test.js`，第一個 test 會以
+   `no explicit "weight <n>"` 失敗。

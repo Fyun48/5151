@@ -87,8 +87,9 @@
 > ⚠️ 2026-10-12 之前 **NAS 現行檔比 repo 檔多了上面那兩行黏滯設定**（Owner 2026-10-10 核准，
 > 當時只落在機器上）；本 PR 已把現行檔逐字同步回 repo——**沒有同步的話，用 repo 檔 reload
 > 會靜默丟掉黏滯**（語法合法、不報錯）。套用前請先 `diff` 現行檔與 repo 檔確認只差 weight。
-> 改完一定要先 `haproxy -c` 再**零中斷 reload**（`kill -s USR2 1`）；casa-nas 的容器只掛到
-> `.cfg.tmpl`，驗證要用 `render-and-run.sh` 同一組 sed 展開後的暫存檔（不能直接驗 `.cfg`）。
+> 改完一定要先 `haproxy -c` 再**零中斷 reload**（`kill -s USR2 1`）；兩台都是把 `haproxy.cfg`
+> **單檔 bind mount** 進 `/usr/local/etc/haproxy/haproxy.cfg`（**沒有** `.cfg.tmpl`／`render-and-run.sh`），
+> 所以要改只能在 **NAS 宿主就地改寫**，容器內直接驗這個路徑（`haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`）。
 > **完整套用／回滾／驗證指令見 `docs/runbooks/haproxy-web-weight.md`**（回滾＝拿掉 weight，
 > 別誤刪黏滯或 redispatch／retry-on）。
 

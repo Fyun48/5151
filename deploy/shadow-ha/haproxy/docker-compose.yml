@@ -5,6 +5,9 @@ services:
     container_name: 5151-haproxy
     image: haproxy:2.9-alpine
     restart: unless-stopped
+    # 正式機的實際命令是 `haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg`
+    # （-W = master/worker、-db = 前景；容器內留前景才不會被判定停止）。
+    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
     ports:
       # 25433 / 25434 = postgres-rw / postgres-ro。
       # web 對外只能綁主機 25153：同一台的 Web-A/Web-B 已經用掉主機 15153，
@@ -12,13 +15,14 @@ services:
       - "0.0.0.0:25433:25433"
       - "0.0.0.0:25434:25434"
       - "0.0.0.0:25153:15153"
-    environment:
-      CASAOS_HOST: ${CASAOS_HOST:?set CASAOS_HOST (CasaOS LAN IP)}
-      SYNOLOGY_HOST: ${SYNOLOGY_HOST:?set SYNOLOGY_HOST (Synology LAN IP)}
+      # 有限 stats（Owner 2026-10-10 核准）：只綁宿主 loopback，不對公網開放。
+      - "127.0.0.1:25154:8404"
     volumes:
-      # haproxy.cfg 是 template（內含 ${CASAOS_HOST} / ${SYNOLOGY_HOST}）。
-      # docker compose 只會替換 compose YAML 內的 ${...}，不會替換掛載檔案內容，
-      # 所以交給 render-and-run.sh 在啟動時展開，展開失敗就讓容器直接失敗。
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg.tmpl:ro
-      - ./render-and-run.sh:/usr/local/bin/render-and-run.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/render-and-run.sh"]
+      # ⚠️ 本檔是**權威設定本身**，不是 template：裡面已是實體 IP，沒有 ${...} 佔位符，
+      # 啟動時也沒有任何展開步驟（舊的 .cfg.tmpl ＋ render-and-run.sh 已刪除）。
+      # 單檔 bind mount 綁的是 inode ⇒ 要改設定只能「就地改寫」：
+      #   1) 就地改（python `open(path,'w')`；`mv` 換檔無效，容器仍看到舊 inode）
+      #   2) `docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`
+      #   3) `docker exec 5151-haproxy kill -s USR2 1`（零中斷 reload）
+      # 詳見 docs/runbooks/haproxy-web-weight.md。
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
