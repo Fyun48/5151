@@ -13,6 +13,21 @@ services:
     container_name: 5151-postgres-B
     image: postgres:16-alpine
     restart: unless-stopped
+    # 2026-10-11（Owner 准「現在調」）：與 primary 同參數取向，但這台 32GB 所以給更大值；
+    # Docker 預設 shm_size=64MB 會卡住大 shared_buffers（PG 起不來），必須一起放大。
+    shm_size: 3221225472
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - hot_standby=on
     ports:
       - "0.0.0.0:15432:5432"
     environment:

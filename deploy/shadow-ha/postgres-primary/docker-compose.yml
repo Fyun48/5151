@@ -10,6 +10,8 @@ services:
     container_name: 5151-postgres-A
     image: postgres:16-alpine
     restart: unless-stopped
+    # 2026-10-11：Docker 預設 shm_size=64MB 會卡住 shared_buffers=1GB（PG 起不來），必須一起放大。
+    shm_size: 2147483648
     # Expose to the LAN so the Synology standby can stream-replicate. The port
     # must be reachable from SYNOLOGY_HOST only; tighten with host firewall.
     ports:
@@ -33,6 +35,14 @@ services:
       - archive_mode=on
       - -c
       - archive_command=/bin/true
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
     volumes:
       - 5151-shadow-pg-a:/var/lib/postgresql/data
     networks:

@@ -118,6 +118,26 @@ CASAOS_HOST=192.168.0.140 SYNOLOGY_HOST=192.168.0.220 docker compose up -d
   `${CASAOS_HOST}` 當主機名解析而失敗。
 - web backend 連的是各主機**已發佈**的 `15153`（容器內的 5153 只有本機可見）。
 
+## PG 記憶體參數與 shm_size（2026-10-11 現行值）
+
+> **這兩份 compose 不是 git checkout，是 NAS 上的純目錄**（`casa-nas:/root/5151-shadow-ha/…`、
+> `syn-nas:/var/services/homes/tori/5151-shadow-ha/…`），在機上改了 repo 不會知道。
+> 2026-10-11 的機上手改已逐字同步回本 repo，之後**以 repo 版為權威**；待辦是把那兩個目錄接回版控。
+
+| 節點 | 主機 | 角色 | RAM | 可用 | `shm_size` | `shared_buffers` | `work_mem` |
+|---|---|---|---|---|---|---|---|
+| `5151-postgres-A` | casa-nas | primary | 7.6 GB | ~4.5 GB | `2147483648`（2 GiB） | `1GB` | `8MB` |
+| `5151-postgres-B` | syn-nas | hot standby | 32 GB | ~19 GB | `3221225472`（3 GiB） | `2GB` | `16MB` |
+
+- **兩台刻意不一樣**：值是按各自實體 RAM（7.6GB vs 32GB）給的，**不要**調成一樣。
+- 兩台都加 `shared_preload_libraries=pg_stat_statements` ＋ `pg_stat_statements.track=top`。
+  `5151-postgres-B` 這份**原本完全沒有 `command:` 段**（全用映像預設），2026-10-11 才補上整段，
+  含 `hot_standby=on`。
+- `pg_stat_statements` 在 standby 是**跟著 WAL 複製過來的**，**不要**在 standby 再 `CREATE EXTENSION`。
+- `shm_size` 不跟著放大的症狀、重跑指令與排法：
+  `docs/runbooks/postgres-manual-failover.md` §「PG 記憶體參數變更與 `shm_size`」。
+- 兩台的機上回滾檔是 `docker-compose.yml.bak-20261011`（同目錄）。
+
 ## 與實際佈署的校正（2026-09-20）
 
 | 原本（repo） | 實際可用（live） | 症狀 |
