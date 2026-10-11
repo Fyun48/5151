@@ -40,8 +40,59 @@ async function run(options, runPostgres, runSqlite) {
 export async function countWatchedAsync(userId, options = {}) {
   const uid = Number(userId) || 0;
   if (!uid) return 0;
+  // 批次預取（2026-10-11 後台會員列表事故）：呼叫端已經用 `countWatchedBatchAsync()` 把整頁算完，
+  // 這裡直接取用，**不再一個人發一條查詢**。沒帶 `memberBatch` 的既有呼叫端行為完全不變。
+  const prefetched = options.memberBatch?.watchCount?.get(uid);
+  if (prefetched !== undefined) return prefetched;
   // ⚠️ 這裡的 `exec` 是**裸陣列**（本模組的 runner 約定，與 `usersAsync` 的 `{rows}` 不同）；
   // 寫成 `(...).rows` 會拿到 undefined ⇒ 永遠回 0（實測中過一次，靠對照組才看出來）。
   return run(options, async (exec) => Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0,
     () => countWatchedSync(sqliteHandle(), uid));
+}
+
+// ---------------------------------------------------------------------------
+// 批次版（2026-10-11 事故）：整頁會員的關注數一次算完。
+//
+// 事故：後台「會員管理」原本是「每位會員各一條 COUNT」並發送出（28 人 ⇒ 84 條），把 app 端
+// PG 連線池抽乾，5 秒後 `timeout exceeded when trying to connect`。這裡把「N 條」收成「1 條」
+// （`GROUP BY user_id`），查詢數與人數脫鉤。
+//
+// ⚠️ 批次 SQL 由**同一份** `WATCHED_COUNT_SQL` 推導（`watchLimits.js` 的那一句），不另抄一份：
+// 抄一份就會漂移，而 `repository/listingStats.js` 的 `watchedTotal` 用的也是同一句。
+// `?` 佔位符由 runner 的 `toPostgresSql()` 轉成 `$1..$n`（SQLite 直接吃）。
+const marks = (count) => Array.from({ length: count }, () => "?").join(",");
+const WATCHED_COUNT_ONE_SELECT = "SELECT COUNT(*) AS n";
+const WATCHED_COUNT_ONE_WHERE = "f.user_id = ?";
+
+export function watchedCountBatchSql(count) {
+  const size = Math.max(0, Number(count) || 0);
+  if (!size || !WATCHED_COUNT_SQL.includes(WATCHED_COUNT_ONE_SELECT) || !WATCHED_COUNT_SQL.includes(WATCHED_COUNT_ONE_WHERE)) {
+    throw new Error(
+      "watchedCountBatchSql：WATCHED_COUNT_SQL 的形狀變了，批次版必須跟著改（不要另外抄一份 SQL）",
+    );
+  }
+  return `${WATCHED_COUNT_SQL
+    .replace(WATCHED_COUNT_ONE_SELECT, "SELECT f.user_id AS user_id, COUNT(*) AS n")
+    .replace(WATCHED_COUNT_ONE_WHERE, `f.user_id IN (${marks(size)})`)}
+         GROUP BY f.user_id`;
+}
+
+// 回傳 `Map<userId, count>`（沒查到的會員 = 0 筆）。空清單**不發查詢**。
+// 非 PG 分支逐人走同步版（後台列表在 SQLite 站根本不走這條，留著是為了讓這個函式自己站得住）。
+export async function countWatchedBatchAsync(userIds, options = {}) {
+  const ids = [...new Set((userIds || []).map((id) => Number(id) || 0).filter(Boolean))];
+  const counts = new Map();
+  if (!ids.length) return counts;
+  await run(options, async (exec) => {
+    for (const row of await exec(watchedCountBatchSql(ids.length), ids)) {
+      counts.set(Number(row.user_id), Number(row.n) || 0);
+    }
+  }, () => {
+    for (const id of ids) counts.set(id, countWatchedSync(sqliteHandle(), id));
+    return null;
+  });
+  // 沒被查到的會員（0 筆額度）也要**明確**留在 Map 裡：預取端用 `undefined` 當「沒有預取」，
+  // 漏掉的話那個人又會退回一人一條查詢，查詢數就隨人數成長（這裡就是修正前的病）。
+  for (const id of ids) if (!counts.has(id)) counts.set(id, 0);
+  return counts;
 }

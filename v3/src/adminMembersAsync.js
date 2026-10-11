@@ -24,8 +24,8 @@ import { adminMemberView } from "./adminMemberView.js";
 import { resolveDeleteReason } from "./members.js";
 import { countWatched as countWatchedSync } from "./watchLimits.js";
 import { expireOpenSelfListingsAsync } from "./selfListingsAsync.js";
-import { countWatchedAsync } from "./watchLimitsAsync.js";
-import { getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+import { countWatchedAsync, countWatchedBatchAsync } from "./watchLimitsAsync.js";
+import { getSettingsAsync, getSettingsBatchAsync, saveSettingsAsync } from "./settingsAsync.js";
 import { deleteUserAsync, getUserByIdAsync, listUsersAsync, restoreUserAsync, setUserPlanAsync } from "./usersAsync.js";
 import { planIntervalMinutes } from "./settingsState.js";
 
@@ -53,10 +53,71 @@ async function execFor(options) {
 export async function countOpenSelfListingsAsync(userId, options = {}) {
   const uid = Number(userId) || 0;
   if (!uid) return 0;
+  // 批次預取（2026-10-11 後台會員列表事故）：整頁的「開放中自主刊登數」已經由
+  // `loadAdminMemberBatchAsync()` 一次算好（含先清過期），這裡直接取用、不再一個人發兩條。
+  const prefetched = options.memberBatch?.listingCount?.get(uid);
+  if (prefetched !== undefined) return prefetched;
   if (!isPg(options)) return countOpenSelfListingsSync(uid);
   const exec = await execFor(options);
   await expireOpenSelfListingsAsync(exec, new Date());
   return Number(one(await exec(OPEN_SELF_LISTINGS_COUNT_SQL, [uid]))?.n) || 0;
+}
+
+// ---------------------------------------------------------------------------
+// 批次讀取（2026-10-11 事故的修正核心）
+//
+// 事故：`listAdminMembersAsync()` 原本是 `Promise.all(users.map(adminMemberViewAsync))`，
+// 每位會員各發 3 條並發查詢（28 人 ⇒ 84 條同時打出去），app 端 PG 連線池拿不到連線，
+// 5 秒後整頁變成 `timeout exceeded when trying to connect`（PG 本身沒爆，max_connections=100、實測只用 21 條）。
+//
+// 修正：整頁先各抓一次 —— ①過期自主刊登清一次（1 條 UPDATE）②設定（2～3 條）③關注數（1 條）
+// ④開放中自主刊登數（1 條）—— 再逐列投影（0 條）。查詢數與人數**脫鉤**。
+//
+// ⚠️ 批次 SQL 由**同一份**單人版文字推導（`OPEN_SELF_LISTINGS_COUNT_SQL`），不另抄一份：
+// 抄一份就會漂移。`?` 佔位符由 runner 的 `toPostgresSql()` 轉 `$n`（SQLite 也吃同一句），
+// 而且 `listed_by_user_id IN (…)` 一樣吃得到 `idx_listings_listed_by_user_id`
+// （partial index 的 `IS NOT NULL` 由這個等值集合蘊含）。
+const marks = (count) => Array.from({ length: count }, () => "?").join(",");
+const OPEN_SELF_COUNT_ONE_SELECT = "SELECT COUNT(*) AS n FROM listings";
+const OPEN_SELF_COUNT_ONE_WHERE = "listed_by_user_id = ?";
+
+export function openSelfListingsCountBatchSql(count) {
+  const size = Math.max(0, Number(count) || 0);
+  if (!size || !OPEN_SELF_LISTINGS_COUNT_SQL.includes(OPEN_SELF_COUNT_ONE_SELECT)
+    || !OPEN_SELF_LISTINGS_COUNT_SQL.includes(OPEN_SELF_COUNT_ONE_WHERE)) {
+    throw new Error("openSelfListingsCountBatchSql：OPEN_SELF_LISTINGS_COUNT_SQL 的形狀變了，批次版必須跟著改");
+  }
+  return `${OPEN_SELF_LISTINGS_COUNT_SQL
+    .replace(OPEN_SELF_COUNT_ONE_SELECT, "SELECT listed_by_user_id AS user_id, COUNT(*) AS n FROM listings")
+    .replace(OPEN_SELF_COUNT_ONE_WHERE, `listed_by_user_id IN (${marks(size)})`)}
+ GROUP BY listed_by_user_id`;
+}
+
+// 回傳 `{ settings, watchCount, listingCount }` 三張 `Map<userId, value>`；把它塞進
+// `options.memberBatch` 之後，`adminMemberViewAsync()` 的三個值全部命中，每人 0 條查詢。
+// 只做**這一頁**（呼叫端傳進來的 users 列）的批次，不是全庫。
+export async function loadAdminMemberBatchAsync(users, options = {}) {
+  const rows = Array.isArray(users) ? users : [];
+  const ids = [...new Set(rows.map((user) => Number(user?.id) || 0).filter(Boolean))];
+  const batch = { settings: new Map(), watchCount: new Map(), listingCount: new Map() };
+  if (!ids.length) return batch;
+  const exec = await execFor(options);
+  // ① 過期清理：單人版是「每位會員各清一次」的同一句 UPDATE，這裡整頁只發一條（語意相同）。
+  await expireOpenSelfListingsAsync(exec, new Date());
+  const [settings, watchCount, listingRows] = await Promise.all([
+    // 呼叫端手上已經有這一頁的 users 列 ⇒ 直接把 role／plan 帶進去，省掉一條查詢。
+    getSettingsBatchAsync(ids, { ...options, users: rows }),
+    countWatchedBatchAsync(ids, options),
+    exec(openSelfListingsCountBatchSql(ids.length), ids),
+  ]);
+  batch.settings = settings;
+  batch.watchCount = watchCount;
+  for (const row of listingRows) batch.listingCount.set(Number(row.user_id), Number(row.n) || 0);
+  // 0 筆的人也要**明確**留在 Map 裡（預取端以 `undefined` 表示「沒有預取」；漏掉就會退回一人一條）。
+  for (const id of ids) {
+    batch.listingCount.set(id, batch.listingCount.get(id) || 0);
+  }
+  return batch;
 }
 
 // `db.js publicAdminMember()` 的 PG 版：三個值都從 PG 拿，投影本身共用同一份純函式。
@@ -78,10 +139,14 @@ export async function adminMemberViewAsync(user, options = {}) {
 }
 
 // `db.js listAdminMembers()` 的 PG 版。
+// 2026-10-11：這裡原本一位會員 3 條並發查詢（= 3N 條）⇒ 28 人就把連線池抽乾。
+// 現在同一頁先批次抓齊（常數條），再逐列投影；`adminMemberViewAsync()` 的輸出形狀與欄位語意不變
+// （它以 `options.memberBatch` 取用批次值；沒有批次時仍是一人一條的舊行為）。
 export async function listAdminMembersAsync(query = {}, options = {}) {
   if (!isPg(options)) return listAdminMembersSync(query);
   const users = await listUsersAsync(query, options);
-  return Promise.all(users.map((user) => adminMemberViewAsync(user, options)));
+  const memberBatch = await loadAdminMemberBatchAsync(users, options);
+  return Promise.all(users.map((user) => adminMemberViewAsync(user, { ...options, memberBatch })));
 }
 
 // `db.js adminDeleteMember()`：理由代碼 → 文字（純函式）→ 停權 → 投影。

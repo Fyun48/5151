@@ -240,3 +240,88 @@ test("GET /api/me 走 PG 島嶼（會員欄位、最後登入與自主刊登數�
     assert.ok(!new RegExp(`(?<![A-Za-z])${sync}\\(`).test(withoutAsync), `/api/me 不得再用同步的 ${sync}()`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 2026-10-11 事故回歸：後台會員列表的查詢數必須與**人數脫鉤**。
+//
+// 事故當下正式站有 28 個會員，列表是 `Promise.all(users.map(adminMemberViewAsync))` ⇒ 約 84 條
+// 並發查詢把 app 端 PG 連線池抽乾，5 秒後 `timeout exceeded when trying to connect`。
+// 這一條用**真的 SQLite 夾具**跑真的 SQL，並逐條計數：
+//   before ＝ 舊寫法（每人 3 個入口）＋名單本身 1 條
+//   after  ＝ `listAdminMembersAsync()`（批次）
+// 並要求 4 人與 28 人的 after **完全相等**（常數），以及兩種寫法的投影逐欄相同（契約不變）。
+const usersMod = await import("../src/usersAsync.js");
+
+function pgOnlyWorldWithMembers(count) {
+  const exec = fixture();
+  const now = "2026-01-01T00:00:00.000Z";
+  const insertUser = exec.raw.prepare(
+    "INSERT INTO users(id, email, role, plan, created_at, signup_count) VALUES (?,?,?,?,?,?)",
+  );
+  const insertSetting = exec.raw.prepare("INSERT INTO user_settings(user_id, key, value) VALUES (?,?,?)");
+  const insertFlag = exec.raw.prepare(
+    "INSERT INTO user_listing_flags(user_id, post_id, viewed, watched, hidden, watch_note, watch_group_id) VALUES (?,?,0,1,0,'','')",
+  );
+  for (let i = 0; i < count; i += 1) {
+    const id = MEMBER + i;
+    const postId = 920000 + i;
+    insertUser.run(id, `member${i}@example.test`, "member", "free", now, i + 1);
+    insertSetting.run(id, "intervalMinutes", JSON.stringify(42 + i));
+    insertSetting.run(id, "intervalAdminSet", JSON.stringify(true));
+    insertFlag.run(id, postId);
+    seedListing(exec.raw, {
+      post_id: postId,
+      title: `自主 ${i}`,
+      source_key: `1|${postId}`,
+      source: "self",
+      self_status: "open",
+      listed_by_user_id: id,
+    });
+  }
+  return exec;
+}
+
+// 逐條計數的 exec：包住夾具的 exec，記錄每一次送出的語句。
+function countingExec(exec) {
+  const calls = [];
+  const wrapped = async (sql, params = []) => {
+    calls.push(String(sql));
+    return exec(sql, params);
+  };
+  wrapped.raw = exec.raw;
+  return { exec: wrapped, calls };
+}
+
+async function measureMemberList(count) {
+  const exec = pgOnlyWorldWithMembers(count);
+  const counter = countingExec(exec);
+  const users = await usersMod.listUsersAsync({}, { ...PG, exec: counter.exec });
+  const listStart = counter.calls.length;
+  const members = await adminAsync.listAdminMembersAsync({}, { ...PG, exec: counter.exec });
+  const batched = counter.calls.length - listStart;
+  const perUserStart = counter.calls.length;
+  const perUser = [];
+  for (const user of users) perUser.push(await adminAsync.adminMemberViewAsync(user, { ...PG, exec: counter.exec }));
+  const perUserCalls = counter.calls.length - perUserStart;
+  // before 也含「名單本身 1 條」（舊寫法同樣要先把 users 列讀出來）。
+  return { users: users.length, before: perUserCalls + 1, after: batched + 1, members, perUser };
+}
+
+test("查詢次數：後台會員列表不再隨人數成長（2026-10-11 連線池事故回歸）", async () => {
+  const small = await measureMemberList(4);
+  const large = await measureMemberList(28);
+  console.log(`[member-list-query-count] 4 人：before=${small.before} after=${small.after}`);
+  console.log(`[member-list-query-count] 28 人：before=${large.before} after=${large.after}`);
+
+  assert.equal(large.users, 28, "前提：28 個會員");
+  assert.ok(small.before >= 4 * 3, `修正前 4 人至少 12 條（實際 ${small.before}）`);
+  assert.ok(large.before >= 28 * 3, `修正前 28 人至少 84 條（實際 ${large.before}）`);
+  assert.equal(large.after, small.after, "批次化後查詢數**不得隨人數成長**");
+  assert.ok(large.after <= 10, `批次化後必須是常數條（實際 ${large.after}）`);
+  // 後端契約不變：批次版的投影必須與「逐人版」逐欄相同。
+  assert.deepEqual(large.members, large.perUser, "批次版與逐人版的投影必須完全相同");
+  assert.equal(large.members[0].intervalMinutes, 42, "批次版要讀到 PG 的 user_settings");
+  assert.equal(large.members[0].watchCount, 1, "批次版的關注數要與逐人版相同");
+  assert.equal(large.members[0].listingCount, 1, "批次版要數到開放中的自主刊登");
+});
+
