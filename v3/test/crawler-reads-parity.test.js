@@ -33,6 +33,12 @@ const skip = PG_TEST_URL ? false : "PG_TEST_URL is not set (live PostgreSQL craw
 
 const TABLES = [
   "settings",
+  // SQLite 退場 P1：PG 的補路線 plan 讀的是「全站會員」——`listUserIds()` 掃 `users`，每位會員再
+  // 由 `getSettingsAsync()` 讀 `user_settings`（`repository/memberSettings.js` 的
+  // USER_SETTINGS_SQL／USER_BY_ID_SQL）。少了任一張，`needingRouteAsync()` 就以 42P01 收場。
+  // 兩張要一起補：只補 `users`，下一筆換 `user_settings` 炸。
+  "users",
+  "user_settings",
   "listings",
   // persistListing() also syncs the projection and bumps the change log, so the write-back
   // subtest needs both (this is the "mirror a fully-initialised store" rule from the runbook).
@@ -57,6 +63,17 @@ const ALIVE_RECENT = 920005;
 const ALIVE_ANCIENT = 920006;
 // Written through PostgreSQL only, so a SQLite read cannot see it.
 const PG_ONLY = 930001;
+// A member with a real commute setting, so the PostgreSQL route plan has somebody to read out of
+// `users` + `user_settings` (see loadFixture; without a member that loop runs zero times and both
+// queries never reach PostgreSQL at all).
+// The work point and mode are deliberately the demo patch's pair: any other coordinate would make
+// every listing-with-coordinates look uncached for that job, and the existing `[MRT_SECOND_KEY]`
+// route expectations would stop describing the fixture. `commuteKm` is the only observable this
+// member owns - it never reaches routeRowNeed(), it only rides along in plan.jobs - and
+// MEMBER_COMMUTE_KM is the one value in this file that no other settings source produces (the demo
+// patch carries DEMO_COMMUTE_KM), so "PostgreSQL read the member's settings" is checkable.
+const COMMUTE_MEMBER_EMAIL = "commute-parity@example.test";
+const MEMBER_COMMUTE_KM = 7;
 // One row per branch of the seven remaining backfill scans (see loadFixture).
 const FEE_NO_COORDS = 920010;
 const FEE_STALE_CONTACT = 920011;
@@ -211,7 +228,18 @@ async function loadFixture() {
   // The change log is created on first use, so a fixture has to create it explicitly - otherwise
   // the mirrored PostgreSQL schema would be missing it (runbook: mirror a fully-initialised store).
   ensureDataRevisionTable(db);
-  fixture = { app, uid };
+  // Mirroring `users`／`user_settings` is only half the fix: with no member, `listUserIds()` returns
+  // nothing and `for (const id of ids)` iterates zero times, so USER_SETTINGS_SQL and USER_BY_ID_SQL
+  // never run against PostgreSQL - the tables would exist and the read path would still be untested.
+  // Seed one member through the app's own write path (same shape the login/settings UI produces).
+  const commuter = app.ensureUser(COMMUTE_MEMBER_EMAIL, { role: "member" });
+  app.saveSettings({
+    workLat: DEMO_WORK_LAT,
+    workLng: DEMO_WORK_LNG,
+    commuteKm: MEMBER_COMMUTE_KM,
+    commuteMode: DEMO_COMMUTE_MODE,
+  }, commuter);
+  fixture = { app, uid, commuter };
   return fixture;
 }
 
@@ -421,6 +449,39 @@ test("live PostgreSQL: the crawler reads match SQLite, and a PostgreSQL write is
       assert.deepEqual(routePg, routeSqlite);
       // ...and the fixture rows really do hit the branches this test claims to cover.
       assertScanFixture(app, routeSqlite);
+    });
+  });
+
+  // #702 這包要守的缺陷類別：PG 模式的補路線掃描若只拿到「本機的會員清單／本機的設定」，
+  // 別的節點上的通勤設定會整批漏掉（同步 `listUserIds()` 讀的是本機 SQLite）。上面那一支只證
+  // 明兩邊掃出來的 rows 一樣；這一支把 plan 的兩個輸入（jobs／wantRush）也抓出來比，並且要求
+  // 「會員的通勤設定真的進了 plan」，否則補了 `users`／`user_settings` 也只是空的綠燈
+  // （沒有會員 ⇒ listUserIds() 回空 ⇒ USER_SETTINGS_SQL／USER_BY_ID_SQL 一次都沒被執行）。
+  await t.test("the route plan is built from the members stored in PostgreSQL", async () => {
+    const { commuter } = await loadFixture();
+    await withMirroredSchema(app, async (pgDriver) => {
+      const reads = await import("../src/crawlerReads.js");
+      const { setUserSettingAsync } = await import("../src/settingsKvAsync.js");
+      const now = Date.parse("2026-09-06T00:00:00.000Z");
+      const input = { limit: 20, cursor: 0, now };
+      const shape = (plan) => plan.jobs.map((job) => [job.workLat, job.workLng, job.commuteKm, job.commuteMode]);
+      const pgPlan = await app.routeScanPlanAsync(input, pgOptions(pgDriver));
+      const sqlitePlan = app.routeScanPlan(input);
+      // The witness that the read path really ran: this commuteKm exists only in that member's
+      // user_settings row. A plan that fell back to the demo patch would carry DEMO_COMMUTE_KM.
+      assert.deepEqual(shape(pgPlan), [[DEMO_WORK_LAT, DEMO_WORK_LNG, MEMBER_COMMUTE_KM, DEMO_COMMUTE_MODE]]);
+      assert.deepEqual(shape(sqlitePlan), shape(pgPlan), "same jobs on both drivers");
+      assert.equal(pgPlan.wantRush, sqlitePlan.wantRush);
+      const pgRows = await reads.needingRouteAsync(input, { ...pgOptions(pgDriver), now });
+      assert.deepEqual(pgRows, app.listingsNeedingRoute(20, { cursor: 0, now }));
+      // The cross-node half: change the member's setting in PostgreSQL only. The local SQLite value
+      // is untouched, so a plan that read "this node's" members would keep reporting
+      // MEMBER_COMMUTE_KM instead of the PostgreSQL value.
+      const pgOnlyKm = MEMBER_COMMUTE_KM + 2;
+      await setUserSettingAsync(commuter, "commuteKm", pgOnlyKm, pgOptions(pgDriver));
+      const afterPlan = await app.routeScanPlanAsync(input, pgOptions(pgDriver));
+      assert.equal(afterPlan.jobs[0].commuteKm, pgOnlyKm, "the plan follows the member row in PostgreSQL");
+      assert.equal(app.routeScanPlan(input).jobs[0].commuteKm, MEMBER_COMMUTE_KM, "and not the local copy");
     });
   });
 
