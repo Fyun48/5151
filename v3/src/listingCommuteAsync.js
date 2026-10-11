@@ -63,6 +63,8 @@ export async function listingCommutePatchesAsync(postIds, userId = null, options
     if (!visible.length) return [];
     const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
       exec,
+      // contract 升級以 driver 實例（行程單例）為 key，不是上面那個每請求新建的 exec 包裝。
+      pgDriver,
       rows: visible,
       settings,
       userId: uid,

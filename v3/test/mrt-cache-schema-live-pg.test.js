@@ -71,7 +71,9 @@ test("R1：舊形狀的 PG mrt_cache，讀取路徑會先升級再 SELECT", { sk
   );
 
   // 3) 讀取路徑的升級入口（裝飾資料的 provider 用的就是這一個）
-  await ensureMrtCacheContractForRead(async (sql, params = []) => query(sql, params));
+  //    第二個參數是「行程內穩定的身分」＝driver 實例（見 mrtCacheSchema.js）：
+  //    這一條測試自己建 driver，所以升級記憶要掛在它身上（不然會跟檔案裡前後兩條測試互相污染）。
+  await ensureMrtCacheContractForRead(async (sql, params = []) => query(sql, params), pgDriver);
   const after = await columnsOf();
   for (const need of ["source", "checked", "walk_m", "searched_m"]) {
     assert.ok(after.includes(need), `升級後要有 ${need}`);
@@ -111,6 +113,9 @@ test("R1：preloadDecorationProviderAsync 在 PG 讀取前會先升級（真的�
   // 傳最小物件即可：這一條要驗的是「升級在讀取之前發生」，不是裝飾結果。
   await preloadDecorationProviderAsync({
     exec,
+    // 升級記憶的 key＝driver 實例（這一條自己建 driver）；不傳會落到模組級單飛，
+    // 被前一條測試用掉就不會再升級這張剛重建的舊表。
+    pgDriver,
     driver: "postgres",
     rows: [],
     settings: { showMrt: false, systemCrawl: () => ({ showMrt: false }) },
