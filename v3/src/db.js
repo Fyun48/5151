@@ -3334,6 +3334,10 @@ export async function preloadDecorationProviderAsync({
   matchVoteUserId = null,
   sameHouse = true,
   driver = "postgres",
+  // 讀取路徑的 contract 升級要 keyed on「行程內穩定的身分」（見 mrtCacheSchema.js）：
+  // 呼叫端手上那個 driver 實例；production 是 `sharedPgDriver()` 的行程單例 ⇒ 每行程一輪。
+  // 沒給時退回模組級單飛（離線夾具注入假 exec 的情況），仍然是每行程最多一輪。
+  pgDriver = null,
   // 分層（astra6 §3）：`peers: false` 只載入候選階段必需的部分（personalFlagMap／personalIndex／
   // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
   loader: loaderIn = null,
@@ -3352,9 +3356,11 @@ export async function preloadDecorationProviderAsync({
   if (driver === "postgres" && !loaderIn) {
     // **best-effort**：升級失敗不讓讀取整批掛掉（離線夾具的 exec 只接受它認識的 SQL，收到 DDL 會丟）。
     // 真的升級不了時，下面那一句 SELECT 會用 42703 明講缺哪個欄位 —— 比在這裡吞掉好查。
-    // 失敗不快取（`ensureMrtCacheContractForRead` 內部的 WeakMap 會刪掉），下一次呼叫會再試。
+    // 失敗不快取（`ensureMrtCacheContractForRead` 內部的記憶會刪掉），下一次呼叫會再試。
+    // key 是 `pgDriver`（行程內單例）而不是這裡的 `exec`（每個請求新建的閉包）——
+    // keyed on exec 會讓 4 條 ALTER 每請求重送一次（正式站 42,664 列的 ACCESS EXCLUSIVE 鎖）。
     try {
-      await ensureMrtCacheContractForRead(exec);
+      await ensureMrtCacheContractForRead(exec, pgDriver);
     } catch { /* 見上：交給 SELECT 自己回報 */ }
   }
   const list = Array.isArray(rows) ? rows : [];

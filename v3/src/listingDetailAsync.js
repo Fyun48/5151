@@ -62,6 +62,8 @@ export async function getListingAsync(postId, userId, options = {}) {
     const matchVoteUserId = options.matchVoteUserId == null ? uid : Number(options.matchVoteUserId) || 0;
     const provider = options.decorationProvider || (await preloadDecorationProviderAsync({
       exec,
+      // contract 升級以 driver 實例（行程單例）為 key，不是上面那個每請求新建的 exec 閉包。
+      pgDriver,
       rows: [row],
       settings,
       userId: uid,
