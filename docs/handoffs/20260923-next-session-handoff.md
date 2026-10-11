@@ -147,10 +147,13 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
 > 2026-10-09 已把 primary 交回 CasaOS（NVMe），Synology 重建成 hot standby，
 > 記錄見 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。以下兩項是該場切換後仍開放的風險：
 
-1. **角色感知的 pg-rw**：目前 HAProxy `backend pg_primary` 的順序是「pg-rw 打對 primary」的唯一依據，
-   但 `option pgsql-check` 只驗連通、不驗 `pg_is_in_recovery()`。待辦：用 `agent-check` 或外部探測
-   把「這顆是 primary 嗎」回報成 `up/down`，讓 pg-rw 不再依賴手動排順序（promote 後應用端不會自己
-   跟過去，靠手動改 HAProxy 順序是這項風險的來源）。
+1. **角色感知的 pg-rw**：**2026-10-12 已解決**——`backend pg_primary` 已改成
+   `balance first` ＋ 兩條 `server pg-* … agent-check agent-port 25436 agent-inter 2s`（`pg-b`
+   **不帶** `backup`），角色由各節點的 pg-agent 判定，promote 後不必再手動改順序；
+   現行內容與套用程序見 `deploy/shadow-ha/haproxy/haproxy.cfg` 與
+   `docs/runbooks/postgres-manual-failover.md` §6。
+   （原始風險描述，保留供對照：原本只靠 `backend pg_primary` 的順序當「pg-rw 打對 primary」的
+   唯一依據，`option pgsql-check` 只驗連通、不驗 `pg_is_in_recovery()`。）
 2. **複寫與歸檔的兩個風險**：`synchronous_standby_names` 目前是空＝純 async（RPO > 0 風險）；
    兩節點 `archive_mode` 漂移（A=on／B=off，primary 端目前 off＝無 PITR）。
 
@@ -177,8 +180,9 @@ server web-b ${SYNOLOGY_HOST}:15153 check inter 3s fall 3 rise 2 weight 70
 - ⚠️ **同步回 repo 的附帶修正**：那兩行黏滯設定原本只在 NAS 的現行檔上，repo 檔沒有。
   沒同步的話，用 repo 檔 reload 會**靜默丟掉**它（語法合法、不報錯）。
 
-**套用與回滾**：`docs/runbooks/haproxy-web-weight.md`（含 casa-nas `render-and-run.sh`
-展開後 `haproxy -c` 的驗證法、`kill -s USR2 1` 零中斷 reload、回滾＝拿掉 weight、
+**套用與回滾**：`docs/runbooks/haproxy-web-weight.md`（含 **NAS 宿主就地改寫**＋容器內
+`haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg` 的驗證法、`kill -s USR2 1` 零中斷 reload、
+回滾＝拿掉 weight 或還原備份、
 唯讀 stats 取 `web_nodes` 兩台的 `weight`／`status`／`rtime`、連打 `/api/health` 20 次＋
 `/api/listings?limit=20` 10 次確認 0 個 5xx）。**回滾只拿掉 weight，不要動黏滯／redispatch／retry-on。**
 

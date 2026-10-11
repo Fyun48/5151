@@ -83,34 +83,49 @@ docker exec 5151-postgres-B psql -U postgres -c "SELECT pg_is_in_recovery();"  #
 
 ### 6. re-point — 更新 router
 
-實測結論（2026-09-20 drill）分兩種情況，**不能只記一種**：
+> **2026-10-12 起：正常 failover 不需要改 `haproxy.cfg`。** `backend pg_primary` 是
+> `balance first` ＋ 兩條 `server pg-* … agent-check agent-port 25436 agent-inter 2s`，
+> 角色由每個節點上的 pg-agent 判定（`25436`＝up-if-primary、`25437`＝up-if-standby），
+> **不靠 server 先後順序**，`pg-b` 也**刻意不帶 `backup`**（見下方注意事項 2）。
+> 設定已逐字同步在 `deploy/shadow-ha/haproxy/haproxy.cfg`（repo 檔＝兩台現行檔，差異 0）。
 
-- **舊 primary 還停機**（fence 後尚未回來）：**不需要**動設定。HAProxy 會在 `fall 3 × inter 3s`
-  後自動把 pg-rw 轉到標成 `backup` 的那台（drill 實測：經 `25433` 查 `pg_is_in_recovery()` = `f`）。
-- **舊 primary 已回來變成 standby**：**必須**把 `pg_primary` 的順序對調並 reload，否則 pg-rw 會照舊順序
-  打到「已降級成唯讀」的節點（2026-09-20 實測踩到：`pg_is_in_recovery()` 回 `t`、寫入會失敗）。
+- **舊 primary 停機**（fence 後尚未回來）：`pg_primary/pg-a` 會 DOWN，但 promote 之前**沒有**任何節點
+  自稱 primary ⇒ `balance first` 沒有可用後端，`pg-rw`（25433）**連線直接失敗**（fail-closed，
+  不會把寫入送到待命庫，這是設計）。
+- **在新 primary 完成 promote 後**：agent 會自己回 `up` ⇒ `pg-rw` 自動恢復，**不必改設定、不必 reload**。
+  驗證＝經 `25433` 查 `pg_is_in_recovery()` 應回 `f`；stats 頁（宿主 `127.0.0.1:25154`）的
+  `pg_primary` 應是 promote 那台 `UP`、另一台 `DOWN (agent)`。
 
-本 cluster 自 2026-10-09 起預設 primary = CasaOS，`haproxy.cfg` 的 `backend pg_primary` 已按此排列
-（`pg-a` 在前、`pg-b` backup）。重新載入：
+**只有 agent 本身故障才需要人工介入**（例如兩台 agent 都回 down、`pg-rw` 全滅）。介入一律走
+`docs/runbooks/haproxy-web-weight.md` 的流程：**在 NAS 宿主就地改寫**（單檔 bind mount 綁 inode）
+→ 容器內 `haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg` → `kill -s USR2 1`：
 
 ```bash
 docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && \
-docker exec 5151-haproxy kill -s HUP 1
+docker exec 5151-haproxy kill -s USR2 1
 ```
+
+**不准把 `backup` 加回 `pg-b`**（那會讓待命庫在沒有任何 primary 時接到寫入）；改完務必把變更
+逐字同步回 repo 檔，否則 repo 鏡像會與正式機漂移。
 
 應用程式 DB router 亦依 `pg_is_in_recovery()` 自動辨識新 primary（read-after-write 打 primary）。
 
 > ⚠️ **2026-09-23 演練 + 2026-10-09 cutover 實測的必讀事項**
 >
-> 1. **`haproxy.cfg` 只能用「就地改寫」**：compose 是把 `./haproxy.cfg` 以**單檔 bind mount** 掛進容器，
->    而 bind mount 綁的是 inode。若用 `awk … > f.new && mv f.new f`（或任何會換 inode 的編輯器）改設定，
->    **容器仍看到舊檔**，`kill -HUP` 也只會重載舊設定；連容器內 `haproxy -c -f …` 驗證到的都是舊內容
->    （症狀：改了順序卻完全沒生效，pg-rw 繼續打到舊 primary）。請用會**改同一個 inode**的方式
->    （例如 python `open(path,'w')` 覆寫、`printf … > file` 也同 inode），或重建容器
+> 1. **`haproxy.cfg` 只能用「就地改寫」**：compose 是把 `./haproxy.cfg` 以**單檔 bind mount** 掛進容器
+>    （`:ro`，所以也**不能**從容器內改檔），而 bind mount 綁的是 inode。若用
+>    `awk … > f.new && mv f.new f`／`sed -i`（或任何會換 inode 的編輯器）改設定，
+>    **容器仍看到舊檔**，reload 也只會重載舊設定；連容器內 `haproxy -c -f …` 驗證到的都是舊內容
+>    （症狀：改了順序卻完全沒生效，pg-rw 繼續打到舊 primary）。請用會**改同一個 inode** 的方式
+>    （例如宿主上 python `open(path,'w')` 覆寫），或重建容器
 >    （`docker compose -f /opt/5151-shadow/haproxy/docker-compose.yml up -d --force-recreate`）。
-> 2. **`option pgsql-check` 不會分辨 primary／standby**：它只確認「這個 PG 接受連線」，
->    所以 promote 之後若沒同步這裡的順序，pg-rw 會照舊順序打到已降級成唯讀的節點，
->    應用端會出現 `cannot execute … in a read-only transaction`（寫入全數失敗）。順序＝正確性，不是最佳化。
+>    2026-10-12 已實查：兩台都**沒有** `.cfg.tmpl`／`render-and-run.sh`／`/tmp/haproxy.cfg`，
+>    `-f` 指的就是這個被掛進去的 `haproxy.cfg`。
+> 2. **角色判定看 agent-check，不看順序**：`option pgsql-check` 只確認「這個 PG 接受連線」，
+>    分不出 primary／standby；分得出的是每個節點的 pg-agent（`agent-check agent-port 25436`）。
+>    所以 promote 後**不必**改設定、也不必把 server 行對調。若 agent 故障（回報與實際角色不符），
+>    才可能把寫入導到唯讀節點（症狀 `cannot execute … in a read-only transaction`），
+>    這時照上面的「人工介入」流程處理，**不要**用「加回 `backup`」或「手動排序」當解法。
 >
 > 3. **應用端寫入是 fail-closed（2026-09-23 起）**：PG 模式的寫入失敗**不會再悄悄落回本機 SQLite**，
 >    而是直接把錯誤往上丟（使用者看到 5xx／「儲存失敗」）。演練時這代表「promote 沒做完＝寫入全滅」，
@@ -118,10 +133,11 @@ docker exec 5151-haproxy kill -s HUP 1
 >    `PG_SQLITE_FALLBACK=open`（寫入也回退），用完立刻關掉。
 >
 > 4. **`haproxy.cfg` 有兩個 backend 都列 `pg-a`／`pg-b`，別用整檔字串比對判斷「是否已對調」**：
->    `backend pg_primary`（pg-rw 用，第 39 行起）與 `backend pg_standby_first`（pg-ro 用，第 47 行起，
->    本來就 pg-a 優先）都列出兩台。2026-10-09 cutover 第一次核對時，就因為在 `pg_standby_first`
->    命中「pg-a 在前」而誤以為已對調、跳過。**改動／核對要限定在 `pg_primary` 這個 block 內**，
->    並確認該 block 自己的 server 順序。
+>    `backend pg_primary`（pg-rw 用）與 `backend pg_standby_first`（pg-ro 用，本來就 pg-a 優先）
+>    都列出兩台。2026-10-09 cutover 第一次核對時，就因為在 `pg_standby_first`
+>    命中「pg-a 在前」而誤以為已對調、跳過。**改動／核對要限定在 `pg_primary` 這個 block 內**
+>    （2026-10-12 起該 block 靠 agent-check 判角色、`pg-b` 不帶 `backup`；`pg_standby_first` 仍保留
+>    `pg-b backup` 當讀取備援）。
 >
 > 另外（2026-10-09 對調後）：**compose 目錄名稱與角色已一致**——
 > primary 的 compose 在 casa-nas `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（容器 `5151-postgres-A`）、

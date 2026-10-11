@@ -105,18 +105,28 @@ docker compose up -d                          # 以 standby 模式啟動（stand
 > 2026-10-09 走的方向是「CasaOS = primary」——動機是磁碟效能（HDD＋scrub）不是容錯，見本檔「網路拓撲」
 > 與 `evidence/runtime-modernization/HA-CUTOVER-20261009.md`。
 
-### 3. HAProxy（CasaOS；實際佈署只跑這一台）
+### 3. HAProxy（兩台：CasaOS `5151-haproxy`／Synology `5151-haproxy-B`）
+
+只在「要重建容器」時才需要跑（**改 `haproxy.cfg` 本身不必重啟**，見下方就地改寫流程）：
 
 ```bash
 cd deploy/shadow-ha/haproxy
-CASAOS_HOST=192.168.0.140 SYNOLOGY_HOST=192.168.0.220 docker compose up -d
+docker compose up -d                                          # CasaOS（5151-haproxy）
+docker compose -f docker-compose.synology.yml up -d           # Synology（5151-haproxy-B）
 ```
 
-- `haproxy.cfg` 是 **template**：`${CASAOS_HOST}` / `${SYNOLOGY_HOST}` 由容器的
-  `render-and-run.sh` 在啟動時用 sed 展開。docker compose 只會替換 compose YAML 內的
-  `${...}`，**不會**替換掛載檔案的內容 —— 直接把 template 掛進去會讓 HAProxy 把
-  `${CASAOS_HOST}` 當主機名解析而失敗。
+- ⚠️ `haproxy.cfg` **不是 template**（2026-10-12 改正）：檔內已經是**實體 IP**
+  （`192.168.0.140` = casa-nas、`192.168.0.220` = syn-nas），容器啟動時**沒有任何展開步驟**，
+  容器內也沒有 `/tmp/haproxy.cfg`。舊版 README 寫的 `.cfg.tmpl`＋`render-and-run.sh` 那一層
+  與正式機不符，已刪除（正式機兩台都是把 `haproxy.cfg` **單檔 bind mount** 進
+  `/usr/local/etc/haproxy/haproxy.cfg`，跑 `haproxy -W -db -f …`）。
+- `haproxy.cfg` 是**權威來源**，但 `.github/workflows/deploy-v3.yml` **不會**把它蓋到正式機。
+  要改正式機只能**就地改寫同一個 inode**（`mv`／換新檔無效，容器仍看到舊 inode）
+  ＋ `docker exec … haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg` ＋ `kill -s USR2 1`（零中斷）；
+  完整程序與回滾見 `docs/runbooks/haproxy-web-weight.md`，CI 另有離線 `haproxy -c` 守門。
 - web backend 連的是各主機**已發佈**的 `15153`（容器內的 5153 只有本機可見）。
+- 有限 stats（Owner 2026-10-10 核准）：容器內 `listen internal_stats` 綁 `8404`，宿主只綁
+  `127.0.0.1:25154`；查 `curl -s http://127.0.0.1:25154/stats;csv`。
 
 ## PG 記憶體參數與 shm_size（2026-10-11 現行值）
 
@@ -146,7 +156,7 @@ CASAOS_HOST=192.168.0.140 SYNOLOGY_HOST=192.168.0.220 docker compose up -d
 | web backend `:5153` | `:15153` | 跨主機連不到 → connection refused → 節點 DOWN |
 | haproxy web 埠 `15153:15153` | `25153:15153` | 與同機 Web-A 的主機 15153 衝突 → `compose up` 失敗 |
 | web node `127.0.0.1:15153` | `0.0.0.0:15153` | 另一台的 HAProxy 連不到 loopback → 節點 DOWN |
-| `${CASAOS_HOST}` 直接掛載 | `render-and-run.sh` 展開 | HAProxy 解析不到 `${...}` 主機名 |
+| `${CASAOS_HOST}` 佔位符（舊稱：直接掛載要靠 `render-and-run.sh` 展開） | `haproxy.cfg` 直接掛載、檔內就是實體 IP | 2026-10-12 實查：容器跑 `-f /usr/local/etc/haproxy/haproxy.cfg`，**沒有** render 那一層；照舊敘述會找不到 `.cfg.tmpl`，也會誤以為「repo 改了、重啟就生效」 |
 
 驗證（throwaway 容器，不動 live）：修正後經 HAProxy 打 `/api/health` = `200`（`Loading success.`），
 舊設定 = `000`。詳見 `evidence/runtime-modernization/STATUS.md`。

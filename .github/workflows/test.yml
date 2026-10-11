@@ -44,6 +44,26 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 2026-10-12：HAProxy 權威設定檔的離線語法守門。
+      #
+      # 為什麼要這一步：`deploy/shadow-ha/haproxy/haproxy.cfg` 是**正式機現行檔的鏡像**，
+      # 但沒有 CI 會把它部署上去（deploy-v3.yml 只做部署後 health check）；套用是在 NAS 上
+      # 「就地改寫＋haproxy -c＋kill -s USR2 1」手動完成的，語法錯了要等 reload 那一刻才炸。
+      # 這裡用官方映像在 runner 內離線驗語法，把 unknown keyword／語法錯誤擋在 PR（不碰正式機、
+      # 不需要任何連線）。實測（haproxy 2.9.15）：**失敗時 exit 1** 並印
+      # `[ALERT] … unknown keyword '<關鍵字>'`；**成功時 exit 0 但不吐任何字**
+      # （官方映像的 entrypoint 會自動把命令改寫成 `haproxy -W -db …`），所以下面自己 echo 一行 OK。
+      - name: Validate HAProxy config
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/deploy/shadow-ha/haproxy:/cfg:ro" \
+            haproxy:2.9-alpine \
+            haproxy -c -f /cfg/haproxy.cfg
+          echo "haproxy -c OK: deploy/shadow-ha/haproxy/haproxy.cfg 語法有效"
+          echo "(haproxy -c 成功時不吐字，所以補這行讓 log 看得出真的驗過；失敗時會 exit 1 並印 ALERT)"
+
       - name: Run Test Suite
         shell: bash
         run: |
