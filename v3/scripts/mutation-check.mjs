@@ -2786,6 +2786,61 @@ const SITERESET_MUTATIONS = [
   },
 ];
 
+// 背景逐筆讀取的 settings 瘦身（v3/test/settings-hot-read-diet.test.js，2026-10-12）。
+//
+// 每一條都把「當輪快照往下傳」拿掉，回到「逐筆各自讀一次 SELECT key, value FROM settings」。
+const SETTINGSDIET_MUTATIONS = [
+  {
+    name: "crawlRuntimeAsync 不再回傳當輪的原始設定列（逐筆又開始各自重讀）",
+    file: "v3/src/crawlScheduleAsync.js",
+    from: "      sourceEnabled:id=>crawlSourceEnabled(stored.crawlSources,id),\n      globalRows:rows};",
+    to: "      sourceEnabled:id=>crawlSourceEnabled(stored.crawlSources,id)};",
+    expect: "crawlRuntimeAsync 要把當輪讀到的原始列",
+  },
+  {
+    name: "runWatch 不組當輪快照（逐筆回到各自讀一次全域設定）",
+    file: "v3/src/watcher.js",
+    from: "      globalRows: options.globalRows || roundRows,\n      requestContext: options.requestContext || decorationRequestContextFromRows(roundRows),\n",
+    to: "",
+    expect: "runWatch 逐筆讀取一律帶當輪快照",
+  },
+  {
+    name: "落地迴圈的逐筆讀取不帶當輪快照",
+    file: "v3/src/watcher.js",
+    from: "      const existing = await listingForWatchAsync(listing.post_id, undefined, roundOptions);",
+    to: "      const existing = await listingForWatchAsync(listing.post_id);",
+    expect: "runWatch 逐筆讀取一律帶當輪快照",
+  },
+  {
+    name: "下架掃描的逐筆讀取不帶當輪快照",
+    file: "v3/src/watcher.js",
+    from: "    const listing = await listingForWatchAsync(row.post_id, undefined, listingOptions || {});\n    if (!listing) continue;\n    checked += 1;",
+    to: "    const listing = await listingForWatchAsync(row.post_id);\n    if (!listing) continue;\n    checked += 1;",
+    expect: "sweepOfflineListings 也走同一份快照",
+  },
+  {
+    name: "下架掃描的呼叫端不傳當輪快照",
+    file: "v3/src/watcher.js",
+    from: "      system: runtime.system,\n      listingOptions: roundOptions,",
+    to: "      system: runtime.system,",
+    expect: "runWatch 逐筆讀取一律帶當輪快照",
+  },
+  {
+    name: "待通知定位的逐筆讀取不帶當輪快照",
+    file: "v3/src/watcher.js",
+    from: "    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);",
+    to: "    const listing = await listingForWatchAsync(event.post_id, userId || undefined);",
+    expect: "resolvePendingNotifyLocations",
+  },
+  {
+    name: "ingestListingGeo 不接受呼叫端傳下來的當輪快照",
+    file: "v3/src/watcher.js",
+    from: "export async function ingestListingGeo(postId, options = {}) {\n  let listing = await listingForWatchAsync(postId, undefined, options);",
+    to: "export async function ingestListingGeo(postId, options = {}) {\n  let listing = await listingForWatchAsync(postId);",
+    expect: "逐筆 0 條全域設定讀取",
+  },
+];
+
 // 通知 flush 迴圈的逐會員讀取（v3/test/notify-flush-settings.test.js，第七十四批）。
 const NOTIFYFLUSH_SRC = "v3/src/watcher.js";
 const NOTIFYFLUSH_MUTATIONS = [
@@ -6312,6 +6367,7 @@ const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATION
   : /source-recovery/.test(testFile) ? [...SRCRECOVERY_MUTATIONS, ...SRCRECOVERY2_MUTATIONS]
   : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
   : /crawl-external-rotation/.test(testFile) ? EXTERNALROT_MUTATIONS  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
+  : /settings-hot-read-diet/.test(testFile) ? SETTINGSDIET_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /sqlite-exit-web-callers/.test(testFile) ? SQLITEEXITWEB_MUTATIONS
   : /watch-limits-async/.test(testFile) ? WATCHLIMITS_MUTATIONS

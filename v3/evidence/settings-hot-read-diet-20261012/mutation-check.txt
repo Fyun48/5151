@@ -1,0 +1,16 @@
+[OK  ] crawlRuntimeAsync 不再回傳當輪的原始設定列（逐筆又開始各自重讀）
+       預期殺手「crawlRuntimeAsync 要把當輪讀到的原始列」→ 已失敗 ✓
+[OK  ] runWatch 不組當輪快照（逐筆回到各自讀一次全域設定）
+       預期殺手「runWatch 逐筆讀取一律帶當輪快照」→ 已失敗 ✓
+[OK  ] 落地迴圈的逐筆讀取不帶當輪快照
+       預期殺手「runWatch 逐筆讀取一律帶當輪快照」→ 已失敗 ✓
+[OK  ] 下架掃描的逐筆讀取不帶當輪快照
+       預期殺手「sweepOfflineListings 也走同一份快照」→ 已失敗 ✓
+[OK  ] 下架掃描的呼叫端不傳當輪快照
+       預期殺手「runWatch 逐筆讀取一律帶當輪快照」→ 已失敗 ✓
+[OK  ] 待通知定位的逐筆讀取不帶當輪快照
+       預期殺手「resolvePendingNotifyLocations」→ 已失敗 ✓
+[OK  ] ingestListingGeo 不接受呼叫端傳下來的當輪快照
+       預期殺手「逐筆 0 條全域設定讀取」→ 已失敗 ✓
+
+共 7 條變異：KILLED 7、SURVIVED 0、SKIP 0
