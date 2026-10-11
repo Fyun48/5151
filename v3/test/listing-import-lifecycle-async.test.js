@@ -13,8 +13,11 @@
 //   2. **狀態機**：`reviewListingImport()` 只接受 `ready_for_review`；
 //      `cancelListingImport()` 對 `confirmed` 丟 409、對 `cancelled` 直接回同一筆。
 //      狀態碼是**共用政策**，parity 抓不到「兩邊一起改壞」，所以對值本身下斷言。
-//   3. **取消要一起收掉草稿**：`listings.self_status` 變 `cancelled`，
-//      而且**兩個 store 都要寫**（本機的同步瀏覽路徑讀 `listings`）。
+//   3. **取消要一起收掉草稿**：`listings.self_status` 變 `cancelled`。
+//      ⚠️ 2026-10-10 SQLite 退場 P5a：草稿那一列的**本機鏡射**（`selfListingsAsync.js` 的
+//      `updateImportedDraftListingAsync`／`abandonImportedDraftListingAsync`）已刪 ⇒ 這一支測試對
+//      草稿的斷言改成「本機那一列**不得被動到**」；`listing_import` 那一列的本機鏡射屬另一包
+//      （listingImportAsync 的收斂），本檔仍照原文斷言。
 //   4. **媒體清理是 best-effort**：逐筆 try/catch（同步版也是），所以「媒體不存在」
 //      不該讓取消失敗；反過來說，這一段的正確性由 member-media 那一批的測試負責。
 import { after, test } from "node:test";
@@ -179,6 +182,7 @@ test("修改：標題與內容會淨化，草稿同步更新；匯入列只寫 P
   seedDraft(disk);
   seedImport(disk);
   const localBefore = plain(importRow(disk));
+  const localDraftBefore = plain(draftRow(disk));
 
   const asyncView = plain(await asyncMod.reviewListingImportAsync(OWNER, IMPORT_ID, input, { ...PG, exec, strict: true }));
   assert.deepEqual(asyncView, syncView, "回傳的公開形狀必須相同");
@@ -189,7 +193,9 @@ test("修改：標題與內容會淨化，草稿同步更新；匯入列只寫 P
   // 所以現在改斷言本機那一列**不得被動到**（開閘時任何觸碰都會拋，這裡用「內容不變」等價證明）。
   assert.deepEqual(plain(importRow(disk)), localBefore, "本機的匯入列不得再被鏡射寫入");
   assert.deepEqual(plain(draftRow(exec.raw)), plain(syncDraft), "PG 上的草稿必須相同");
-  assert.deepEqual(plain(draftRow(disk)), plain(syncDraft), "本機的草稿也要追上（同步瀏覽路徑讀它）");
+  // 🚫 P5a：`selfListingsAsync.updateImportedDraftListingAsync()` 的本機鏡射已刪 ⇒ 本機那一列
+  // **不得被動到**（原本的斷言是「本機的草稿也要追上（同步瀏覽路徑讀它）」）。
+  assert.deepEqual(plain(draftRow(disk)), localDraftBefore, "本機的草稿那一列不得被 async 版動到");
   assert.equal(asyncView.imported_title, "新的匯入標題", "標題要 trim（否則這條測試沒有鑑別力）");
 });
 
@@ -229,6 +235,7 @@ test("取消：匯入變 cancelled、草稿變 cancelled；匯入列只寫 PG（
   seedDraft(disk);
   seedImport(disk, { mediaIds: [] });
   const localBefore = plain(importRow(disk));
+  const localDraftBefore = plain(draftRow(disk));
 
   const result = plain(await asyncMod.cancelListingImportAsync(OWNER, IMPORT_ID, { ...PG, exec, strict: true, now: NOW }));
   assert.deepEqual(result, syncResult, "回傳值必須相同");
@@ -238,7 +245,9 @@ test("取消：匯入變 cancelled、草稿變 cancelled；匯入列只寫 PG（
   assert.deepEqual(plain(importRow(disk)), localBefore, "本機的匯入列不得再被鏡射寫入");
   assert.equal(importRow(exec.raw).status, "cancelled");
   assert.deepEqual(plain(draftRow(exec.raw)), plain(syncDraft), "PG 上的草稿狀態必須相同");
-  assert.deepEqual(plain(draftRow(disk)), plain(syncDraft), "本機的草稿也要追上");
+  // 🚫 P5a：`abandonImportedDraftListingAsync()` 的本機鏡射已刪 ⇒ 本機的草稿不得被動到
+  // （原本的斷言是「本機的草稿也要追上」）。
+  assert.deepEqual(plain(draftRow(disk)), localDraftBefore, "本機的草稿那一列不得被 async 版動到");
   assert.equal(draftRow(exec.raw).self_status, "cancelled", "取消要一起收掉草稿");
 });
 

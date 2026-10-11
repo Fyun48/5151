@@ -180,9 +180,15 @@ test("PG 分支：591 匯入建立 ready_for_review 的草稿，而且匯入列�
   assert.equal(row.listing.post_id, Number(drafts[0].post_id), "回傳的 listing 要是 PG 那一列");
   assert.deepEqual(row.photos, JSON.parse(drafts[0].self_photos));
 
-  // 本機鏡射：還沒搬完的同步讀者看的是節點本機那一份。
-  assert.equal(localImports().length, 1, "本機也要有鏡射列");
-  assert.equal(handle().prepare("SELECT COUNT(*) AS n FROM listings WHERE listed_by_user_id = ?").get(USER).n, 1);
+  // 本機鏡射：`listing_import` 那一列還是（屬另一包的收斂）；
+  // 🚫 但**草稿列**（`listings`）的本機鏡射已隨 SQLite 退場 P5a
+  // （`selfListingsAsync.insertImportedDraftListingAsync()`）刪除 ⇒ 本機不得有那一列
+  //（原本的斷言是「本機也要有鏡射列」＝ 1）。
+  assert.equal(localImports().length, 1, "本機也要有鏡射列（listing_import 那一列）");
+  assert.equal(
+    handle().prepare("SELECT COUNT(*) AS n FROM listings WHERE listed_by_user_id = ?").get(USER).n, 0,
+    "草稿不得再鏡射到本機（PG 是唯一來源）",
+  );
 });
 
 test("同來源重複匯入回同一筆（reused），PG 不長第二列", async () => {

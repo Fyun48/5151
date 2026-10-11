@@ -26,9 +26,11 @@
 //   2. **取消訂閱的閘門**：`applyUnsubscribeToken()` 會**暫時**把 `notifications_enabled`
 //      設成 true（使用者按了取消連結就一定要生效）。同步版的 `finally` 在 async 用會提早還原，
 //      所以要 `withNotificationsForcedEnabledAsync()`。
-//   3. **兩個 store**：本機還有**同步**讀者（`planDeliveries()` 讀 prefs、worker 的摘要查詢
-//      讀訂閱），所以 PG 寫完之後本機也要寫同一組值。反過來，本機的**投遞**與**worker**
-//      路徑仍在 SQLite 上，這也是這一包不能只寫 PG 的原因。
+//   3. **只有一個 store（2026-10-10 SQLite 退場 P5a 起）**：原本 PG 寫完之後還會把同一組值
+//      鏡射進本機 SQLite（`planDeliveries()`／worker 摘要那時還讀本機）。那些鏡射在正式站
+//      （`PG_NO_SQLITE_OPEN=1`）**必拋** `business SQLite is closed` ⇒ 會員按「儲存通知偏好」
+//      或按取消訂閱連結都拿到 400。Owner 裁決：正式讀寫不回退節點 SQLite，鏡射整條刪除，
+//      PG 是唯一來源。
 //   4. **`rental_notify_prefs.user_id` 在 PG 上是 identity**（SQLite 的 `INTEGER PRIMARY KEY`
 //      被鏡射成 identity），但它是使用者 id、永遠由呼叫端提供 ⇒ 明確寫入不會推進序列，
 //      `pg-identity-sequences` 的健檢會永遠紅著。ensure 要多一句 `DROP IDENTITY`。
@@ -55,7 +57,6 @@ import {
   UNSUB_MARK_USED_SQL,
   UNSUB_TOKEN_SQL,
   assertRentalNotificationsEnabled,
-  bumpAnalytics,
   matchSubscriptionView,
   mergeRentalNotifyPrefs,
   newToken,
@@ -80,9 +81,8 @@ export const RENTAL_NOTIFY_PREFS_UNIQUE_INDEXES = [
   "CREATE UNIQUE INDEX IF NOT EXISTS rental_match_subscriptions_owner_listing_key ON rental_match_subscriptions(owner_user_id, listing_id)",
   "CREATE UNIQUE INDEX IF NOT EXISTS rental_match_subscriptions_token_key ON rental_match_subscriptions(public_token)",
 ];
-// 本機那一列的收斂：PG 是來源，所以連 `public_token` 一起蓋（只在兩個 store 不一致時才會有差）。
-export const SUBSCRIPTION_SYNC_LOCAL_SQL =
-  "UPDATE rental_match_subscriptions SET mode = ?, updated_at = ?, public_token = ? WHERE id = ?";
+// 🚫 `SUBSCRIPTION_SYNC_LOCAL_SQL`（本機那一列的收斂）已隨 SQLite 退場 P5a 刪除：
+// PG 是唯一來源，不再有「本機鏡射」這一步。
 
 // `user_id` 是使用者帶進來的 id，不該是 identity（理由見檔頭第 4 點）。
 export const PREFS_DROP_IDENTITY_SQL =
@@ -147,7 +147,7 @@ export async function getRentalNotifyPrefsForAsync(userId, options = {}) {
   return withCaps(prefs);
 }
 
-// prefs 的寫入（PG）。**兩個 store 都寫**：本機的 `planDeliveries()` 還讀本機 prefs。
+// prefs 的寫入（PG）。SQLite 退場 P5a 起**只寫 PG**（原本的「本機追上」鏡射已刪）。
 async function savePrefsPg(run, userId, patch, now, options) {
   assertRentalNotificationsEnabled();
   const uid = Number(userId) || 0;
@@ -156,12 +156,10 @@ async function savePrefsPg(run, userId, patch, now, options) {
   const next = mergeRentalNotifyPrefs(current, patch);
   const params = prefsUpsertParams(uid, next, now);
   await run(PREFS_UPSERT_SQL, params);
-  // 本機追上：同一組值（不是重算一次，避免兩邊因為起點不同而分歧）。
-  sqliteHandle().prepare(PREFS_UPSERT_SQL).run(...params);
-  // 計數也各記一次：`bumpAnalyticsAsync()` 的 PG 分支不會碰本機 handle，所以本機要用
-  // **同步版**再記一次（同一個 `taipeiDay()` 與同一句 upsert，不自己重寫）。
+  // 🚫 本機鏡射已刪（SQLite 退場 P5a）：`PG_NO_SQLITE_OPEN=1` 時這一句必拋
+  // `business SQLite is closed` ⇒ 會員按「儲存通知偏好」收到 400（PG 其實已寫成功）。
+  // 計數只記 PG：`bumpAnalyticsAsync()` 的 PG 分支本來就不碰本機 handle。
   await bumpAnalyticsAsync("pref_updated", now, 1, nested(options, run));
-  bumpAnalytics(sqliteHandle(), "pref_updated", now);
   return prefsFromRow(one((await run(PREFS_BY_USER_SQL, [uid])).rows));
 }
 
@@ -216,22 +214,18 @@ export async function saveMatchSubscriptionAsync(ownerUserId, listingId, mode, o
       throw rentalNotifyHttpError("找不到這則刊登", 404, "listing_not_found");
     }
     const stamp = isoOf(now);
-    const local = sqliteHandle();
-    const localRow = local.prepare(SUBSCRIPTION_BY_OWNER_LISTING_SQL).get(uid, lid);
     const existing = one((await run(SUBSCRIPTION_BY_OWNER_LISTING_SQL, [uid, lid])).rows);
-    // token 的優先序：PG 已有的 → 本機已有的 → 新產生。
-    // ⚠️ 先看本機是刻意的：PG 上還沒有這一列、但本機有時（島嶼搬遷前建立的訂閱），
-    // 沿用本機的 token 才不會讓**已經寄出去**的連結失效；兩個 store 也才會一致。
-    const token = existing?.public_token || localRow?.public_token || newToken();
+    // token 的優先序：PG 已有的 → 新產生。
+    // 🚫 原本還會讀本機 `localRow.public_token`（島嶼搬遷前建立的訂閱）——SQLite 退場 P5a 已刪：
+    // 開閘時那個 `local.prepare()` 必拋，而且 PG 是唯一來源（舊的本機 token 不該再影響新寫入）。
+    const token = existing?.public_token || newToken();
     if (existing) {
       await run(SUBSCRIPTION_UPDATE_MODE_SQL, [next, stamp, existing.id]);
     } else {
       await run(SUBSCRIPTION_INSERT_SQL, [token, uid, lid, next, stamp, stamp]);
     }
-    // 本機追上（worker 的摘要查詢讀本機）：同一組值、同一個 token。
-    // PG 是來源，所以本機那一列連 `public_token` 一起收斂（只有本機有那一列時值相同、不會變動）。
-    if (localRow) local.prepare(SUBSCRIPTION_SYNC_LOCAL_SQL).run(next, stamp, token, localRow.id);
-    else local.prepare(SUBSCRIPTION_INSERT_SQL).run(token, uid, lid, next, stamp, stamp);
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：原本還會把同一列（含 public_token）寫進本機
+    // `rental_match_subscriptions`，開閘時那兩句都會拋。PG 是唯一來源。
     return matchSubscriptionView(one((await run(SUBSCRIPTION_BY_OWNER_LISTING_SQL, [uid, lid])).rows), lid);
   }, async () => (await import("./db.js")).saveMatchSubscriptionFor(uid, lid, mode, now));
 }
@@ -261,19 +255,8 @@ export async function applyUnsubscribeTokenAsync(token, options = {}) {
       await savePrefsPg(run, row.user_id, unsubscribePrefsPatch(scope), now, options);
     });
     await run(UNSUB_MARK_USED_SQL, [stamp, raw]);
-    // 本機追上：**只有本機也有這個 token 時**才動（信件可能是別的節點寄的；
-    // 本機沒有那一列時硬寫會讓一個已經成功的 PG 請求變成 404——與 wish_room_example
-    // 那個 FK 陷阱同一類）。
-    const local = sqliteHandle();
-    const localToken = local.prepare(UNSUB_TOKEN_SQL).get(raw);
-    if (localToken && !localToken.used_at) {
-      if (scope === "new_match" || scope === "all") {
-        local.prepare(SUBSCRIPTIONS_OFF_ALL_SQL).run(stamp, localToken.user_id);
-      } else if (scope === "digest") {
-        local.prepare(SUBSCRIPTIONS_OFF_DIGEST_SQL).run(stamp, localToken.user_id);
-      }
-      local.prepare(UNSUB_MARK_USED_SQL).run(stamp, raw);
-    }
+    // 🚫 本機鏡射已刪（SQLite 退場 P5a）：這是**免登入的公開路由**（`POST /api/public/unsubscribe/:token`），
+    // 開閘時原本那一段 `sqliteHandle()` 讀寫必拋 ⇒ 使用者按下取消訂閱拿到 400（PG 其實已生效）。
     return { ok: true, already: false };
   }, async () => (await import("./db.js")).applyUnsubscribeTokenFor(token, now));
 }
