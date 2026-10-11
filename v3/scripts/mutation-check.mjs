@@ -6185,6 +6185,86 @@ const SEARCHPARITY_MUTATIONS = [
   },
 ];
 
+// 會員列表版本化快取的失效正確性（2026-10-11）。
+// 這一包最危險的失敗模式是「**看起來有快取、但 key 少放一項**」——列表照樣回得出來，
+// 只是偶爾回錯（漏掉剛按不再顯示的物件、用舊的路線資料判斷通勤）。
+// 每一條都對應 `v3/test/member-listing-cache.test.js` 裡的一個測試。
+const MEMBERCACHE_MUTATIONS = [
+  {
+    name: "空表版本號不擋（Number(null)=0 ⇒ 空 data_revision 也被當成可靠版本號）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "  if (row.revision == null || row.data_version == null) return null;\n",
+    to: "",
+    expect: "readMemberListingGeneration：沒有 data_revision 或空表",
+  },
+  {
+    name: "金關變成「有設就算開」（預設值不再保守）",
+    file: "v3/src/memberListingCachePg.js",
+    from: 'return raw === "1" || raw === "on" || raw === "true";',
+    to: 'return raw !== "";',
+    expect: "金關預設關閉",
+  },
+  {
+    name: "寫入前不再確認版本（算到一半有寫入也照樣掛上新版本號）",
+    file: "v3/src/memberListingCachePg.js",
+    from: [
+      "    if (confirm && memberListingCacheKey({ generation: confirm, args, uid, explicitAsOf }) === key) {",
+      "      writeEntry(key, payload, now(), maxEntries, maxListings);",
+      "      counters.stores += 1;",
+      "    }",
+    ].join("\n"),
+    to: [
+      "    {",
+      "      writeEntry(key, payload, now(), maxEntries, maxListings);",
+      "      counters.stores += 1;",
+      "    }",
+    ].join("\n"),
+    expect: "算到一半就寫入",
+  },
+  {
+    name: "會員自己的狀態簽章不進 key（剛按的不再顯示會被回舊值）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "    generation.signature,\n",
+    to: "",
+    expect: "會員自己的狀態",
+  },
+  {
+    name: "非 data_revision 的資料版本號不進 key（通勤路線換了、成員卻照舊）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "    `d${generation.dataVersion}`,\n",
+    to: "",
+    expect: "路線／快取類資料的版本號",
+  },
+  {
+    name: "分頁游標不進 key（下一頁會拿到第一頁的快取）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "    cursor: args.cursor ?? null,",
+    to: "    cursor: null,",
+    expect: "請求參數不同",
+  },
+  {
+    name: "物件簽章不排序鍵（同一包 settings 只要鍵序不同就算不同 key）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "  const keys = Object.keys(value).sort();",
+    to: "  const keys = Object.keys(value);",
+    expect: "normalizeMemberListRequest",
+  },
+  {
+    name: "記憶體護欄的筆數預算拿掉（一頁 500 筆的 /api/state 可以吃掉整個池）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "  while (cache.size > maxEntries || weightTotal > maxListings) {",
+    to: "  while (cache.size > maxEntries) {",
+    expect: "記憶體護欄",
+  },
+  {
+    name: "單筆超過預算照樣存進去（一筆就能把整池擠掉）",
+    file: "v3/src/memberListingCachePg.js",
+    from: "  if (weight > maxListings) return;\n",
+    to: "",
+    expect: "記憶體護欄",
+  },
+];
+
 // Stage 1 fixture 證據的「電話外洩」偵測（2026-10-01 第一百零一批）。
 // 這一條的誤判會讓整個 fixture 準備失敗：`opaqueId()` 是 sha256 的前 12 個十六進位字元，
 // 光靠機率就會出現 `e0912345678d`（中間剛好 10 位數字），舊邊界會把它當成電話。
@@ -6277,6 +6357,7 @@ const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATION
   : /wish-offers-async/.test(testFile) ? WOFFERS_MUTATIONS
   : /demand-async/.test(testFile) ? DEMAND_MUTATIONS
   : /route-data-map/.test(testFile) ? MAP_MUTATIONS
+  : /member-listing-cache/.test(testFile) ? MEMBERCACHE_MUTATIONS
     : /admin-settings-async/.test(testFile) ? ADMSET_MUTATIONS
           : /self-listings-async/.test(testFile) ? SELFLIST_MUTATIONS
           : /housing-refresh-async/.test(testFile) ? HOUSING_MUTATIONS

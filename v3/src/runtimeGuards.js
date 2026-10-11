@@ -25,6 +25,16 @@ export const PG_NO_SQLITE_OPEN_ENV = "PG_NO_SQLITE_OPEN";
 // 設定、v3/scripts/crawl-sandbox.mjs:184 讀取）。
 export const CRAWL_SANDBOX_REPORT_ENV = "CRAWL_SANDBOX_REPORT";
 
+// 會員列表路徑的版本化結果快取（`v3/src/memberListingCachePg.js`）。
+//
+// **預設關閉**：只有這個鍵明確是 `1`／`on`／`true` 才啟用；其餘（未設、空字串、`0`、拼錯）
+// 一律維持現況（每個請求重算），所以沒設定時的行為與今天逐字相同。這是一個純效能閘門，
+// 不像上面幾條會拒絕啟動——讀不到版本號時它自己 fail-closed（不讀不寫，直接現算）。
+// 另外兩個可選鍵：`MEMBER_LISTING_CACHE_FRESH_MS`（預設 30000）、
+// `MEMBER_LISTING_CACHE_ENTRIES`（預設 24，記憶體護欄）。
+// 怎麼驗證：`node v3/scripts/member-listing-cache-bench.mjs`（隔離庫，同一組參數連打兩次）。
+export const MEMBER_LISTING_CACHE_ENV = "MEMBER_LISTING_CACHE";
+
 // 與 dbDriverPostgres.js 的 resolvePostgresConfig() 對齊：這些 env 只要有一個非空，
 // 就代表「有 PG 連線」，driver 必須解析成 postgres。
 const PG_URL_KEYS = ["PG_URL", "DATABASE_URL", "POSTGRES_URL"];
