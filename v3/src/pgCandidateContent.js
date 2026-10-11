@@ -55,21 +55,28 @@ export function createCandidateContentStore({ maxRows = 50000, maxBytes = 64 * 1
 
 export async function readCandidateContent({ client, readRows, store, sql, params, options }) {
   if (!store || !options.arrayRows || !sql.startsWith(PREFIX)) return readRows(sql, params, options);
+  // `extraColumns`（A 方案／一趟掃描用）：把**額外的旗標欄位**掛在「版本預讀」那一趟，
+  // 而不是掛在主查詢的 SELECT 上——這樣主查詢仍以 `SELECT <42 欄> FROM listings ` 開頭，
+  // 內容備忘（`store`）照樣命中；旗標與列在版本那一趟逐列對齊。
+  const extra = options.extraColumns || null;
   // Enforce the full column privilege contract on every read, even a 100% hit.
   // Field metadata detects column replacement/type changes without trusting TTL.
   const fields = (await client.query(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings LIMIT 0`)).fields;
   const metadata = (await client.query(IDENTITY_SQL)).rows[0];
   // Views, inheritance/partitioning and RLS need their own version/visibility
   // proof. Keep their original single SELECT instead of approximating it.
+  // （走這條時旗標讀不到 ⇒ 呼叫端會退回「旗標另查一次」那條路，見 listingScopeScan。）
   if (!metadata || metadata.relkind !== 'r' || metadata.relhassubclass || metadata.relrowsecurity || !metadata.table_select) {
     return readRows(sql, params, options);
   }
   const identity = store.bindIdentity(JSON.stringify([metadata, fields.map(f => [f.name, f.tableID, f.columnID, f.dataTypeID, f.dataTypeModifier])]));
   const rows = [], missing = [], versions = new Map();
-  await readRows(`SELECT ${VERSION_COLUMNS} FROM listings ${sql.slice(PREFIX.length)}`, params, {
+  await readRows(`SELECT ${VERSION_COLUMNS}${extra ? extra.selectSql : ""} FROM listings ${sql.slice(PREFIX.length)}`,
+    extra ? [...params, ...extra.params] : params, {
     consumeValues: async selected => runStepsAsync((function* () {
       for (let i = 0; i < selected.length; i++) {
-        const [postId, version] = selected[i];
+        const [postId, version, ...flagValues] = selected[i];
+        if (extra) extra.onRow(flagValues);
         const id = Number(postId), index = rows.length;
         const values = store.get(id, version, identity);
         rows.push(values ? candidateRowFromValues(values) : null);

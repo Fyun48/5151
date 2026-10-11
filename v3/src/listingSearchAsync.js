@@ -62,6 +62,9 @@ export async function searchListingsAsync(args = {}, options = {}) {
       decorationLoader: options.decorationLoader,
       requestContext: options.requestContext,
       reusableCandidates: options.reusableCandidates,
+      // A 方案（一趟掃描）：呼叫端已備好的 list 範圍與候選列（同一趟掃描的結果）。
+      scope: options.scope,
+      candidates: options.candidates,
     });
   } catch (error) {
     // F2／astra6 §5：PostgreSQL 失敗時**不回退 SQLite**，且**移除正式可達的換庫能力** ✗。

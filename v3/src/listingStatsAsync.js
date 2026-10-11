@@ -33,7 +33,13 @@ export async function loadPgListingStatsInputs(args = {}, options = {}) {
     driver: "postgres", pgDriver: options.pgDriver, exec,
     deps: options.deps || listingStatsBuildContext(),
   });
-  return repository.loadInputs({...args, requestContext:options.requestContext});
+  return repository.loadInputs({
+    ...args,
+    requestContext: options.requestContext,
+    // A 方案（一趟掃描）：呼叫端已備好的 stats 範圍與該範圍的列（`prepareStatsScope` ＋ 共趟掃描）。
+    scope: options.scope,
+    scopeRows: options.scopeRows,
+  });
 }
 
 // Counters consume personal flags and routes. They do not decorate cards or

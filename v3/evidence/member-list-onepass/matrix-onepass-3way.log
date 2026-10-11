@@ -1,0 +1,4 @@
+(node:32007) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+wrote v3/evidence/member-list-onepass/matrix-onepass-3way.json (40 cases)

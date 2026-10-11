@@ -126,6 +126,42 @@ async function countProductListings(runOne, requestContext) {
   return count;
 }
 
+/**
+ * 本請求的「stats 範圍」準備（**述詞與順序與 `loadInputs` 內逐字相同**）。
+ *
+ * 為什麼要抽出來（2026-10-11 第二刀・A 方案）：`computeListingPage` 必須在**掃描之前**同時
+ * 拿到 list 與 stats 兩份 WHERE，才能用同一趟掃描 `(stats_where) OR (list_where)` ＋
+ * `in_list_scope` 旗標，取代「stats 掃一次寬候選 → list 再下一次 id-only」的兩趟。
+ *
+ * `baseClauses`／`baseParams` 是**行政區與價格天花板之前**的那兩條（`searchWhere` ＋
+ * `listingVisibilityClauses`）——`statusCounts` 那條聚合查詢用的正是它們（不得被縮窄）。
+ */
+export async function prepareStatsScope(context, { searchKeys, settings, requestContext, run } = {}) {
+  const baseClauses = [];
+  const baseParams = [];
+  context.searchWhere(searchKeys, baseClauses, baseParams, requestContext);
+  context.listingVisibilityClauses(baseClauses, baseParams, requestContext, { sqliteDb: null });
+  const clauses = [...baseClauses];
+  const params = [...baseParams];
+  // 行政區投影預篩（與會員列表同一條）：`memberRegionDistrictNames` 是同一份清單，
+  // 拿得到投影就用 `post_id = ANY(...)`，拿不到就退回 `split_part` 表達式（不得靜默少算）。
+  const districtNames = context.memberRegionDistrictNames(settings);
+  const districtPrefilter = await loadDistrictPrefilterIds(run, { districtNames });
+  const projectedDistrictHandled = appendDistrictProjectedCandidates(
+    districtNames, clauses, params,
+    { driver: "postgres", projectedIds: districtPrefilter ? districtPrefilter.postIds : null },
+  );
+  if (!projectedDistrictHandled) {
+    context.appendDistrictCandidates(districtNames, clauses, params, { driver: "postgres" });
+  }
+  context.appendPriceCeilingCandidates(settings, clauses, params, { driver: "postgres" });
+  return {
+    baseClauses, baseParams, clauses, params,
+    where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    districtNames, districtPrefilter,
+  };
+}
+
 export function createListingStatsRepository({
   driver = "postgres",
   pgDriver = null,
@@ -153,7 +189,7 @@ export function createListingStatsRepository({
      * flag map they get overlaid with), the offline counters, the watch quota, the
      * product-visible total and the failed route jobs.
      */
-    async loadInputs({ searchKeys, userId, settings: settingsOverride, diagnostics, requestContext: providedContext = null, asOf = null } = {}) {
+    async loadInputs({ searchKeys, userId, settings: settingsOverride, diagnostics, requestContext: providedContext = null, asOf = null, scope: providedScope = null, scopeRows = null } = {}) {
       let stageStarted = performance.now();
       const markStage = name => {
         const now = performance.now();
@@ -163,10 +199,11 @@ export function createListingStatsRepository({
       const requestContext = providedContext || await buildListRequestContextFromPg(run, {asOf,resolvedSearchKeys:searchKeys});
       const uid = Number(userId) || 0;
       const settings = settingsOverride || requestContext.settingsForUser(uid);
-      const clauses = [];
-      const params = [];
-      context.searchWhere(searchKeys, clauses, params, requestContext);
-      context.listingVisibilityClauses(clauses, params, requestContext, {sqliteDb:null});
+      // A 方案：呼叫端已經用同一趟掃描算好 stats 範圍與該範圍的列時，沿用同一份述詞與結果
+      // （`prepareStatsScope` 與下面那一段是逐字相同的順序與述詞）。
+      const scope = providedScope || await prepareStatsScope(context, { searchKeys, settings, requestContext, run });
+      const clauses = scope.baseClauses;
+      const params = scope.baseParams;
       // Same order and the same statements as db.js stats(): the offline counters describe the
       // shared search pool (districts/price not narrowed yet), the candidates get everything.
       const statusWhere = `WHERE ${[...clauses, "COALESCE(offline, 0) != 0"].join(" AND ")}`;
@@ -178,21 +215,10 @@ export function createListingStatsRepository({
         params,
       );
       markStage("status_ms");
-      // 行政區投影預篩（與會員列表同一條）：`memberRegionDistrictNames` 是同一份清單，
-      // 拿得到投影就用 `post_id = ANY(...)`，拿不到就退回 `split_part` 表達式（不得靜默少算）。
-      const statsDistrictNames = context.memberRegionDistrictNames(settings);
-      const statsDistrictPrefilter = await loadDistrictPrefilterIds(run, { districtNames: statsDistrictNames });
-      const projectedDistrictHandled = appendDistrictProjectedCandidates(
-        statsDistrictNames, clauses, params,
-        { driver: "postgres", projectedIds: statsDistrictPrefilter ? statsDistrictPrefilter.postIds : null },
-      );
-      if (!projectedDistrictHandled) {
-        context.appendDistrictCandidates(statsDistrictNames, clauses, params, { driver: "postgres" });
-      }
       markStage("district_ms");
-      context.appendPriceCeilingCandidates(settings, clauses, params, {driver:"postgres"});
-      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-      const raw = await run(`SELECT ${context.candidateColumns} FROM listings ${where}`, params, {batch: true, arrayRows: true});
+      const raw = Array.isArray(scopeRows)
+        ? scopeRows
+        : await run(`SELECT ${context.candidateColumns} FROM listings ${scope.where}`, scope.params, {batch: true, arrayRows: true});
       markStage("candidates_ms");
       const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)), {label:"stats.normalize"});
       markStage("normalize_ms");
