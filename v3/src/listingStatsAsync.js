@@ -39,12 +39,15 @@ export async function loadPgListingStatsInputs(args = {}, options = {}) {
     // A 方案（一趟掃描）：呼叫端已備好的 stats 範圍與該範圍的列（`prepareStatsScope` ＋ 共趟掃描）。
     scope: options.scope,
     scopeRows: options.scopeRows,
+    // 第三刀（2026-10-11）：同一個請求的 list 與 stats 兩條管線**共用同一個裝飾資料載入器**，
+    // 個人旗標／路由／MRT／listing_prep 等輔助讀取因此只查一次（同一個請求、同一份述詞）。
+    loader: options.decorationLoader || null,
   });
 }
 
 // Counters consume personal flags and routes. They do not decorate cards or
 // compare house groups, so loading candidate extras/peers/MRT for them is wasteful.
-async function statsProvider(exec, inputs) {
+async function statsProvider(exec, inputs, loader = null) {
   const {settings, rows, requestContext} = inputs;
   const keys = [];
   if (Number(settings.commuteKm) > 0 && hasWorkPoint(settings)) {
@@ -54,9 +57,10 @@ async function statsProvider(exec, inputs) {
       keys.push(makeRouteKey(settings.workLat,settings.workLng,row.lat,row.lng,settings.commuteMode,"from_work"));
     }
   }
-  const loader = createDecorationDataLoader({exec,driver:"postgres"});
+  // 第三刀：呼叫端（同一個請求）已有載入器時沿用，路由快取以 **key 為單位** 命中 ⇒ 不再重查。
+  const shared = loader || createDecorationDataLoader({exec,driver:"postgres"});
   return preloadedDecorationProvider({userId:inputs.uid,personalFlags:inputs.flagMap,
-    routeCache:await loader.routeCacheMap(keys),crawlSources:requestContext.crawlSources,
+    routeCache:await shared.routeCacheMap(keys),crawlSources:requestContext.crawlSources,
     systemCrawl:requestContext.systemCrawl,now:requestContext.now});
 }
 
@@ -82,7 +86,7 @@ export async function listingStatsAsync(
         {...options, pgDriver:snapshotDriver, exec},
       );
       markStage(options.preloadedStatsInputs ? "reuse_inputs_ms" : "inputs_ms");
-      const provider = options.decorationProvider || await statsProvider(exec, inputs);
+      const provider = options.decorationProvider || await statsProvider(exec, inputs, options.decorationLoader || null);
       markStage("provider_ms");
       if (inputs.candidateShape) {
         return summarizeRawListingStatsAsync({
