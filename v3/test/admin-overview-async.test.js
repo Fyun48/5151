@@ -88,3 +88,13 @@ test("讀不到資料時要吞掉錯誤並回空 Map（與同步版相同的容�
   assert.equal(lastSeen.size, 0);
   assert.equal(todayNew.size, 0);
 });
+
+// SQLite 退場 P2：後台總覽的 PG 路徑帶 `strict: true`——同一個函式不可以再把失敗吞成空的 Map
+// （空 Map ⇒ 每個來源的 todayNew 顯示 0，那正是「靜默顯示 0」的缺陷）。
+test("strict: true 時 PG 讀不到要把錯誤往上丟，不可以回空 Map", async () => {
+  const exec = async () => { throw new Error("PG 讀不到 listings"); };
+  await assert.rejects(
+    () => sourceListingStatsAsync({ ...PG, exec, strict: true }),
+    /PG 讀不到 listings/,
+  );
+});
