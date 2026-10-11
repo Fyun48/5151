@@ -85,7 +85,7 @@ PY
 # p = "/cfg/haproxy.cfg"; s = open(p).read(); open(p, "w").write(s.replace(...)); print("ok")
 # PY
 
-# (2) 語法：容器內路徑（必須 "Configuration file is valid"）
+# (2) 語法：容器內路徑（exit 0 ＝有效；2.9 通常會印 "Configuration file is valid"，以 exit code 為準）
 docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 
 # (3) 零中斷 reload，然後看日誌
@@ -161,7 +161,8 @@ PY
 ## 4. 驗證（套用與回滾都要跑同一套）
 
 ```bash
-# (1) 語法（兩台都用**容器內路徑**；必須回 "Configuration file is valid"）
+# (1) 語法（兩台都用**容器內路徑**；exit 0 ＝有效；2.9 通常會印 "Configuration file is valid"，
+#     以 exit code 為準）
 docker exec 5151-haproxy   haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg
 

@@ -50,8 +50,9 @@ jobs:
       # 但沒有 CI 會把它部署上去（deploy-v3.yml 只做部署後 health check）；套用是在 NAS 上
       # 「就地改寫＋haproxy -c＋kill -s USR2 1」手動完成的，語法錯了要等 reload 那一刻才炸。
       # 這裡用官方映像在 runner 內離線驗語法，把 unknown keyword／語法錯誤擋在 PR（不碰正式機、
-      # 不需要任何連線）；`haproxy -c` 成功時會印 "Configuration file is valid" 並 exit 0。
-      # 失敗的長相（實例）：`[ALERT] … unknown keyword 'agent-fall'` ⇒ 步驟紅。
+      # 不需要任何連線）。實測（haproxy 2.9.15）：**失敗時 exit 1** 並印
+      # `[ALERT] … unknown keyword '<關鍵字>'`；**成功時 exit 0 但不吐任何字**
+      # （官方映像的 entrypoint 會自動把命令改寫成 `haproxy -W -db …`），所以下面自己 echo 一行 OK。
       - name: Validate HAProxy config
         shell: bash
         run: |
