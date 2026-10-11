@@ -70,11 +70,27 @@
 > 少了任一項，該節點就會「服務得到但行為不一樣」——所以**新增節點時要照這四項逐項確認**。
 >
 > **HAProxy（`/opt/5151-shadow/haproxy/haproxy.cfg`，正本在 repo `deploy/shadow-ha/haproxy/`）**：
-> `web_nodes` 有 `web-a`（casa-nas）與 `web-b`（syn-nas）兩台（預設 roundrobin），
-> 2026-09-23 加了 `option redispatch`——節點掛掉時連線失敗會立即改試另一台，
-> 不必等 health check（`inter 3s × fall 3`，最久約 9 秒）標記 DOWN。
-> **`pg_rw`／`pg_ro` 刻意不加 redispatch**：那會把寫入轉到唯讀的 standby。
-> 改完一定要 `docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg` 再 `kill -s HUP 1`（runbook 有寫）。
+> `web_nodes` 有 `web-a`（casa-nas）與 `web-b`（syn-nas）兩台，
+> **2026-10-12 起加權 `weight 30`／`weight 70`**（不再 roundrobin）：同日 02:26–02:28 用同一支腳本、
+> 同一分鐘、先 B 後 A 實測端對端中位 **web-B 3,915ms ／ web-A 5,240ms**（差約 25%；`list;dur`
+> 1,141–1,662 vs 1,731–2,408ms、`stats;dur` 2,456–3,337 vs 3,056–3,807ms）。
+> 原因是 casa-nas 4 核 Celeron（N3450）同時養 `591-tracker-v3` 34.9% ＋ `5151-postgres-A` 約 46%
+> ＋ `web-A` 27.6%（`loadavg ≈ 4.0`），不是 web-A 的程式或設定比較差。
+> **web-a 保留 30 是刻意的**——它同時是 PG primary 宿主與 web 層 failover 目標，
+> 歸零會讓 web-B 掛掉時沒有熱節點可接。
+> 訪客黏滯（Owner 2026-10-10 核准）與加權的關係：`stick-table … expire 30m` ＋
+> `stick on req.hdr(cf-connecting-ip)` 讓**已在表內的來源 IP 仍回到原本那台**，
+> weight 只改**新**黏滯的分配，所以效果是**漸進**的、不會立刻整批移轉。
+> 2026-09-23 加的 `option redispatch`——節點掛掉時連線失敗會立即改試另一台，
+> 不必等 health check（`inter 3s × fall 3`，最久約 9 秒）標記 DOWN——**不因加權而改變**。
+> **`pg_rw`／`pg_ro` 刻意不加 redispatch、也不加 weight**：那會把寫入轉到唯讀的 standby。
+> ⚠️ 2026-10-12 之前 **NAS 現行檔比 repo 檔多了上面那兩行黏滯設定**（Owner 2026-10-10 核准，
+> 當時只落在機器上）；本 PR 已把現行檔逐字同步回 repo——**沒有同步的話，用 repo 檔 reload
+> 會靜默丟掉黏滯**（語法合法、不報錯）。套用前請先 `diff` 現行檔與 repo 檔確認只差 weight。
+> 改完一定要先 `haproxy -c` 再**零中斷 reload**（`kill -s USR2 1`）；casa-nas 的容器只掛到
+> `.cfg.tmpl`，驗證要用 `render-and-run.sh` 同一組 sed 展開後的暫存檔（不能直接驗 `.cfg`）。
+> **完整套用／回滾／驗證指令見 `docs/runbooks/haproxy-web-weight.md`**（回滾＝拿掉 weight，
+> 別誤刪黏滯或 redispatch／retry-on）。
 
 ## 三個必須記住的事實
 

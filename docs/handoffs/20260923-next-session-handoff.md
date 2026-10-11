@@ -97,6 +97,8 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
 1. 公開流量切到 A 組（tunnel ingress `5155` → `25153`），web-A 對齊 PG（見 §2 的 2.4 之後那幾列）。
 2. B 節點（syn-nas `5151-web-B`）對齊四件事（image／PG／session secret／auth.env），
    HAProxy `web_nodes` 兩台都在；`option redispatch` ＋ `retry-on conn-failure empty-response response-timeout`。
+   （**2026-10-12 追加**：兩台改為加權 `web-a weight 30`／`web-b weight 70`，
+   並把 2026-10-10 Owner 核准的訪客黏滯同步回 repo 權威檔——見 §3.7。）
 3. **web 層演練（實跑兩次）**：停掉 web-A → HAProxy 標 `web-a DOWN (Connection refused)`、
    公開站由 web-B 接手（15 次請求中 14 次 200，**只有節點被殺的那一瞬間 1 次 503**）；
    啟動 web-A 後兩台都回 200。那個 1 次 503 是「回應已開始傳輸後節點死亡」，
@@ -151,6 +153,38 @@ runbook `docs/runbooks/postgres-cutover-bootstrap.md` 步驟 7 的孤島清完 �
    跟過去，靠手動改 HAProxy 順序是這項風險的來源）。
 2. **複寫與歸檔的兩個風險**：`synchronous_standby_names` 目前是空＝純 async（RPO > 0 風險）；
    兩節點 `archive_mode` 漂移（A=on／B=off，primary 端目前 off＝無 PITR）。
+
+### 3.7 web 層加權（2026-10-12；repo 已改，**正式機由 planner 套用**）
+
+**為什麼**：兩台同程式碼、打同一個 PG（primary 在 casa-nas），差距來自 casa-nas 的 CPU 被搶
+（`591-tracker-v3` 34.9% ＋ `5151-postgres-A` 約 46% ＋ `web-A` 27.6%，4 核 `loadavg ≈ 4.0`）。
+2026-10-12 02:26–02:28 同一支腳本、同一分鐘、先 B 後 A 實測端對端中位：
+**web-B 3,915ms ／ web-A 5,240ms**（`list;dur` 1,141–1,662 vs 1,731–2,408ms；
+`stats;dur` 2,456–3,337 vs 3,056–3,807ms），公網入口（混合）5,379ms。
+
+**改了什麼**（`deploy/shadow-ha/haproxy/haproxy.cfg`，只此一檔）：
+
+```
+server web-a ${CASAOS_HOST}:15153 check inter 3s fall 3 rise 2 weight 30
+server web-b ${SYNOLOGY_HOST}:15153 check inter 3s fall 3 rise 2 weight 70
+```
+
+- **web-a 留 30 是刻意的**：casa-nas 同時是 PG primary 宿主與 web 層 failover 目標，歸零會讓
+  web-B 掛掉時沒有熱節點可接。
+- **效果是漸進的**：`stick-table … expire 30m` ＋ `stick on req.hdr(cf-connecting-ip)`（Owner
+  2026-10-10 核准）會讓**已在表內的來源 IP 仍回到原本那台**，weight 只改**新**黏滯的分配，
+  所以不會立刻整批移轉；p50 要等黏滯過期才收斂。
+- ⚠️ **同步回 repo 的附帶修正**：那兩行黏滯設定原本只在 NAS 的現行檔上，repo 檔沒有。
+  沒同步的話，用 repo 檔 reload 會**靜默丟掉**它（語法合法、不報錯）。
+
+**套用與回滾**：`docs/runbooks/haproxy-web-weight.md`（含 casa-nas `render-and-run.sh`
+展開後 `haproxy -c` 的驗證法、`kill -s USR2 1` 零中斷 reload、回滾＝拿掉 weight、
+唯讀 stats 取 `web_nodes` 兩台的 `weight`／`status`／`rtime`、連打 `/api/health` 20 次＋
+`/api/listings?limit=20` 10 次確認 0 個 5xx）。**回滾只拿掉 weight，不要動黏滯／redispatch／retry-on。**
+
+**離線守護**：`test/haproxy-web-nodes-weight.test.js`（`npm test` 會跑）——`web_nodes` 兩條 server
+必須存在且 weight 非 0、`web-b > web-a`、`stick-table`／`stick on`／`redispatch`／`retry-on` 不得被覆蓋；
+最後一個 test 用突變證明它會紅（把 weight 拿掉 → `no explicit "weight <n>"`）。
 
 ## 4. 常用指令
 
