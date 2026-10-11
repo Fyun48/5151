@@ -2,7 +2,7 @@ import { buildListRequestContextFromPg, listingStatsBuildContext } from './db.js
 import { resolveDbDriver } from './dbDriver.js';
 import { sharedPgDriver } from './pgSharedDriver.js';
 import { toPostgresSql } from './sqlDialect.js';
-import { withPgReadSnapshot, readPgRows } from './pgReadSnapshot.js';
+import { withPgReadSnapshot, readPgRows, isReadOnlySnapshotViolation } from './pgReadSnapshot.js';
 import { listingRequestTime } from './listingRequestTime.js';
 import { searchListingsAsync, ListingSearchUnavailableError, isListingSearchUnavailable } from './listingSearchAsync.js';
 import { listingStatsAsync, loadPgListingStatsInputs } from './listingStatsAsync.js';
@@ -73,11 +73,21 @@ async function prepareOnePassScan({args, statsArgs, common, pgDriver}) {
     searchKeys: statsArgs.searchKeys, settings, requestContext, run: exec,
   });
   const listScope = await prepareListScope(exec, args, {settings, context: requestContext, uid, voteUid});
+  // B（2026-10-12）：共趟掃描的時間**另外**記成一個新鍵 `scan_ms`（→ `Server-Timing` 的
+  // `scan;dur`）。它先前只以「總和」的形式躲在 `statsPrepareMs`（scope 準備 ＋ 共趟掃描）裡，
+  // 讓 `stats;dur` 看起來像大頭；實際上掃描才是（見 listingStageTiming.js 的契約註解）。
+  // ⚠️ 這裡**只新增鍵**：`statsPrepareMs`／`stats_ms`／`query_ms` 的算式與數字都不動
+  // （測試 v3/test/listing-server-timing.test.js 逐項固定住這件事）。
+  const scanStarted = performance.now();
   const scanned = await runScopeScan(pgDriver, {
     candidateColumns: listingStatsBuildContext().candidateColumns,
     statsScope: {clauses: statsScope.clauses, params: statsScope.params},
     listScope: {clauses: listScope.built.clauses, params: listScope.built.params},
   });
+  // 掃不到（述詞不共用前綴 ⇒ 呼叫端走原本兩趟）時不記：那時沒有「共趟掃描」，記 0 會說謊。
+  if (scanned && statsArgs.diagnostics) {
+    statsArgs.diagnostics.scan_ms = Math.round(performance.now() - scanStarted);
+  }
   if (!scanned) return null;
   return {statsScope, statsRows: scanned.statsRows, listScope, listRows: scanned.listRows};
 }
@@ -141,8 +151,15 @@ async function computeListingPage(args = {}, driver = 'sqlite', options = {}) {
   if(driver!=='postgres') return run();
   try {
     const pgDriver=options.pgDriver || await sharedPgDriver();
-    return await withPgReadSnapshot(pgDriver,run);
+    // 會員列表的**唯讀快照**：`PG_RO_URL` 有值且該會員最近沒有寫入時走待機節點；未設則走原路。
+    // 這是唯一一條允許 `PG_RO_URL` 的路（見 v3/src/pgReadReplica.js 的契約註解）。
+    return await withPgReadSnapshot(pgDriver, run, {
+      memberReadSnapshot: true,
+      userId: Number(args.userId) || 0,
+    });
   } catch(error) {
+    // 唯讀快照的寫入守門要**原樣**往外丟：包成 SEARCH_UNAVAILABLE 會把可判讀的訊息埋掉。
+    if(isReadOnlySnapshotViolation(error)) throw error;
     if(isListingSearchUnavailable(error)) throw error;
     throw new ListingSearchUnavailableError(error);
   }

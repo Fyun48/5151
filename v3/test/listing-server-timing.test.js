@@ -24,6 +24,8 @@ const TIMING = Object.freeze({
     status_ms: 21, district_ms: 30, candidates_ms: 518, normalize_ms: 1, auxiliary_ms: 35,
     provider_ms: 191, profile_sync_ms: 204, count_sync_ms: 24, reduce_ms: 249,
     driver: "postgres", candidates: 12712,
+    // 2026-10-12 新增的**獨立**階段：共趟掃描（先前只以「總和」的形式躲在 stats_ms 裡）。
+    scan_ms: 173,
   }),
 });
 
@@ -47,6 +49,51 @@ test("Server-Timing 逐階段度量：既有總量不變、新階段是各子階
   assert.equal(map.get("stats_cand"), 21 + 30 + 518 + 1 + 35);
   assert.equal(map.get("stats_provider"), 191);
   assert.equal(map.get("stats_count"), 204 + 24 + 249);
+  // 3. 2026-10-12 新增鍵：`scan;dur` 直接鏡射 `stats_stages.scan_ms`（不從任何既有度量扣除）。
+  assert.equal(map.get("scan"), 173);
+});
+
+test("新增 scan;dur 不得改變既有度量：stats_cand 不含 scan_ms、stats_ms 仍是原本那個數字", () => {
+  const withScan = Object.freeze({
+    query_ms: 1000, stats_ms: 500, total_ms: 1600,
+    stages: Object.freeze({ sql_ms: 20 }),
+    stats_stages: Object.freeze({ status_ms: 10, candidates_ms: 90, scan_ms: 300 }),
+  });
+  const withoutScan = Object.freeze({
+    ...withScan,
+    stats_stages: Object.freeze({ status_ms: 10, candidates_ms: 90 }),
+  });
+  const a = headerMap(buildListingServerTimingHeader(withScan));
+  const b = headerMap(buildListingServerTimingHeader(withoutScan));
+  // `scan_ms` 只能多出 `scan;dur` 一個頭；其他每一個度量的數字逐字不變。
+  const extra = [...a.keys()].filter((name) => !b.has(name));
+  assert.deepEqual(extra, ["scan"], "唯一新增的度量就是 scan");
+  for (const [name, dur] of b) assert.equal(a.get(name), dur, `${name};dur 不得因為新增 scan 而改變`);
+  assert.equal(a.get("stats"), 500, "stats;dur 仍是 stats_ms（不扣除掃描）");
+  assert.equal(a.get("stats_cand"), 100, "scan_ms 不得被併進 stats_cand");
+  assert.equal(a.get("list"), 1000);
+});
+
+test("scan_ms 缺席時不得輸出 scan;dur（未知／缺少的階段一律略過）", () => {
+  const map = headerMap(buildListingServerTimingHeader({
+    query_ms: 5, stats_ms: 3, stats_stages: { candidates_ms: 1, scan_ms: null },
+  }));
+  assert.equal(map.has("scan"), false);
+  assert.doesNotMatch(buildListingServerTimingHeader({ stats_stages: { scan_ms: "" } }), /scan/);
+});
+
+test("來源護欄：共趟掃描只以新增鍵掃進 stats_stages，stats_ms 的算式與數字不得動", async () => {
+  const { readFileSync } = await import("node:fs");
+  const page = readFileSync(new URL("../src/listingSearchPage.js", import.meta.url), "utf8");
+  // 新增：只把 runScopeScan 的耗時寫進**新鍵** scan_ms。
+  assert.match(page, /statsArgs\.diagnostics\.scan_ms = Math\.round\(performance\.now\(\) - scanStarted\)/);
+  // 既有語意與數字不變：stats_ms 仍是 `statsPrepareMs + (now - statsStarted)`，
+  // 而且 scan_ms 不得出現在這個算式裡（不得從 stats;dur 扣除掃描）。
+  const statsMsLine = page.split("\n").find((line) => line.includes("stats_ms:"));
+  assert.match(statsMsLine, /stats_ms:statsPrepareMs\+performance\.now\(\)-statsStarted/);
+  assert.equal(statsMsLine.includes("scan"), false, "stats_ms 的算式不得引用 scan_ms");
+  const queryMsLine = page.split("\n").find((line) => line.includes("query_ms:"));
+  assert.equal(queryMsLine.includes("scan"), false, "query_ms（list;dur）的算式不得引用 scan_ms");
 });
 
 test("缺欄位／非數值一律略過，不得輸出 NaN", () => {
