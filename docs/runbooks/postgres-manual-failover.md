@@ -201,3 +201,69 @@ docker start 5151-postgres-B
 - 舊 primary 被 fence 前，**不** promote standby。
 - 若兩邊都曾寫入，以「新 primary（被 promote 的那台）」為準，舊 primary 一律重拉。
 - 全程不依賴自動化；不啟用 `repmgr` / `Patroni` 自動升格（未來有第三 Witness 才評估）。
+
+## PG 記憶體參數變更與 `shm_size`（2026-10-11 實測）
+
+### 現行值（兩台刻意不同，不要調成一樣）
+
+| 節點 | 主機 | 角色 | RAM | 可用 | `shm_size` | `shared_buffers` | `work_mem` |
+|---|---|---|---|---|---|---|---|
+| `5151-postgres-A` | casa-nas | primary | 7.6 GB | ~4.5 GB | `2147483648`（2 GiB） | `1GB` | `8MB` |
+| `5151-postgres-B` | syn-nas | hot standby | 32 GB | ~19 GB | `3221225472`（3 GiB） | `2GB` | `16MB` |
+
+- 值按各自實體 RAM 給（7.6GB vs 32GB），**不是打錯**。
+- 兩台都啟用 `shared_preload_libraries=pg_stat_statements`、`pg_stat_statements.track=top`；
+  `5151-postgres-B` 原本沒有 `command:` 段，2026-10-11 才整段補上（含 `hot_standby=on`）。
+- `pg_stat_statements` 在 standby 是**跟著 WAL 複製過來的**，**不要**在 standby 再 `CREATE EXTENSION`。
+
+### 坑：Docker 預設 `/dev/shm` 只有 64MB —— 症狀不是「PG 起不來」
+
+`shm_size` 沒放大時 **PG 還是起得來**：2026-10-11 用 throwaway 容器實測
+`--shm-size=64m` ＋ `shared_buffers=512MB` 照樣 `database system is ready to accept connections`
+（PG 的主共享記憶體走 anonymous mmap，**不經過** `/dev/shm`），所以 startup 不會失敗、log 沒有異狀。
+會炸的是 **dynamic shared memory**：PG 16 預設 `dynamic_shared_memory_type=posix`，用的就是
+`/dev/shm`；並行查詢（parallel hash join 等）會直接失敗：
+
+```text
+ERROR:  could not resize shared memory segment "/PostgreSQL.1594758946" to 16777216 bytes: No space left on device
+```
+
+這個症狀平時不出現（要有並行查詢才踩到），事後很難查，所以**調大 `shared_buffers` / `work_mem`
+時就一起把 `shm_size` 調大**。
+
+> 兩份 compose 裡那句註解「Docker 預設 shm_size=64MB 會卡住 shared_buffers=1GB（PG 起不來）」
+> 是**照 NAS 原文逐字同步過來的**（2026-10-11 機上手改的內容，不改一字）。
+> 症狀請以上面實測的為準：**起得來**，炸的是並行查詢的 dynamic shared memory。
+
+重跑（throwaway 容器；不掛 volume、不開 port、不碰 live 資料）：
+
+```bash
+docker run --rm --shm-size=64m --network none -e POSTGRES_HOST_AUTH_METHOD=trust \
+  postgres:16-alpine sh -c 'df -h /dev/shm | tail -1'
+# => shm  64.0M  0  64.0M  0% /dev/shm        ← Docker 預設值
+```
+
+### 調參＝要重建容器：用 `docker compose up -d`，並比對 image id
+
+- 改 `command:` / `shm_size` 都要**重建容器**：在各自的 compose 目錄跑 `docker compose up -d`。
+  **不要**用 `docker restart` —— 它不會重新讀 compose，改了等於沒改。
+- 重建前後**必須比對 image id**，確認只是重啟、沒有換版：
+  ```bash
+  docker inspect -f '{{.Image}}' 5151-postgres-A    # primary（casa-nas）
+  /usr/local/bin/docker inspect -f '{{.Image}}' 5151-postgres-B   # standby（syn-nas，docker 在 /usr/local/bin）
+  ```
+  2026-10-11 重建前後兩台都是 `sha256:de3a4eab8fdfa507ea92aac488b916b08089e515db49b055fe71dfa271ba3a28`
+  （＝ `sha256:de3a4eab8fdf…`，同一個版本，沒有換版）。
+- `postgres:16-alpine` **尚未釘 digest**：這是**刻意保留的待辦，不是遺漏**。
+  要釘之前得先確認重建立會換版、並走一次 standby 重建流程；**不要在別的 PR 順手釘**。
+
+### 2026-10-11 重建後實測
+
+- primary `5151-postgres-A` 約 5 秒就緒、standby `5151-postgres-B` 約 10 秒就緒。
+- replication slot `standby_b`、`wal_archive` 皆 `active=true`、`replay_lag=0.07s`。
+- 逐表列數兩側一致：`listings=186,359`、`listing_search_projection=186,359`、
+  `listing_group_members=92,713`、`users=28`。
+- 機上回滾檔：兩台各自 compose 目錄下的 `docker-compose.yml.bak-20261011`。
+- 註：這兩個 compose 目錄**不是 git checkout（是純目錄）**，機上改了 repo 不會知道；
+  2026-10-11 已把機上手改內容逐字同步回 repo，之後**以 repo 版為權威**。
+
