@@ -74,6 +74,10 @@ async function userRowAsync(exec, uid) {
 export async function getSettingsAsync(userId, options = {}) {
   const uid = Number(userId) || 0;
   if ((options.driver || resolveDbDriver()) !== "postgres") return getSettingsSync(uid);
+  // 批次預取（2026-10-11 後台會員列表事故）：整頁的設定已經由 `getSettingsBatchAsync()` 抓好，
+  // 這裡直接取用（每位會員 0 條查詢）。沒帶 `memberBatch` 的既有呼叫端行為完全不變。
+  const prefetched = options.memberBatch?.settings?.get(uid);
+  if (prefetched) return prefetched;
   const exec = await pgExec(options);
   const globalRows = await exec(repo.GLOBAL_SETTINGS_SQL, []);
   const system = systemCrawlFromRows(globalRows);
@@ -81,6 +85,69 @@ export async function getSettingsAsync(userId, options = {}) {
   const userRows = await exec(repo.USER_SETTINGS_SQL, [uid]);
   const user = await userRowAsync(exec, uid);
   return settingsFromRows({ globalRows, userRows, user, system });
+}
+
+// ---------------------------------------------------------------------------
+// 批次版（2026-10-11 事故）：整頁會員的設定一次抓好。
+//
+// `getSettingsAsync()` 一個人要 3 條（全域 settings ＋ user_settings ＋ users 那一列）；
+// 後台「會員管理」原本每位會員各叫一次並發送出（28 人 ⇒ 84 條），把 app 端 PG 連線池抽乾，
+// 5 秒後 `timeout exceeded when trying to connect`。這裡整頁固定 2～3 條。
+//
+// ⚠️ 批次 SQL 由 `repository/memberSettings.js` 的**同一份**單人版文字推導，不另抄一份
+// （抄一份就會漂移）。`?` 佔位符由 `toPostgresSql()` 轉 `$1..$n`，SQLite 也吃同一句。
+const marks = (count) => Array.from({ length: count }, () => "?").join(",");
+const USER_SETTINGS_ONE_WHERE = "user_id = ?";
+const USER_SETTINGS_ONE_SELECT = "SELECT key, value FROM";
+const USER_BY_ID_ONE_WHERE = "id = ?";
+
+export function userSettingsBatchSql(count) {
+  const size = Math.max(0, Number(count) || 0);
+  if (!size || !repo.USER_SETTINGS_SQL.includes(USER_SETTINGS_ONE_SELECT) || !repo.USER_SETTINGS_SQL.includes(USER_SETTINGS_ONE_WHERE)) {
+    throw new Error("userSettingsBatchSql：USER_SETTINGS_SQL 的形狀變了，批次版必須跟著改");
+  }
+  return repo.USER_SETTINGS_SQL
+    .replace(USER_SETTINGS_ONE_SELECT, "SELECT user_id, key, value FROM")
+    .replace(USER_SETTINGS_ONE_WHERE, `user_id IN (${marks(size)})`);
+}
+
+export function usersByIdBatchSql(count) {
+  const size = Math.max(0, Number(count) || 0);
+  if (!size || !repo.USER_BY_ID_SQL.includes(USER_BY_ID_ONE_WHERE)) {
+    throw new Error("usersByIdBatchSql：USER_BY_ID_SQL 的形狀變了，批次版必須跟著改");
+  }
+  return repo.USER_BY_ID_SQL.replace(USER_BY_ID_ONE_WHERE, `id IN (${marks(size)})`);
+}
+
+// 回傳 `Map<userId, settings>`（`settingsFromRows()` 的形狀，與 `getSettingsAsync()` 逐欄相同）。
+// `options.users` 可以帶呼叫端**已經有的** users 列（後台列表就是這樣，省掉一條查詢）；
+// 沒帶就自己查。空清單不發任何查詢。
+export async function getSettingsBatchAsync(userIds, options = {}) {
+  const ids = [...new Set((userIds || []).map((id) => Number(id) || 0).filter(Boolean))];
+  const out = new Map();
+  if (!ids.length) return out;
+  if ((options.driver || resolveDbDriver()) !== "postgres") {
+    for (const id of ids) out.set(id, getSettingsSync(id));
+    return out;
+  }
+  const exec = await pgExec(options);
+  const globalRows = await exec(repo.GLOBAL_SETTINGS_SQL, []);
+  const rows = await exec(userSettingsBatchSql(ids.length), ids);
+  const users = Array.isArray(options.users) && options.users.length
+    ? options.users
+    : await exec(usersByIdBatchSql(ids.length), ids);
+  const system = systemCrawlFromRows(globalRows);
+  const rowsByUser = new Map();
+  for (const row of rows) {
+    const key = Number(row.user_id);
+    if (!rowsByUser.has(key)) rowsByUser.set(key, []);
+    rowsByUser.get(key).push(row);
+  }
+  const userById = new Map(users.map((row) => [Number(row.id), row]));
+  for (const id of ids) {
+    out.set(id, settingsFromRows({ globalRows, userRows: rowsByUser.get(id) || [], user: userById.get(id) || null, system }));
+  }
+  return out;
 }
 
 // `db.js:commuteRushEnabled()` 的 PG 版：讀的是**站台層級**的 `settings.commuteRushEnabled`
