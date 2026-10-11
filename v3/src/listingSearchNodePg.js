@@ -140,13 +140,42 @@ export async function searchListingsNodePg(args = {}, opts = {}) {
   return withPgReadSnapshot(opts.pgDriver, pgDriver => searchListingsNodePgInner(args, {...opts, pgDriver}));
 }
 
+/**
+ * 候選列的順序契約：`post_id` 遞增（見 searchListingsNodePgInner 的「明確候選順序」註解）。
+ *
+ * astra6 2026-09-25 §5.5 之後這段順序一直是由 **SQL 的 `ORDER BY post_id`** 提供；但 PG 的
+ * `work_mem`（正式庫預設 4MB）放不下 17 萬筆排序鍵時會退化成 external merge，把整組資料
+ * 溢寫到磁碟：正式庫實測 `temp 118,968 kB`／該段 8,239ms；隔離量測庫同一個查詢 EXPLAIN
+ * `read=125,422 → 95,548`、`temp=4,096kB → 0`（去掉 ORDER BY）。
+ *
+ * Node 端排序同一份 post_id 陣列完全不落地（17 萬個整數約 1.4MB），而且 **順序逐筆相同**
+ * ——兩邊都是 post_id 遞增，所以「同一份資料＋同一組 args＋同一個 asOf ⇒ 同一個結果」的
+ * 契約不變。`v3/test/member-candidate-order-parity.test.js` 逐筆比對 SQL 排序與 Node 排序。
+ */
+export function orderCandidateRowsByPostId(rows, columnIndex) {
+  if (!Array.isArray(rows) || rows.length < 2) return rows || [];
+  const key = Number.isInteger(columnIndex) && columnIndex >= 0
+    ? (row) => Number(Array.isArray(row) ? row[columnIndex] : row?.post_id)
+    : (row) => Number(row?.post_id);
+  return rows.slice().sort((a, b) => (key(a) || 0) - (key(b) || 0));
+}
+
+/** `candidateColumns`（逗號分隔）裡 post_id 的位置：arrayRows 模式要靠它取排序鍵。 */
+function postIdColumnIndex(candidateColumns) {
+  const index = String(candidateColumns || "").split(",").map((part) => part.trim()).indexOf("post_id");
+  return index >= 0 ? index : undefined;
+}
+
 export async function loadSearchCandidateRows(pgDriver, {candidateColumns, built, reusableCandidates = null}) {
   if (!Array.isArray(reusableCandidates)) {
-    return readPgRows(pgDriver, toPostgresSql(`SELECT ${candidateColumns} FROM listings ${built.where} ORDER BY post_id`), built.params, {arrayRows:true});
+    const wide = await readPgRows(pgDriver, toPostgresSql(`SELECT ${candidateColumns} FROM listings ${built.where}`), built.params, {arrayRows:true});
+    return orderCandidateRowsByPostId(wide, postIdColumnIndex(candidateColumns));
   }
   // The list and counters have different scopes. Read the exact list IDs first;
   // reuse only matching raw rows and fetch every missing ID in this snapshot.
-  const selected = await readPgRows(pgDriver, toPostgresSql(`SELECT post_id FROM listings ${built.where} ORDER BY post_id`), built.params);
+  // 這裡同樣不帶 ORDER BY（見 orderCandidateRowsByPostId）：先取 id 集合、最後再排一次。
+  const selected = await orderCandidateRowsByPostId(
+    await readPgRows(pgDriver, toPostgresSql(`SELECT post_id FROM listings ${built.where}`), built.params));
   const byId = new Map();
   await runStepsAsync((function* () {
     let visited = 0;

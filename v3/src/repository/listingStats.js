@@ -84,11 +84,44 @@ async function countWatchedListings(runOne, uid) {
 }
 
 // db.js productListingCount() (P1-18: member-visible totals never reveal a Stage 1 fixture).
+//
+// 這一支原本是**每個請求**一次 `COUNT(*) FROM listings WHERE <isolation>`：正式庫實測 418ms，
+// 而且它與候選查詢無關（只取決於隔離條件與資料版本）。改用既有的 **data_revision 版本化**
+// 手法（同 v3/src/db.js 的 `storedSearchKeysFromPg`）：`MAX(data_revision.id)` 換代才重算。
+//
+// fail-soft 契約與 db.js 同款：`data_revision` 不存在、是空表（MAX(id) IS NULL）或查詢失敗時
+// **一律不緩存**、每次現讀 —— 沒有可靠版本號就不做跨請求快取，避免把第一個請求的答案沿用下去。
+let pgProductCountCache = { revision: null, isolation: null, count: null };
+
+/** 測試／寫入端需要主動失效時用（與 db.js 的 resetStoredSearchKeysFromPg 同形狀）。 */
+export function resetPgProductCountCache() {
+  pgProductCountCache = { revision: null, isolation: null, count: null };
+}
+
+async function currentDataRevision(runOne) {
+  try {
+    const hasTable = await runOne("SELECT to_regclass('data_revision') IS NOT NULL AS has_table");
+    if (!hasTable?.has_table) return null;
+    const row = await runOne("SELECT MAX(id) AS n FROM data_revision");
+    if (row?.n == null) return null;
+    const revision = Number(row.n);
+    return Number.isFinite(revision) ? revision : null;
+  } catch {
+    return null;
+  }
+}
+
 async function countProductListings(runOne, requestContext) {
   const isolation = requestContext?.isolation;
   if (!isolation) throw new Error("PG stats require isolation context");
+  const revision = await currentDataRevision(runOne);
+  if (revision != null && pgProductCountCache.revision === revision && pgProductCountCache.isolation === isolation.sql) {
+    return pgProductCountCache.count;
+  }
   const row = await runOne(`SELECT COUNT(*) AS n FROM listings WHERE ${isolation.sql}`, isolation.params);
-  return Number(row?.n) || 0;
+  const count = Number(row?.n) || 0;
+  if (revision != null) pgProductCountCache = { revision, isolation: isolation.sql, count };
+  return count;
 }
 
 export function createListingStatsRepository({
