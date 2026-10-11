@@ -4,11 +4,9 @@ import {
   findBySourceKey,
   getCommunityCache,
   getListing,
-  getSettings,
   getSystemCrawl,
   getUserById,
   getMailTemplates,
-  listingCount,
   listMatchCandidates,
   listingHasTrustedGeo,
   markListingOffline,
@@ -102,6 +100,7 @@ import { detailConcurrency, mapPool } from "./pool.js";
 import {
   listingForWatchAsync,
   listingCountForSearchAsync,
+  listingExistsAsync,
   matchCandidatesAsync,
   needing591GeoAsync,
   needingAddressEnrichAsync,
@@ -788,7 +787,7 @@ export async function runWatch(options = {}) {
   }
   await bindNotifyJobSnapshotsFor(options);
 
-  const isBaseline = settings.hasBaseline !== true && listingCount() === 0;
+  const isBaseline = settings.hasBaseline !== true && !(await listingExistsAsync());
   const pages = CRAWL_PAGES_591;
   const hbPages = CRAWL_PAGES_EXTERNAL;
   const collected = [];
