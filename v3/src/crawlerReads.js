@@ -15,6 +15,7 @@
 import {
   findBySourceKey as findBySourceKeySync,
   listMatchCandidates,
+  listingCount,
   listingCountForSearch as listingCountForSearchSync,
   expandSearchKeysAgainst,
   listingSearchBuildContext,
@@ -107,6 +108,26 @@ export async function listingCountForSearchAsync(searchKey, options = {}) {
     keys,
   );
   return Number(rows?.[0]?.n || 0);
+}
+
+// db.js listingCount(): the baseline decision in watcher.runWatch() only needs to know whether the
+// listings catalog is empty ("this round is the first data we ever see"), not how many rows it
+// holds. The synchronous db.js version answers that with a bare COUNT(*) on the local SQLite
+// handle — unreachable in the production PG island (PG_NO_SQLITE_OPEN=1), where it throws
+// "business SQLite is closed". An existence probe answers the same question with the same
+// semantics and no synchronous SQLite read:
+//   • sqlite   -> db.js listingCount() (the caller-visible behaviour is unchanged)
+//   • postgres -> SELECT 1 FROM listings LIMIT 1 against PostgreSQL
+// Deliberately no try/catch and no fail-open, for the same reason as listingCountForSearchAsync
+// above: a fail-open baseline (always "true") silently suppresses every notification of the first
+// PG round, while a fail-closed one (always "false") silently flood-notifies every member. Both
+// are worse than letting the PostgreSQL error surface.
+export async function listingExistsAsync(options = {}) {
+  const driver = options.driver || resolveDbDriver();
+  if (driver !== "postgres") return listingCount() > 0;
+  const exec = await postgresExec(options);
+  const rows = await exec("SELECT 1 FROM listings LIMIT 1");
+  return rows.length > 0;
 }
 
 // Test hook: clear the DISTINCT memo so isolated suites can pin the exact query list without
