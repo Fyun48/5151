@@ -9,6 +9,12 @@ name: 5151-shadow-haproxy-b
 # 因此任一主機掛掉都還有入口。
 #
 # 與 CasaOS 上的 `5151-haproxy` 成對（那份在 /opt/5151-shadow/haproxy/）。發版流程不碰它們。
+#
+# ⚠️ 本檔與 `docker-compose.yml` 是**正式機現行 compose 的鏡像**：兩邊的**有效行**
+#    （`grep -avE '^\s*#|^\s*$'`）必須逐字一致（只有 `name:`／service 名／`container_name:` 的
+#    `-b` 後綴不同），**不准只在一邊加東西**（由 `test/haproxy-compose-parity.test.js` 守著）。
+#    命令沿用 `haproxy:2.9-alpine` 的映像預設（`haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg`；
+#    2026-10-12 planner 在兩台以 `docker inspect -f "{{.Args}}"` 實讀核對）⇒ 兩份都**刻意不寫** `command:`。
 services:
   5151-haproxy-B:
     container_name: 5151-haproxy-B
@@ -22,9 +28,10 @@ services:
       - "127.0.0.1:25154:8404"
     volumes:
       # ⚠️ 這份 cfg 是**權威設定本身**（已含實體 IP，沒有 ${...} 佔位符、沒有 render 步驟）。
-      # 單檔 bind mount 綁的是 inode：要改設定只能「就地改寫」（例如 python open(path,'w')），
-      # 用 `awk … > f.new && mv f.new f` 換檔不會生效（容器還看到舊 inode）。
+      # 單檔 bind mount 綁的是 inode，而且是 `:ro` ⇒ 要改設定只能在**宿主**就地改寫
+      # （python `io.open(path,'r+')` ＋ `truncate()`；`mv`／`os.replace`／`awk` 換檔不會生效，
+      # 容器還看到舊 inode；容器內寫入會 Read-only file system）。
       # 改完先 `docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`
-      # 再 `docker exec 5151-haproxy-B kill -s USR2 1`（零中斷 reload）。
+      # （⚠️ 通過時官方映像不吐任何字，自己印一行 OK），再 `kill -s USR2 1`（零中斷 reload）。
       # 詳見 docs/runbooks/haproxy-web-weight.md。
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro

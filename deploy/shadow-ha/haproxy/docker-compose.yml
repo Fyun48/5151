@@ -1,13 +1,18 @@
 name: 5151-shadow-haproxy
 
+# ⚠️ 兩份 haproxy compose（本檔與 docker-compose.synology.yml）是**正式機現行 compose 的鏡像**：
+#    兩邊的**有效行**（`grep -avE '^\s*#|^\s*$'`）必須逐字一致（只有 `name:`／service 名／
+#    `container_name:` 的 `-b` 後綴不同），**不准只在一邊加東西**——「一份有加、一份沒加」就是漂移。
+#    這條由離線測試 `test/haproxy-compose-parity.test.js` 守著（`npm test` 會跑）。
+#
+# 命令沿用映像預設：`haproxy:2.9-alpine` 的預設 `haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg`
+# （2026-10-12 planner 在兩台以 `docker inspect -f "{{.Args}}"` 實讀核對；兩台都**沒有**顯式
+#  `command:`）⇒ 本檔**刻意不寫** `command:`，寫了就會與 live 不一致。
 services:
   5151-haproxy:
     container_name: 5151-haproxy
     image: haproxy:2.9-alpine
     restart: unless-stopped
-    # 正式機的實際命令是 `haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg`
-    # （-W = master/worker、-db = 前景；容器內留前景才不會被判定停止）。
-    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
     ports:
       # 25433 / 25434 = postgres-rw / postgres-ro。
       # web 對外只能綁主機 25153：同一台的 Web-A/Web-B 已經用掉主機 15153，
@@ -20,9 +25,9 @@ services:
     volumes:
       # ⚠️ 本檔是**權威設定本身**，不是 template：裡面已是實體 IP，沒有 ${...} 佔位符，
       # 啟動時也沒有任何展開步驟（舊的 .cfg.tmpl ＋ render-and-run.sh 已刪除）。
-      # 單檔 bind mount 綁的是 inode ⇒ 要改設定只能「就地改寫」：
-      #   1) 就地改（python `open(path,'w')`；`mv` 換檔無效，容器仍看到舊 inode）
-      #   2) `docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`
+      # 單檔 bind mount 綁的是 inode（且是 `:ro`）⇒ 要改設定只能在**宿主**就地改寫：
+      #   1) 宿主就地改（python `io.open(path,'r+')` ＋ `truncate()`；`mv`／`os.replace`／`awk` 換檔無效）
+      #   2) `docker exec 5151-haproxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg`（成功時不吐字，自己印 OK）
       #   3) `docker exec 5151-haproxy kill -s USR2 1`（零中斷 reload）
       # 詳見 docs/runbooks/haproxy-web-weight.md。
       - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
