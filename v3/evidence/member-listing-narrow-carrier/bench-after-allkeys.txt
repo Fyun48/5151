@@ -1,0 +1,505 @@
+(node:2055) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+SCENARIO default: cold list=1650 stats=1162 total=2812 | warm list=1346 stats=502 total=1849 | cand=10114 matched=977
+SCENARIO district=中山區: cold list=1334 stats=490 total=1823 | warm list=1297 stats=556 total=1853 | cand=4848 matched=719
+SCENARIO rent 3000-8000: cold list=754 stats=242 total=996 | warm list=763 stats=284 total=1047 | cand=1254 matched=18
+SCENARIO q=新莊: cold list=694 stats=468 total=1161 | warm list=687 stats=465 total=1151 | cand=26 matched=1
+SCENARIO multi(district+q+price_asc): cold list=581 stats=433 total=1014 | warm list=537 stats=513 total=1051 | cand=27 matched=0
+{
+  "memberUid": 1,
+  "runs": 2,
+  "scenarios": [
+    {
+      "scenario": "default",
+      "args": [],
+      "cold": {
+        "label": "cold",
+        "wall_ms": 2813,
+        "list_ms": 1650,
+        "stats_ms": 1162,
+        "total_ms_from_route": 2812,
+        "candidates": 10114,
+        "totalMatched": 977,
+        "returned": 80,
+        "stages": {
+          "asOf": "2026-10-11T11:22:12.083Z",
+          "contextDegraded": [],
+          "prepare_ms": 537,
+          "sql_ms": 231,
+          "candidates": 10114,
+          "engine": "node_pg",
+          "preload_ms": 507,
+          "profile_ms": 103,
+          "relations_ms": 87,
+          "display_ms": 21,
+          "sort_ms": 6,
+          "preload_page_ms": 34,
+          "hydrate_ms": 98
+        },
+        "stats_stages": {
+          "status_ms": 27,
+          "district_ms": 243,
+          "candidates_ms": 472,
+          "normalize_ms": 10,
+          "auxiliary_ms": 60,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 813,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 190,
+          "profile_sync_ms": 125.02632100000073,
+          "count_sync_ms": 21.9940519999991,
+          "reduce_ms": 158.4929970000003
+        }
+      },
+      "warm": {
+        "label": "warm",
+        "wall_ms": 1849,
+        "list_ms": 1346,
+        "stats_ms": 502,
+        "total_ms_from_route": 1849,
+        "candidates": 10114,
+        "totalMatched": 977,
+        "returned": 80,
+        "stages": {
+          "asOf": "2026-10-11T11:22:16.662Z",
+          "contextDegraded": [],
+          "prepare_ms": 536,
+          "sql_ms": 174,
+          "candidates": 10114,
+          "engine": "node_pg",
+          "preload_ms": 383,
+          "profile_ms": 77,
+          "relations_ms": 54,
+          "display_ms": 14,
+          "sort_ms": 3,
+          "preload_page_ms": 29,
+          "hydrate_ms": 54
+        },
+        "stats_stages": {
+          "status_ms": 21,
+          "district_ms": 2,
+          "candidates_ms": 170,
+          "normalize_ms": 1,
+          "auxiliary_ms": 31,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 224,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 156,
+          "profile_sync_ms": 96.59609000000182,
+          "count_sync_ms": 14.467778000002,
+          "reduce_ms": 122.25954300000012
+        }
+      },
+      "warm_all_list_ms": [
+        1290,
+        1346
+      ],
+      "warm_all_stats_ms": [
+        475,
+        502
+      ],
+      "warm_all_total_ms": [
+        1765,
+        1849
+      ]
+    },
+    {
+      "scenario": "district=中山區",
+      "args": [
+        "districts"
+      ],
+      "cold": {
+        "label": "cold",
+        "wall_ms": 1824,
+        "list_ms": 1334,
+        "stats_ms": 490,
+        "total_ms_from_route": 1823,
+        "candidates": 4848,
+        "totalMatched": 719,
+        "returned": 80,
+        "stages": {
+          "asOf": "2026-10-11T11:22:18.512Z",
+          "contextDegraded": [],
+          "prepare_ms": 666,
+          "sql_ms": 250,
+          "candidates": 4848,
+          "engine": "node_pg",
+          "preload_ms": 203,
+          "profile_ms": 27,
+          "relations_ms": 41,
+          "display_ms": 8,
+          "sort_ms": 2,
+          "preload_page_ms": 32,
+          "hydrate_ms": 87
+        },
+        "stats_stages": {
+          "status_ms": 22,
+          "district_ms": 2,
+          "candidates_ms": 146,
+          "normalize_ms": 1,
+          "auxiliary_ms": 34,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 205,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 167,
+          "profile_sync_ms": 94.08992500000386,
+          "count_sync_ms": 12.908349999996062,
+          "reduce_ms": 117.64052400000037
+        }
+      },
+      "warm": {
+        "label": "warm",
+        "wall_ms": 1854,
+        "list_ms": 1297,
+        "stats_ms": 556,
+        "total_ms_from_route": 1853,
+        "candidates": 4848,
+        "totalMatched": 719,
+        "returned": 80,
+        "stages": {
+          "asOf": "2026-10-11T11:22:21.834Z",
+          "contextDegraded": [],
+          "prepare_ms": 485,
+          "sql_ms": 162,
+          "candidates": 4848,
+          "engine": "node_pg",
+          "preload_ms": 274,
+          "profile_ms": 29,
+          "relations_ms": 51,
+          "display_ms": 12,
+          "sort_ms": 2,
+          "preload_page_ms": 60,
+          "hydrate_ms": 201
+        },
+        "stats_stages": {
+          "status_ms": 22,
+          "district_ms": 2,
+          "candidates_ms": 141,
+          "normalize_ms": 1,
+          "auxiliary_ms": 31,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 196,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 222,
+          "profile_sync_ms": 107.87398499999836,
+          "count_sync_ms": 15.988516000003074,
+          "reduce_ms": 138.11599100000058
+        }
+      },
+      "warm_all_list_ms": [
+        1016,
+        1297
+      ],
+      "warm_all_stats_ms": [
+        481,
+        556
+      ],
+      "warm_all_total_ms": [
+        1497,
+        1853
+      ]
+    },
+    {
+      "scenario": "rent 3000-8000",
+      "args": [
+        "priceMin",
+        "priceMax"
+      ],
+      "cold": {
+        "label": "cold",
+        "wall_ms": 997,
+        "list_ms": 754,
+        "stats_ms": 242,
+        "total_ms_from_route": 996,
+        "candidates": 1254,
+        "totalMatched": 18,
+        "returned": 18,
+        "stages": {
+          "asOf": "2026-10-11T11:22:23.689Z",
+          "contextDegraded": [],
+          "prepare_ms": 455,
+          "sql_ms": 144,
+          "candidates": 1254,
+          "engine": "node_pg",
+          "preload_ms": 98,
+          "profile_ms": 11,
+          "relations_ms": 5,
+          "display_ms": 2,
+          "sort_ms": 0,
+          "preload_page_ms": 13,
+          "hydrate_ms": 9
+        },
+        "stats_stages": {
+          "status_ms": 21,
+          "district_ms": 2,
+          "candidates_ms": 117,
+          "normalize_ms": 0,
+          "auxiliary_ms": 31,
+          "driver": "postgres",
+          "candidates": 1223,
+          "inputs_ms": 172,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 55,
+          "profile_sync_ms": 10.821721999998772,
+          "count_sync_ms": 0.37043500000254426,
+          "reduce_ms": 14.426656999999977
+        }
+      },
+      "warm": {
+        "label": "warm",
+        "wall_ms": 1048,
+        "list_ms": 763,
+        "stats_ms": 284,
+        "total_ms_from_route": 1047,
+        "candidates": 1254,
+        "totalMatched": 18,
+        "returned": 18,
+        "stages": {
+          "asOf": "2026-10-11T11:22:25.703Z",
+          "contextDegraded": [],
+          "prepare_ms": 464,
+          "sql_ms": 145,
+          "candidates": 1254,
+          "engine": "node_pg",
+          "preload_ms": 101,
+          "profile_ms": 8,
+          "relations_ms": 4,
+          "display_ms": 1,
+          "sort_ms": 0,
+          "preload_page_ms": 12,
+          "hydrate_ms": 10
+        },
+        "stats_stages": {
+          "status_ms": 20,
+          "district_ms": 2,
+          "candidates_ms": 118,
+          "normalize_ms": 0,
+          "auxiliary_ms": 30,
+          "driver": "postgres",
+          "candidates": 1223,
+          "inputs_ms": 170,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 103,
+          "profile_sync_ms": 10.118001999997432,
+          "count_sync_ms": 0.26735399999779474,
+          "reduce_ms": 10.71491099999912
+        }
+      },
+      "warm_all_list_ms": [
+        776,
+        763
+      ],
+      "warm_all_stats_ms": [
+        240,
+        284
+      ],
+      "warm_all_total_ms": [
+        1017,
+        1047
+      ]
+    },
+    {
+      "scenario": "q=新莊",
+      "args": [
+        "q"
+      ],
+      "cold": {
+        "label": "cold",
+        "wall_ms": 1162,
+        "list_ms": 694,
+        "stats_ms": 468,
+        "total_ms_from_route": 1161,
+        "candidates": 26,
+        "totalMatched": 1,
+        "returned": 1,
+        "stages": {
+          "asOf": "2026-10-11T11:22:26.751Z",
+          "contextDegraded": [],
+          "prepare_ms": 467,
+          "sql_ms": 198,
+          "candidates": 26,
+          "engine": "node_pg",
+          "preload_ms": 8,
+          "profile_ms": 0,
+          "relations_ms": 0,
+          "display_ms": 0,
+          "sort_ms": 0,
+          "preload_page_ms": 4,
+          "hydrate_ms": 2
+        },
+        "stats_stages": {
+          "status_ms": 23,
+          "district_ms": 1,
+          "candidates_ms": 147,
+          "normalize_ms": 1,
+          "auxiliary_ms": 32,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 204,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 152,
+          "profile_sync_ms": 89.92985900001077,
+          "count_sync_ms": 11.324282000003222,
+          "reduce_ms": 110.97069399999964
+        }
+      },
+      "warm": {
+        "label": "warm",
+        "wall_ms": 1152,
+        "list_ms": 687,
+        "stats_ms": 465,
+        "total_ms_from_route": 1151,
+        "candidates": 26,
+        "totalMatched": 1,
+        "returned": 1,
+        "stages": {
+          "asOf": "2026-10-11T11:22:29.099Z",
+          "contextDegraded": [],
+          "prepare_ms": 444,
+          "sql_ms": 203,
+          "candidates": 26,
+          "engine": "node_pg",
+          "preload_ms": 10,
+          "profile_ms": 0,
+          "relations_ms": 0,
+          "display_ms": 0,
+          "sort_ms": 0,
+          "preload_page_ms": 6,
+          "hydrate_ms": 0
+        },
+        "stats_stages": {
+          "status_ms": 23,
+          "district_ms": 3,
+          "candidates_ms": 117,
+          "normalize_ms": 1,
+          "auxiliary_ms": 32,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 177,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 167,
+          "profile_sync_ms": 97.00179500001104,
+          "count_sync_ms": 13.924892000006366,
+          "reduce_ms": 121.14876599999843
+        }
+      },
+      "warm_all_list_ms": [
+        711,
+        687
+      ],
+      "warm_all_stats_ms": [
+        474,
+        465
+      ],
+      "warm_all_total_ms": [
+        1184,
+        1151
+      ]
+    },
+    {
+      "scenario": "multi(district+q+price_asc)",
+      "args": [
+        "districts",
+        "q",
+        "sort"
+      ],
+      "cold": {
+        "label": "cold",
+        "wall_ms": 1015,
+        "list_ms": 581,
+        "stats_ms": 433,
+        "total_ms_from_route": 1014,
+        "candidates": 27,
+        "totalMatched": 0,
+        "returned": 0,
+        "stages": {
+          "asOf": "2026-10-11T11:22:30.251Z",
+          "contextDegraded": [],
+          "prepare_ms": 436,
+          "sql_ms": 121,
+          "candidates": 27,
+          "engine": "node_pg",
+          "preload_ms": 9,
+          "profile_ms": 0,
+          "relations_ms": 0,
+          "display_ms": 0,
+          "sort_ms": 0,
+          "preload_page_ms": 0,
+          "hydrate_ms": 0
+        },
+        "stats_stages": {
+          "status_ms": 22,
+          "district_ms": 1,
+          "candidates_ms": 116,
+          "normalize_ms": 1,
+          "auxiliary_ms": 31,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 171,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 153,
+          "profile_sync_ms": 90.81732399999964,
+          "count_sync_ms": 11.531124000001,
+          "reduce_ms": 108.94552300000214
+        }
+      },
+      "warm": {
+        "label": "warm",
+        "wall_ms": 1052,
+        "list_ms": 537,
+        "stats_ms": 513,
+        "total_ms_from_route": 1051,
+        "candidates": 27,
+        "totalMatched": 0,
+        "returned": 0,
+        "stages": {
+          "asOf": "2026-10-11T11:22:32.283Z",
+          "contextDegraded": [],
+          "prepare_ms": 406,
+          "sql_ms": 110,
+          "candidates": 27,
+          "engine": "node_pg",
+          "preload_ms": 8,
+          "profile_ms": 0,
+          "relations_ms": 0,
+          "display_ms": 0,
+          "sort_ms": 0,
+          "preload_page_ms": 0,
+          "hydrate_ms": 0
+        },
+        "stats_stages": {
+          "status_ms": 19,
+          "district_ms": 1,
+          "candidates_ms": 167,
+          "normalize_ms": 1,
+          "auxiliary_ms": 32,
+          "driver": "postgres",
+          "candidates": 10373,
+          "inputs_ms": 219,
+          "reuse_inputs_ms": 0,
+          "provider_ms": 152,
+          "profile_sync_ms": 109.06999999999243,
+          "count_sync_ms": 13.15034799998466,
+          "reduce_ms": 142.35994499999651
+        }
+      },
+      "warm_all_list_ms": [
+        550,
+        537
+      ],
+      "warm_all_stats_ms": [
+        466,
+        513
+      ],
+      "warm_all_total_ms": [
+        1015,
+        1051
+      ]
+    }
+  ]
+}

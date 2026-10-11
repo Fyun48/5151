@@ -2,6 +2,19 @@ import { candidateRowFromValues, LIST_CANDIDATE_KEYS } from './listingCandidateR
 import { readCandidateContent } from './pgCandidateContent.js';
 import { currentWorkDiagnostics, yieldWork } from './workDiagnostics.js';
 
+// 每次 `FETCH FORWARD` 的批次大小上限。
+//
+// 契約：**cell 預算固定**（512 列 × 42 欄 ＝ 21,504 cells），所以寬讀取的行為逐字不變
+// （42 欄 ⇒ 512、36 欄 ⇒ 597、20 欄 ⇒ 1,075）；只有 1–20 欄的**窄讀取**會放大，
+// 上限 8,192 列（1 欄 ⇒ 8,192 cells，仍是原預算的 38%）。
+//
+// 為什麼要放寬：會員列表的 id-only 候選掃描（`SELECT post_id`）在舊上限下每個請求要
+// 13 趟 `FETCH FORWARD 1024`；正式站 `pg_stat_statements` 量到 4,123 calls／avg 73ms／
+// 合計 301s。這是**來回次數**的成本，不是掃描本身的成本。
+export function cursorFetchBatchSize(fieldCount) {
+  return Math.max(512, Math.min(8192, Math.floor(512 * 42 / Math.max(1, Number(fieldCount) || 1))));
+}
+
 // A complete read uses one connection and one database snapshot. Lightweight
 // driver doubles without a pool can still exercise the pure repository tests.
 export async function withPgReadSnapshot(driver, run) {
@@ -77,7 +90,14 @@ export async function withPgReadSnapshot(driver, run) {
         if (batch.rows.length < batchSize) break;
         // Bound row dispatch as well as decoded cells. Four simultaneous narrow
         // 4096-row replies can monopolize a slow NAS event loop despite few cells.
-        batchSize = Math.max(512, Math.min(1024, Math.floor(512 * 42 / Math.max(1, batch.fields.length))));
+        //
+        // 2026-10-11（會員列表效能包）：`min(1024, …)` 對**窄讀取**（`SELECT post_id` 這類
+        // 1–3 欄）等於丟掉既有的 cell 預算，讓每次讀取都要 13 趟 `FETCH FORWARD 1024`
+        // （正式站 `pg_stat_statements`：4,123 calls／avg 73ms／合計 301s）。這裡把上限改成
+        // **8192 列**，但 cell 預算維持 512×42＝21,504 不變 ⇒ 42 欄讀取仍是 512、20 欄仍是
+        // 1,075（都不變），只有 1–5 欄的窄讀取變大（1 欄 ⇒ 8192 列＝8,192 cells，
+        // 仍是原預算的 38%）。列數上限仍遠低於註解所提的「4,096 列 × 4 併發」情境。
+        batchSize = cursorFetchBatchSize(batch.fields.length);
         await yieldWork('pg.fetch');
       }
       await query(`CLOSE ${name}`);

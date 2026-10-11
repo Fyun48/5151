@@ -21,9 +21,11 @@ test('live PG: narrow reads retain all rows across bounded replies and report ba
       }));
       const metrics = diagnostics.snapshot();
       assert.equal(metrics['pg.appendRows.sync'].totalUnits, 8705);
-      assert.equal(metrics['pg.appendRows.sync'].maxUnits, 1024);
-      assert.ok(metrics['pg.fetch.yieldWait'].calls >= 8);
-      assert.ok(metrics['pg.fetch.wall'].calls >= 9);
+      // 窄讀取（1 欄）的批次上限＝8,192 列（cell 預算不變）。8,705 列 ⇒
+      // FETCH 512（暖身）→ FETCH 8192 → FETCH 1，共 3 趟、2 次 yield。
+      assert.equal(metrics['pg.appendRows.sync'].maxUnits, 8192);
+      assert.ok(metrics['pg.fetch.yieldWait'].calls >= 1);
+      assert.ok(metrics['pg.fetch.wall'].calls >= 2);
     } finally { await driver.close(); }
   });
 test('live PG: complete-read planner settings remain local after success and failure',

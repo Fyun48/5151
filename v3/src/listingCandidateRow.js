@@ -50,6 +50,28 @@ export function candidateRowFromValues(values) {
 export const LIST_CANDIDATE_KEYS = Object.freeze(Object.keys(candidateRowFromValues([])));
 export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");
 
+// ── 會員列表的「共用窄列集合」（裁決 §4.1 P2／本包第 3 步）─────────────────────
+//
+// 這是 list 與 stats **共用**的候選載體定義：兩個路徑都靠 `listingSearchBuildContext()`
+// 的 `candidateColumns` 取同一份列集合（`listingSearchPage.js` 先載一份給 stats，再把同一批
+// 列交給 list 重用），所以「stats 不會自己再掃一次完整候選」是**由這份定義保證**的，
+// 而不是靠兩邊各自記得寫一樣的 SQL。
+//
+// 為什麼**不是**更少的欄位：2026-10-11 逐欄查證的結果是 42 欄**全部**都有候選階段的讀取點
+// （需求表見 `v3/test/list-candidate-carrier.test.js` 的 REQUIREMENT_TABLE），
+// 因此本包不做欄位級瘦身 —— `listingSearchAsync.js:53-58` 記載的 astra 2026-09-25 §2.1
+// 「窄欄位實驗已撤回、撤回條件是要先有完整 parity」正是同一個結論。
+// 本包真正縮窄的是**候選集合本身**（行政區投影預篩），不是列寬。
+export const MEMBER_LIST_REQUIRED_COLUMNS = Object.freeze([...LIST_CANDIDATE_KEYS]);
+export const MEMBER_LIST_CANDIDATE_KEYS = MEMBER_LIST_REQUIRED_COLUMNS;
+export const MEMBER_LIST_CANDIDATE_COLUMNS = MEMBER_LIST_CANDIDATE_KEYS.join(", ");
+
+/** 給驗證器／測試用：回傳「被讀到但不在載體裡」的欄位（空陣列＝合法）。 */
+export function missingMemberListColumns(columns) {
+  const present = new Set(Array.isArray(columns) ? columns : String(columns || "").split(",").map((s) => s.trim()));
+  return MEMBER_LIST_REQUIRED_COLUMNS.filter((column) => !present.has(column));
+}
+
 // PG 公開列表路徑的候選查詢欄位（searchPublicListingsAsync 用）。這是「過濾＋排序＋識別」
 // 真正會讀到的欄位：其餘 6 欄（address_norm／layout／match_rejected／hidden_at／last_event／
 // self_status）只在「頁面二次 SELECT *」與「非公開列表的成員/自我列表/配對」路徑才會讀到，

@@ -34,6 +34,41 @@ export function districtKeyPrefixExpression(dialect = "sqlite") {
   return prefix;
 }
 
+// 行政區「投影預篩」子句（PG 專屬）。
+//
+// 取代 `${prefix} IN (allowed)` 那個 `split_part(source_key…)` 表達式：改由呼叫端先用
+// `listing_search_projection.district`（`idx_proj_district`）取回 id 集合，這裡只放
+// `post_id = ANY(?::bigint[])`，讓 PG 能用主鍵索引／bitmap 取得候選而不是 seq scan。
+//
+// 語意論證與退回條件見 `listingDistrictPrefilter.js`。要點：
+//   * `projectedIds` 必須是「Node 判定鏈最後會留下的行政區列」的**超集**；
+//     預篩是多餘的前置縮窄，判定鏈照舊逐列跑。
+//   * 原本的 `${prefix} NOT IN (allKeys)`（未知／legacy 前綴保留）**不再需要**：
+//     `districtNameFromListing` 在 `source_key` 解析不出行政區時會改由 address／title 推導，
+//     而那正是投影 `district` 欄的來源；投影完整時，推導得出行政區的列一定在 `projectedIds`
+//     內，推導不出來的列則會被判定鏈的 `districtSet` 過濾掉。因此這一項移除**不會少算**。
+//   * 取不到投影（滯後／缺表／`MEMBER_DISTRICT_PREFILTER=0`）時呼叫端不會走這條，改回
+//     `appendDistrictCandidates` 的完整表達式。
+//
+// 回傳 `true` 表示已接手（含「不需要縮減」的情形）；`false` 表示呼叫端應退回舊路徑。
+export function appendDistrictProjectedCandidates(names, clauses, params, { projectedIds = null, relatedIds = null, driver = "postgres" } = {}) {
+  if (!Array.isArray(projectedIds)) return false;
+  if (driver !== "postgres") return false;
+  const selected = new Set(names || []);
+  if (!selected.size) return true;
+  const allowed = known.filter(row => selected.has(row.name)).map(row => row.key);
+  // 沒有可辨識的行政區名稱、或本來就選滿全部行政區 ⇒ 與舊路徑一樣不縮減。
+  if (!allowed.length || allowed.length === allKeys.length) return true;
+  const alternatives = ["post_id = ANY(?::bigint[])"];
+  params.push(projectedIds);
+  if (Array.isArray(relatedIds) && relatedIds.length) {
+    alternatives.push("post_id = ANY(?::bigint[])");
+    params.push(relatedIds);
+  }
+  clauses.push(`(${alternatives.join(" OR ")})`);
+  return true;
+}
+
 // Keep unrecognised/legacy keys for the existing address/title fallback.
 // This is a conservative candidate reduction, not a new district classifier.
 export function appendDistrictCandidates(names, clauses, params, { preserveRelationsFor, driver = "sqlite", relatedIds = null } = {}) {
