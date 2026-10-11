@@ -238,14 +238,20 @@ export function ensureListingPrepSchemaAsync(conn, options = {}) {
 }
 
 // 單筆入列（PG 路徑）。seed 也走這一支，避免「入列」的判斷出現兩份。
-async function enqueueViaExec(exec, listing, { via = "scheduler", priority, missing = [], now = Date.now() } = {}) {
+//
+// `existing`：批次呼叫端（seed）可用**一條集合式查詢**抓好整批既有列再逐筆傳進來；
+// 沒傳（單筆呼叫端）＝維持原本「自己讀一次、寫完再回讀一次」的行為，回傳值也一樣。
+// `existing: null` 明確代表「這一批查過了，這個 post_id 沒有既有列」⇒ 走 INSERT。
+async function enqueueViaExec(exec, listing, { via = "scheduler", priority, missing = [], now = Date.now(), existing: preset } = {}) {
   if (!enrichEnqueueEligible(listing)) return null;
   const postId = Number(listing.post_id);
   const prio = enqueuePriority(via, priority);
   const jobQuery = repo.enrichJobByPostIdQuery(postId);
-  const existing = firstRow(await exec(jobQuery.sql, jobQuery.params));
+  const existing = preset === undefined ? firstRow(await exec(jobQuery.sql, jobQuery.params)) : preset;
   const plan = enqueueEnrichPlan(existing, { postId, prio, via, missing, now });
   await exec(plan.sql, plan.params);
+  // 批次路徑沒有回讀的需要（呼叫端只數筆數），少一次查詢；單筆路徑逐字維持原行為。
+  if (preset !== undefined) return existing;
   return firstRow(await exec(jobQuery.sql, jobQuery.params));
 }
 
@@ -266,25 +272,52 @@ export function enqueueListingEnrichAsync(conn, listing, {
 
 // listingEnrichQueue.js seedHousepriceEnrichJobs()：候選查詢改讀 PG（原本讀本機 SQLite，
 // PG 模式下會拿到空的或以本機資料產出錯誤的工作），每一列再走 enqueueViaExec。
-export async function seedHousepriceEnrichJobsAsync(conn, { limit = 80, isEnabled = () => true } = {}, options = {}) {
+//
+// ⚠️「逐筆 fail-soft」是鐵則：一筆入列失敗**只損失那一筆**，同一輪其他筆照樣落地；
+// 失敗的 post_id 與原因收進 `errors[]`（由 detailed 版回傳，`processListingEnrichBatch`
+// 只讀筆數，所以對外數字介面不變）。
+export async function seedHousepriceEnrichJobsDetailedAsync(conn, { limit = 80, isEnabled = () => true } = {}, options = {}) {
   const opts = withConn(options, conn);
   // `isEnabled` 可能是同步（SQLite bundle）或 async（PG bundle 的 isSourceEnabledAsync）；
   // `await` 同步版回傳的 boolean 是 no-op，兩種形狀都吃得下。
-  if (!(await isEnabled("houseprice"))) return 0;
+  if (!(await isEnabled("houseprice"))) return { seeded: 0, errors: [] };
   return withFallbackCounted(
     opts,
     async (exec) => {
       const q = repo.seedEnrichCandidatesQuery(limit);
       const rows = (await exec(q.sql, q.params)).rows || [];
-      let n = 0;
-      for (const row of rows) {
-        await enqueueViaExec(exec, row, { via: "scheduler", missing: seedRowMissing(row) });
-        n += 1;
+      if (!rows.length) return { seeded: 0, errors: [] };
+      // 一輪 40 筆 → 原本 80 條逐列 `WHERE post_id = $1`；先一條集合式查詢抓好整批既有列。
+      const batch = repo.enrichJobsByPostIdsQuery(rows.map((row) => row.post_id));
+      const existingByPostId = new Map();
+      for (const job of (await exec(batch.sql, batch.params)).rows || []) {
+        existingByPostId.set(Number(job.post_id) || 0, job);
       }
-      return n;
+      let seeded = 0;
+      const errors = [];
+      for (const row of rows) {
+        const postId = Number(row.post_id) || 0;
+        try {
+          await enqueueViaExec(exec, row, {
+            via: "scheduler",
+            missing: seedRowMissing(row),
+            existing: existingByPostId.get(postId) || null,
+          });
+          seeded += 1;
+        } catch (error) {
+          errors.push({ post_id: postId, code: error?.code || "", message: String(error?.message || error) });
+          console.warn(`[enrich-seed] post_id=${postId} 入列失敗，只損失這一筆：${error?.message || error}`);
+        }
+      }
+      return { seeded, errors };
     },
-    () => seedHousepriceEnrichJobsSync(conn, { limit, isEnabled }),
+    () => ({ seeded: seedHousepriceEnrichJobsSync(conn, { limit, isEnabled }), errors: [] }),
   );
+}
+
+export async function seedHousepriceEnrichJobsAsync(conn, seedOpts = {}, options = {}) {
+  const result = await seedHousepriceEnrichJobsDetailedAsync(conn, seedOpts, options);
+  return Number(result?.seeded) || 0;
 }
 
 // listingEnrichQueue.js reclaimStaleEnrichJobs()：回傳回收筆數（PG 用 rowCount）。

@@ -28,12 +28,39 @@ const db = app.sqliteHandle();
 enrich.ensureListingPrepSchema(db);
 
 // PostgreSQL exec 的離線替身：$n → ?，讀取走 all()，其餘走 run()。
+//
+// astra 2026-10-12：正式碼新增了 **PG 陣列綁定**（`= ANY(?::bigint[])`，見
+// repository/listingEnrich.js 的 enrichJobsByPostIdsQuery）⇒ 離線替身必須支援它：
+// 展開成 SQLite 的 `IN (?, ?, …)` 並移除型別轉換。單次左到右掃描，確保展開後的
+// 參數順序與 placeholder 出現順序一致（與 notify-enqueue-parity.test.js 同一招）。
+function expandPgPlaceholders(sql, params = []) {
+  const args = [];
+  let cursor = 0;
+  const takePositional = () => { const value = params[cursor]; cursor += 1; return value; };
+  const text = String(sql).replace(
+    /=\s*ANY\(\s*(\$\d+|\?)(?:::[A-Za-z_]+(?:\[\])?)?\s*\)|::[A-Za-z_]+(?:\[\])?|(\$\d+)|(\?)/gi,
+    (match, anyRef, dollarRef, qmark) => {
+      if (anyRef) {
+        const value = anyRef.startsWith("$") ? params[Number(anyRef.slice(1)) - 1] : takePositional();
+        const values = value == null ? [] : (Array.isArray(value) ? value : [value]);
+        // PG 的空陣列（= ANY('{}')）不匹配任何列 ⇒ 以 IN (NULL) 表達同一語意。
+        if (!values.length) return "IN (NULL)";
+        return `IN (${values.map((v) => { args.push(v); return "?"; }).join(", ")})`;
+      }
+      if (dollarRef) { args.push(params[Number(dollarRef.slice(1)) - 1]); return "?"; }
+      if (qmark !== undefined) { args.push(takePositional()); return "?"; }
+      return "";   // 型別轉換：SQLite 不需要
+    },
+  );
+  return { text, args };
+}
+
 function shim(sql, params = []) {
-  const text = String(sql).replace(/\$(\d+)/g, "?");
+  const { text, args } = expandPgPlaceholders(sql, params);
   const st = db.prepare(text);
   const isRead = /^\s*(select|with)/i.test(text) || /returning/i.test(text);
-  if (isRead) return st.all(...params);
-  st.run(...params);
+  if (isRead) return st.all(...args);
+  st.run(...args);
   return [];
 }
 const pgOptions = { driver: "postgres", exec: shim, strict: true };
@@ -99,16 +126,16 @@ test("live：影子站上的後台統計可以真的跑完（0 skip 由 PG_TEST_
 // ---------------------------------------------------------------------------
 
 function shimCounted(sql, params = []) {
-  const text = String(sql).replace(/\$(\d+)/g, "?");
+  const { text, args } = expandPgPlaceholders(sql, params);
   if (/information_schema\.columns/i.test(text)) {
-    return { rows: db.prepare("SELECT name AS column_name FROM pragma_table_info(?)").all(...params), rowCount: 0 };
+    return { rows: db.prepare("SELECT name AS column_name FROM pragma_table_info(?)").all(...args), rowCount: 0 };
   }
   const statement = db.prepare(text);
   if (/^\s*(select|with)/i.test(text) || /returning/i.test(text)) {
-    const rows = statement.all(...params);
+    const rows = statement.all(...args);
     return { rows, rowCount: rows.length };
   }
-  const info = statement.run(...params);
+  const info = statement.run(...args);
   return { rows: [], rowCount: Number(info.changes) || 0 };
 }
 const pgWriteOptions = { driver: "postgres", exec: shimCounted, strict: true };

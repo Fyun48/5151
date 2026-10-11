@@ -79,12 +79,24 @@ export async function getSettingsAsync(userId, options = {}) {
   const prefetched = options.memberBatch?.settings?.get(uid);
   if (prefetched) return prefetched;
   const exec = await pgExec(options);
-  const globalRows = await exec(repo.GLOBAL_SETTINGS_SQL, []);
+  // 同一輪（tick）內已經讀過全域 settings 的呼叫端可以把那批列傳下來（`options.globalRows`），
+  // 這一輪就不必每位會員再讀一次。**只在同一次呼叫鏈內有效**，不是快取
+  //（管理頁改了要立刻生效；跨 tick／跨請求一律重讀）。
+  const globalRows = options.globalRows || await exec(repo.GLOBAL_SETTINGS_SQL, []);
   const system = systemCrawlFromRows(globalRows);
   if (!uid) return settingsFromRows({ globalRows, system });
   const userRows = await exec(repo.USER_SETTINGS_SQL, [uid]);
   const user = await userRowAsync(exec, uid);
   return settingsFromRows({ globalRows, userRows, user, system });
+}
+
+// 背景迴圈（watcher.flushPendingNotifications()）用：**一輪讀一次**全域 settings 列，
+// 往下傳給同輪的 getSettingsAsync()／裝飾資料／站台信件範本。
+// SQLite 模式回 null（那條路走本機 db.prepare，沒有這個問題）。
+export async function readGlobalSettingsRowsAsync(options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return null;
+  const exec = await pgExec(options);
+  return exec(repo.GLOBAL_SETTINGS_SQL, []);
 }
 
 // ---------------------------------------------------------------------------

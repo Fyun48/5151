@@ -4408,6 +4408,19 @@ function crawlSourcesFromRows(rows) {
   return publicCrawlSources(normalizeCrawlSources(value));
 }
 
+// 背景迴圈「同一次 tick 內 settings 讀一次、往下傳」用的形狀（2026-10-12）。
+//
+// `preloadDecorationProviderAsync()` 在 `requestContext` 為 null 時會自己再讀一次
+// `SELECT key, value FROM settings`；背景路徑（通知入列的逐會員裝飾、flush 的逐事件詳情）
+// 因此每筆都多一條全域 settings 讀取。呼叫端若已經為了別的理由讀過同一批列，
+// 就把這兩塊傳下去，同一輪不要重讀。
+// ⚠️ 這是**呼叫端自己持有的當輪資料**，不准做成跨 tick／跨請求的 TTL 快取
+//（管理頁改了要立刻生效）。
+export function decorationRequestContextFromRows(globalRows) {
+  const rows = Array.isArray(globalRows) ? globalRows : [];
+  return { crawlSources: crawlSourcesFromRows(rows), systemCrawl: systemCrawlFromRows(rows) };
+}
+
 export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = null, resolvedSearchKeys = undefined } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const clock = listingRequestTime(asOf);
@@ -8702,6 +8715,29 @@ export function notifyEnqueueQueries() {
              ORDER BY id DESC LIMIT 1`,
       params: [Number(userId) || 0, Number(postId) || 0, String(type || "")],
     }),
+    // ── 批次版去重讀取（2026-10-12 背景輔助查詢瘦身）─────────────────────────────
+    // 一次抓好整批會員的去重依據。單筆版的結果必須逐字相同：
+    //   • lastEventDetailsBatch  ＝ 每個 user 的 `lastEventDetail`（同一 user 取 id 最大那一列）
+    //   • newEventUserIdsBatch   ＝ 每個 user 的 `newEventExists`（列在集合裡就是「已存在」）
+    //   • groupNotifiedBatch     ＝ `groupNotifiedExists`／`groupNotifiedDetails` 兩支的合併
+    //     （同一組拿全部列，once-ever 只看有沒有、否則逐列比對正規化後的 detail）
+    lastEventDetailsBatch: (userIds, postId, type) => ({
+      sql: `SELECT user_id, detail FROM user_events
+             WHERE user_id = ANY(?::bigint[]) AND post_id = ? AND type = ?
+             ORDER BY user_id, id DESC`,
+      params: [userIds, Number(postId) || 0, String(type || "")],
+    }),
+    newEventUserIdsBatch: (userIds, postId) => ({
+      sql: `SELECT DISTINCT user_id FROM user_events
+             WHERE user_id = ANY(?::bigint[]) AND post_id = ? AND type = 'new'`,
+      params: [userIds, Number(postId) || 0],
+    }),
+    groupNotifiedBatch: (userIds, groupId, type) => ({
+      sql: `SELECT user_id, id, detail FROM user_events
+             WHERE user_id = ANY(?::bigint[]) AND group_id = ? AND type = ?
+             ORDER BY user_id, id DESC`,
+      params: [userIds, String(groupId || ""), String(type || "")],
+    }),
     // addUserEvent(): an id is only needed by callers that report it back, so the PostgreSQL side
     // asks for RETURNING (SQLite answers with lastInsertRowid instead).
     insertUserEvent: (row, { returning = false } = {}) => ({
@@ -8755,6 +8791,8 @@ export function notifyEnqueueBuildContext() {
     overlayPersonal,
     preloadDecorationProviderAsync,
     decorateRowsWithProvider,
+    // 同一次 tick 內「settings 讀一次、往下傳」用（通知入列的逐會員裝飾）。
+    decorationRequestContextFromRows,
   };
 }
 
