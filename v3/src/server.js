@@ -4508,17 +4508,37 @@ async function queueGeoBackfill(settings = null) {
     }
     if (needCommute) {
       let emptyRouteRounds = 0;
+      // SQLite 退場 P1（2026-10-10）：失敗要**看得見**。原本這裡是
+      // `console.warn("補路線失敗：", error.message)` —— 正式站 24 小時 80 行
+      // `business SQLite is closed ... reached at listUserIds` 就是被這一行吞掉的：
+      // 看不出第幾輪、也看不出 error 的 name／code，讀起來像一時的資料問題。
+      let routeBackfillFailures = 0;
+      let routeBackfillConsecutive = 0;
       for (let round = 0; round < 80; round += 1) {
         try {
           const routes = await runRoutes();
+          if (routeBackfillConsecutive) routeBackfillConsecutive = 0;
           if (!routes.attempted) break;
           if (routes.located > 0) emptyRouteRounds = 0;
           else emptyRouteRounds += 1;
           if (emptyRouteRounds >= 3) break;
         } catch (error) {
-          console.warn("補路線失敗：", error.message);
+          // 重試上限維持 80 輪（不會變成無限迴圈）；錯誤本身照樣往上報，不吞。
+          routeBackfillFailures += 1;
+          routeBackfillConsecutive += 1;
+          console.warn(
+            `route-backfill-failed round=${round} consecutive=${routeBackfillConsecutive}`
+            + ` name=${error?.name || "Error"} code=${error?.code ?? ""} ${error?.message || error}`,
+          );
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
+      }
+      if (routeBackfillFailures) {
+        // 固定前綴可 grep；講清楚這**不是**房源資料問題，而是補路線這條讀取路徑失敗。
+        console.warn(
+          `route-backfill-failed total=${routeBackfillFailures} of 80 rounds：`
+          + "補路線這一輪放棄了，沒有完成的物件下一輪會再排；這不是房源資料問題，請看上面的 name／code。",
+        );
       }
       for (let round = 0; round < 80; round += 1) {
         try {

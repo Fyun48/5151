@@ -421,7 +421,12 @@ export async function probeListingAlive(postId) {
 export async function fetchListingDetail(postId, options = {}) {
   const body = await fetchRentDetailBody(postId);
   const ref = communityRefFromDetail(body.data);
-  let community = ref.id ? options.getCommunity?.(ref.id) : null;
+  // SQLite 退場 P1：`options.getCommunity` 現在是 driver-aware 的 async 版
+  // （`communityCacheAsync.js`）；`await` 一個同步函式的回傳值不會變，所以舊的同步實作
+  // （測試／腳本自己傳進來的）仍然相容。
+  // ⚠️ 少了這個 await，PG 模式會拿到一個 Promise 當真相值——`community.lat` 永遠是
+  // `undefined`，於是每一筆 591 詳情都以為「沒有社區座標」而重打社區 API。
+  let community = ref.id ? await options.getCommunity?.(ref.id) : null;
   const cachedCommunity = community && (community.lat != null || community.address) ? community : null;
   if (ref.id && !community) {
     community = await fetchCommunityLocation(ref.id);

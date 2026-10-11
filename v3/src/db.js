@@ -1109,8 +1109,13 @@ export function googleDirectionsEnabled() {
 
 bindGoogleDirectionsEnabled(() => googleDirectionsEnabled());
 
+// ⚠️ SQLite 退場 P1（`db.js:1113`）：這是**同步**函式（回傳陣列，被同步的掃描器吃），
+// 沒有一個地方能 `await` `listUserIdsAsync()`。PG 模式的上游要用
+// `settingsAsync.collectCommuteSettingsAsync()`（PG 的會員清單＋PG 的設定），
+// 這一支只服務 sqlite driver／同步 bundle；PG 模式下沒有本機 handle 時明確失敗、不回退。
 export function collectCommuteSettings() {
-  const list = listUserIds().map((id) => getSettings(id));
+  const list = listUserIdsSyncPath("collectCommuteSettings", "collectCommuteSettingsAsync()")
+    .map((id) => getSettings(id));
   list.push(getSettings());
   list.push(demoCommutePatch());
   return list;
@@ -2546,6 +2551,38 @@ export { publicVapidKey, vapidConfigured, pushPayloadFromEvents };
 
 export function listUserIds() {
   return listUserIdsOn(db);
+}
+
+// ---- SQLite 退場 P1：同步「全會員清單」路徑的明確失敗（2026-10-10） -------------------------
+//
+// 背景（正式站 `591-tracker-v3` 實測）：三隻容器都開了閘（`PG_NO_SQLITE_OPEN=1`），
+// 24 小時內 82 行 `business SQLite is closed`，逐行都是
+// `reached at listUserIds (file:///app/src/members.js:50)`（80 行，全被 server.js 補路線
+// 重試圈吞成 `補路線失敗：`）與 `reached at getCommunityCache`（`db.js:8724`，1 行，未捕捉的
+// rejection 直接把 worker 打掛一次）。來源是**還沒搬完的同步讀取路徑**。
+//
+// 這一支是那些路徑的守衛：**不准吞錯、也不准回退讀本機 SQLite**，要讓它看得見地失敗。
+// 只改「本來就已經在拋錯」的那個情形（PG 模式＋沒有可用的本機 handle，也就是閘開著時）；
+// 有可用 handle（本機／未開閘）時行為逐字不變 ⇒ 不會多打壞任何現在跑得動的路徑。
+//
+// ⚠️ 差別只在訊息：原本是通用的 `business SQLite is closed`，看不出是哪一條**業務路徑**；
+// 現在帶固定前綴 `sync-user-ids-unavailable` 與業務點名稱（`site`），日誌可直接 grep／計數。
+//
+// 目前只有一個呼叫點：`collectCommuteSettings`（`:1113`）。另外四個同步點
+// （`coveringPlan`／`currentSearchKeys`／`bindNotifyJobSnapshots`／`enqueueListingEvent`）
+// 經過逐點核對後**刻意不動**：它們的 PG 上游都已經接 async 版或直接短路
+// （`coveringPlanAsync` 已接 server.js；`bindNotifyJobSnapshotsFor()` 在 PG 直接回 0；
+// `enqueueListingEventAsync` 已接 watcher／crawlerWrites），改它們只會製造迴歸。
+export const SYNC_USER_IDS_UNAVAILABLE = "sync-user-ids-unavailable";
+
+export function listUserIdsSyncPath(site, hint = "") {
+  if (resolveDbDriver() === "postgres" && !sqliteHandleIsUsable(sqliteHandle())) {
+    const tail = hint ? `; use ${hint}` : "";
+    throw new Error(
+      `${SYNC_USER_IDS_UNAVAILABLE}: ${site} needs the full member list, but this is PG mode without a local SQLite handle (PG_NO_SQLITE_OPEN=1)${tail}`,
+    );
+  }
+  return listUserIds();
 }
 
 export { ADMIN_DELETE_REASONS };
@@ -6582,17 +6619,47 @@ export function upsertRouteJob(partial = {}) {
 // PostgreSQL 路徑（repository/crawlerScans.js）會自己去撈 route_jobs／route_cache，再用同一個
 // routeRowNeed() 決策，所以兩個 driver 的「哪些物件還需要跑路線」定義只有一份。
 
-export function routeScanPlan({ limit = 40, priorityIds = [], cursor = 0, now = Date.now() } = {}) {
+// ⚠️ SQLite 退場 P1：這一支的兩個輸入（`jobs`／`wantRush`）原本**只有本機 SQLite 版本**
+// （`collectCommuteSettings()` 讀全會員、`commuteRushEnabled()` 讀 `settings`）。PG 的掃描
+// （`repository/crawlerScans.js:selectRouteCandidates()`）卻直接呼叫它 ⇒ PG 模式的補路線
+// 掃描每次都拋 `business SQLite is closed`（正式站一天 80 行，被 server.js 的重試圈吞成
+// 「補路線失敗」）。現在允許**注入**這兩個輸入（PG 端用 `collectCommuteSettingsAsync()`／
+// `commuteRushEnabledAsync()` 取得），形狀與決策仍然只有這一份；未注入時行為逐字不變
+// （sqlite driver 的路徑完全不動）。
+export function routeScanPlan({
+  limit = 40,
+  priorityIds = [],
+  cursor = 0,
+  now = Date.now(),
+  jobs = null,
+  wantRush = null,
+} = {}) {
   return {
     cap: Math.max(1, Math.min(Number(limit) || 40, 80)),
-    jobs: commuteWorkJobs(collectCommuteSettings()),
-    wantRush: commuteRushEnabled() && googleDirectionsAllowed(),
+    jobs: jobs ?? commuteWorkJobs(collectCommuteSettings()),
+    wantRush: wantRush ?? (commuteRushEnabled() && googleDirectionsAllowed()),
     now: Number(now) || Date.now(),
     priorityIds: [...new Set((priorityIds || []).map(Number).filter((id) => id > 0))],
     cursor: Number(cursor) || 0,
     pageSize: 250,
     maxPages: 20,
   };
+}
+
+// SQLite 退場 P1：PG 的補路線掃描（`repository/crawlerScans.js:selectRouteCandidates()`）
+// 必須用**PG 的** `jobs`／`wantRush`。這一支就是那個入口：driver-aware，內部用兩個**既有**
+// 的 async 替身（`collectCommuteSettingsAsync()`／`commuteRushEnabledAsync()`），最後仍然交給
+// `routeScanPlan()` 產出形狀 ⇒ 決策只有一份、不會漂移。
+//
+// ⚠️ 這裡用**動態** import：`settingsAsync.js` 在模組頂層就 import `db.js`，靜態反向 import
+// 會變成循環（`geoCacheAsync.js` 的 `syncDb = () => import("./db.js")` 是同一個理由）。
+// sqlite driver 不走這條路（直接回同步版），所以本機／未開閘的行為逐字不變。
+export async function routeScanPlanAsync(input = {}, options = {}) {
+  if ((options.driver || resolveDbDriver()) !== "postgres") return routeScanPlan(input);
+  const { collectCommuteSettingsAsync, commuteRushEnabledAsync } = await import("./settingsAsync.js");
+  const jobs = commuteWorkJobs(await collectCommuteSettingsAsync(options));
+  const wantRush = (await commuteRushEnabledAsync(options)) && googleDirectionsAllowed();
+  return routeScanPlan({ ...input, jobs, wantRush });
 }
 
 export function routePriorityScanQuery({ postIds = [] } = {}) {
@@ -8718,10 +8785,17 @@ export function eventPayloadFromListing(event, listing) {
   };
 }
 
-export function getCommunityCache(communityId) {
-  const id = Number(communityId);
-  if (!id) return null;
-  const row = db.prepare("SELECT community_id AS id, name, address, lat, lng FROM community_cache WHERE community_id = ?").get(id);
+// SQLite 退場 P1：`community_cache` 的**讀取**在 PG 端原本缺一隻（只有寫入端
+// `setCommunityCacheAsync()`），遷移不對稱 ⇒ 唯一的呼叫者（watcher 的 591 座標補齊）
+// 在 PG 模式下讀本機，開閘時直接拋 `business SQLite is closed`（正式站一天一次，
+// 未捕捉的 rejection 把 worker 打掛）。語句與回傳形狀都在這裡，PG 版
+// （`communityCacheAsync.js`）共用同一支 mapper，兩個 driver 不可能漂移。
+export const COMMUNITY_CACHE_SELECT_SQL =
+  "SELECT community_id AS id, name, address, lat, lng FROM community_cache WHERE community_id = ?";
+
+// 一列 `community_cache` → 兩個 driver 共用的回傳形狀（`lat`／`lng` 一定是 Number 或 null；
+// 0 與非數字都視為「沒有座標」，與原本的同步版逐字相同）。
+export function communityCacheFromRow(row) {
   if (!row) return null;
   const lat = Number(row.lat);
   const lng = Number(row.lng);
@@ -8732,6 +8806,12 @@ export function getCommunityCache(communityId) {
     lat: Number.isFinite(lat) && lat !== 0 ? lat : null,
     lng: Number.isFinite(lng) && lng !== 0 ? lng : null,
   };
+}
+
+export function getCommunityCache(communityId) {
+  const id = Number(communityId);
+  if (!id) return null;
+  return communityCacheFromRow(db.prepare(COMMUNITY_CACHE_SELECT_SQL).get(id));
 }
 
 export function hasCommunityCache(communityId) {

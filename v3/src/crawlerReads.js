@@ -28,8 +28,11 @@ import {
   listingsNeedingOfflineRecheck,
   listingsNeedingRoute,
   listingsNeedingSourceKit,
+  routeScanPlanAsync,
+  sqliteHandle,
 } from "./db.js";
 import { getListingAsync } from "./listingDetailAsync.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
 import {
   select591GeoCandidates,
@@ -214,8 +217,16 @@ export async function needingRouteAsync({ limit = 40, priorityIds = [], cursor }
   try {
     const exec = await postgresExec(options);
     const deps = options.deps || crawlerReadsBuildContext();
+    // SQLite 退場 P1：`deps.routeScanPlan()` 會同步讀本機 SQLite（`collectCommuteSettings()` →
+    // `listUserIds()`、`commuteRushEnabled()` → `settings`），PG 模式的補路線掃描因此每次都拋
+    // `business SQLite is closed`（正式站 24 小時 80 行）。這裡在 PG 模式先用 PG 的
+    // `routeScanPlanAsync()` 把 plan 算好（jobs／wantRush 來自 PG），再交給 repository 使用；
+    // 形狀仍然由 db.js 的 `routeScanPlan()` 產生。`options.plan` 是給測試／診斷的注入點。
+    const plan = options.plan
+      || await routeScanPlanAsync({ limit, priorityIds, cursor: nextCursor, now: scanNow }, options);
     const result = await selectRouteCandidates(exec, {
       deps,
+      plan,
       limit,
       priorityIds,
       cursor: nextCursor,
@@ -225,6 +236,9 @@ export async function needingRouteAsync({ limit = 40, priorityIds = [], cursor }
     return result.rows;
   } catch (error) {
     if (options.strict) throw error;
+    // 開閘（沒有可用的本機 handle）時不回退同步掃描：回退只會把根源的 PG 錯誤蓋成
+    // 「business SQLite is closed」（`demandAsync.js:188` 同一個慣例）。
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     return runSqlite();
   }
 }
