@@ -1,0 +1,959 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:24:23.703Z",
+ "windowMs": 137642,
+ "totalQueries": 1218,
+ "totalMs": 105978.62,
+ "bySql": {
+  "SELECT * FROM listings WHERE post_id IN ($1)": {
+   "count": 86,
+   "ms": 156.74,
+   "sites": {
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM users WHERE email = $1": {
+   "count": 86,
+   "ms": 87.31,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $1": {
+   "count": 86,
+   "ms": 101.24,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM users WHERE id = $1": {
+   "count": 86,
+   "ms": 89.43,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $1": {
+   "count": 86,
+   "ms": 94.64,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1": {
+   "count": 86,
+   "ms": 72.35,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'": {
+   "count": 86,
+   "ms": 72.22,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])": {
+   "count": 86,
+   "ms": 72.75,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])": {
+   "count": 86,
+   "ms": 73.42,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m\n       FROM mrt_cache WHERE geo_key = ANY($1::text[])": {
+   "count": 46,
+   "ms": 44.76,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT m.group_id AS group_key, l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text, l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed, l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail, l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time\n       FROM listing_group_members m\n       JOIN listings l ON l.post_id = m.post_id\n       WHERE m.group_id = ANY($1::text[])": {
+   "count": 33,
+   "ms": 64.82,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 17,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 14,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2": {
+   "count": 30,
+   "ms": 85.99,
+   "sites": {
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 20,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:208 <- v3/src/db.js:4958": 10
+   }
+  },
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default\n     FROM information_schema.columns\n     WHERE table_schema = $1 AND table_name = $2\n     ORDER BY ordinal_position": {
+   "count": 30,
+   "ms": 237.72,
+   "sites": {
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 30
+   }
+  },
+  "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text,\n       price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level FROM listings WHERE post_id = ANY($1::bigint[])": {
+   "count": 29,
+   "ms": 33.84,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 14,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 13,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 2
+   }
+  },
+  "BEGIN": {
+   "count": 21,
+   "ms": 16.98,
+   "sites": {
+    "v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "COMMIT": {
+   "count": 21,
+   "ms": 25285.03,
+   "sites": {
+    "v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "UPDATE listings\n   SET kit_error = $1, kit_next_retry_at = $2\n WHERE post_id = $3": {
+   "count": 12,
+   "ms": 48864.07,
+   "sites": {
+    "v3/src/crawlerWrites.js:56 <- v3/src/crawlerWrites.js:242 <- v3/src/crawlerWrites.js:64 <- v3/src/watcher.js:1313 <- v3/scripts/settings-hot-read-count.mjs:67": 12
+   }
+  },
+  "SELECT value FROM settings WHERE key = $1": {
+   "count": 11,
+   "ms": 13.04,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 9,
+    "v3/scripts/settings-hot-read-count.mjs:47": 2
+   }
+  },
+  "INSERT INTO data_revision (entity_type, entity_id, event_type, created_at) VALUES ($1, $2, $3, $4)": {
+   "count": 11,
+   "ms": 21.8,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:398 <- v3/src/db.js:4921 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/revisionBumpAsync.js:31 <- v3/src/crawlerWrites.js:90 <- v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value": {
+   "count": 10,
+   "ms": 23.88,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:136 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT address, geo_source, floor_name, has_natural_gas, has_balcony, furnish_items FROM listings WHERE post_id = $1": {
+   "count": 10,
+   "ms": 10.38,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:237 <- v3/src/repository/writePath.js:342 <- v3/src/db.js:4902 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "INSERT INTO listings (\n      post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text,\n      price_contain_text, extra_fees, extra_fees_fetched, address, area_name,\n      layout, floor_name, kind_name, role_name, cover, tags, refresh_time,\n      first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,\n      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail\n    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, 0, 0, $25, $26, $27, $28, $29, $30, $31, $32)\n    ON CONFLICT(post_id) DO UPDATE SET\n      source_key = excluded.source_key,\n      search_key = excluded.search_key,\n      title = excluded.title,\n      url = excluded.url,\n      price = CASE WHEN COALESCE(excluded.price, '') != '' THEN excluded.price ELSE listings.price END,\n      price_num = CASE WHEN excluded.price_num > 0 THEN excluded.price_num ELSE listings.price_num END,\n      extra_fee = excluded.extra_fee,\n      extra_fee_text = CASE WHEN COALESCE(excluded.extra_fee_text, '') != '' THEN excluded.extra_fee_text ELSE listings.extra_fee_text END,\n      price_contain_text = CASE WHEN COALESCE(excluded.price_contain_text, '') != '' THEN excluded.price_contain_text ELSE listings.price_contain_text END,\n      extra_fees = CASE\n        WHEN listings.extra_fees_fetched = 1 AND COALESCE(listings.extra_fees, '') NOT IN ('', '[]')\n        THEN listings.extra_fees\n        ELSE excluded.extra_fees\n      END,\n      address = CASE\n        WHEN COALESCE(excluded.address, '') != '' THEN excluded.address\n        ELSE listings.address\n      END,\n      area_name = CASE WHEN COALESCE(excluded.area_name, '') != '' THEN excluded.area_name ELSE listings.area_name END,\n      layout = CASE WHEN COALESCE(excluded.layout, '') != '' THEN excluded.layout ELSE listings.layout END,\n      floor_name = CASE WHEN COALESCE(excluded.floor_name, '') != '' THEN excluded.floor_name ELSE listings.floor_name END,\n      kind_name = CASE WHEN COALESCE(excluded.kind_name, '') != '' THEN excluded.kind_name ELSE listings.kind_name END,\n      role_name = CASE WHEN COALESCE(excluded.role_name, '') != '' THEN excluded.role_name ELSE listings.role_name END,\n      cover = CASE WHEN COALESCE(excluded.cover, '') != '' THEN excluded.cover ELSE listings.cover END,\n      tags = excluded.tags,\n      refresh_time = CASE WHEN COALESCE(excluded.refresh_time, '') != '' THEN excluded.refresh_time ELSE listings.refresh_time END,\n      last_seen_at = excluded.last_seen_at,\n      last_event = CASE\n        WHEN COALESCE(listings.offline, 0) = 1 AND excluded.last_event IN ('seen', 'offline', '') THEN 'same_source'\n        ELSE excluded.last_event\n      END,\n      last_checked_at = excluded.last_seen_at,\n      offline = 0,\n      offline_at = NULL,\n      offline_confirmed = 0,\n      lat = CASE\n        WHEN COALESCE(listings.geo_source, '') IN ('591', 'community', 'hbhousing', 'sinyi', 'housefun', 'houseprice', 'ddroom', 'rakuya', 'geocode') THEN listings.lat\n        ELSE COALESCE(excluded.lat, listings.lat)\n      END,\n      lng = CASE\n        WHEN COALESCE(listings.geo_source, '') IN ('591', 'community', 'hbhousing', 'sinyi', 'housefun', 'houseprice', 'ddroom', 'rakuya', 'geocode') THEN listings.lng\n        ELSE COALESCE(excluded.lng, listings.lng)\n      END,\n      community_id = CASE\n        WHEN excluded.community_id > 0 THEN excluded.community_id\n        ELSE listings.community_id\n      END,\n      community_name = CASE\n        WHEN COALESCE(excluded.community_name, '') != '' THEN excluded.community_name\n        ELSE listings.community_name\n      END,\n      community_linked = CASE\n        WHEN excluded.community_linked > 0 OR excluded.community_id > 0 THEN 1\n        ELSE listings.community_linked\n      END,\n      cost_changed_at = CASE\n        WHEN COALESCE(excluded.cost_changed_at, '') != '' THEN excluded.cost_changed_at\n        ELSE listings.cost_changed_at\n      END,\n      cost_change_type = CASE\n        WHEN COALESCE(excluded.cost_change_type, '') != '' THEN excluded.cost_change_type\n        ELSE listings.cost_change_type\n      END,\n      cost_change_detail = CASE\n        WHEN COALESCE(excluded.cost_change_detail, '') != '' THEN excluded.cost_change_detail\n        ELSE listings.cost_change_detail\n      END": {
+   "count": 10,
+   "ms": 27.12,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:353 <- v3/src/db.js:4902 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET source = $1, source_id = COALESCE(NULLIF(source_id, ''), $2) WHERE post_id = $3": {
+   "count": 10,
+   "ms": 13.46,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:365 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET has_natural_gas = $1, has_balcony = $2, furnish_items = $3 WHERE post_id = $4": {
+   "count": 10,
+   "ms": 14.41,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:370 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET content_seq = COALESCE(content_seq, 0) + 1 WHERE post_id = $1": {
+   "count": 10,
+   "ms": 14.42,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:374 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET geo_source = COALESCE(NULLIF(geo_source, ''), $1) WHERE post_id = $2": {
+   "count": 10,
+   "ms": 13.08,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:377 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM listings WHERE post_id = $1": {
+   "count": 10,
+   "ms": 20.93,
+   "sites": {
+    "v3/src/db.js:4908 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "\n  INSERT INTO listing_search_projection (post_id, district, source, kind, kind_keys, rent, total_monthly_cost, area, floor, total_floors,\n  elevator, parking, rooftop, low_floor, lat, lng, location_class, primary_listing_id,\n  offline_state, commute_km, updated_at)\n  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)\n  ON CONFLICT(post_id) DO UPDATE SET\n    district = excluded.district,\n    source = excluded.source,\n    kind = excluded.kind,\n    kind_keys = excluded.kind_keys,\n    rent = excluded.rent,\n    total_monthly_cost = excluded.total_monthly_cost,\n    area = excluded.area,\n    floor = excluded.floor,\n    total_floors = excluded.total_floors,\n    elevator = excluded.elevator,\n    parking = excluded.parking,\n    rooftop = excluded.rooftop,\n    low_floor = excluded.low_floor,\n    lat = excluded.lat,\n    lng = excluded.lng,\n    location_class = excluded.location_class,\n    primary_listing_id = excluded.primary_listing_id,\n    offline_state = excluded.offline_state,\n    commute_km = excluded.commute_km,\n    updated_at = excluded.updated_at\n": {
+   "count": 10,
+   "ms": 13.11,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:387 <- v3/src/db.js:4914 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET fold_rent_num = $1, fold_refresh_kind = $2, fold_refresh_rel_ms = $3, fold_refresh_abs_ms = $4 WHERE post_id = $5": {
+   "count": 10,
+   "ms": 13.68,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:393 <- v3/src/db.js:4915 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SAVEPOINT change_log": {
+   "count": 10,
+   "ms": 3.83,
+   "sites": {
+    "v3/src/db.js:4920 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "RELEASE SAVEPOINT change_log": {
+   "count": 10,
+   "ms": 3.49,
+   "sites": {
+    "v3/src/db.js:4926 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT is_enabled FROM system_provider_configs WHERE category = $1 AND is_enabled = 1 LIMIT 1": {
+   "count": 10,
+   "ms": 12.02,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:91 <- v3/src/listingSimilarityAsync.js:212 <- v3/src/listingSimilarityAsync.js:176": 10
+   }
+  },
+  "SELECT post_id, source, source_id, url FROM listings\n           WHERE COALESCE(hidden, 0) = 0 AND COALESCE(offline, 0) = 0\n             AND source = $1\n             AND COALESCE(kit_fetched, 0) = 0\n             AND (kit_next_retry_at IS NULL OR kit_next_retry_at <= $2)\n           ORDER BY CASE WHEN EXISTS (\n    SELECT 1 FROM user_listing_flags f WHERE f.post_id = listings.post_id AND f.watched = 1\n  ) THEN 0 ELSE 1 END, last_seen_at DESC\n           LIMIT $3": {
+   "count": 8,
+   "ms": 48.04,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:49 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1291 <- v3/scripts/settings-hot-read-count.mjs:67": 6,
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:49 <- v3/src/crawlerReads.js:187 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1291 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT key,value FROM settings": {
+   "count": 6,
+   "ms": 6.94,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:15 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($1,$2) ON CONFLICT(key) DO NOTHING": {
+   "count": 6,
+   "ms": 5.59,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT value FROM settings WHERE key=$1 FOR UPDATE": {
+   "count": 6,
+   "ms": 6.71,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT id,region_id,section_ids,price_min,price_max FROM crawl_covers": {
+   "count": 4,
+   "ms": 5.02,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:95 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:95 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "UPDATE crawl_covers SET last_run_at=$1 WHERE id=$2": {
+   "count": 4,
+   "ms": 3.99,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:100 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:100 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT * FROM users WHERE deleted_at IS NULL OR deleted_at='' ORDER BY id": {
+   "count": 4,
+   "ms": 4.54,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:56 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:56 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT user_id,key,value FROM user_settings": {
+   "count": 4,
+   "ms": 34.22,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  }
+ },
+ "byFingerprint": {
+  "SELECT * FROM listings WHERE post_id IN ($?)": {
+   "count": 86,
+   "ms": 156.74,
+   "sites": {
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM users WHERE email = $?": {
+   "count": 86,
+   "ms": 87.31,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $?": {
+   "count": 86,
+   "ms": 101.24,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM users WHERE id = $?": {
+   "count": 86,
+   "ms": 89.43,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $?": {
+   "count": 86,
+   "ms": 94.64,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $?": {
+   "count": 86,
+   "ms": 72.35,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $? AND vote = ?": {
+   "count": 86,
+   "ms": 72.22,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($?::bigint[])": {
+   "count": 86,
+   "ms": 72.75,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT * FROM listing_prep WHERE post_id = ANY($?::bigint[])": {
+   "count": 86,
+   "ms": 73.42,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m FROM mrt_cache WHERE ": {
+   "count": 46,
+   "ms": 44.76,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10
+   }
+  },
+  "SELECT m.group_id AS group_key, l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees,": {
+   "count": 33,
+   "ms": 64.82,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 17,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 14,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT ? FROM information_schema.tables WHERE table_schema = $? AND table_name = $?": {
+   "count": 30,
+   "ms": 85.99,
+   "sites": {
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 20,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:208 <- v3/src/db.js:4958": 10
+   }
+  },
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default FROM information_schema.columns WHERE table_s": {
+   "count": 30,
+   "ms": 237.72,
+   "sites": {
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 30
+   }
+  },
+  "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text, ref": {
+   "count": 29,
+   "ms": 33.84,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 14,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 13,
+    "v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 2
+   }
+  },
+  "BEGIN": {
+   "count": 21,
+   "ms": 16.98,
+   "sites": {
+    "v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "COMMIT": {
+   "count": 21,
+   "ms": 25285.03,
+   "sites": {
+    "v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "UPDATE listings SET kit_error = $?, kit_next_retry_at = $? WHERE post_id = $?": {
+   "count": 12,
+   "ms": 48864.07,
+   "sites": {
+    "v3/src/crawlerWrites.js:56 <- v3/src/crawlerWrites.js:242 <- v3/src/crawlerWrites.js:64 <- v3/src/watcher.js:1313 <- v3/scripts/settings-hot-read-count.mjs:67": 12
+   }
+  },
+  "SELECT value FROM settings WHERE key = $?": {
+   "count": 11,
+   "ms": 13.04,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 9,
+    "v3/scripts/settings-hot-read-count.mjs:47": 2
+   }
+  },
+  "INSERT INTO data_revision (entity_type, entity_id, event_type, created_at) VALUES ($?, $?, $?, $?)": {
+   "count": 11,
+   "ms": 21.8,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:398 <- v3/src/db.js:4921 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+    "v3/src/revisionBumpAsync.js:31 <- v3/src/crawlerWrites.js:90 <- v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO UPDATE SET value=excluded.value": {
+   "count": 10,
+   "ms": 23.88,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:136 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT address, geo_source, floor_name, has_natural_gas, has_balcony, furnish_items FROM listings WHERE post_id = $?": {
+   "count": 10,
+   "ms": 10.38,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:237 <- v3/src/repository/writePath.js:342 <- v3/src/db.js:4902 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "INSERT INTO listings ( post_id, source_key, search_key, title, url, price, price_num, extra_fee, extra_fee_text, price_c": {
+   "count": 10,
+   "ms": 27.12,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:353 <- v3/src/db.js:4902 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET source = $?, source_id = COALESCE(NULLIF(source_id, ?), $?) WHERE post_id = $?": {
+   "count": 10,
+   "ms": 13.46,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:365 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET has_natural_gas = $?, has_balcony = $?, furnish_items = $? WHERE post_id = $?": {
+   "count": 10,
+   "ms": 14.41,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:370 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET content_seq = COALESCE(content_seq, ?) + ? WHERE post_id = $?": {
+   "count": 10,
+   "ms": 14.42,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:374 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET geo_source = COALESCE(NULLIF(geo_source, ?), $?) WHERE post_id = $?": {
+   "count": 10,
+   "ms": 13.08,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:377 <- v3/src/db.js:4903 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT * FROM listings WHERE post_id = $?": {
+   "count": 10,
+   "ms": 20.93,
+   "sites": {
+    "v3/src/db.js:4908 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "INSERT INTO listing_search_projection (post_id, district, source, kind, kind_keys, rent, total_monthly_cost, area, floor": {
+   "count": 10,
+   "ms": 13.11,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:387 <- v3/src/db.js:4914 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "UPDATE listings SET fold_rent_num = $?, fold_refresh_kind = $?, fold_refresh_rel_ms = $?, fold_refresh_abs_ms = $? WHERE": {
+   "count": 10,
+   "ms": 13.68,
+   "sites": {
+    "v3/src/db.js:4898 <- v3/src/repository/writePath.js:234 <- v3/src/repository/writePath.js:236 <- v3/src/repository/writePath.js:393 <- v3/src/db.js:4915 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SAVEPOINT change_log": {
+   "count": 10,
+   "ms": 3.83,
+   "sites": {
+    "v3/src/db.js:4920 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "RELEASE SAVEPOINT change_log": {
+   "count": 10,
+   "ms": 3.49,
+   "sites": {
+    "v3/src/db.js:4926 <- v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+   }
+  },
+  "SELECT is_enabled FROM system_provider_configs WHERE category = $? AND is_enabled = ? LIMIT ?": {
+   "count": 10,
+   "ms": 12.02,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:91 <- v3/src/listingSimilarityAsync.js:212 <- v3/src/listingSimilarityAsync.js:176": 10
+   }
+  },
+  "SELECT post_id, source, source_id, url FROM listings WHERE COALESCE(hidden, ?) = ? AND COALESCE(offline, ?) = ? AND sour": {
+   "count": 8,
+   "ms": 48.04,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:49 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1291 <- v3/scripts/settings-hot-read-count.mjs:67": 6,
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:49 <- v3/src/crawlerReads.js:187 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1291 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT key,value FROM settings": {
+   "count": 6,
+   "ms": 6.94,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:15 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO NOTHING": {
+   "count": 6,
+   "ms": 5.59,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT value FROM settings WHERE key=$? FOR UPDATE": {
+   "count": 6,
+   "ms": 6.71,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT id,region_id,section_ids,price_min,price_max FROM crawl_covers": {
+   "count": 4,
+   "ms": 5.02,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:95 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:95 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "UPDATE crawl_covers SET last_run_at=$? WHERE id=$?": {
+   "count": 4,
+   "ms": 3.99,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:100 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:100 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT * FROM users WHERE deleted_at IS NULL OR deleted_at=? ORDER BY id": {
+   "count": 4,
+   "ms": 4.54,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:56 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:56 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT user_id,key,value FROM user_settings": {
+   "count": 4,
+   "ms": 34.22,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT value FROM settings WHERE key=$?": {
+   "count": 2,
+   "ms": 1.79,
+   "sites": {
+    "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:144 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT post_id FROM listings WHERE COALESCE(hidden, ?) = ? AND COALESCE(offline, ?) = ? AND COALESCE(source, ?) != ? ORD": {
+   "count": 2,
+   "ms": 433.45,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:11 <- v3/src/crawlerReads.js:160 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:681 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT post_id, offline, offline_at, offline_confirmed, last_checked_at FROM listings WHERE COALESCE(hidden, ?) = ? AND ": {
+   "count": 2,
+   "ms": 196.05,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:18 <- v3/src/crawlerReads.js:169 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:728 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT DISTINCT search_key FROM listings": {
+   "count": 2,
+   "ms": 154.99,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/crawlerReads.js:100 <- v3/src/watcher.js:1166 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT COUNT(*) AS n FROM listings WHERE search_key IN ($?)": {
+   "count": 2,
+   "ms": 3.24,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/crawlerReads.js:107 <- v3/src/watcher.js:1166 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "SELECT post_id FROM listings WHERE COALESCE(hidden, ?) = ? AND COALESCE(offline, ?) = ? AND COALESCE(source, ?) = ? AND ": {
+   "count": 2,
+   "ms": 234.33,
+   "sites": {
+    "v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:27 <- v3/src/crawlerReads.js:178 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1272 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+   }
+  },
+  "INSERT INTO settings(key, value) VALUES ($?, $?) ON CONFLICT(key) DO UPDATE SET value = excluded.value": {
+   "count": 1,
+   "ms": 241.68,
+   "sites": {
+    "v3/scripts/settings-hot-read-count.mjs:57": 1
+   }
+  },
+  "UPDATE listings SET offline_confirmed = ?, last_event = ?, last_checked_at = $? WHERE COALESCE(offline, ?) = ? AND COALE": {
+   "count": 1,
+   "ms": 214.5,
+   "sites": {
+    "v3/src/crawlerWrites.js:88 <- v3/src/crawlerWrites.js:343 <- v3/src/crawlerWrites.js:89 <- v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "SAVEPOINT revision_bump": {
+   "count": 1,
+   "ms": 0.52,
+   "sites": {
+    "v3/src/revisionBumpAsync.js:30 <- v3/src/crawlerWrites.js:90 <- v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "RELEASE SAVEPOINT revision_bump": {
+   "count": 1,
+   "ms": 0.46,
+   "sites": {
+    "v3/src/revisionBumpAsync.js:32 <- v3/src/crawlerWrites.js:90 <- v3/src/crawlerWrites.js:87 <- v3/src/watcher.js:680 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": {
+   "count": 1,
+   "ms": 43.24,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:75 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT ?": {
+   "count": 1,
+   "ms": 35.27,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 33.6,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 34.83,
+   "sites": {
+    "v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "CREATE TABLE IF NOT EXISTS data_revision ( id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, entity_type TEXT NOT ": {
+   "count": 1,
+   "ms": 0.71,
+   "sites": {
+    "v3/src/db.js:4843 <- v3/src/db.js:4889 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "CREATE INDEX IF NOT EXISTS idx_data_revision_id ON data_revision (id)": {
+   "count": 1,
+   "ms": 0.66,
+   "sites": {
+    "v3/src/db.js:4843 <- v3/src/db.js:4889 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "SELECT setval(pg_get_serial_sequence(?, ?), (SELECT COALESCE(MAX(id), ?) + ? FROM data_revision), false)": {
+   "count": 1,
+   "ms": 1042.69,
+   "sites": {
+    "v3/src/db.js:4846 <- v3/src/db.js:4889 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_rent_num double precision": {
+   "count": 1,
+   "ms": 22031.17,
+   "sites": {
+    "v3/src/db.js:4858 <- v3/src/db.js:4890 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_kind smallint": {
+   "count": 1,
+   "ms": 1301.3,
+   "sites": {
+    "v3/src/db.js:4858 <- v3/src/db.js:4890 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_rel_ms bigint": {
+   "count": 1,
+   "ms": 3430.18,
+   "sites": {
+    "v3/src/db.js:4858 <- v3/src/db.js:4890 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_abs_ms bigint": {
+   "count": 1,
+   "ms": 692.14,
+   "sites": {
+    "v3/src/db.js:4858 <- v3/src/db.js:4890 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 1
+   }
+  },
+  "UPDATE settings SET value = $? WHERE key = $?": {
+   "count": 1,
+   "ms": 64.81,
+   "sites": {
+    "v3/scripts/settings-hot-read-count.mjs:82": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1275": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 40,
+  "query v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 30,
+  "query v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:701": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 24,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174": 20,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893": 16,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 14,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1275": 14,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701": 12,
+  "query v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1294": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 12,
+  "query v3/src/crawlerWrites.js:56 <- v3/src/crawlerWrites.js:242 <- v3/src/crawlerWrites.js:64 <- v3/src/watcher.js:1313 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+  "withTransaction v3/src/crawlScheduleAsync.js:34": 10,
+  "query v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/crawlerReads.js:79 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/usersAsync.js:73 <- v3/src/usersAsync.js:162 <- v3/src/usersAsync.js:74 <- v3/src/usersAsync.js:161 <- v3/src/usersAsync.js:179 <- v3/src/listingDetailAsync.js:51 <- v3/src/watcher.js:1189": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1189": 10,
+  "withTransaction v3/src/db.js:4894 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 10,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:208 <- v3/src/db.js:4958": 10,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 10,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:91 <- v3/src/listingSimilarityAsync.js:212 <- v3/src/listingSimilarityAsync.js:176": 10,
+  "query v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:49 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:1291 <- v3/scripts/settings-hot-read-count.mjs:67": 6,
+  "exec v3/src/db.js:4858 <- v3/src/db.js:4890 <- v3/src/watcher.js:1198 <- v3/scripts/settings-hot-read-count.mjs:67": 4,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 3,
+  "query v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:1294": 3,
+  "query v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:11 <- v3/src/crawlerReads.js:160 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:681 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+  "query v3/src/crawlerReads.js:57 <- v3/src/repository/crawlerScans.js:18 <- v3/src/crawlerReads.js:169 <- v3/src/crawlerReads.js:69 <- v3/src/watcher.js:728 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+  "query v3/src/crawlerReads.js:57 <- v3/src/crawlerReads.js:100 <- v3/src/watcher.js:1166 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+  "query v3/src/crawlerReads.js:57 <- v3/src/crawlerReads.js:107 <- v3/src/watcher.js:1166 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+ },
+ "driverCallsTotal": 1027,
+ "driverSqls": {
+  "SELECT * FROM listings WHERE post_id IN ($1)": 86,
+  "SELECT * FROM users WHERE email = $1": 86,
+  "SELECT key, value FROM user_settings WHERE user_id = $1": 86,
+  "SELECT * FROM users WHERE id = $1": 86,
+  "SELECT * FROM user_listing_flags WHERE user_id = $1": 86,
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1": 86,
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'": 86,
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])": 86,
+  "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])": 86,
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m F": 46,
+  "SELECT m.group_id AS group_key, l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extr": 33,
+  "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2": 30,
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default FROM information_schema.c": 30,
+  "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, pri": 29,
+  "": 21,
+  "UPDATE listings SET kit_error = $1, kit_next_retry_at = $2 WHERE post_id = $3": 12,
+  "SELECT value FROM settings WHERE key = $1": 11,
+  "SELECT is_enabled FROM system_provider_configs WHERE category = $1 AND is_enabled = 1 LIMIT 1": 10,
+  "SELECT post_id, source, source_id, url FROM listings WHERE COALESCE(hidden, 0) = 0 AND COALESCE(offl": 8,
+  "SELECT post_id FROM listings WHERE COALESCE(hidden, 0) = 0 AND COALESCE(offline, 0) = 0 AND COALESCE": 4,
+  "SELECT post_id, offline, offline_at, offline_confirmed, last_checked_at FROM listings WHERE COALESCE": 2,
+  "SELECT DISTINCT search_key FROM listings": 2,
+  "SELECT COUNT(*) AS n FROM listings WHERE search_key IN ($1)": 2,
+  "INSERT INTO settings(key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value = excluded.val": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT 0": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": 1,
+  "CREATE TABLE IF NOT EXISTS data_revision ( id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, e": 1,
+  "CREATE INDEX IF NOT EXISTS idx_data_revision_id ON data_revision (id)": 1,
+  "SELECT setval(pg_get_serial_sequence('data_revision', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM d": 1,
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_rent_num double precision": 1,
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_kind smallint": 1,
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_rel_ms bigint": 1,
+  "ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_refresh_abs_ms bigint": 1,
+  "UPDATE settings SET value = $1 WHERE key = $2": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 10,
+  "query v3/scripts/settings-hot-read-count.mjs:47": 1,
+  "query v3/scripts/settings-hot-read-count.mjs:57": 1,
+  "query v3/scripts/settings-hot-read-count.mjs:82": 1
+ }
+}

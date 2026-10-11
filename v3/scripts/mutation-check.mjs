@@ -2841,6 +2841,56 @@ const SETTINGSDIET_MUTATIONS = [
   },
 ];
 
+// 第二包：**同一批內重複讀同一份全域列**（v3/test/settings-hot-read-diet-2.test.js，2026-10-12）。
+// 這一包的四個迴圈各自成批：一筆事件、一位會員、一位候選會員、一位要通知的會員。
+const SETTINGSDIET2_MUTATIONS = [
+  {
+    name: "通知入列不再吃當輪快照（每一筆事件各重讀一次全域設定）",
+    file: "v3/src/repository/notifyEnqueue.js",
+    from: "  const globalRows = Array.isArray(loadedGlobalRows) ? loadedGlobalRows : await run(queries.globalSettings());",
+    to: "  const globalRows = await run(queries.globalSettings());",
+    expect: "通知入列：同一批事件帶了當輪快照就不得逐筆重讀全域設定",
+  },
+  {
+    name: "爬蟲輪次的逐筆入列不把當輪快照傳下去",
+    file: "v3/src/watcher.js",
+    from: "      await enqueueListingEventAsync(saved, evt, roundOptions);",
+    to: "      await enqueueListingEventAsync(saved, evt);",
+    expect: "通知入列：爬蟲輪次的入列呼叫端要把當輪快照傳下去",
+  },
+  {
+    name: "通勤設定清單不把當輪那一批列傳給每位會員（每位會員各重讀一次）",
+    file: "v3/src/settingsAsync.js",
+    from: "  const perMember = { ...options, exec, globalRows };",
+    to: "  const perMember = { ...options, exec };",
+    expect: "通勤設定清單：整份清單只讀一次全域設定",
+  },
+  {
+    name: "閒置暫停不把當輪那一批列傳下去（每位候選會員各重讀一次，寫入再讀一次）",
+    file: "v3/src/accountMaintenanceAsync.js",
+    from: "    const settings = await getSettingsAsync(id, roundOptions);",
+    to: "    const settings = await getSettingsAsync(id, options);",
+    expect: "閒置暫停：整圈維護只讀一次全域設定",
+  },
+  {
+    name: "flush 第二圈的信件範本不吃當輪快照（每位要通知的會員各重讀一次）",
+    // ⚠️ 不能直接變異 `getMemberMailBundleAsync(userId)` 那一行：少了 options ⇒
+    // `options.driver` 也跟著不見 ⇒ `resolveDbDriver()` 退回 sqlite 分支（離線測試看不到），
+    // 這是「等價變異」。改成變異它內部讀範本那一句，效果一樣、而且測得到。
+    file: "v3/src/memberMailAsync.js",
+    from: "  const rows = options.globalRows || await exec(repo.GLOBAL_SETTINGS_SQL, []);",
+    to: "  const rows = await exec(repo.GLOBAL_SETTINGS_SQL, []);",
+    expect: "flush 第二圈：整批只讀一次全域設定",
+  },
+  {
+    name: "flush 第二圈的逐會員設定改回沒有當輪快照的 options",
+    file: "v3/src/watcher.js",
+    from: "      result = await notify(await getSettingsAsync(userId, roundOptions), dock, {",
+    to: "      result = await notify(await getSettingsAsync(userId, options), dock, {",
+    expect: "flush 第二圈：整批只讀一次全域設定",
+  },
+];
+
 // 通知 flush 迴圈的逐會員讀取（v3/test/notify-flush-settings.test.js，第七十四批）。
 const NOTIFYFLUSH_SRC = "v3/src/watcher.js";
 const NOTIFYFLUSH_MUTATIONS = [
@@ -6367,6 +6417,7 @@ const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATION
   : /source-recovery/.test(testFile) ? [...SRCRECOVERY_MUTATIONS, ...SRCRECOVERY2_MUTATIONS]
   : /crawl-sandbox/.test(testFile) ? CRAWLSANDBOX_MUTATIONS
   : /crawl-external-rotation/.test(testFile) ? EXTERNALROT_MUTATIONS  : /crawl-round-integration/.test(testFile) ? ROUNDINT_MUTATIONS
+  : /settings-hot-read-diet-2/.test(testFile) ? SETTINGSDIET2_MUTATIONS
   : /settings-hot-read-diet/.test(testFile) ? SETTINGSDIET_MUTATIONS
   : /notify-flush-settings/.test(testFile) ? NOTIFYFLUSH_MUTATIONS
   : /sqlite-exit-web-callers/.test(testFile) ? SQLITEEXITWEB_MUTATIONS

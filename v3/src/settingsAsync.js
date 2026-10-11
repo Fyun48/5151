@@ -191,9 +191,14 @@ export async function collectCommuteSettingsAsync(options = {}) {
   const ids = (await exec(queries.listUserIds().sql, queries.listUserIds().params))
     .map((row) => Number(row.id) || 0)
     .filter(Boolean);
+  // 這一整份清單是**同一批**：全域設定的列只讀一次，往下傳給每一位會員
+  // （原本每位會員各讀一次 `SELECT key, value FROM settings`；repro 實測 23 位 ⇒ 23 條）。
+  // 呼叫端已經有當輪快照時（`options.globalRows`）直接沿用；只在這次呼叫鏈內有效，不是快取。
+  const globalRows = Array.isArray(options.globalRows) ? options.globalRows : await exec(repo.GLOBAL_SETTINGS_SQL, []);
+  const perMember = { ...options, exec, globalRows };
   const list = [];
-  for (const id of ids) list.push(await getSettingsAsync(id, { ...options, exec }));
-  list.push(await getSettingsAsync(0, { ...options, exec }));
+  for (const id of ids) list.push(await getSettingsAsync(id, perMember));
+  list.push(await getSettingsAsync(0, perMember));
   list.push(demoCommutePatch());
   return list;
 }

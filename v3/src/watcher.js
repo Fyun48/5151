@@ -579,10 +579,10 @@ export async function flushPendingNotifications(settings = null, { silent = fals
     ));
     const mail = mailByUser.get(userId) || [];
     const push = pushByUser.get(userId) || [];
-    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { smtp: null, templates: await getMailTemplatesAsync(options) };
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId, roundOptions) : { smtp: null, templates: await getMailTemplatesAsync(options) };
     let result = { webhook: { job_state: "skipped" }, mail: { job_state: "skipped", shown_ids: [] } };
     if (!silent && (dock.length || hook.length || mail.length)) {
-      result = await notify(await getSettingsAsync(userId, options), dock, {
+      result = await notify(await getSettingsAsync(userId, roundOptions), dock, {
         webhookEvents: hook,
         mailEvents: mail,
         mailTo: String((await getUserByIdAsync(userId, options))?.email || "").trim(),
@@ -1237,7 +1237,9 @@ export async function runWatch(options = {}) {
       // 5168 全新房源等資料準備完成再通知，避免舊庫回填大量「全新」
       if (type === "new" && String(saved.source || listing.source || "") === "houseprice") continue;
       const evt = { type, detail };
-      await enqueueListingEventAsync(saved, evt);
+      // 當輪快照（`roundOptions.globalRows`）：這一輪每一筆事件都不要再各讀一次
+      // `SELECT key, value FROM settings`（正式站 196 秒窗口 328 條事件 ⇒ 328 次）。
+      await enqueueListingEventAsync(saved, evt, roundOptions);
     }
 
     // 這一批的物件都落地了 ⇒ 如果它的來源全部成功，立刻記錄「這組覆蓋條件已完成」。

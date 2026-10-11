@@ -140,7 +140,14 @@ test("watcher.js 的 flush 不得再用同步的 getSettings／getUserById／get
     const withoutAsync = body.replace(new RegExp(`${sync}Async\\(`, "g"), "");
     assert.ok(!new RegExp(`(?<![A-Za-z])${sync}\\(`).test(withoutAsync), `flush 不得再用同步的 ${sync}()`);
   }
-  for (const islandCall of ["await getSettingsAsync(userId, options)", "await getUserByIdAsync(userId, options)", "await getMailTemplatesAsync(options)"]) {
+  // ⚠️ 2026-10-12 第二包：第二圈（真正送出通知那一圈）原本用 `options`（沒有當輪快照）
+  // ⇒ 每位要通知的會員各重讀一次 `SELECT key, value FROM settings`。現在一律用 `roundOptions`。
+  for (const islandCall of [
+    "await getSettingsAsync(userId, roundOptions)",
+    "await getUserByIdAsync(userId, options)",
+    "await getMailTemplatesAsync(options)",
+    "await getMemberMailBundleAsync(userId, roundOptions)",
+  ]) {
     assert.ok(body.includes(islandCall), `flush 要用 ${islandCall}`);
   }
 });

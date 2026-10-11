@@ -45,7 +45,15 @@ async function withFallback(options, runPostgres, runSqlite) {
 export function enqueueListingEventAsync(listing, event, options = {}) {
   return withFallback(
     options,
-    (exec, deps) => enqueueListingEventRepo(exec, { deps, listing, event }),
+    // 當輪快照（爬蟲輪次的 `globalRows`／`requestContext`）往下傳：同一批事件只讀一次
+    // `SELECT key, value FROM settings`。沒帶時 repo 逐字沿用原本的讀法。
+    (exec, deps) => enqueueListingEventRepo(exec, {
+      deps,
+      listing,
+      event,
+      globalRows: options.globalRows,
+      requestContext: options.requestContext,
+    }),
     () => enqueueListingEventSync(listing, event),
   );
 }

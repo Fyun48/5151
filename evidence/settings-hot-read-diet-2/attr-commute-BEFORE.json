@@ -1,0 +1,86 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:20:51.448Z",
+ "windowMs": 3329,
+ "totalQueries": 68,
+ "totalMs": 69.41,
+ "bySql": {
+  "SELECT key, value FROM settings": {
+   "count": 23,
+   "ms": 23.96,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 23
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $1": {
+   "count": 22,
+   "ms": 22.37,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+   }
+  },
+  "SELECT * FROM users WHERE id = $1": {
+   "count": 22,
+   "ms": 18.73,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": {
+   "count": 1,
+   "ms": 4.35,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  }
+ },
+ "byFingerprint": {
+  "SELECT key, value FROM settings": {
+   "count": 23,
+   "ms": 23.96,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 23
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $?": {
+   "count": 22,
+   "ms": 22.37,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+   }
+  },
+  "SELECT * FROM users WHERE id = $?": {
+   "count": 22,
+   "ms": 18.73,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = ? ORDER BY id": {
+   "count": 1,
+   "ms": 4.35,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:196 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+ },
+ "driverCallsTotal": 68,
+ "driverSqls": {
+  "SELECT key, value FROM settings": 23,
+  "SELECT key, value FROM user_settings WHERE user_id = $1": 22,
+  "SELECT * FROM users WHERE id = $1": 22,
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:196 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+ }
+}
