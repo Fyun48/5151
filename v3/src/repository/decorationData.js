@@ -349,6 +349,33 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
     inflight: new Map(),
   };
   const keyOf = (ids) => [...new Set((ids || []).map(normalizeId).filter(Boolean))].sort((a, b) => a - b).join(",");
+  const textKeyOf = (keys) => [...new Set((keys || []).map((k) => String(k || "")).filter(Boolean))].sort().join("|");
+
+  /**
+   * 只對「缺少的字串 key」發查詢的列快取（`rowsByIds` 的字串 key 版）。
+   *
+   * 為什麼要改（2026-10-11 第三刀）：`routeCacheMap`／`mrtCacheMap`／`routeJobsMap` 原本以
+   * **整組 key 聯集**當 memo key ⇒ 「候選階段（近萬個 key）」與「頁面階段（數十個 key，通常是
+   * 候選的子集）」各查一次，即使後者完全被前者涵蓋。改成以 key 為單位之後，第二次呼叫只查
+   * 「沒見過的 key」，子集情境下**零查詢**；語意不變（同一組 key 的每一列都取回同一份值，
+   * 缺列一律回 null，與舊行為相同）。
+   */
+  async function rowsByKeys(rows, keys, fetch, label) {
+    const missing = keys.filter((key) => !rows.has(key));
+    if (missing.length) {
+      const key = `${label}:${textKeyOf(missing)}`;
+      if (!cache.inflight.has(key)) {
+        const promise = (async () => {
+          const got = await fetch(missing);
+          for (const k of missing) rows.set(k, got.get(k) ?? null);
+        })();
+        cache.inflight.set(key, promise);
+        promise.then(() => cache.inflight.delete(key), () => cache.inflight.delete(key));
+      }
+      await cache.inflight.get(key);
+    }
+    return new Map(keys.map((key) => [key, rows.get(key) ?? null]));
+  }
 
   // 只對「缺少的 id」發查詢；回傳每個請求 id 都有值（可能 null）的 Map。
   async function rowsByIds(rows, ids, fetch, label) {
@@ -450,20 +477,17 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
     async routeCacheMap(keys) {
       const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
       if (!list.length) return new Map();
-      const map = await memo(cache.routeCache, list.join("|"), () => loadRouteCacheEntries(exec, list, driver));
-      return new Map(list.map((key) => [key, map.get(key) || null]));
+      return rowsByKeys(cache.routeCache, list, (miss) => loadRouteCacheEntries(exec, miss, driver), "routeCache");
     },
     async mrtCacheMap(keys) {
       const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
       if (!list.length) return new Map();
-      const map = await memo(cache.mrtCache, list.join("|"), () => loadMrtCacheEntries(exec, list, driver));
-      return new Map(list.map((key) => [key, map.get(key) || null]));
+      return rowsByKeys(cache.mrtCache, list, (miss) => loadMrtCacheEntries(exec, miss, driver), "mrtCache");
     },
     async routeJobsMap(keys) {
       const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))].sort();
       if (!list.length) return new Map();
-      const map = await memo(cache.routeJobs, list.join("|"), () => loadRouteJobs(exec, list, driver));
-      return new Map(list.map((key) => [key, map.get(key) || null]));
+      return rowsByKeys(cache.routeJobs, list, (miss) => loadRouteJobs(exec, miss, driver), "routeJobs");
     },
   };
 }

@@ -9,6 +9,7 @@ import { listingStatsAsync, loadPgListingStatsInputs } from './listingStatsAsync
 import { prepareStatsScope } from './repository/listingStats.js';
 import { prepareListScope } from './listingSearchNodePg.js';
 import { runScopeScan } from './listingScopeScan.js';
+import { createDecorationDataLoader } from './repository/decorationData.js';
 import { loadMemberListingPage, memberListingCacheEnabled } from './memberListingCachePg.js';
 
 /** 一趟掃描（A 方案）的開關；`MEMBER_LIST_ONEPASS=0` 可完全關掉（等價／A-B 證據用）。 */
@@ -88,6 +89,17 @@ async function computeListingPage(args = {}, driver = 'sqlite', options = {}) {
       ? await buildListRequestContextFromPg((sql,params=[])=>pgDriver.query(toPostgresSql(sql),params).then(r=>r.rows),{asOf:args.asOf,resolvedSearchKeys:args.searchKeys})
       : null;
     const common = {driver, pgDriver, requestContext};
+    // 第三刀（2026-10-11）：**一個請求一個裝飾資料載入器**。list 與 stats 兩條管線原本各自
+    // 建立自己的 loader ⇒ 個人旗標／路由快取／MRT／listing_prep 等輔助讀取同一份資料查兩次
+    //（同一條 SQL、同一組參數）。共用之後由 loader 的 per-id／per-key 快取吸收重疊集合，
+    // 回傳值逐字相同（同一份述詞與同一份列），只是少掉重複的往返。
+    const decorationLoader = driver === 'postgres'
+      ? createDecorationDataLoader({
+        exec: (sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then(r => r.rows),
+        driver: 'postgres',
+      })
+      : null;
+    if (decorationLoader) common.decorationLoader = decorationLoader;
     const statsDetails={};
     const statsArgs={searchKeys:args.searchKeys,userId:args.userId,
       settings:args.settings,asOf:args.asOf,diagnostics:statsDetails};

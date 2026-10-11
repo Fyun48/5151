@@ -1,0 +1,74 @@
+-- 005_member_listing_aux_indexes.sql
+--
+-- 目的：把會員列表路徑（`GET /api/listings`）**每請求一次的全域統計**裡，唯一還需要新索引的
+--       那一條收進可重跑的遷移路徑（第三刀，2026-10-11）。
+--
+-- 背景（隔離量測庫 repro 實測，`EXPLAIN (ANALYZE, BUFFERS)`、`SET jit = off`，同參數同資料）：
+--
+--   `stats.loadInputs` 的離線計數（`v3/src/repository/listingStats.js` 的 statusRow）：
+--     SELECT SUM(CASE WHEN COALESCE(offline,0) != 0 AND COALESCE(offline_confirmed,0) = 0 THEN 1 ELSE 0 END) AS pending,
+--            SUM(CASE WHEN COALESCE(offline,0) != 0 AND COALESCE(offline_confirmed,0) != 0 THEN 1 ELSE 0 END) AS confirmed
+--       FROM listings WHERE <searchWhere＋可見性述詞> AND COALESCE(offline, 0) != 0
+--
+--   舊計畫（warm，同一份參數重跑三次取穩定值）：
+--     Bitmap Heap Scan on listings
+--       -> BitmapAnd
+--            -> Bitmap Index Scan on idx_listings_offline_counts   （2,109 列都在這裡）
+--            -> BitmapOr
+--                 -> Bitmap Index Scan on idx_listings_search      （184,460 個 TID、1.8MB 的索引）
+--                 -> Bitmap Index Scan on idx_listings_self
+--     Execution Time: 15.4–16.1 ms／request、Buffers: shared hit=2242
+--
+--   為什麼 planner 會去動 `idx_listings_search`：`idx_listings_offline_counts` 的**選擇率估計**
+--   與實際差距太大（估計 rows=183,308、實際 2,109，87 倍），planner 因此再拿 search_key 的
+--   bitmap 來「縮小」集合。實際上 `COALESCE(offline,0) <> 0` 只有 2,109 列（`pg_stats`：
+--   offline=1 的頻率 1.18%），這條查詢不需要那顆 1.8MB 索引。
+--
+--   下面的部分索引把「offline <> 0」這 2,109 列單獨索引起來（與 `idx_listings_offline_counts`
+--   同一組列，但帶上這條查詢會用到的欄位），讓 planner 只用它就能滿足述詞：
+--     新計畫：Bitmap Heap Scan on listings
+--               -> BitmapOr
+--                    -> Bitmap Index Scan on idx_listings_offline_search   ← 本檔第 1 顆
+--                    -> Bitmap Index Scan on idx_listings_self
+--     Execution Time（`v3/scripts/member-list-aux-index-probe.mjs --json …`，同一支腳本可重跑）
+--     ① baseline              15.4 ms  Buffers: shared hit=2242（BitmapAnd 動到 idx_listings_search）
+--     ② 只有 (search_key)      4.7–7.4 ms
+--     ③ 本檔採用的覆蓋版本      4.6–4.8 ms  Buffers: shared hit=2018–2020
+--     ⇒ **15.4ms → 4.6ms（約 3.3x）**、同一組參數、同一份資料、Buffer 命中數幾乎相同。
+--
+--   為什麼第 1 欄是 `search_key`：述詞裡的 `search_key IN (…39 個 URL…) OR source = 'self'`
+--   本身就是這條查詢的一部分，把它放進索引讓 planner 不必再開 `idx_listings_search`
+--   （那顆索引含 184,460 個 TID、1.8MB，就是舊計畫多花時間的地方）。
+--   其餘欄位（source／self_status／self_expires_at／fixture_namespace／offline_confirmed）
+--   是述詞裡的 FILTER 條件，放進來讓 planner 有機會走 index-only 或減少回表寬度。
+--
+--   驗證方式（必須看到 `Bitmap Index Scan on idx_listings_offline_search`，且不得出現
+--   `idx_listings_search`／`BitmapAnd`）：
+--     EXPLAIN (ANALYZE, BUFFERS)
+--     SELECT SUM(CASE WHEN COALESCE(offline,0) != 0 AND COALESCE(offline_confirmed,0) = 0 THEN 1 ELSE 0 END)
+--       FROM listings WHERE COALESCE(offline, 0) != 0;
+--   （完整述詞需要請求脈絡；上面的簡化版足以確認 planner 採用本索引。）
+--
+-- 套用方式（單一環境一次，可在連線中的庫上跑）：
+--   docker exec -i <pg 容器> psql -X -w -U postgres -d <db> -v ON_ERROR_STOP=1 \
+--     < v3/migrations/005_member_listing_aux_indexes.sql
+--
+-- 本檔可重複執行（IF NOT EXISTS），不需要明確交易。
+-- 刻意使用 CONCURRENTLY：建立期間不阻擋 crawler 的寫入。
+-- 注意：CONCURRENTLY 不能在 BEGIN/COMMIT 區塊內執行，psql 請勿加 --single-transaction。
+--
+-- ⚠️ CONCURRENTLY 的陷阱（與 002／004 同）：建置失敗會留下 INVALID 索引，而 `IF NOT EXISTS`
+--    之後不會重建它（名字已存在）。套用後必須檢查 `indisvalid`：
+--      SELECT c.relname, i.indisvalid
+--        FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+--       WHERE c.relname = 'idx_listings_offline_search';
+--    必須是 `indisvalid = true`；若為 false，先 DROP INDEX 再重跑本檔。
+--
+-- ⚠️ 維護規則：索引的**部分述詞**必須與查詢逐字對應（`COALESCE(offline, 0) <> 0`）。
+--    改動 `repository/listingStats.js` 的 statusWhere 述詞時要一起檢查。
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_listings_offline_search
+  ON listings (search_key, source, self_status, self_expires_at, fixture_namespace, offline_confirmed)
+  WHERE COALESCE(offline, 0) <> 0;
+
+ANALYZE listings;

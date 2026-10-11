@@ -1,0 +1,161 @@
+{
+  "generatedAt": "2026-10-11T16:21:37.492Z",
+  "params": 40,
+  "cases": [
+    {
+      "label": "① baseline（現行計畫）",
+      "runs": [
+        {
+          "execMs": 19.494,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapAnd",
+            "Bitmap Index Scan on idx_listings_offline_counts",
+            "BitmapOr",
+            "Bitmap Index Scan on idx_listings_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=1364 read=878"
+        },
+        {
+          "execMs": 15.124,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapAnd",
+            "Bitmap Index Scan on idx_listings_offline_counts",
+            "BitmapOr",
+            "Bitmap Index Scan on idx_listings_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2242"
+        },
+        {
+          "execMs": 15.437,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapAnd",
+            "Bitmap Index Scan on idx_listings_offline_counts",
+            "BitmapOr",
+            "Bitmap Index Scan on idx_listings_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2242"
+        }
+      ],
+      "warm": {
+        "execMs": 15.437,
+        "planNodes": [
+          "Bitmap Heap Scan on listings",
+          "BitmapAnd",
+          "Bitmap Index Scan on idx_listings_offline_counts",
+          "BitmapOr",
+          "Bitmap Index Scan on idx_listings_search",
+          "Bitmap Index Scan on idx_listings_self",
+          "Seq Scan on listing_prep p"
+        ],
+        "buffers": "Buffers: shared hit=2242"
+      }
+    },
+    {
+      "label": "② 部分索引 (search_key) WHERE COALESCE(offline,0) <> 0",
+      "runs": [
+        {
+          "execMs": 8.197,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2002 read=16"
+        },
+        {
+          "execMs": 5.445,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2018"
+        },
+        {
+          "execMs": 7.403,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_search",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2018"
+        }
+      ],
+      "warm": {
+        "execMs": 7.403,
+        "planNodes": [
+          "Bitmap Heap Scan on listings",
+          "BitmapOr",
+          "Bitmap Index Scan on probe_offline_search",
+          "Bitmap Index Scan on idx_listings_self",
+          "Seq Scan on listing_prep p"
+        ],
+        "buffers": "Buffers: shared hit=2018"
+      }
+    },
+    {
+      "label": "③ 部分覆蓋索引 (search_key, source, self_status, self_expires_at, fixture_namespace, offline_confirmed) WHERE COALESCE(offline,0) <> 0",
+      "runs": [
+        {
+          "execMs": 4.541,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_cover",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2015 read=5"
+        },
+        {
+          "execMs": 4.792,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_cover",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2020"
+        },
+        {
+          "execMs": 4.775,
+          "planNodes": [
+            "Bitmap Heap Scan on listings",
+            "BitmapOr",
+            "Bitmap Index Scan on probe_offline_cover",
+            "Bitmap Index Scan on idx_listings_self",
+            "Seq Scan on listing_prep p"
+          ],
+          "buffers": "Buffers: shared hit=2020"
+        }
+      ],
+      "warm": {
+        "execMs": 4.775,
+        "planNodes": [
+          "Bitmap Heap Scan on listings",
+          "BitmapOr",
+          "Bitmap Index Scan on probe_offline_cover",
+          "Bitmap Index Scan on idx_listings_self",
+          "Seq Scan on listing_prep p"
+        ],
+        "buffers": "Buffers: shared hit=2020"
+      }
+    }
+  ]
+}

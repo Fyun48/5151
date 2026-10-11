@@ -93,6 +93,12 @@ async function countWatchedListings(runOne, uid) {
 //
 // fail-soft 契約與 db.js 同款：`data_revision` 不存在、是空表（MAX(id) IS NULL）或查詢失敗時
 // **一律不緩存**、每次現讀 —— 沒有可靠版本號就不做跨請求快取，避免把第一個請求的答案沿用下去。
+//
+// ⚠️ 2026-10-11 第三刀（P2）評估過 planner 的 (c)「≤60 秒 TTL」並**實作後撤回**：
+//   `v3/test/listing-stats-product-count.test.js:61`（「同一個 data_revision 只 COUNT 一次，
+//   換代後重算」）明確要求「revision 換代就必須重算」，而正式庫的爬蟲讓 revision **每個請求都在
+//   前進** ⇒ 任何 TTL 都會讓「換代就重算」失效。放寬這條契約屬於產品決策（見證據包 §4 待裁決點 2），
+//   不是實作細節，所以在拿到裁決前維持原本的版本號語意。
 let pgProductCountCache = { revision: null, isolation: null, count: null };
 
 /** 測試／寫入端需要主動失效時用（與 db.js 的 resetStoredSearchKeysFromPg 同形狀）。 */
@@ -189,7 +195,7 @@ export function createListingStatsRepository({
      * flag map they get overlaid with), the offline counters, the watch quota, the
      * product-visible total and the failed route jobs.
      */
-    async loadInputs({ searchKeys, userId, settings: settingsOverride, diagnostics, requestContext: providedContext = null, asOf = null, scope: providedScope = null, scopeRows = null } = {}) {
+    async loadInputs({ searchKeys, userId, settings: settingsOverride, diagnostics, requestContext: providedContext = null, asOf = null, scope: providedScope = null, scopeRows = null, loader = null } = {}) {
       let stageStarted = performance.now();
       const markStage = name => {
         const now = performance.now();
@@ -222,7 +228,10 @@ export function createListingStatsRepository({
       markStage("candidates_ms");
       const rows = await runStepsAsync(transformChunks(raw || [], chunk => chunk.map(normalizeStatsCandidateRow)), {label:"stats.normalize"});
       markStage("normalize_ms");
-      const flagMap = await loadPersonalFlagMap(run, uid);
+      // 第三刀（2026-10-11）：同一個請求的 list 管線已經載過同一份個人旗標時沿用它的載入器
+      //（同一條 SQL、同一組參數、同一個請求）⇒ 這一段不再多一次往返。沒有共用載入器時
+      // 逐字走原本的 `loadPersonalFlagMap`。
+      const flagMap = loader ? await loader.personalFlagMap(uid) : await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);
       const dbTotal = await countProductListings(runOne, requestContext);
       const failedRouteJobs = new Set(
