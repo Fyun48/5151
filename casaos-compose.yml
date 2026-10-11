@@ -24,8 +24,10 @@ services:
       PG_URL: ${PG_URL:-}
       # 正式部署（DB_DRIVER=postgres）一律 strict：讀寫都不回退本機 SQLite。
       PG_SQLITE_FALLBACK: ${PG_SQLITE_FALLBACK:-strict}
-      # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）；預設 0＝不影響現行行為。
-      PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-0}
+      # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）。預設 1：缺這行的新機器／手動重建
+      # 一律預設安全（不再默默降 0、然後被 runtimeGuards 第④刀拒絕啟動）。
+      # 唯一例外是爬蟲沙盒（docker-compose.crawl-sandbox.yml 維持 0，原因見 runtimeGuards.js 第④刀）。
+      PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-1}
     volumes:
       - /DATA/AppData/591-tracker-v3:/data
       - /DATA/AppData/591-tracker:/v1-data:ro

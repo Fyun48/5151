@@ -478,6 +478,12 @@ before(async () => {
       DB_DRIVER: "postgres",
       PG_URL: RAW,
       APP_ROLE: "web",
+      // 正式語意（P5b 第④⑤刀）：`runtimeGuards.assertRuntimeDbGuard()`（server.js:5450 呼叫）
+      // 對「有 PG 連線 env」的行程要求閘開＋只准 strict，否則直接拒絕啟動。
+      // 這裡**照正式規格起服務**（不是關守衛：不放 DB_RUNTIME_GUARD=off），
+      // 所以本檔驗到的就是正式站會跑的那條路徑（開閘後同步 SQLite handle 碰了就拋）。
+      PG_NO_SQLITE_OPEN: "1",
+      PG_SQLITE_FALLBACK: "strict",
       AUTH_EMAIL: ADMIN_EMAIL,
       AUTH_PASSWORD: ADMIN_PASS,
     },

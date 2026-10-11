@@ -57,7 +57,7 @@ function mockFetch(pages, images = {}) {
   };
 }
 
-test("live PG：匯入列與草稿都落在 PG（本機鏡射跟上），照片進 PG 素材庫", { skip }, async (t) => {
+test("live PG：匯入列與草稿都落在 PG（本機不得被寫），照片進 PG 素材庫", { skip }, async (t) => {
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
   const { toPostgresSql } = await import("../src/sqlDialect.js");
   const asyncMod = await import("../src/listingImportAsync.js");
@@ -127,10 +127,18 @@ test("live PG：匯入列與草稿都落在 PG（本機鏡射跟上），照片�
   for (const url of photos) assert.ok([...keys].some((k) => String(url).includes(k)), `照片 URL 要指向 PG 的 storage_key：${url}`);
   assert.equal(row.listing.post_id, Number(drafts[0].post_id), "回傳的 listing 要是 PG 那一列");
 
-  // 本機鏡射（與第四十七／四十八／八十三批同一個紀律）：PG 是權威，本機那一份是給
-  // 「還沒搬完的同步讀者」看的，失敗不影響結果——所以這裡驗它**有**跟上，而不是沒有寫。
-  const mirrored = local.prepare("SELECT id, status FROM listing_import WHERE user_id = ?").get(userId);
-  assert.ok(mirrored, "本機要有鏡射列");
-  assert.equal(Number(mirrored.id), Number(imports[0].id), "鏡射要用 PG 配到的 id");
-  assert.equal(mirrored.status, "ready_for_review");
+  // P5b：本機鏡射**兩邊都不得再有**——`listing_import` 那一列隨本包刪掉
+  // `listingImportAsync.mirrorLocal` 而消失；草稿列（`listings`）隨 P5a／#704
+  // （`selfListingsAsync.insertImportedDraftListingAsync()` 的鏡射）刪除。PG 是唯一權威。
+  // 斷言紀律與 `listing-import-start-async.test.js`（本機 `listing_import` 與本機草稿都＝0）一致。
+  // 舊斷言（本檔原 :132-135）驗的是「本機要有鏡射列、id 要等於 PG 配到的 id、status 要跟上」，
+  // 那個期望描述的是**已移除的舊世界**，是 #703 CI 的第二個紅點。
+  assert.equal(
+    local.prepare("SELECT COUNT(*) AS n FROM listing_import WHERE user_id = ?").get(userId).n, 0,
+    "本機不得再有 listing_import 鏡射列（mirrorLocal 已刪）",
+  );
+  assert.equal(
+    local.prepare("SELECT COUNT(*) AS n FROM listings WHERE listed_by_user_id = ?").get(userId).n, 0,
+    "草稿也不得再鏡射到本機（P5a 已刪草稿鏡射）",
+  );
 });
