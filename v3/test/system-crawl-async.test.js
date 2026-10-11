@@ -12,11 +12,13 @@
 //   1. **只套用有給的欄位**：`PUT /api/admin/system-crawl` 的 partial patch 規則（五個鍵各自
 //      判斷）最容易被寫成「整包覆蓋」——那會讓後台只切一個開關就把其他設定洗掉。
 //   2. **後台改完要對爬蟲生效**：`systemCrawlFromRows()` 還有**同步**讀者
-//      （爬蟲角色的 `crawlIntervalMinutes()`、`getSettings()` 的 system 區塊），
-//      所以 PG 寫完本機也要寫同一組值，而且本機的會員設定記憶體快取要清掉。
+//      （爬蟲角色的 `crawlIntervalMinutes()`、`getSettings()` 的 system 區塊）。
+//      ⚠️ SQLite 退場 P3（2026-10-10）：本來「PG 寫完本機也要寫同一組值」，但開閘
+//      （`PG_NO_SQLITE_OPEN=1`）時那句鏡射會直接拋錯 ⇒ PG 已寫成功、使用者收到失敗。
+//      鏡射已移除，PG 是唯一權威來源；本機的會員設定記憶體快取（`forgetSettings()`）仍然要清。
 //   3. **目錄快照兩個 driver 要一致**：`buildSiteCatalogSnapshot()` 是共用的純函式，
-//      但「列出」的來源不同（PG vs 本機），而且快照本身要寫進 `settings.siteCatalogStats`
-//      （同步的 `readSiteCatalogStats()` 是 adminOverview 的來源健康度在用）。
+//      但「列出」的來源不同（PG vs 本機）。快照原本也鏡射進本機 `settings.siteCatalogStats`
+//      （同步的 `readSiteCatalogStats()` 在用），P3 一併移除；那個同步讀者由另一包改成 PG async 讀。
 //   4. **`IFNULL` 是 SQLite 專屬**：後台刊登搜尋的 LIKE 那一段原本用 `IFNULL(address, '')`，
 //      PG 沒有這個函式 ⇒ 共用常數改成 `COALESCE`（兩邊都有、行為相同）。
 //   5. **旗標來源**：分享頁的 extras 是純函式，但旗標要來自 PG 的 settings。
@@ -183,7 +185,7 @@ test("系統爬蟲設定：讀取（預設值／已存值）兩個 driver 相同
   assert.ok(Array.isArray(asyncView.cities), "cities 也要在（後台下拉選單用）");
 });
 
-test("系統爬蟲設定：partial patch 只覆蓋有給的鍵，而且兩個 store 都要寫", async () => {
+test("系統爬蟲設定：partial patch 只覆蓋有給的鍵；只寫 PG（不再鏡射本機）", async () => {
   const [disk, exec] = resetBoth((h) => {
     setSetting(h, "systemWatchDistricts", ["1-5"]);
     setSetting(h, "systemCrawlIntervalMinutes", 45);
@@ -191,26 +193,35 @@ test("系統爬蟲設定：partial patch 只覆蓋有給的鍵，而且兩個 st
   });
   seedListing(disk, { id: 800010, sourceKey: "1-5" });
   seedListing(exec.raw, { id: 800010, sourceKey: "1-5" });
+  // SQLite 退場 P3：本機那一組值**不得再被鏡射寫入**，所以先記下來、之後逐鍵比對沒被動到。
+  const localKeys = ["systemCrawlIntervalMinutes", "systemWatchDistricts", "systemShowMrt", "siteCatalogStats"];
+  const localBefore = Object.fromEntries(localKeys.map((key) => [key, settingValue(disk, key)]));
 
   // 只改一個鍵
   const asyncView = plain(await asyncContent.saveSystemCrawlAsync({ intervalMinutes: 90 }, { ...PG, exec, strict: true }));
   assert.equal(asyncView.intervalMinutes, 90, "給的鍵要生效");
   assert.deepEqual(asyncView.watchDistricts, ["1-5"], "沒給的鍵不得被洗掉");
   assert.equal(asyncView.showMrt, true, "沒給的布林鍵也不得被洗掉");
-  // PG 與本機都要有同一組值（爬蟲是讀本機的）
   for (const [key, expected] of [["systemCrawlIntervalMinutes", 90], ["systemWatchDistricts", ["1-5"]], ["systemShowMrt", true]]) {
     assert.equal(settingValue(exec.raw, key), JSON.stringify(expected), `PG 的 ${key} 必須是 ${JSON.stringify(expected)}`);
-    assert.equal(settingValue(disk, key), JSON.stringify(expected), `本機的 ${key} 必須追上`);
   }
-  // 目錄快照也要寫（PG ＋ 本機）
+  // 原本這裡斷言「本機的 ${key} 必須追上」（PG 寫完再 upsert 一次節點本機的 `settings`）。
+  // 正式站三隻都開著 `PG_NO_SQLITE_OPEN=1` ⇒ 那句鏡射會直接拋錯（PG 已寫成功、呼叫端卻收到失敗）。
+  // 方向是 PG 唯一權威來源，所以改斷言本機那一組值**不得被動到**。
+  for (const key of localKeys) {
+    assert.equal(settingValue(disk, key), localBefore[key], `本機的 ${key} 不得再被鏡射寫入`);
+  }
+  assert.equal(localBefore.systemCrawlIntervalMinutes, "45", "種子值是 45：若本機被鏡射就會變 90，這條才有鑑別力");
+  // 目錄快照只寫 PG
   const pgSnap = JSON.parse(settingValue(exec.raw, "siteCatalogStats"));
   assert.ok(pgSnap && typeof pgSnap.total === "number", "PG 上必須有目錄快照");
   assert.deepEqual(plain(asyncView.catalog), pgSnap, "回傳的 catalog 必須就是落地的那一份");
-  assert.deepEqual(JSON.parse(settingValue(disk, "siteCatalogStats")), pgSnap, "本機也要有同一份快照");
+  assert.equal(settingValue(disk, "siteCatalogStats"), undefined, "本機不得再寫目錄快照");
   // 布林鍵也要能單獨關掉（`showMrt:false` 是「有給」而不是「沒給」）
   const off = plain(await asyncContent.saveSystemCrawlAsync({ showMrt: false }, { ...PG, exec, strict: true }));
   assert.equal(off.showMrt, false, "明確給 false 要生效（不能被當成沒給）");
   assert.equal(settingValue(exec.raw, "systemShowMrt"), "false");
+  assert.equal(settingValue(disk, "systemShowMrt"), localBefore.systemShowMrt, "本機的 showMrt 也不得被動到");
 });
 
 test("目錄快照：只算監看區裡的刊登，來源分佈與標籤都要相同", async () => {

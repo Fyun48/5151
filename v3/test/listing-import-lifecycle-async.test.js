@@ -164,7 +164,7 @@ test("讀取：公開形狀逐鍵相同（含巢狀 listing 與 photos）", asyn
   }
 });
 
-test("修改：標題與內容會淨化，草稿同步更新，兩個 store 都寫", async () => {
+test("修改：標題與內容會淨化，草稿同步更新；匯入列只寫 PG（不再鏡射本機）", async () => {
   const [disk, exec] = resetBoth((h) => {
     seedDraft(h);
     seedImport(h);
@@ -178,11 +178,16 @@ test("修改：標題與內容會淨化，草稿同步更新，兩個 store 都�
   seedUsers(disk);
   seedDraft(disk);
   seedImport(disk);
+  const localBefore = plain(importRow(disk));
 
   const asyncView = plain(await asyncMod.reviewListingImportAsync(OWNER, IMPORT_ID, input, { ...PG, exec, strict: true }));
   assert.deepEqual(asyncView, syncView, "回傳的公開形狀必須相同");
   assert.deepEqual(plain(importRow(exec.raw)), plain(syncImport), "PG 上的匯入列必須相同");
-  assert.deepEqual(plain(importRow(disk)), plain(syncImport), "本機的匯入列也要追上");
+  // SQLite 退場 P3：這條原本斷言「本機的匯入列也要追上」（PG 寫完再鏡射一次節點本機的
+  // `listing_import`）。正式站三隻都開著 `PG_NO_SQLITE_OPEN=1` ⇒ 那句鏡射會直接拋
+  // 「business SQLite is closed」，PG 明明寫成功、使用者卻收到失敗。方向是 PG 唯一權威來源，
+  // 所以現在改斷言本機那一列**不得被動到**（開閘時任何觸碰都會拋，這裡用「內容不變」等價證明）。
+  assert.deepEqual(plain(importRow(disk)), localBefore, "本機的匯入列不得再被鏡射寫入");
   assert.deepEqual(plain(draftRow(exec.raw)), plain(syncDraft), "PG 上的草稿必須相同");
   assert.deepEqual(plain(draftRow(disk)), plain(syncDraft), "本機的草稿也要追上（同步瀏覽路徑讀它）");
   assert.equal(asyncView.imported_title, "新的匯入標題", "標題要 trim（否則這條測試沒有鑑別力）");
@@ -210,7 +215,7 @@ test("修改：狀態不是 ready_for_review、不是自己的，錯誤形狀都
   assert.equal(syncMod.IMPORT_STATUSES.CONFIRMED, "confirmed");
 });
 
-test("取消：匯入變 cancelled、草稿變 cancelled，而且兩個 store 都寫", async () => {
+test("取消：匯入變 cancelled、草稿變 cancelled；匯入列只寫 PG（草稿仍兩個 store 都寫）", async () => {
   const [disk, exec] = resetBoth((h) => {
     seedDraft(h);
     seedImport(h, { mediaIds: [] });
@@ -223,11 +228,14 @@ test("取消：匯入變 cancelled、草稿變 cancelled，而且兩個 store �
   seedUsers(disk);
   seedDraft(disk);
   seedImport(disk, { mediaIds: [] });
+  const localBefore = plain(importRow(disk));
 
   const result = plain(await asyncMod.cancelListingImportAsync(OWNER, IMPORT_ID, { ...PG, exec, strict: true, now: NOW }));
   assert.deepEqual(result, syncResult, "回傳值必須相同");
   assert.deepEqual(plain(importRow(exec.raw)), plain(syncImport), "PG 上的匯入狀態必須相同");
-  assert.deepEqual(plain(importRow(disk)), plain(syncImport), "本機的匯入狀態也要追上");
+  // SQLite 退場 P3：原本斷言「本機的匯入狀態也要追上」；開閘時那句鏡射會拋錯
+  // （PG 已取消、使用者卻收到失敗），現在改斷言本機那一列不得被動到。
+  assert.deepEqual(plain(importRow(disk)), localBefore, "本機的匯入列不得再被鏡射寫入");
   assert.equal(importRow(exec.raw).status, "cancelled");
   assert.deepEqual(plain(draftRow(exec.raw)), plain(syncDraft), "PG 上的草稿狀態必須相同");
   assert.deepEqual(plain(draftRow(disk)), plain(syncDraft), "本機的草稿也要追上");

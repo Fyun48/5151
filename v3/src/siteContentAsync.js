@@ -20,7 +20,6 @@ import {
   SYSTEM_CRAWL_SETTING_KEYS,
   SITE_CATALOG_ROWS_SQL,
   SITE_CATALOG_STATS_KEY,
-  SETTINGS_UPSERT_SQL,
   buildSiteCatalogSnapshot,
   forgetSettings,
   getSystemCrawl as getSystemCrawlSync,
@@ -28,7 +27,6 @@ import {
   systemCrawlFromRows,
   normalizeSystemCrawlPatch,
   saveSystemCrawl as saveSystemCrawlSync,
-  sqliteHandle,
 } from "./db.js";
 import {
   getCommsConfig as getCommsConfigSync,
@@ -235,9 +233,11 @@ async function refreshSiteCatalogStatsPg(options, system) {
   const exec = await pgExec(options);
   const rows = await exec(SITE_CATALOG_ROWS_SQL, []);
   const snapshot = buildSiteCatalogSnapshot(rows, system);
+  // SQLite 退場 P3：原本緊接著還會 upsert 一次節點本機的 `settings.siteCatalogStats`
+  // （註解寫的同步讀者 `readSiteCatalogStats()` 已由另一包改成 PG async 讀），
+  // 但正式站三隻都開著 `PG_NO_SQLITE_OPEN=1` ⇒ 那句會直接拋錯，PG 寫成功、呼叫端卻收到失敗。
+  // 已移除，不做 try/catch 吞錯、也不留 `if (!PG_NO_SQLITE_OPEN)` 活口。
   await setSiteSettingAsync(SITE_CATALOG_STATS_KEY, snapshot, options);
-  // 本機追上：`readSiteCatalogStats()`（adminOverview 的來源健康度在用）是**同步**讀者。
-  sqliteHandle().prepare(SETTINGS_UPSERT_SQL).run(SITE_CATALOG_STATS_KEY, JSON.stringify(snapshot));
   return snapshot;
 }
 
@@ -253,11 +253,10 @@ export async function saveSystemCrawlAsync(partial = {}, options = {}) {
   for (const [key, value] of Object.entries(nextValues)) {
     await setSiteSettingAsync(key, value, options);
   }
-  // 本機追上（同一組值）＋ 清本機的會員設定快取（同步版也做這一步）。
-  const local = sqliteHandle();
-  for (const [key, value] of Object.entries(nextValues)) {
-    local.prepare(SETTINGS_UPSERT_SQL).run(key, JSON.stringify(value));
-  }
+  // SQLite 退場 P3：原本緊接著還會把同一組值 upsert 進節點本機的 `settings`
+  // （同步版的 `getSettings()`／爬蟲角色的 `crawlIntervalMinutes()` 讀的是本機那一份），
+  // 但正式站三隻都開著 `PG_NO_SQLITE_OPEN=1` ⇒ 那句會直接拋錯（PG 已寫成功、呼叫端卻收到失敗）。
+  // 已移除；`forgetSettings()`（清本機的會員設定記憶體快取）保留，因為它是純記憶體動作、不碰 handle。
   forgetSettings();
   const next = await getSystemCrawlAsync(options);
   next.catalog = await refreshSiteCatalogStatsPg(options, next);

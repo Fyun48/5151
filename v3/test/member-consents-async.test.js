@@ -338,6 +338,7 @@ test("匯入確認：寫入同意 ＋ 更新匯入列，三個聲明欄位都要
   const syncView = plain(dbMod.confirmListingImportFor(OTHER, IMPORT_ID + 1, good));
   const syncImport = importOf(disk, IMPORT_ID + 1);
   const syncConsents = consentRows(disk, OTHER);
+  const localImportBefore = plain(importOf(disk, IMPORT_ID));
 
   const asyncView = plain(await importsAsync.confirmListingImportAsync(USER, IMPORT_ID, good, { ...PG, exec, strict: true, now: NOW }));
   // `confirmed_at` 是「寫入當下」：同步版沒有注入點（用真的 now），PG 版用注入的 NOW
@@ -359,7 +360,9 @@ test("匯入確認：寫入同意 ＋ 更新匯入列，三個聲明欄位都要
   assert.equal(asyncView.confirmed_at, NOW, "PG 版要用注入的 now 蓋 confirmed_at");
   assert.equal(pick(asyncView).status, "confirmed");
   assert.deepEqual(plain(importOf(exec.raw, IMPORT_ID)), plain(syncImport), "PG 上的匯入列必須與同步版相同");
-  assert.deepEqual(plain(importOf(disk, IMPORT_ID)), plain(syncImport), "本機的匯入列也要追上");
+  // SQLite 退場 P3：原本斷言「本機的匯入列也要追上」；開閘（PG_NO_SQLITE_OPEN=1）時
+  // 那句鏡射會直接拋錯（同意紀錄已進 PG，使用者卻收到失敗），現在改斷言本機那一列不得被動到。
+  assert.deepEqual(plain(importOf(disk, IMPORT_ID)), localImportBefore, "本機的匯入列不得再被鏡射寫入");
   assert.deepEqual(plain(consentRows(exec.raw, USER)), plain(syncConsents), "PG 上的同意列必須與同步版相同");
   assert.equal(consentRows(exec.raw, USER)[0].source, "import", "來源必須是 import");
   assert.equal(importOf(exec.raw, IMPORT_ID).status, "confirmed");
