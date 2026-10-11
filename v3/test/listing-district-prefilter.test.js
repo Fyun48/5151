@@ -28,12 +28,13 @@ function withEnv(value, run) {
 }
 
 /** 假的 executor：只認得本模組會送出的三種查詢。 */
-function fakeExec({ revision = 7, missing = 0, mismatched = 0, ids = [{ post_id: 1 }, { post_id: 2 }], hasProjection = true } = {}) {
+function fakeExec({ revision = 7, missing = 0, mismatched = 0, ids = [{ post_id: 1 }, { post_id: 2 }], hasProjection = true, hasListings = true } = {}) {
   const calls = [];
   const exec = async (sql) => {
     calls.push(sql);
     if (/to_regclass\('data_revision'\)/.test(sql)) return [{ has_table: revision != null }];
     if (/MAX\(id\) AS n FROM data_revision/.test(sql)) return [{ n: revision }];
+    if (/to_regclass\('listings'\) IS NOT NULL/.test(sql)) return [{ ok: hasProjection && hasListings }];
     if (/to_regclass\('listing_search_projection'\)/.test(sql)) return [{ has_table: hasProjection }];
     if (/COUNT\(\*\) AS n FROM listings l WHERE NOT EXISTS/.test(sql)) return [{ n: missing }];
     if (/AS missing,/.test(sql) || /AS mismatched/.test(sql)) return [{ missing, mismatched }];

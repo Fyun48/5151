@@ -79,8 +79,15 @@ export async function districtProjectionVerified(exec, { districtNames = [], all
 
   let ok = false;
   try {
-    const hasTable = await one(`SELECT to_regclass('${TABLE}') IS NOT NULL AS has_table`);
-    if (hasTable?.has_table) {
+    // ⚠️ 先確認**兩個表都在**才發查詢。
+    // 為什麼非做不可：`listing-search-parity.test.js` 會把 `listings` 改名來模擬缺 schema；
+    // 若這一支在缺表時仍然送出 `FROM listings`，PG 會回 42P01 並讓**整個快照交易進入 aborted**，
+    // 後續真正的候選查詢就變成 25P02（current transaction is aborted），呼叫端再也拿不到
+    // 期待的 42P01 ⇒ 測試紅、而且真實環境的錯誤碼也會失真。
+    const hasTables = await one(
+      `SELECT to_regclass('listings') IS NOT NULL AND to_regclass('${TABLE}') IS NOT NULL AS ok`,
+    );
+    if (hasTables?.ok) {
       const prefix = districtKeyPrefixExpression("pg");
       const placeholders = (n, offset) => Array.from({ length: n }, (_, i) => `$${i + offset}`).join(",");
       const row = await one(
