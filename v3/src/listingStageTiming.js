@@ -5,12 +5,19 @@
 //
 // 契約（不得違反）：
 //   1. **只寫進 header**。payload 的內容與欄位集合必須逐字不變；`timing.stages`／
-//      `timing.stats_stages` 是既有欄位（這一層不新增、不修改），本模組只把它們**鏡射**成
-//      標準的 `Server-Timing` 度量。測試 `v3/test/listing-server-timing.test.js` 會固定住
+//      `timing.stats_stages` 是既有欄位（這一層不新增、不修改這兩個欄位本身），本模組只把它們
+//      **鏡射**成標準的 `Server-Timing` 度量。測試 `v3/test/listing-server-timing.test.js` 會固定住
 //      這件事（header 有值、JSON 沒有新鍵）。
 //   2. `list;dur` 與 `stats;dur` 的語意與數字**不變**（量測腳本 `member-perf.mjs` 與
 //      `member-list-benchmark.mjs` 都靠它們）。
 //   3. 未知／缺少的階段一律略過，不得輸出 `NaN`。
+//
+// 2026-10-12（會員讀待機路由包）**新增**一個階段度量 `scan;dur`（← `stats_stages.scan_ms`）：
+// `stats;dur`（＝`stats_ms`）一直是「scope 準備 ＋ 共趟掃描 ＋ 計數」的**總和**，而共趟掃描
+// 先前沒有任何獨立欄位 ⇒ 只看 `stats;dur` 會把掃描的成本誤讀成計數的成本（Owner 2026-10-12
+// 05:56 就是這樣被誤導的）。這裡以**新增鍵**的方式補上：`scan;dur` 只鏡射 `stats_ms` 裡本來
+// 就含著的那一段，**不從 `stats;dur` 扣除、也不併進 `stats_cand`**（`scan_ms` 刻意不出現在任何
+// 既有度量的鍵清單裡），所以 `list;dur`／`stats;dur`／`stats_cand;dur` 的數字逐字不變。
 
 /** 既有兩個總量度量（語意不得改變）。 */
 const TOTAL_METRICS = Object.freeze([
@@ -33,6 +40,9 @@ const STATS_STAGE_METRICS = Object.freeze([
   ["stats_cand", ["status_ms", "district_ms", "candidates_ms", "normalize_ms", "auxiliary_ms"]],
   ["stats_provider", ["provider_ms"]],
   ["stats_count", ["profile_sync_ms", "count_sync_ms", "reduce_ms", "profile_ms", "count_ms"]],
+  // 2026-10-12 新增的**獨立**階段（`stats;dur` 的總和裡本來就含著它，這裡只是讓它現身）。
+  // 不要把它加進上面的 `stats_cand`：那會改變既有度量的數字（契約 1／2）。
+  ["scan", ["scan_ms"]],
 ]);
 
 function numberOrNull(value) {

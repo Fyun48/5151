@@ -57,6 +57,10 @@ Synology (SYNOLOGY_HOST=192.168.0.220)
   兩台不一致，登入會隨機失效。所以一定要用 env 明確指定同一組。）
 - `DB_DRIVER=postgres` ＋ `PG_URL`：指向 HAProxy 的 **`pg-rw`（`25433`）**，寫入才會落到當下的 primary
   （`pg-ro 25434` 給唯讀用途）。`SESSION_SECRET` 兩台必須同一組。
+- `PG_RO_URL`（選填，**預設關閉**）：會員列表的唯讀快照改走 HAProxy 的 **`pg-ro`（`25434`）**。
+  未設＝行為與以前逐字相同（連待機池都不建立）；開閘／關閘就是加／刪這一個鍵
+  （web-A 範例 `…@192.168.0.140:25434/<db>`、web-B 範例 `…@192.168.0.220:25434/<db>`）。
+  開閘步驟、要看的指標與最壞後果：`docs/runbooks/member-read-replica-routing.md`。
 - `V3_IMAGE`：**digest pin**（`ghcr.io/fyun48/5151@sha256:…`），放在各節點目錄的 `.env`，
   由發版流程寫入；不要用 `:latest`（發版步驟會直接拒絕，比對 rendered image 與執行中容器的 Image）。
 - tunnel connector：目前只有 CasaOS 的 `5151-cloudflared-A`（**單點**，見上面的拓撲註記）。

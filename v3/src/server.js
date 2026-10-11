@@ -246,6 +246,8 @@ import {
 } from "./comms.js";
 import { renderSafeContent } from "./safeContent.js";
 import { adminEmail, clearSessionCookie, envAdminConfigured, readSession, requireAuth, resolveSession, sessionCookie, verifyLogin, verifyLoginAsync } from "./auth.js";
+// 會員自身狀態的寫入 → 路由提示（會員列表唯讀快照的待機路由用；見 memberWriteRecency.js）。
+import { memberWriteMiddleware } from "./memberWriteMiddleware.js";
 // 刊登生產力工具（說明範本／聯絡人）的 PG 島嶼入口。
 // `listingToolsMeta` 是**純函式**：上限只取決於 plan／role，而 session 已經每請求從 PG
 // 解析出來了，所以不必再 `getUserById()` 查一次 users（那正是這 10 條路由原本的 SQLite 卡點）。
@@ -751,6 +753,15 @@ app.use(express.json({
 // 而且要在 requireAuth 之前，讓 `readSession()` 一率讀到已解析的快取。
 // 這一條同時解掉「187 條路由的 session 讀的是節點本機 SQLite」這個步驟 3 的卡點。
 app.use(resolveSession());
+
+// 會員「寫後新鮮期」路由提示（2026-10-12 會員讀待機路由包）。
+// 這一條**不改任何回應**，只在「已回成功的寫入」之後記下 `uid → 時刻`；會員列表的唯讀快照
+// （`/api/listings`）據此在 5 秒內整趟走 primary，其餘走待機（`PG_RO_URL`）。
+// 掛在**所有** mutating 請求上（而不是逐條路由）是刻意的：會員自身狀態的寫入點很多
+// （`user_listing_flags`／`user_settings`／`user_same_house_members`／`user_match_votes`…），
+// 逐條掛一定會漏；漏掉的代價是「剛寫完看到舊的自己」（見 docs/runbooks/member-read-replica-routing.md），
+// 多記的代價只是多走一次 primary。未設 `PG_RO_URL` 時這條提示沒有任何作用。
+app.use(memberWriteMiddleware({ userIdOf: (req) => readSession(req)?.userId }));
 
 app.use((req, res, next) => {
   if (req.path === "/" || req.path.endsWith(".html")) {

@@ -6385,7 +6385,139 @@ const FIXTUREPHONE_MUTATIONS = [
   },
 ];
 
+// 會員列表「唯讀快照 → 待機節點」（2026-10-12 會員讀待機路由包）。
+// 每一條都對應 `v3/test/member-read-replica-routing.test.js` 裡的一個測試：這一包的失敗模式都很安靜
+// （沒開閘卻照走、fail-safe 變成半套、寫入守門失效、剛寫完看到舊的自己），所以逐條拿掉看測試會不會紅。
+const MEMBERREADREPLICA_MUTATIONS = [
+  {
+    name: "PG_RO_URL 未設也照走待機（開關形同虛設，且每請求多一次註定失敗的連線嘗試）",
+    file: "v3/src/pgReadReplica.js",
+    from: "  if (!memberReadSnapshot || !replicaConfigured) return SNAPSHOT_SOURCE_PRIMARY;",
+    to: "  if (!memberReadSnapshot) return SNAPSHOT_SOURCE_PRIMARY;",
+    expect: "PG_RO_URL 未設",
+  },
+  {
+    name: "寫後新鮮期提示失效（會員剛寫的狀態會看到舊的）",
+    file: "v3/src/pgReadReplica.js",
+    from: "  if (memberWriteFresh) return SNAPSHOT_SOURCE_PRIMARY;",
+    to: "  if (false) return SNAPSHOT_SOURCE_PRIMARY;",
+    expect: "剛寫過",
+  },
+  {
+    name: "待機複製衝突不重跑（直接把 40001 當失敗往外丟）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "    const code = standbyConflictCode(error);",
+    to: "    const code = \"\";",
+    expect: "重跑一次",
+  },
+  {
+    name: "任何錯誤都當成待機衝突重跑（掩蓋真正的錯誤）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "    if (!code) throw error;",
+    to: "    if (false) throw error;",
+    expect: "非衝突的錯誤",
+  },
+  {
+    name: "衝突錯誤不追 cause 鏈（被 list 管線包一層就認不得）",
+    file: "v3/src/pgReadReplica.js",
+    from: "    current = current.cause;",
+    to: "    current = null;",
+    expect: "cause 鏈",
+  },
+  {
+    name: "待機拿不到連線就讓整個請求失敗（fail-safe 退回 primary 失效）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "  } catch {\n    // 待機拿不到連線 ⇒ **整趟**退回 primary（router 已記一條可搜尋的 warning）。\n    // 絕對不可以改成「一部分讀 primary、一部分讀待機」：那會是同一個請求兩個快照。\n    router.noteRoute?.('primary');\n    return runSnapshotOn(await driver.pool.connect(), driver, run, memberReadSnapshot);\n  }",
+    to: "  } catch {\n    throw new Error('read replica unavailable');\n  }",
+    expect: "待機拿不到連線",
+  },
+  {
+    name: "唯讀快照的寫入守門關掉（寫入語句直接進待機／唯讀交易）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "  if (!memberReadSnapshot) return null;",
+    to: "  if (true) return null;",
+    expect: "寫入語句進入會員唯讀快照",
+  },
+  {
+    name: "守門放行鎖定讀取（SELECT … FOR UPDATE 也是寫入意圖）",
+    file: "v3/src/pgReadSnapshot.js",
+    from: "  if ((keyword === \"SELECT\" || keyword === \"WITH\") && LOCKING_READ.test(String(typeof sql === \"string\" ? sql : (sql?.text ?? \"\")))) {\n    throw new ReadOnlySnapshotViolationError(sql);\n  }",
+    to: "",
+    expect: "守門清單",
+  },
+  {
+    name: "寫後新鮮期窗口失效（過期仍算新鮮 ⇒ 提示永遠有效）",
+    file: "v3/src/memberWriteRecency.js",
+    from: "      if (now() - at < ms) return true;",
+    to: "      if (true) return true;",
+    expect: "寫後新鮮期",
+  },
+  {
+    name: "失敗的寫入（4xx）也記提示",
+    file: "v3/src/memberWriteMiddleware.js",
+    from: "      if (res.statusCode >= 400) return;",
+    to: "",
+    expect: "memberWriteMiddleware",
+  },
+  {
+    name: "唯讀請求（GET）也記提示（提示表會被所有讀取灌爆）",
+    file: "v3/src/memberWriteMiddleware.js",
+    from: "    if (method === \"GET\" || method === \"HEAD\" || method === \"OPTIONS\") return next();",
+    to: "    if (false) return next();",
+    expect: "memberWriteMiddleware",
+  },
+  {
+    name: "會員列表快照沒把 memberReadSnapshot 傳下去（開閘無效）",
+    file: "v3/src/listingSearchPage.js",
+    from: "      memberReadSnapshot: true,\n      userId: Number(args.userId) || 0,",
+    to: "      userId: Number(args.userId) || 0,",
+    expect: "唯一允許 PG_RO_URL",
+  },
+];
+
+// B：共趟掃描的獨立階段 `scan;dur`（2026-10-12）。
+// 核心契約是「**只新增**」：新鍵現身，`list;dur`／`stats;dur`／`stats_cand;dur` 的數字一個都不准動。
+const LISTINGSTAGETIMING_MUTATIONS = [
+  {
+    name: "scan_ms 直接併進 stats_cand（既有度量的數字被改）",
+    file: "v3/src/listingStageTiming.js",
+    from: "  [\"stats_cand\", [\"status_ms\", \"district_ms\", \"candidates_ms\", \"normalize_ms\", \"auxiliary_ms\"]],",
+    to: "  [\"stats_cand\", [\"status_ms\", \"district_ms\", \"candidates_ms\", \"normalize_ms\", \"auxiliary_ms\", \"scan_ms\"]],",
+    expect: "不得改變既有度量",
+  },
+  {
+    name: "scan_ms 一併併進 stats_count（既有度量的數字被改）",
+    file: "v3/src/listingStageTiming.js",
+    from: "  [\"stats_count\", [\"profile_sync_ms\", \"count_sync_ms\", \"reduce_ms\", \"profile_ms\", \"count_ms\"]],",
+    to: "  [\"stats_count\", [\"profile_sync_ms\", \"count_sync_ms\", \"reduce_ms\", \"profile_ms\", \"count_ms\", \"scan_ms\"]],",
+    expect: "不得改變既有度量",
+  },
+  {
+    name: "缺 scan_ms 時仍然輸出 scan;dur（NaN／null 的謊言）",
+    file: "v3/src/listingStageTiming.js",
+    from: "    if (dur != null) metrics.push({ name, dur });\n  }\n  return metrics;",
+    to: "    if (dur != null || name === \"scan\") metrics.push({ name, dur });\n  }\n  return metrics;",
+    expect: "缺席時不得輸出",
+  },
+  {
+    name: "共趟掃描不再記 scan_ms（新鍵消失）",
+    file: "v3/src/listingSearchPage.js",
+    from: "    statsArgs.diagnostics.scan_ms = Math.round(performance.now() - scanStarted);",
+    to: "",
+    expect: "來源護欄：共趟掃描只以新增鍵掃進 stats_stages",
+  },
+  {
+    name: "把掃描時間從 stats_ms 扣掉（stats;dur 的既有數字被改）",
+    file: "v3/src/listingSearchPage.js",
+    from: "stats_ms:statsPrepareMs+performance.now()-statsStarted",
+    to: "stats_ms:statsPrepareMs-scanStarted+performance.now()-statsStarted",
+    expect: "stats_ms 的算式",
+  },
+];
+
 const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATIONS
+  : /member-read-replica/.test(testFile) ? MEMBERREADREPLICA_MUTATIONS
+  : /listing-server-timing/.test(testFile) ? LISTINGSTAGETIMING_MUTATIONS
   : /stage1-fixture-readiness/.test(testFile) ? FIXTUREPHONE_MUTATIONS
   : /profile-async/.test(testFile) ? PROFILEASYNC_MUTATIONS
   : /source-history-async/.test(testFile) ? SRCHIST_MUTATIONS

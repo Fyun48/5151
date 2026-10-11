@@ -88,6 +88,8 @@ idempotency key 去重、以及 **standby 上可見同一 schema（串流複寫�
 | `PG_CONNECT_TIMEOUT_MS` | `5000` | 連線逾時 |
 | `PG_POOL_IDLE_MS` | `10000` | idle 回收 |
 | `PG_APPLICATION_NAME` | `5151-v3` | `application_name`（`pg_stat_activity` 可辨識） |
+| `PG_RO_URL` | 未設 | **會員列表唯讀快照的待機連線**（HAProxy 的 `pg_ro`，`25434`）；未設＝走原路。待機池的 `application_name` 是 `<PG_APPLICATION_NAME>-ro`。見 `docs/runbooks/member-read-replica-routing.md` |
+| `MEMBER_READ_FRESHNESS_MS` | `5000` | 會員剛寫過之後，其請求多久內整趟走 primary（只在設了 `PG_RO_URL` 時有作用） |
 | `PG_LISTINGS_UNDECORATED` | 未設 | `1` = 允許 PostgreSQL 回傳未裝飾的 listings（僅供遷移驗證） |
 
 連線字串**不會**出現在 `driver.config`（只有 host/port/db/user 與 `hasConnectionString`），

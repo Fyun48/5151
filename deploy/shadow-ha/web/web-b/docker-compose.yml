@@ -23,6 +23,14 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?shared across web nodes}
       DB_DRIVER: ${DB_DRIVER:-postgres}
       PG_URL: ${PG_URL:?postgres://…@<haproxy>:25433/<db>}
+      # 會員列表「唯讀快照」的待機節點（HAProxy 的 pg_ro，25434）。**開閘＝設這一個鍵**；
+      # 未設／留空＝行為與以前逐字相同（連待機池都不建立）。
+      # web-B 的 HAProxy 在這台上 ⇒ 範例：postgres://user:…@192.168.0.220:25434/5151_shadow
+      # 連不上待機時整趟退回上面的 PG_URL（不會混合兩個快照），並記 [pg-read] warning。
+      PG_RO_URL: ${PG_RO_URL:-}
+      # 可選（都有安全預設，不設就好）：PG_RO_RETRY_COOLDOWN_MS=3000、PG_RO_CONNECT_TIMEOUT_MS=2000、
+      # PG_RO_POOL_MAX=<同 PG_POOL_MAX>、MEMBER_READ_FRESHNESS_MS=5000。
+      # 細節與開閘步驟：docs/runbooks/member-read-replica-routing.md
       # 正式站一律 strict（讀寫都不回退本機 SQLite）；runtime guard 也會擋 PG_SQLITE_FALLBACK=open。
       PG_SQLITE_FALLBACK: ${PG_SQLITE_FALLBACK:-strict}
       # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）。預設 1：缺這行的新機器／手動重建

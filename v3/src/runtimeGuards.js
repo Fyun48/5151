@@ -37,7 +37,11 @@ export const MEMBER_LISTING_CACHE_ENV = "MEMBER_LISTING_CACHE";
 
 // 與 dbDriverPostgres.js 的 resolvePostgresConfig() 對齊：這些 env 只要有一個非空，
 // 就代表「有 PG 連線」，driver 必須解析成 postgres。
-const PG_URL_KEYS = ["PG_URL", "DATABASE_URL", "POSTGRES_URL"];
+//
+// 2026-10-12：加入 `PG_RO_URL`（會員列表唯讀快照的**待機**連線，實作見 pgReadReplica.js）。
+// 它是一條 PG 連線：設了卻沒有 `DB_DRIVER=postgres` 一定是設定錯誤（會靜默無效），
+// 所以依第一條 guard 的既有意圖大聲拒絕，不要讓它安靜地不做事。
+const PG_URL_KEYS = ["PG_URL", "DATABASE_URL", "POSTGRES_URL", "PG_RO_URL"];
 const PG_HOST_KEYS = ["PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"];
 
 function nonEmpty(env, key) {
