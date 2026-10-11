@@ -32,8 +32,8 @@ import {
   routeScanPlanAsync,
   sqliteHandle,
 } from "./db.js";
-import { getListingAsync } from "./listingDetailAsync.js";
 import { sqliteHandleIsUsable } from "./sqliteHandle.js";
+import { getListingAsync } from "./listingDetailAsync.js";
 import { findBySourceKey as findBySourceKeyRepo, listMatchCandidates as listMatchCandidatesRepo } from "./repository/listingReads.js";
 import {
   select591GeoCandidates,
@@ -68,6 +68,7 @@ async function scan(options, runPostgres, runSqlite) {
     const deps = options.deps || crawlerReadsBuildContext();
     return await runPostgres(exec, deps);
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return runSqlite();
   }
@@ -146,6 +147,7 @@ export async function watchSiblings(sourceKey, excludePostId, options = {}) {
     const exec = await postgresExec(options);
     return await findBySourceKeyRepo(exec, { sourceKey, excludePostId });
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return findBySourceKeySync(sourceKey, excludePostId);
   }
@@ -256,6 +258,7 @@ export async function needingRouteAsync({ limit = 40, priorityIds = [], cursor }
     needingRouteAsync.lastCursor = result.cursor;
     return result.rows;
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     // 開閘（沒有可用的本機 handle）時不回退同步掃描：回退只會把根源的 PG 錯誤蓋成
     // 「business SQLite is closed」（`demandAsync.js:188` 同一個慣例）。
@@ -280,6 +283,7 @@ export async function matchCandidatesAsync(excludePostId, incoming = null, optio
     const deps = options.deps || crawlerReadsBuildContext();
     return await listMatchCandidatesRepo(exec, { deps, excludePostId, incoming });
   } catch (error) {
+    if (!sqliteHandleIsUsable(sqliteHandle())) throw error;
     if (options.strict) throw error;
     return listMatchCandidates(excludePostId, incoming);
   }

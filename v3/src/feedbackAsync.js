@@ -38,6 +38,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
+import { sqliteHandleIsUsable } from "./sqliteHandle.js";
 import { claimFeedbackAttachmentsAsync } from "./feedbackMediaAsync.js";
 import { ensurePgSchema } from "./pgSchema.js";
 
@@ -325,8 +326,10 @@ export async function feedbackStatsAsync(options = {}) {
         const id = normalizeFeedbackKind(row.kind);
         out.byKind[id] = (out.byKind[id] || 0) + (Number(row.n) || 0);
       }
-    } catch {
-      // 同步版也是吞掉（表還沒建時回全 0）
+    } catch (error) {
+      // 同步版也是吞掉（表還沒建時回全 0）；但 strict／開閘時必須把 PG 的錯誤往上丟，
+      // 否則「查詢壞掉」會被當成「統計是 0」回給後台。
+      if (options.strict === true || !sqliteHandleIsUsable(sqliteHandle())) throw error;
     }
     return out;
   }, () => feedbackStatsSync(sqliteHandle()));

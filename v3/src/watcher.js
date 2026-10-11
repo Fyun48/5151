@@ -3,7 +3,6 @@ import {
   coveringPlan,
   findBySourceKey,
   getListing,
-  getSystemCrawl,
   getUserById,
   getMailTemplates,
   listMatchCandidates,
@@ -66,7 +65,7 @@ import { processListingEnrichBatch } from "./listingEnrichQueue.js";
 // （SQLite 模式的行為與同步函式完全相同；PG 模式才寫到 PostgreSQL）。
 import { enqueueListingEnrichAsync, listingEnrichQueueFacade } from "./listingEnrichQueueAsync.js";
 import { crawlSourceEnabled } from "./crawlSources.js";
-import { getCrawlSourcesAsync } from "./siteContentAsync.js";
+import { getCrawlSourcesAsync, getSystemCrawlAsync } from "./siteContentAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { assertRuntimeDbGuard } from "./runtimeGuards.js";
 import { getCachedGeoAsync, setCachedGeoAsync } from "./geoCacheAsync.js";
@@ -322,9 +321,13 @@ function detailOptions() {
     // client591.js 已經把這個回傳值 `await`，所以 async 版可以直接接（回傳值不是
     // Promise 的同步函式也相容，await 一個純值不會變）。
     getCommunity: getCommunityCacheAsync,
-    // Fire-and-forget inside client591, so swallow a rejected write here (the async path already
-    // falls back to SQLite on a PostgreSQL failure).
-    saveCommunity: (community) => { setCommunityCacheAsync(community).catch(() => {}); },
+    // Fire-and-forget inside client591：不擋抓取，但**不再無聲吞掉**——失敗要留一行 log
+    // （社群快取是內部 pin 快取，不影響本輪抓取的成敗）。
+    saveCommunity: (community) => {
+      setCommunityCacheAsync(community).catch((error) => {
+        crawlTelemetry.warn(`社群快取寫入失敗（不影響本輪抓取）：${error?.message || error}`);
+      });
+    },
   };
 }
 
@@ -654,7 +657,9 @@ async function resolvePendingNotifyLocations(settings, { withRoute = true, ...op
 }
 
 async function sweepOfflineListings(seenIds, { limit = 20, budgetMs = SWEEP_SCAN_BUDGET_MS, system = null } = {}) {
-  const confirmDays = normalizeOfflineConfirmDays((system || getSystemCrawl()).offlineConfirmDays);
+  // 開閘後不得再退回同步讀 getSystemCrawl()（那會碰本機 SQLite handle）；沒傳 system 就 async 讀。
+  const systemCrawl = system || await getSystemCrawlAsync();
+  const confirmDays = normalizeOfflineConfirmDays(systemCrawl.offlineConfirmDays);
   const confirmed = await confirmExpiredOfflineAsync({ days: confirmDays });
   const rows = await needingAliveCheckAsync({ excludeIds: [...seenIds], limit });
   crawlTelemetry.log(`下架掃描開始：待確認 ${rows.length} 筆／預算 ${limit} 筆`);

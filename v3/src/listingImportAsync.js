@@ -141,12 +141,7 @@ export async function importMetaAsync({ plan = "free", now = new Date(), ...opti
 // 形狀與驗證逐條沿用 `listingImport.js`：`assertSponsorMember()`（方案／角色）、
 // `normalizeImportUrl()`（provider 與正規化網址）、`fetchParsedListing()`（抓取與解析）、
 // `importPhotos()`（預算／錯誤形狀／`PHOTO_IMPORT_PARTIAL` 訊息）、`publicImportShape()`（20 個鍵）。
-// 這裡只負責「換資料層」：`?` 佔位、PG runner，以及 best-effort 的本機鏡射。
-
-/** 本機鏡射：還沒搬完的同步讀者看的是節點本機那一份；失敗不影響 PG 的結果。 */
-function mirrorLocal(sql, params) {
-  try { sqliteHandle().prepare(sql).run(...params); } catch { /* 鏡射盡力而為 */ }
-}
+// 這裡只負責「換資料層」：`?` 佔位與 PG runner（本機鏡射已移除：開閘後它只會撞到關閉的 handle）。
 
 export async function startListingImportAsync(userId, input = {}, { plan = "free", role = "", now = new Date(), ...options } = {}) {
   const uid = Number(userId) || 0;
@@ -162,10 +157,7 @@ export async function startListingImportAsync(userId, input = {}, { plan = "free
     const inserted = ((await run(`${IMPORT_INSERT_SQL} RETURNING id`, importInsertParams(uid, parsed, stamp))).rows || [])[0];
     const importId = Number(inserted?.id) || 0;
     if (!importId) throw new Error("匯入寫入沒有回傳 id");
-    mirrorLocal(`INSERT INTO listing_import(id, user_id, provider, original_source_url, normalized_source_url, source_listing_id, status, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-      [importId, ...importInsertParams(uid, parsed, stamp)]);
     await run(IMPORT_STATUS_UPDATE_SQL, [IMPORT_STATUSES.FETCHING, importId]);
-    mirrorLocal(IMPORT_STATUS_UPDATE_SQL, [IMPORT_STATUSES.FETCHING, importId]);
 
     const deps = {
       fetchImpl: options.fetchImpl,
@@ -181,7 +173,6 @@ export async function startListingImportAsync(userId, input = {}, { plan = "free
         parsedListing = await fetchParsedListing(parsed, deps);
       } catch (error) {
         await run(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FETCH_BLOCKED", error.message));
-        mirrorLocal(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FETCH_BLOCKED", error.message));
         throw error;
       }
 
@@ -190,7 +181,6 @@ export async function startListingImportAsync(userId, input = {}, { plan = "free
       if (!title && !text) {
         const error = httpError("無法從公開頁解析標題或說明", 400, "PARSE_FAILED");
         await run(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, "PARSE_FAILED", error.message));
-        mirrorLocal(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, "PARSE_FAILED", error.message));
         throw error;
       }
 
@@ -225,7 +215,6 @@ export async function startListingImportAsync(userId, input = {}, { plan = "free
           }
         }
         await run(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FAILED", error.message));
-        mirrorLocal(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FAILED", error.message));
         throw error;
       }
 
@@ -241,13 +230,11 @@ export async function startListingImportAsync(userId, input = {}, { plan = "free
         importId,
       });
       await run(IMPORT_READY_UPDATE_SQL, ready);
-      mirrorLocal(IMPORT_READY_UPDATE_SQL, ready);
       return publicImportAsync(await readImportRow(run, importId), { listing }, options, run);
     } catch (error) {
       const row = await readImportRow(run, importId);
       if (row && row.status !== IMPORT_STATUSES.FAILED) {
         await run(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FAILED", error.message));
-        mirrorLocal(IMPORT_FAIL_UPDATE_SQL, importFailParams(importId, error.code || "FAILED", error.message));
       }
       throw error;
     }
