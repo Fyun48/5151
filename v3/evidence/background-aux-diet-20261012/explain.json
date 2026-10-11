@@ -1,0 +1,97 @@
+{
+  "generatedAt": "2026-10-11T17:59:49.880Z",
+  "users": 22,
+  "plans": [
+    {
+      "label": "去重批次（現況，無索引）",
+      "ms": 3.5,
+      "plan": [
+        "Sort  (cost=598.11..598.11 rows=1 width=23) (actual time=3.452..3.454 rows=11 loops=1)",
+        "  Sort Key: user_id, id DESC",
+        "  Sort Method: quicksort  Memory: 25kB",
+        "  Buffers: shared hit=408",
+        "  ->  Seq Scan on user_events  (cost=0.06..598.10 rows=1 width=23) (actual time=0.537..3.419 rows=11 loops=1)",
+        "        Filter: ((post_id = '9100000005'::bigint) AND (type = 'match_split'::text) AND (user_id = ANY ('{1,2,3,710002,710003,710005,710013,710015,710018,710031,710033,710035,710037,710039,710041,710043,710045,710047,710049,710051,710053,710055}'::bigint[])))",
+        "        Rows Removed by Filter: 9491",
+        "        Buffers: shared hit=408",
+        "Planning:",
+        "  Buffers: shared hit=9",
+        "Planning Time: 0.263 ms",
+        "Execution Time: 3.500 ms"
+      ]
+    },
+    {
+      "label": "去重逐會員版（改動前；× 會員數＝每事件成本）",
+      "ms": 3.172,
+      "plan": [
+        "Limit  (cost=559.72..559.73 rows=1 width=15) (actual time=3.108..3.110 rows=0 loops=1)",
+        "  Buffers: shared hit=408",
+        "  ->  Sort  (cost=559.72..559.73 rows=1 width=15) (actual time=3.106..3.108 rows=0 loops=1)",
+        "        Sort Key: id DESC",
+        "        Sort Method: quicksort  Memory: 25kB",
+        "        Buffers: shared hit=408",
+        "        ->  Bitmap Heap Scan on user_events  (cost=62.51..559.71 rows=1 width=15) (actual time=3.094..3.095 rows=0 loops=1)",
+        "              Recheck Cond: (user_id = '1'::bigint)",
+        "              Filter: ((post_id = '9100000005'::bigint) AND (type = 'match_split'::text))",
+        "              Rows Removed by Filter: 5079",
+        "              Heap Blocks: exact=402",
+        "              Buffers: shared hit=408",
+        "              ->  Bitmap Index Scan on idx_user_events_user  (cost=0.00..62.51 rows=5097 width=0) (actual time=0.375..0.376 rows=5186 loops=1)",
+        "                    Index Cond: (user_id = '1'::bigint)",
+        "                    Buffers: shared hit=6",
+        "Planning Time: 0.143 ms",
+        "Execution Time: 3.172 ms"
+      ]
+    },
+    {
+      "label": "補欄位集合式（現況，無索引）",
+      "ms": 4.817,
+      "plan": [
+        "Seq Scan on listing_enrich_jobs  (cost=0.10..823.44 rows=40 width=480) (actual time=0.015..4.789 rows=40 loops=1)",
+        "  Filter: (post_id = ANY ('{2456675091,2457442337,2424941754,2402355385,2486655206,2430719439,2471201961,2407581652,2438889634,2480128239,2492747651,2460265842,2492107319,2471729050,2480691564,2498784102,2413373515,2433327459,2462301275,2414042341,2477206958,2424716082,2424725735,2476466253,2495015330,2471660490,2442051481,2452676238,2437695561,2476306011,2481099935,2473584563,2403101868,2458707167,2482318813,2421854860,2487901298,2424774557,2430959653,2459187239}'::bigint[]))",
+        "  Rows Removed by Filter: 11116",
+        "  Buffers: shared hit=656",
+        "Planning:",
+        "  Buffers: shared hit=96",
+        "Planning Time: 0.767 ms",
+        "Execution Time: 4.817 ms"
+      ]
+    },
+    {
+      "label": "去重批次（migration 006 的索引）",
+      "ms": 0.166,
+      "plan": [
+        "Incremental Sort  (cost=86.57..86.61 rows=2 width=23) (actual time=0.131..0.132 rows=11 loops=1)",
+        "  Sort Key: user_id, id DESC",
+        "  Presorted Key: user_id",
+        "  Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 25kB  Peak Memory: 25kB",
+        "  Buffers: shared hit=54 read=4",
+        "  ->  Index Scan using idx_probe_ue on user_events  (cost=0.29..86.56 rows=1 width=23) (actual time=0.078..0.114 rows=11 loops=1)",
+        "        Index Cond: ((user_id = ANY ('{1,2,3,710002,710003,710005,710013,710015,710018,710031,710033,710035,710037,710039,710041,710043,710045,710047,710049,710051,710053,710055}'::bigint[])) AND (post_id = '9100000005'::bigint) AND (type = 'match_split'::text))",
+        "        Buffers: shared hit=54 read=4",
+        "Planning:",
+        "  Buffers: shared hit=7 read=1",
+        "Planning Time: 0.247 ms",
+        "Execution Time: 0.166 ms"
+      ]
+    },
+    {
+      "label": "補欄位集合式（migration 006 的索引）",
+      "ms": 0.261,
+      "plan": [
+        "Bitmap Heap Scan on listing_enrich_jobs  (cost=111.81..239.88 rows=40 width=480) (actual time=0.197..0.209 rows=40 loops=1)",
+        "  Recheck Cond: (post_id = ANY ('{2456675091,2457442337,2424941754,2402355385,2486655206,2430719439,2471201961,2407581652,2438889634,2480128239,2492747651,2460265842,2492107319,2471729050,2480691564,2498784102,2413373515,2433327459,2462301275,2414042341,2477206958,2424716082,2424725735,2476466253,2495015330,2471660490,2442051481,2452676238,2437695561,2476306011,2481099935,2473584563,2403101868,2458707167,2482318813,2421854860,2487901298,2424774557,2430959653,2459187239}'::bigint[]))",
+        "  Heap Blocks: exact=3",
+        "  Buffers: shared hit=62 read=21",
+        "  ->  Bitmap Index Scan on idx_probe_enrich_post  (cost=0.00..111.70 rows=40 width=0) (actual time=0.188..0.189 rows=40 loops=1)",
+        "        Index Cond: (post_id = ANY ('{2456675091,2457442337,2424941754,2402355385,2486655206,2430719439,2471201961,2407581652,2438889634,2480128239,2492747651,2460265842,2492107319,2471729050,2480691564,2498784102,2413373515,2433327459,2462301275,2414042341,2477206958,2424716082,2424725735,2476466253,2495015330,2471660490,2442051481,2452676238,2437695561,2476306011,2481099935,2473584563,2403101868,2458707167,2482318813,2421854860,2487901298,2424774557,2430959653,2459187239}'::bigint[]))",
+        "        Buffers: shared hit=59 read=21",
+        "Planning:",
+        "  Buffers: shared hit=7 read=1",
+        "Planning Time: 0.232 ms",
+        "Execution Time: 0.261 ms"
+      ]
+    }
+  ],
+  "leftoverProbeIndexes": 0
+}

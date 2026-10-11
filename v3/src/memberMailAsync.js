@@ -67,8 +67,11 @@ async function readUserSettings(exec, uid) {
 }
 
 // 站台範本在 PG 的 settings 表（key=mailTemplates）。SQLite 分支走 db.js 的 getMailTemplates()。
-async function readSiteTemplates(exec) {
-  return normalizeMailTemplates(toMap(await exec(repo.GLOBAL_SETTINGS_SQL, [])).get("mailTemplates"));
+// `options.globalRows`：同一輪（tick）內已經讀過全域 settings 的呼叫端傳下來的列，
+// 同輪不再重讀（跨 tick 一律重讀，管理頁改了要立刻生效）。
+async function readSiteTemplates(exec, options = {}) {
+  const rows = options.globalRows || await exec(repo.GLOBAL_SETTINGS_SQL, []);
+  return normalizeMailTemplates(toMap(rows).get("mailTemplates"));
 }
 
 // db.js getMemberMailSettings() 的 PG 分支。
@@ -91,7 +94,7 @@ export async function getMemberMailBundleAsync(userId, options = {}) {
   const stored = await readUserSettings(exec, uid);
   const smtp = normalizeSmtp(stored.get("memberSmtp") || {}, {});
   const templates = normalizeMemberMailTemplates(stored.get("memberMailTemplates"));
-  const siteTemplates = await readSiteTemplates(exec);
+  const siteTemplates = await readSiteTemplates(exec, options);
   const ready = smtpReady(smtp);
   return {
     smtp: ready ? smtp : null,

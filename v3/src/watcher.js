@@ -1,6 +1,7 @@
 import {
   bindNotifyJobSnapshots,
   coveringPlan,
+  decorationRequestContextFromRows,
   findBySourceKey,
   getListing,
   getUserById,
@@ -46,7 +47,7 @@ import { isSourceCoolingDown, SOURCE_BLOCK_COOLDOWN_MS } from "./crawlWatchdog.j
 // 正式站 24 小時 80 行 `business SQLite is closed ... reached at listUserIds` 全部來自
 // `backfillListingRoutes()` 這一行（上游是 async，能 await），被 server.js 的重試圈吞成
 // 「補路線失敗：」。PG 模式必須讀 PG 的會員與設定，否則清單只有本機那一台。
-import { collectCommuteSettingsAsync, commuteRushEnabledAsync, getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+import { collectCommuteSettingsAsync, commuteRushEnabledAsync, getSettingsAsync, readGlobalSettingsRowsAsync, saveSettingsAsync } from "./settingsAsync.js";
 // 通知決策要讀站上那一份的會員與信件範本（PG 模式下讀本機等於用別台節點的資料做決定）。
 import { getUserByIdAsync } from "./usersAsync.js";
 import { getMailTemplatesAsync } from "./adminSettingsAsync.js";
@@ -460,7 +461,16 @@ export async function flushPendingNotifications(settings = null, { silent = fals
   // ⚠️ 逐會員的設定與信箱要讀**站上讀的那一份**（PG）：同步版讀本機 ⇒ PG 模式下
   // 「暫停通知的會員照樣被通知」、信件寄到舊的（或空的）信箱，而且不會報錯。
   // `options` 一路轉發給島嶼，測試才能注入 driver（正式路徑不傳，行為不變）。
-  settings = settings || await getSettingsAsync(0, options);
+  //
+  // 同一輪的 settings：這一輪讀**一次** `SELECT key, value FROM settings`（`roundRows`），
+  // 往下傳給每個事件的會員設定／裝飾資料／站台信件範本。
+  // 原本每位會員各讀 1~3 次（正式站 180 秒窗口 1,846 次的主要來源之一）。
+  // ⚠️ 只活在「這一次呼叫」裡，不是跨 tick 快取 ⇒ 管理頁改了同一輪之後就生效。
+  const roundRows = await readGlobalSettingsRowsAsync(options);
+  const roundOptions = roundRows
+    ? { ...options, globalRows: roundRows, requestContext: decorationRequestContextFromRows(roundRows) }
+    : options;
+  settings = settings || await getSettingsAsync(0, roundOptions);
   await bindNotifyJobSnapshotsFor(options);
   const pending = await pendingNotifyEventsAsync({ limit: 400 }, options);
   const dockByUser = new Map();
@@ -470,10 +480,10 @@ export async function flushPendingNotifications(settings = null, { silent = fals
   const neededByEvent = new Map();
   for (const event of pending) {
     const userId = Number(event.user_id) || 0;
-    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;
-    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);
+    const userSettings = userId ? await getSettingsAsync(userId, roundOptions) : settings;
+    const listing = await listingForWatchAsync(event.post_id, userId || undefined, roundOptions);
     const mailTo = String((await getUserByIdAsync(userId, options))?.email || "").trim();
-    const mailBundle = userId ? await getMemberMailBundleAsync(userId) : { configured: false, smtp: null, templates: await getMailTemplatesAsync(options) };
+    const mailBundle = userId ? await getMemberMailBundleAsync(userId, roundOptions) : { configured: false, smtp: null, templates: await getMailTemplatesAsync(options) };
     const mailReady = Boolean(mailBundle.configured);
     if (!listing) {
       await updateEventNotifyAsync(event.id, { notify_decide: "cancelled", notify_reason: "missing", notified: 1 }, options);

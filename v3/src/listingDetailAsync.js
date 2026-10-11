@@ -69,6 +69,9 @@ export async function getListingAsync(postId, userId, options = {}) {
       userId: uid,
       matchVoteUserId,
       sameHouse,
+      // 呼叫端（背景 flush 迴圈）同一輪已經讀過全域 settings 時，把 crawlSources／systemCrawl
+      // 傳下來，裝飾資料就不必再自己讀一次 `SELECT key, value FROM settings`。
+      requestContext: options.requestContext,
     }));
     const [decorated] = decorateRowsWithProvider([row], {
       settings,

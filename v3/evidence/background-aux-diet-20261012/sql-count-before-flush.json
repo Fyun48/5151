@@ -1,0 +1,322 @@
+{
+  "label": "before",
+  "unmatchedSites": {
+    "count": 0,
+    "sites": {}
+  },
+  "phase": "flush",
+  "generatedAt": "2026-10-11T18:22:35.687Z",
+  "detail": {
+    "unpend": 60
+  },
+  "totals": {
+    "queries": 1074,
+    "ms": 9658.76,
+    "enrichJobPerPostReads": 0,
+    "enrichJobBatchReads": 0,
+    "lastEventDetailPerUserReads": 0,
+    "lastEventDetailBatchReads": 0,
+    "groupNotifiedBatchReads": 0,
+    "newEventBatchReads": 0,
+    "globalSettingsReads": 181,
+    "flushEventReads": 120
+  },
+  "fingerprints": {
+    "UPDATE user_events SET notify_next_at = NULL WHERE id IN (SELECT id FROM user_events": {
+      "count": 1,
+      "ms": 244.31,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228": 1
+      }
+    },
+    "SELECT key, value FROM settings": {
+      "count": 181,
+      "ms": 1664.54,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:82 <- v3/src/watcher.js:463": 1,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:82 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/memberMailAsync.js:36 <- v3/src/memberMailAsync.js:71 <- v3/src/memberMailAsync.js:94 <- v3/src/watcher.js:476": 60
+      }
+    },
+    "SELECT e.* FROM user_events e LEFT JOIN listings l ON l.post_id = e.post_id WHERE CO": {
+      "count": 1,
+      "ms": 24.88,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:22 <- v3/src/notifyQueueAsync.js:68 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:465": 1
+      }
+    },
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+      "count": 120,
+      "ms": 248.87,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:85 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/memberMailAsync.js:36 <- v3/src/memberMailAsync.js:66 <- v3/src/memberMailAsync.js:91 <- v3/src/watcher.js:476": 60
+      }
+    },
+    "SELECT * FROM users WHERE id = $?": {
+      "count": 120,
+      "ms": 252.41,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:86 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/usersAsync.js:77 <- v3/src/usersAsync.js:104 <- v3/src/usersAsync.js:78": 60
+      }
+    },
+    "SELECT * FROM listings WHERE post_id IN ($?)": {
+      "count": 60,
+      "ms": 201.76,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": {
+      "count": 1,
+      "ms": 33.29,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:75 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT ?": {
+      "count": 1,
+      "ms": 96.14,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": {
+      "count": 1,
+      "ms": 80.57,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": {
+      "count": 1,
+      "ms": 53.27,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "SELECT * FROM user_listing_flags WHERE user_id = $?": {
+      "count": 60,
+      "ms": 393.36,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:403 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id ": {
+      "count": 60,
+      "ms": 188.03,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:410 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $? AND vote = ?": {
+      "count": 60,
+      "ms": 58.24,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:470 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($?::bigint[]": {
+      "count": 60,
+      "ms": 66.65,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:415 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63": 60
+      }
+    },
+    "SELECT * FROM listing_prep WHERE post_id = ANY($?::bigint[])": {
+      "count": 60,
+      "ms": 81.83,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:466 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63": 60
+      }
+    },
+    "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk": {
+      "count": 40,
+      "ms": 70.17,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/repository/decorationData.js:485 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63": 40
+      }
+    },
+    "SELECT * FROM user_events WHERE id = $?": {
+      "count": 120,
+      "ms": 1165.87,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:32 <- v3/src/notifyQueueAsync.js:77 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:491": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:32 <- v3/src/notifyQueueAsync.js:77 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:499": 60
+      }
+    },
+    "UPDATE user_events SET notify_decide = $?, notify_reason = $?, notify_retry_count = ": {
+      "count": 120,
+      "ms": 4713.63,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:37 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:491": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:37 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:499": 60
+      }
+    },
+    "SELECT m.group_id AS group_key, l.post_id, l.source_id, l.title, l.url, l.price, l.p": {
+      "count": 6,
+      "ms": 19.25,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 6
+      }
+    },
+    "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, ext": {
+      "count": 1,
+      "ms": 1.75,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:475 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63": 1
+      }
+    }
+  },
+  "queries": {
+    "UPDATE user_events SET notify_next_at = NULL\n                 WHERE id IN (SELECT id FROM user_events WHERE COALESCE(notified, 0) = 0 ORDER BY id LIMIT $1)": {
+      "count": 1,
+      "ms": 244.31,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228": 1
+      }
+    },
+    "SELECT key, value FROM settings": {
+      "count": 181,
+      "ms": 1664.54,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:82 <- v3/src/watcher.js:463": 1,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:82 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/db.js:3371 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/memberMailAsync.js:36 <- v3/src/memberMailAsync.js:71 <- v3/src/memberMailAsync.js:94 <- v3/src/watcher.js:476": 60
+      }
+    },
+    "\n      SELECT e.*\n      FROM user_events e\n      LEFT JOIN listings l ON l.post_id = e.post_id\n      WHERE COALESCE(e.notified, 0) = 0\n        AND COALESCE(e.notify_decide, '') NOT IN ('cancelled', 'superseded')\n        AND (e.notify_next_at IS NULL OR e.notify_next_at <= $1)\n      ORDER BY\n        CASE\n          WHEN COALESCE(e.notify_decide, '') = 'ready' THEN 0\n          WHEN COALESCE(e.line_job_state, '') IN ('retry', 'unknown')\n            OR COALESCE(e.email_job_state, '') IN ('retry', 'unknown')\n            OR COALESCE(e.push_job_state, '') IN ('retry', 'unknown') THEN 1\n          WHEN l.lat IS NOT NULL AND COALESCE(l.location_class, '') NOT IN ('admin', 'unknown') THEN 2\n          ELSE 3\n        END,\n        COALESCE(e.notify_next_at, 0) ASC,\n        e.id ASC\n      LIMIT $2": {
+      "count": 1,
+      "ms": 24.88,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:22 <- v3/src/notifyQueueAsync.js:68 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:465": 1
+      }
+    },
+    "SELECT key, value FROM user_settings WHERE user_id = $1": {
+      "count": 120,
+      "ms": 248.87,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:85 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/memberMailAsync.js:36 <- v3/src/memberMailAsync.js:66 <- v3/src/memberMailAsync.js:91 <- v3/src/watcher.js:476": 60
+      }
+    },
+    "SELECT * FROM users WHERE id = $1": {
+      "count": 120,
+      "ms": 252.41,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:86 <- v3/src/watcher.js:473": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/usersAsync.js:77 <- v3/src/usersAsync.js:104 <- v3/src/usersAsync.js:78": 60
+      }
+    },
+    "SELECT * FROM listings WHERE post_id IN ($1)": {
+      "count": 60,
+      "ms": 201.76,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/repository/listings.js:161 <- v3/src/listingDetailAsync.js:45 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": {
+      "count": 1,
+      "ms": 33.29,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:75 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT 0": {
+      "count": 1,
+      "ms": 96.14,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": {
+      "count": 1,
+      "ms": 80.57,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": {
+      "count": 1,
+      "ms": 53.27,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:78 <- v3/src/db.js:3363 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 1
+      }
+    },
+    "SELECT * FROM user_listing_flags WHERE user_id = $1": {
+      "count": 60,
+      "ms": 393.36,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:403 <- v3/src/db.js:3397 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1": {
+      "count": 60,
+      "ms": 188.03,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:410 <- v3/src/db.js:3398 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'": {
+      "count": 60,
+      "ms": 58.24,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/repository/decorationData.js:470 <- v3/src/db.js:3399 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 60
+      }
+    },
+    "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])": {
+      "count": 60,
+      "ms": 66.65,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:415 <- v3/src/db.js:3449 <- v3/src/listingDetailAsync.js:63": 60
+      }
+    },
+    "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])": {
+      "count": 60,
+      "ms": 81.83,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:466 <- v3/src/db.js:3467 <- v3/src/listingDetailAsync.js:63": 60
+      }
+    },
+    "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m\n       FROM mrt_cache WHERE geo_key = ANY($1::text[])": {
+      "count": 40,
+      "ms": 70.17,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/repository/decorationData.js:485 <- v3/src/db.js:3508 <- v3/src/listingDetailAsync.js:63": 40
+      }
+    },
+    "SELECT * FROM user_events WHERE id = $1": {
+      "count": 120,
+      "ms": 1165.87,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:32 <- v3/src/notifyQueueAsync.js:77 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:491": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:32 <- v3/src/notifyQueueAsync.js:77 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:499": 60
+      }
+    },
+    "UPDATE user_events SET\n        notify_decide = $1,\n        notify_reason = $2,\n        notify_retry_count = $3,\n        notify_last_error = $4,\n        notify_next_at = $5,\n        notify_ready_at = $6,\n        notify_coord_version = $7,\n        dock_job_state = $8,\n        line_job_state = $9,\n        email_job_state = $10,\n        push_job_state = $11,\n        notified = $12\n      WHERE id = $13": {
+      "count": 120,
+      "ms": 4713.63,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:37 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:491": 60,
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:37 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:499": 60
+      }
+    },
+    "SELECT m.group_id AS group_key, l.post_id, l.source_id, l.title, l.url, l.price, l.price_num, l.extra_fee, l.extra_fees, l.extra_fee_text, l.price_contain_text, l.floor_name, l.area_name, l.layout, l.source, l.offline, l.offline_confirmed, l.hidden, l.match_post_id, l.match_level, l.match_verdict, l.match_detail, l.cost_changed_at, l.cost_change_detail, l.cost_change_type, l.last_seen_at, l.refresh_time\n       FROM listing_group_members m\n       JOIN listings l ON l.post_id = m.post_id\n       WHERE m.group_id = ANY($1::text[])": {
+      "count": 6,
+      "ms": 19.25,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:197 <- v3/src/repository/decorationData.js:452 <- v3/src/repository/decorationData.js:454 <- v3/src/db.js:3452 <- v3/src/listingDetailAsync.js:63 <- v3/src/watcher.js:474": 6
+      }
+    },
+    "SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text,\n       price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level FROM listings WHERE post_id = ANY($1::bigint[])": {
+      "count": 1,
+      "ms": 1.75,
+      "callsites": {
+        "v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:146 <- v3/src/dbDriverPostgres.js:210 <- v3/src/dbDriverPostgres.js:228 <- v3/src/listingDetailAsync.js:40 <- v3/src/repository/decorationData.js:251 <- v3/src/repository/decorationData.js:475 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/repository/decorationData.js:475 <- v3/src/db.js:3478 <- v3/src/listingDetailAsync.js:63": 1
+      }
+    }
+  }
+}

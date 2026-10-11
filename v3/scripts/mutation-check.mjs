@@ -2794,8 +2794,9 @@ const NOTIFYFLUSH_MUTATIONS = [
     file: NOTIFYFLUSH_SRC,
     // 批次 F 起 resolvePendingNotifyLocations 也用同一行（async）⇒ 錨點要連下一行才唯一
     // （那裡的下一行是 `listingForWatchAsync(event.post_id, userId || undefined)`，無 options）。
-    from: "    const userSettings = userId ? await getSettingsAsync(userId, options) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);",
-    to: "    const userSettings = userId ? getSettings(userId) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, options);",
+    // 2026-10-12 背景輔助查詢瘦身：flush 一輪讀一次 settings 往下傳 ⇒ 這裡吃 `roundOptions`。
+    from: "    const userSettings = userId ? await getSettingsAsync(userId, roundOptions) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, roundOptions);",
+    to: "    const userSettings = userId ? getSettings(userId) : settings;\n    const listing = await listingForWatchAsync(event.post_id, userId || undefined, roundOptions);",
     expect: "暫停旗標以 PG 為準",
   },
   {
@@ -2818,7 +2819,8 @@ const NOTIFYFLUSH_MUTATIONS = [
     file: NOTIFYFLUSH_SRC,
     // ⚠️ 第七十七批起 watcher 有三處 worker 預設參數也是這一行 ⇒ 錨點要連下一行才唯一
     // （`v3/test/mutation-anchors.test.js` 會檢查每個錨點恰好出現一次）。
-    from: "  settings = settings || await getSettingsAsync(0, options);\n  await bindNotifyJobSnapshotsFor(options);",
+    // 2026-10-12：flush 一輪讀一次 settings，往下傳的是 `roundOptions`。
+    from: "  settings = settings || await getSettingsAsync(0, roundOptions);\n  await bindNotifyJobSnapshotsFor(options);",
     to: "  settings = settings || getSettings();\n  await bindNotifyJobSnapshotsFor(options);",
     // 同上：站台設定的讀取在離線夾具裡的差異由接線那條守住。
     expect: "不得再用同步的",

@@ -92,6 +92,18 @@ export function enrichJobByPostIdQuery(postId) {
   return { sql: "SELECT * FROM listing_enrich_jobs WHERE post_id = ?", params: [Number(postId) || 0] };
 }
 
+// 集合式版：背景 seed 一輪要問 40 個 post_id 有沒有既有列，原本逐列送（一輪 80 次）——
+// 這正是正式站 180 秒窗口裡 480 次 `SELECT * FROM listing_enrich_jobs WHERE post_id = $1`
+// 的來源（6 輪 × 40 筆 × 先讀＋回讀）。
+// `?::bigint[]` 是 PG 陣列綁定（與 repository/decorationData.js 同一種寫法）；
+// post_id 是 bigint（max 2,699,975,575 > 2^31-1），一律用 Number，不准 `|0`／Int32Array。
+export function enrichJobsByPostIdsQuery(postIds) {
+  const ids = [...new Set((Array.isArray(postIds) ? postIds : [])
+    .map((id) => Number(id) || 0)
+    .filter((id) => id > 0))];
+  return { sql: "SELECT * FROM listing_enrich_jobs WHERE post_id = ANY(?::bigint[])", params: [ids] };
+}
+
 export function enrichJobRunSeqQuery(id) {
   return { sql: "SELECT request_seq, run_seq FROM listing_enrich_jobs WHERE id = ?", params: [Number(id) || 0] };
 }
