@@ -1,0 +1,84 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:58:01.062Z",
+ "windowMs": 5336,
+ "totalQueries": 46,
+ "totalMs": 51.57,
+ "bySql": {
+  "SELECT key, value FROM user_settings WHERE user_id = $1": {
+   "count": 22,
+   "ms": 25.06,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22
+   }
+  },
+  "SELECT * FROM users WHERE id = $1": {
+   "count": 22,
+   "ms": 20.56,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": {
+   "count": 1,
+   "ms": 4.44,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.51,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:198 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  }
+ },
+ "byFingerprint": {
+  "SELECT key, value FROM user_settings WHERE user_id = $?": {
+   "count": 22,
+   "ms": 25.06,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22
+   }
+  },
+  "SELECT * FROM users WHERE id = $?": {
+   "count": 22,
+   "ms": 20.56,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = ? ORDER BY id": {
+   "count": 1,
+   "ms": 4.44,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.51,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:198 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:191 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:198 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+ },
+ "driverCallsTotal": 46,
+ "driverSqls": {
+  "SELECT key, value FROM user_settings WHERE user_id = $1": 22,
+  "SELECT * FROM users WHERE id = $1": 22,
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": 1,
+  "SELECT key, value FROM settings": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:198 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+ }
+}

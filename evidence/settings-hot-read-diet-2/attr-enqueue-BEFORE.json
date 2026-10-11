@@ -1,0 +1,418 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:33:34.470Z",
+ "windowMs": 7184,
+ "totalQueries": 4987,
+ "totalMs": 4233.9,
+ "bySql": {
+  "SELECT key, value FROM user_settings WHERE user_id = $1": {
+   "count": 440,
+   "ms": 420.69,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:55 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM users WHERE id = $1": {
+   "count": 440,
+   "ms": 381.61,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:56 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT id, last_used_at, updated_at FROM user_search_profiles\n     WHERE user_id = $1 AND active = 1\n     ORDER BY last_used_at DESC, updated_at DESC, id DESC": {
+   "count": 440,
+   "ms": 400.58,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:115 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_search_profiles WHERE user_id = $1 AND active = 1": {
+   "count": 440,
+   "ms": 338.06,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:119 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $1 AND post_id = $2": {
+   "count": 440,
+   "ms": 321.71,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:62 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $1": {
+   "count": 440,
+   "ms": 410.96,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1": {
+   "count": 440,
+   "ms": 284.51,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'": {
+   "count": 440,
+   "ms": 292.32,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])": {
+   "count": 440,
+   "ms": 322.69,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])": {
+   "count": 440,
+   "ms": 314.77,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m\n       FROM mrt_cache WHERE geo_key = ANY($1::text[])": {
+   "count": 440,
+   "ms": 337.22,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 20,
+   "ms": 20.1,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:34 <- v3/src/notifyEnqueueAsync.js:48 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": {
+   "count": 20,
+   "ms": 22.25,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:38 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT group_id FROM listing_group_members WHERE post_id = $1": {
+   "count": 20,
+   "ms": 14.29,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:140 <- v3/src/repository/notifyEnqueue.js:51 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT user_id, detail FROM user_events\n             WHERE user_id = ANY($1::bigint[]) AND post_id = $2 AND type = $3\n             ORDER BY user_id, id DESC": {
+   "count": 20,
+   "ms": 63.36,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:156 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT DISTINCT user_id FROM user_events\n             WHERE user_id = ANY($1::bigint[]) AND post_id = $2 AND type = 'new'": {
+   "count": 20,
+   "ms": 59.31,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:164 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key = ANY($1::text[])": {
+   "count": 20,
+   "ms": 19.99,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:276 <- v3/src/repository/decorationData.js:480 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3506 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20
+   }
+  },
+  "SELECT * FROM route_jobs WHERE job_key = ANY($1::text[])": {
+   "count": 20,
+   "ms": 17.61,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:307 <- v3/src/repository/decorationData.js:490 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3510 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20
+   }
+  },
+  "SELECT * FROM listings ORDER BY post_id LIMIT 1": {
+   "count": 1,
+   "ms": 8.6,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:128 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  },
+  "SELECT COALESCE(MAX(id),0)::int m FROM user_events": {
+   "count": 1,
+   "ms": 1.62,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:131 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": {
+   "count": 1,
+   "ms": 100.31,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:86 <- v3/src/db.js:3363 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT 0": {
+   "count": 1,
+   "ms": 23.65,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 26.65,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 29.82,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "DELETE FROM user_events WHERE id > $1": {
+   "count": 1,
+   "ms": 1.22,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:137 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  }
+ },
+ "byFingerprint": {
+  "SELECT key, value FROM user_settings WHERE user_id = $?": {
+   "count": 440,
+   "ms": 420.69,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:55 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM users WHERE id = $?": {
+   "count": 440,
+   "ms": 381.61,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:56 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT id, last_used_at, updated_at FROM user_search_profiles WHERE user_id = $? AND active = ? ORDER BY last_used_at DE": {
+   "count": 440,
+   "ms": 400.58,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:115 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_search_profiles WHERE user_id = $? AND active = ?": {
+   "count": 440,
+   "ms": 338.06,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:119 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $? AND post_id = $?": {
+   "count": 440,
+   "ms": 321.71,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:62 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+   }
+  },
+  "SELECT * FROM user_listing_flags WHERE user_id = $?": {
+   "count": 440,
+   "ms": 410.96,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $?": {
+   "count": 440,
+   "ms": 284.51,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $? AND vote = ?": {
+   "count": 440,
+   "ms": 292.32,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440
+   }
+  },
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($?::bigint[])": {
+   "count": 440,
+   "ms": 322.69,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT * FROM listing_prep WHERE post_id = ANY($?::bigint[])": {
+   "count": 440,
+   "ms": 314.77,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m FROM mrt_cache WHERE ": {
+   "count": 440,
+   "ms": 337.22,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 20,
+   "ms": 20.1,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:34 <- v3/src/notifyEnqueueAsync.js:48 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = ? ORDER BY id": {
+   "count": 20,
+   "ms": 22.25,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:38 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT group_id FROM listing_group_members WHERE post_id = $?": {
+   "count": 20,
+   "ms": 14.29,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:140 <- v3/src/repository/notifyEnqueue.js:51 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT user_id, detail FROM user_events WHERE user_id = ANY($?::bigint[]) AND post_id = $? AND type = $? ORDER BY user_i": {
+   "count": 20,
+   "ms": 63.36,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:156 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT DISTINCT user_id FROM user_events WHERE user_id = ANY($?::bigint[]) AND post_id = $? AND type = ?": {
+   "count": 20,
+   "ms": 59.31,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:164 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+   }
+  },
+  "SELECT route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at FROM route_cache WHERE route_key =": {
+   "count": 20,
+   "ms": 19.99,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:276 <- v3/src/repository/decorationData.js:480 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3506 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20
+   }
+  },
+  "SELECT * FROM route_jobs WHERE job_key = ANY($?::text[])": {
+   "count": 20,
+   "ms": 17.61,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:307 <- v3/src/repository/decorationData.js:490 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3510 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20
+   }
+  },
+  "SELECT * FROM listings ORDER BY post_id LIMIT ?": {
+   "count": 1,
+   "ms": 8.6,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:128 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  },
+  "SELECT COALESCE(MAX(id),?)::int m FROM user_events": {
+   "count": 1,
+   "ms": 1.62,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:131 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": {
+   "count": 1,
+   "ms": 100.31,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:86 <- v3/src/db.js:3363 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT ?": {
+   "count": 1,
+   "ms": 23.65,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 26.65,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": {
+   "count": 1,
+   "ms": 29.82,
+   "sites": {
+    "v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 1
+   }
+  },
+  "DELETE FROM user_events WHERE id > $?": {
+   "count": 1,
+   "ms": 1.22,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:137 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:55 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:56 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:115 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:119 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:62 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:64 <- v3/src/repository/decorationData.js:403 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3397 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:93 <- v3/src/repository/decorationData.js:410 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3398 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:228 <- v3/src/repository/decorationData.js:470 <- v3/src/repository/decorationData.js:318 <- v3/src/db.js:3399 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:135 <- v3/src/repository/decorationData.js:415 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3449 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:218 <- v3/src/repository/decorationData.js:466 <- v3/src/repository/decorationData.js:387 <- v3/src/repository/decorationData.js:389 <- v3/src/db.js:3467 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:290 <- v3/src/repository/decorationData.js:485 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3508 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 440,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:34 <- v3/src/notifyEnqueueAsync.js:48 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:38 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:140 <- v3/src/repository/notifyEnqueue.js:51 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:156 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:164 <- v3/src/repository/notifyEnqueue.js:52 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:276 <- v3/src/repository/decorationData.js:480 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3506 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/decorationData.js:307 <- v3/src/repository/decorationData.js:490 <- v3/src/repository/decorationData.js:369 <- v3/src/repository/decorationData.js:371 <- v3/src/db.js:3510 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36": 20,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36": 3,
+  "query v3/scripts/settings-hot-read-attribution.mjs:128 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1,
+  "query v3/scripts/settings-hot-read-attribution.mjs:131 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1,
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/mrtCacheSchema.js:36 <- v3/src/mrtCacheSchema.js:37 <- v3/src/mrtCacheSchema.js:86 <- v3/src/db.js:3363 <- v3/src/repository/notifyEnqueue.js:64 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134": 1,
+  "query v3/scripts/settings-hot-read-attribution.mjs:137 <- v3/scripts/settings-hot-read-attribution.mjs:157": 1
+ },
+ "driverCallsTotal": 4987,
+ "driverSqls": {
+  "SELECT key, value FROM user_settings WHERE user_id = $1": 440,
+  "SELECT * FROM users WHERE id = $1": 440,
+  "SELECT id, last_used_at, updated_at FROM user_search_profiles WHERE user_id = $1 AND active = 1 ORDE": 440,
+  "SELECT * FROM user_search_profiles WHERE user_id = $1 AND active = 1": 440,
+  "SELECT * FROM user_listing_flags WHERE user_id = $1 AND post_id = $2": 440,
+  "SELECT * FROM user_listing_flags WHERE user_id = $1": 440,
+  "SELECT post_id, group_key, system_agrees FROM user_same_house_members WHERE user_id = $1": 440,
+  "SELECT post_id, peer_id FROM user_match_votes WHERE user_id = $1 AND vote = 'split'": 440,
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])": 440,
+  "SELECT * FROM listing_prep WHERE post_id = ANY($1::bigint[])": 440,
+  "SELECT geo_key, station, walk_km, walk_min, ride_km, ride_min, source, checked, walk_m, searched_m F": 440,
+  "SELECT key, value FROM settings": 20,
+  "SELECT id FROM users WHERE deleted_at IS NULL OR deleted_at = '' ORDER BY id": 20,
+  "SELECT group_id FROM listing_group_members WHERE post_id = $1": 20,
+  "SELECT user_id, detail FROM user_events WHERE user_id = ANY($1::bigint[]) AND post_id = $2 AND type ": 20,
+  "SELECT DISTINCT user_id FROM user_events WHERE user_id = ANY($1::bigint[]) AND post_id = $2 AND type": 20,
+  "SELECT route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at FROM route_cac": 20,
+  "SELECT * FROM route_jobs WHERE job_key = ANY($1::text[])": 20,
+  "SELECT * FROM listings ORDER BY post_id LIMIT 1": 1,
+  "SELECT COALESCE(MAX(id),0)::int m FROM user_events": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS source TEXT": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS checked BIGINT NOT NULL DEFAULT 0": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS walk_m DOUBLE PRECISION": 1,
+  "ALTER TABLE mrt_cache ADD COLUMN IF NOT EXISTS searched_m DOUBLE PRECISION": 1,
+  "DELETE FROM user_events WHERE id > $1": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:34 <- v3/src/notifyEnqueueAsync.js:48 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+ }
+}

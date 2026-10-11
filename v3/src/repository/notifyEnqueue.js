@@ -21,7 +21,7 @@
 // (POSTGRES_SWITCH_PLAN ④).
 import { ONCE_EVER_GROUP_NOTIFY_TYPES } from "../listingGroups.js";
 
-export async function enqueueListingEvent(exec, { deps, listing, event } = {}) {
+export async function enqueueListingEvent(exec, { deps, listing, event, globalRows: loadedGlobalRows = null, requestContext: loadedRequestContext = null } = {}) {
   const context = deps || {};
   // notifyEnqueueBuildContext() carries the statement builders flat, the way notifyBuildContext() does.
   const queries = context;
@@ -29,12 +29,15 @@ export async function enqueueListingEvent(exec, { deps, listing, event } = {}) {
   const payload = context.notifyEventPayload(listing, event);
   const ids = [];
 
-  // The `settings` rows are read once per event: the member settings and the system-crawl block both
-  // come from them (db.js getSettings()/getSystemCrawl() read the same table).
-  const globalRows = await run(queries.globalSettings());
+  // The `settings` rows feed both the member settings and the system-crawl block (db.js
+  // getSettings()/getSystemCrawl() read the same table). **同一輪／同一批只讀一次**：
+  // 爬蟲輪次這種「逐筆房源各入列一次事件」的路徑會把當輪讀到的列傳下來
+  // （`options.globalRows`／`options.requestContext`），這裡就不再每一筆事件重讀一次。
+  // 呼叫端沒帶（後台單筆動作、離線事件…）時逐字沿用原本的讀法 ⇒ 行為完全不變。
+  const globalRows = Array.isArray(loadedGlobalRows) ? loadedGlobalRows : await run(queries.globalSettings());
   const system = context.systemCrawlFromRows(globalRows);
   // 同一輪的裝飾資料共用這一批列（不然 22 個會員＝22 條 `SELECT key, value FROM settings`）。
-  const requestContext = context.decorationRequestContextFromRows(globalRows);
+  const requestContext = loadedRequestContext || context.decorationRequestContextFromRows(globalRows);
   const userIds = (await run(queries.listUserIds()))
     .map((row) => Number(row.id) || 0)
     .filter(Boolean);

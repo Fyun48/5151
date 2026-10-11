@@ -1,0 +1,84 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:22:50.252Z",
+ "windowMs": 1871,
+ "totalQueries": 63,
+ "totalMs": 1546.07,
+ "bySql": {
+  "UPDATE user_events SET notified=$2, notify_decide=$3, notify_reason=$4, notify_next_at=$5,\n         notify_retry_count=$6, notify_ready_at=$7, notify_coord_version=$8, notify_profile_id=$9,\n         notify_profile_version=$10, email_job_state=$11, push_job_state=$12, line_job_state=$13, dock_job_state=$14\n       WHERE id=$1": {
+   "count": 60,
+   "ms": 1526.79,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:100 <- v3/scripts/settings-hot-read-attribution.mjs:139": 60
+   }
+  },
+  "SELECT id, notified, notify_decide, notify_reason, notify_next_at, notify_retry_count, notify_ready_at, notify_coord_version, notify_profile_id, notify_profile_version, email_job_state, push_job_state, line_job_state, dock_job_state FROM user_events WHERE COALESCE(notified,0) = 0": {
+   "count": 1,
+   "ms": 8.22,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.48,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/watcher.js:474 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  },
+  "\n      SELECT e.*\n      FROM user_events e\n      LEFT JOIN listings l ON l.post_id = e.post_id\n      WHERE COALESCE(e.notified, 0) = 0\n        AND COALESCE(e.notify_decide, '') NOT IN ('cancelled', 'superseded')\n        AND (e.notify_next_at IS NULL OR e.notify_next_at <= $1)\n      ORDER BY\n        CASE\n          WHEN COALESCE(e.notify_decide, '') = 'ready' THEN 0\n          WHEN COALESCE(e.line_job_state, '') IN ('retry', 'unknown')\n            OR COALESCE(e.email_job_state, '') IN ('retry', 'unknown')\n            OR COALESCE(e.push_job_state, '') IN ('retry', 'unknown') THEN 1\n          WHEN l.lat IS NOT NULL AND COALESCE(l.location_class, '') NOT IN ('admin', 'unknown') THEN 2\n          ELSE 3\n        END,\n        COALESCE(e.notify_next_at, 0) ASC,\n        e.id ASC\n      LIMIT $2": {
+   "count": 1,
+   "ms": 9.58,
+   "sites": {
+    "v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:22 <- v3/src/notifyQueueAsync.js:68 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:480 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  }
+ },
+ "byFingerprint": {
+  "UPDATE user_events SET notified=$?, notify_decide=$?, notify_reason=$?, notify_next_at=$?, notify_retry_count=$?, notify": {
+   "count": 60,
+   "ms": 1526.79,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:100 <- v3/scripts/settings-hot-read-attribution.mjs:139": 60
+   }
+  },
+  "SELECT id, notified, notify_decide, notify_reason, notify_next_at, notify_retry_count, notify_ready_at, notify_coord_ver": {
+   "count": 1,
+   "ms": 8.22,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.48,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/watcher.js:474 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  },
+  "SELECT e.* FROM user_events e LEFT JOIN listings l ON l.post_id = e.post_id WHERE COALESCE(e.notified, ?) = ? AND COALES": {
+   "count": 1,
+   "ms": 9.58,
+   "sites": {
+    "v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:22 <- v3/src/notifyQueueAsync.js:68 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:480 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/scripts/settings-hot-read-attribution.mjs:100 <- v3/scripts/settings-hot-read-attribution.mjs:139": 60,
+  "query v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/watcher.js:474 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1,
+  "query v3/src/notifyQueueAsync.js:48 <- v3/src/repository/notifyQueue.js:22 <- v3/src/notifyQueueAsync.js:68 <- v3/src/notifyQueueAsync.js:57 <- v3/src/watcher.js:480 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+ },
+ "driverCallsTotal": 63,
+ "driverSqls": {
+  "UPDATE user_events SET notified=$2, notify_decide=$3, notify_reason=$4, notify_next_at=$5, notify_re": 60,
+  "SELECT id, notified, notify_decide, notify_reason, notify_next_at, notify_retry_count, notify_ready_": 1,
+  "SELECT key, value FROM settings": 1,
+  " SELECT e.* FROM user_events e LEFT JOIN listings l ON l.post_id = e.post_id WHERE COALESCE(e.notifi": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/watcher.js:474 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+ }
+}

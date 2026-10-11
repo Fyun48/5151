@@ -1,0 +1,148 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:58:06.738Z",
+ "windowMs": 43885,
+ "totalQueries": 111,
+ "totalMs": 43586.37,
+ "bySql": {
+  "INSERT INTO user_settings(user_id, key, value) VALUES ($1,$2,$3) ON CONFLICT(user_id,key) DO UPDATE SET value = excluded.value": {
+   "count": 70,
+   "ms": 30064.66,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:170": 70
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $1": {
+   "count": 18,
+   "ms": 18.85,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:88 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18
+   }
+  },
+  "SELECT * FROM users WHERE id = $1": {
+   "count": 18,
+   "ms": 16.26,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18
+   }
+  },
+  "SELECT user_id, key, value FROM user_settings WHERE key IN ('notificationsPaused','inactivityPaused')": {
+   "count": 1,
+   "ms": 5.25,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:81 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT count(*)::int c FROM users\n      WHERE COALESCE(role,'member') <> 'admin' AND COALESCE(deleted_at,'') = ''\n        AND COALESCE(email_verified,1) <> 0\n        AND COALESCE(last_login_at, created_at) <= $1": {
+   "count": 1,
+   "ms": 3.05,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:82 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT id FROM users\n       WHERE COALESCE(role, 'member') != 'admin'\n         AND COALESCE(deleted_at, '') = ''\n         AND COALESCE(email_verified, 1) != 0\n         AND COALESCE(last_login_at, created_at) <= $1": {
+   "count": 1,
+   "ms": 1.09,
+   "sites": {
+    "v3/src/accountMaintenanceAsync.js:43 <- v3/src/accountMaintenanceAsync.js:79 <- v3/src/accountMaintenanceAsync.js:89 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.4,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/accountMaintenanceAsync.js:94 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "DELETE FROM user_settings WHERE key IN ('notificationsPaused','inactivityPaused')": {
+   "count": 1,
+   "ms": 13475.81,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:92 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  }
+ },
+ "byFingerprint": {
+  "INSERT INTO user_settings(user_id, key, value) VALUES ($?,$?,$?) ON CONFLICT(user_id,key) DO UPDATE SET value = excluded": {
+   "count": 70,
+   "ms": 30064.66,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:170": 70
+   }
+  },
+  "SELECT key, value FROM user_settings WHERE user_id = $?": {
+   "count": 18,
+   "ms": 18.85,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:88 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18
+   }
+  },
+  "SELECT * FROM users WHERE id = $?": {
+   "count": 18,
+   "ms": 16.26,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18
+   }
+  },
+  "SELECT user_id, key, value FROM user_settings WHERE key IN (?,?)": {
+   "count": 1,
+   "ms": 5.25,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:81 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT count(*)::int c FROM users WHERE COALESCE(role,?) <> ? AND COALESCE(deleted_at,?) = ? AND COALESCE(email_verified": {
+   "count": 1,
+   "ms": 3.05,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:82 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT id FROM users WHERE COALESCE(role, ?) != ? AND COALESCE(deleted_at, ?) = ? AND COALESCE(email_verified, ?) != ? A": {
+   "count": 1,
+   "ms": 1.09,
+   "sites": {
+    "v3/src/accountMaintenanceAsync.js:43 <- v3/src/accountMaintenanceAsync.js:79 <- v3/src/accountMaintenanceAsync.js:89 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "SELECT key, value FROM settings": {
+   "count": 1,
+   "ms": 1.4,
+   "sites": {
+    "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/accountMaintenanceAsync.js:94 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  },
+  "DELETE FROM user_settings WHERE key IN (?,?)": {
+   "count": 1,
+   "ms": 13475.81,
+   "sites": {
+    "v3/scripts/settings-hot-read-attribution.mjs:92 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:170": 70,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:88 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:69 <- v3/src/settingsAsync.js:89 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18,
+  "query v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:81 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1,
+  "query v3/scripts/settings-hot-read-attribution.mjs:82 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1,
+  "query v3/src/accountMaintenanceAsync.js:43 <- v3/src/accountMaintenanceAsync.js:79 <- v3/src/accountMaintenanceAsync.js:89 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1,
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/accountMaintenanceAsync.js:94 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1,
+  "query v3/scripts/settings-hot-read-attribution.mjs:92 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+ },
+ "driverCallsTotal": 111,
+ "driverSqls": {
+  "INSERT INTO user_settings(user_id, key, value) VALUES ($1,$2,$3) ON CONFLICT(user_id,key) DO UPDATE ": 70,
+  "SELECT key, value FROM user_settings WHERE user_id = $1": 18,
+  "SELECT * FROM users WHERE id = $1": 18,
+  "SELECT user_id, key, value FROM user_settings WHERE key IN ('notificationsPaused','inactivityPaused'": 1,
+  "SELECT count(*)::int c FROM users WHERE COALESCE(role,'member') <> 'admin' AND COALESCE(deleted_at,'": 1,
+  "SELECT id FROM users WHERE COALESCE(role, 'member') != 'admin' AND COALESCE(deleted_at, '') = '' AND": 1,
+  "SELECT key, value FROM settings": 1,
+  "DELETE FROM user_settings WHERE key IN ('notificationsPaused','inactivityPaused')": 1
+ },
+ "driverSettingsSites": {
+  "query v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/accountMaintenanceAsync.js:94 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+ }
+}

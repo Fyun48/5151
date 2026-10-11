@@ -355,7 +355,8 @@ test("every event site goes through the driver-aware entry point", async () => {
   assert.match(watcher, /import \{ enqueueListingEventAsync \} from "\.\/notifyEnqueueAsync\.js";/);
   assert.equal((watcher.match(/\benqueueListingEvent\(/g) || []).length, 0, "no synchronous enqueue left");
   assert.match(watcher, /await enqueueListingEventAsync\(listing, \{[\s\S]{0,120}type: "offline"/);
-  assert.match(watcher, /await enqueueListingEventAsync\(saved, evt\);/);
+  // 2026-10-12 第二包：逐筆入列要帶當輪快照（`roundOptions`），否則每一筆事件都重讀一次全域設定。
+  assert.match(watcher, /await enqueueListingEventAsync\(saved, evt, roundOptions\);/);
   assert.match(watcher, /await enqueueListingEventAsync\(\{ \.\.\.listing, display_ready: true \}, \{/);
 
   const enrich = read("listingEnrichQueue.js");

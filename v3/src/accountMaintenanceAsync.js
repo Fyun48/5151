@@ -14,7 +14,7 @@
 import { expireStaleVerifyTokens as expireStaleVerifyTokensSync } from "./emailVerify.js";
 import { IDLE_PAUSE_MS, listIdleMemberIds as listIdleMemberIdsSync } from "./members.js";
 import { idlePauseFlags, shouldSkipIdlePause } from "./idlePause.js";
-import { getSettingsAsync, saveSettingsAsync } from "./settingsAsync.js";
+import { getSettingsAsync, readGlobalSettingsRowsAsync, saveSettingsAsync } from "./settingsAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -87,11 +87,17 @@ export async function listIdleMemberIdsAsync({ now = Date.now(), idleMs = IDLE_P
 // db.js pauseIdleMembers()：與同步版同一條規則（已暫停者跳過，其餘寫入暫停旗標）。
 export async function pauseIdleMembersAsync({ now = Date.now() } = {}, options = {}) {
   const ids = await listIdleMemberIdsAsync({ now }, options);
+  // 這一圈維護是**同一批**：全域設定的列只讀一次。
+  // `getSettingsAsync()` 與 `saveSettingsAsync()`（內部也會先讀一次當前設定）都吃
+  // `options.globalRows` ⇒ 原本「每位候選會員 2 條」變成整圈 1 條。
+  // 只在這次呼叫內有效，不是快取；管理頁改了，下一個 tick 就看得到。
+  const globalRows = await readGlobalSettingsRowsAsync(options);
+  const roundOptions = globalRows ? { ...options, globalRows } : options;
   let n = 0;
   for (const id of ids) {
-    const settings = await getSettingsAsync(id, options);
+    const settings = await getSettingsAsync(id, roundOptions);
     if (shouldSkipIdlePause(settings)) continue;
-    await saveSettingsAsync(idlePauseFlags(), id, options);
+    await saveSettingsAsync(idlePauseFlags(), id, roundOptions);
     n += 1;
   }
   return n;

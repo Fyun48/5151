@@ -1,0 +1,445 @@
+{
+ "generatedAt": "2026-10-11T22:02:42.801Z",
+ "targetFingerprint": "SELECT key, value FROM settings",
+ "note": "target.count 只用檔自己的鍵（byFingerprint／windowMs／totalQueries）算出來；sites 的鍵是 <檔案:行號> 的呼叫鏈。",
+ "files": [
+  {
+   "file": "attr-commute-BEFORE.json",
+   "reason": "exit",
+   "windowMs": 3329,
+   "totalQueries": 68,
+   "driverCallsTotal": 68,
+   "target": {
+    "count": 23,
+    "ms": 23.96,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 23
+    }
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 22,
+     "ms": 22.37,
+     "sites": {
+      "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:195 <- v3/scripts/settings-hot-read-attribution.mjs:55 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-commute-AFTER.json",
+   "reason": "exit",
+   "windowMs": 5336,
+   "totalQueries": 46,
+   "driverCallsTotal": 46,
+   "target": {
+    "count": 1,
+    "ms": 1.51,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:198 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+    }
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 22,
+     "ms": 25.06,
+     "sites": {
+      "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:201 <- v3/scripts/settings-hot-read-attribution.mjs:67 <- v3/scripts/settings-hot-read-attribution.mjs:170": 22
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-geobackfill.json",
+   "reason": "exit",
+   "windowMs": 2772,
+   "totalQueries": 68,
+   "driverCallsTotal": 68,
+   "target": {
+    "count": 23,
+    "ms": 21.48,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:85 <- v3/src/settingsAsync.js:195 <- v3/src/settingsAsync.js:205 <- v3/scripts/settings-hot-read-attribution.mjs:62 <- v3/scripts/settings-hot-read-attribution.mjs:139": 23
+    }
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 22,
+     "ms": 21.36,
+     "sites": {
+      "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/settingsAsync.js:195 <- v3/src/settingsAsync.js:205 <- v3/scripts/settings-hot-read-attribution.mjs:62 <- v3/scripts/settings-hot-read-attribution.mjs:139": 22
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-maintenance-BEFORE.json",
+   "reason": "exit",
+   "windowMs": 4323,
+   "totalQueries": 128,
+   "driverCallsTotal": 128,
+   "target": {
+    "count": 18,
+    "ms": 22.81,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:85 <- v3/src/accountMaintenanceAsync.js:92 <- v3/scripts/settings-hot-read-attribution.mjs:77 <- v3/scripts/settings-hot-read-attribution.mjs:139": 18
+    }
+   },
+   "otherSettingsFingerprints": {
+    "INSERT INTO user_settings(user_id, key, value) VALUES ($?,$?,$?) ON CONFLICT(user_id,key) DO UPDATE SET value = excluded": {
+     "count": 70,
+     "ms": 3775.95,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:82 <- v3/scripts/settings-hot-read-attribution.mjs:139": 70
+     }
+    },
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 18,
+     "ms": 20.22,
+     "sites": {
+      "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:88 <- v3/src/accountMaintenanceAsync.js:92 <- v3/scripts/settings-hot-read-attribution.mjs:77 <- v3/scripts/settings-hot-read-attribution.mjs:139": 18
+     }
+    },
+    "SELECT user_id, key, value FROM user_settings WHERE key IN (?,?)": {
+     "count": 1,
+     "ms": 5.39,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:69 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+     }
+    },
+    "DELETE FROM user_settings WHERE key IN (?,?)": {
+     "count": 1,
+     "ms": 159.75,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:80 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-maintenance-AFTER.json",
+   "reason": "exit",
+   "windowMs": 43885,
+   "totalQueries": 111,
+   "driverCallsTotal": 111,
+   "target": {
+    "count": 1,
+    "ms": 1.4,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/accountMaintenanceAsync.js:94 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+    }
+   },
+   "otherSettingsFingerprints": {
+    "INSERT INTO user_settings(user_id, key, value) VALUES ($?,$?,$?) ON CONFLICT(user_id,key) DO UPDATE SET value = excluded": {
+     "count": 70,
+     "ms": 30064.66,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:94 <- v3/scripts/settings-hot-read-attribution.mjs:170": 70
+     }
+    },
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 18,
+     "ms": 18.85,
+     "sites": {
+      "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:88 <- v3/src/accountMaintenanceAsync.js:98 <- v3/scripts/settings-hot-read-attribution.mjs:89 <- v3/scripts/settings-hot-read-attribution.mjs:170": 18
+     }
+    },
+    "SELECT user_id, key, value FROM user_settings WHERE key IN (?,?)": {
+     "count": 1,
+     "ms": 5.25,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:48 <- v3/scripts/settings-hot-read-attribution.mjs:81 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+     }
+    },
+    "DELETE FROM user_settings WHERE key IN (?,?)": {
+     "count": 1,
+     "ms": 13475.81,
+     "sites": {
+      "v3/scripts/settings-hot-read-attribution.mjs:92 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-enqueue-BEFORE.json",
+   "reason": "exit",
+   "windowMs": 7184,
+   "totalQueries": 4987,
+   "driverCallsTotal": 4987,
+   "target": {
+    "count": 20,
+    "ms": 20.1,
+    "sites": {
+     "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:34 <- v3/src/notifyEnqueueAsync.js:48 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 20
+    }
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 440,
+     "ms": 420.69,
+     "sites": {
+      "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:55 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:134 <- v3/scripts/settings-hot-read-attribution.mjs:157": 440
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-enqueue-AFTER.json",
+   "reason": "exit",
+   "windowMs": 44564,
+   "totalQueries": 4968,
+   "driverCallsTotal": 4968,
+   "target": {
+    "count": 1,
+    "ms": 1.65,
+    "sites": {
+     "v3/scripts/settings-hot-read-attribution.mjs:59 <- v3/scripts/settings-hot-read-attribution.mjs:145 <- v3/scripts/settings-hot-read-attribution.mjs:170": 1
+    }
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 440,
+     "ms": 314.66,
+     "sites": {
+      "v3/src/notifyEnqueueAsync.js:27 <- v3/src/repository/notifyEnqueue.js:28 <- v3/src/repository/notifyEnqueue.js:58 <- v3/src/notifyEnqueueAsync.js:36 <- v3/scripts/settings-hot-read-attribution.mjs:147 <- v3/scripts/settings-hot-read-attribution.mjs:170": 440
+     }
+    }
+   }
+  },
+  {
+   "file": "attr-notify.json",
+   "reason": "exit",
+   "windowMs": 1871,
+   "totalQueries": 63,
+   "driverCallsTotal": 63,
+   "target": {
+    "count": 1,
+    "ms": 1.48,
+    "sites": {
+     "v3/src/settingsAsync.js:55 <- v3/src/settingsAsync.js:99 <- v3/src/watcher.js:474 <- v3/scripts/settings-hot-read-attribution.mjs:96 <- v3/scripts/settings-hot-read-attribution.mjs:139": 1
+    }
+   },
+   "otherSettingsFingerprints": {}
+  },
+  {
+   "file": "attr-similarity.json",
+   "reason": "exit",
+   "windowMs": 2902,
+   "totalQueries": 210,
+   "driverCallsTotal": 210,
+   "target": {
+    "count": 0,
+    "ms": 0,
+    "sites": {}
+   },
+   "otherSettingsFingerprints": {
+    "SELECT value FROM settings WHERE key = $?": {
+     "count": 30,
+     "ms": 19.82,
+     "sites": {
+      "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:192 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 16,
+      "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:201 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 14
+     }
+    }
+   }
+  },
+  {
+   "file": "round-watch-harness-master-14438e4.json",
+   "reason": "exit",
+   "windowMs": 137642,
+   "totalQueries": 1218,
+   "driverCallsTotal": 1027,
+   "target": {
+    "count": 0,
+    "ms": 0,
+    "sites": {}
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 86,
+     "ms": 101.24,
+     "sites": {
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1275 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1294 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+     }
+    },
+    "SELECT value FROM settings WHERE key = $?": {
+     "count": 11,
+     "ms": 13.04,
+     "sites": {
+      "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 9,
+      "v3/scripts/settings-hot-read-count.mjs:47": 2
+     }
+    },
+    "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO UPDATE SET value=excluded.value": {
+     "count": 10,
+     "ms": 23.88,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:136 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT key,value FROM settings": {
+     "count": 6,
+     "ms": 6.94,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:15 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO NOTHING": {
+     "count": 6,
+     "ms": 5.59,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT value FROM settings WHERE key=$? FOR UPDATE": {
+     "count": 6,
+     "ms": 6.71,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT user_id,key,value FROM user_settings": {
+     "count": 4,
+     "ms": 34.22,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1250 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1332 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT value FROM settings WHERE key=$?": {
+     "count": 2,
+     "ms": 1.79,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:144 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "INSERT INTO settings(key, value) VALUES ($?, $?) ON CONFLICT(key) DO UPDATE SET value = excluded.value": {
+     "count": 1,
+     "ms": 241.68,
+     "sites": {
+      "v3/scripts/settings-hot-read-count.mjs:57": 1
+     }
+    },
+    "UPDATE settings SET value = $? WHERE key = $?": {
+     "count": 1,
+     "ms": 64.81,
+     "sites": {
+      "v3/scripts/settings-hot-read-count.mjs:82": 1
+     }
+    }
+   }
+  },
+  {
+   "file": "round-watch-harness-diet2.json",
+   "reason": "exit",
+   "windowMs": 101072,
+   "totalQueries": 1218,
+   "driverCallsTotal": 1027,
+   "target": {
+    "count": 0,
+    "ms": 0,
+    "sites": {}
+   },
+   "otherSettingsFingerprints": {
+    "SELECT key, value FROM user_settings WHERE user_id = $?": {
+     "count": 86,
+     "ms": 143.82,
+     "sites": {
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1277 <- v3/scripts/settings-hot-read-count.mjs:67": 40,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:701 <- v3/src/watcher.js:893 <- v3/scripts/settings-hot-read-count.mjs:67": 24,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1296 <- v3/scripts/settings-hot-read-count.mjs:67": 12,
+      "v3/src/listingDetailAsync.js:40 <- v3/src/settingsAsync.js:49 <- v3/src/settingsAsync.js:88 <- v3/src/listingDetailAsync.js:60 <- v3/src/watcher.js:1189 <- v3/scripts/settings-hot-read-count.mjs:67": 10
+     }
+    },
+    "SELECT value FROM settings WHERE key = $?": {
+     "count": 11,
+     "ms": 31.47,
+     "sites": {
+      "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:211 <- v3/src/listingSimilarityAsync.js:176": 9,
+      "v3/scripts/settings-hot-read-count.mjs:47": 2
+     }
+    },
+    "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO UPDATE SET value=excluded.value": {
+     "count": 10,
+     "ms": 17.83,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:136 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:118 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:119 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT key,value FROM settings": {
+     "count": 6,
+     "ms": 13.43,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:15 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:774 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:55 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "INSERT INTO settings(key,value) VALUES ($?,$?) ON CONFLICT(key) DO NOTHING": {
+     "count": 6,
+     "ms": 10.01,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:49 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT value FROM settings WHERE key=$? FOR UPDATE": {
+     "count": 6,
+     "ms": 14.15,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:133 <- v3/src/watcher.js:1100 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:50 <- v3/src/crawlScheduleAsync.js:94 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT user_id,key,value FROM user_settings": {
+     "count": 4,
+     "ms": 76.67,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1252 <- v3/scripts/settings-hot-read-count.mjs:67": 2,
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:57 <- v3/src/crawlScheduleAsync.js:104 <- v3/src/watcher.js:1334 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "SELECT value FROM settings WHERE key=$?": {
+     "count": 2,
+     "ms": 3.17,
+     "sites": {
+      "v3/src/crawlScheduleAsync.js:35 <- v3/src/crawlScheduleAsync.js:144 <- v3/src/crawlScheduleAsync.js:34 <- v3/src/watcher.js:816 <- v3/scripts/settings-hot-read-count.mjs:67": 2
+     }
+    },
+    "INSERT INTO settings(key, value) VALUES ($?, $?) ON CONFLICT(key) DO UPDATE SET value = excluded.value": {
+     "count": 1,
+     "ms": 40.62,
+     "sites": {
+      "v3/scripts/settings-hot-read-count.mjs:57": 1
+     }
+    },
+    "UPDATE settings SET value = $? WHERE key = $?": {
+     "count": 1,
+     "ms": 51.66,
+     "sites": {
+      "v3/scripts/settings-hot-read-count.mjs:82": 1
+     }
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,84 @@
+{
+ "reason": "exit",
+ "startedAt": "2026-10-11T21:21:17.098Z",
+ "windowMs": 2902,
+ "totalQueries": 210,
+ "totalMs": 544.77,
+ "bySql": {
+  "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2": {
+   "count": 90,
+   "ms": 127.2,
+   "sites": {
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 32,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 28,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:190 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 16,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:199 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 14
+   }
+  },
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default\n     FROM information_schema.columns\n     WHERE table_schema = $1 AND table_name = $2\n     ORDER BY ordinal_position": {
+   "count": 90,
+   "ms": 397.75,
+   "sites": {
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 48,
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 42
+   }
+  },
+  "SELECT value FROM settings WHERE key = $1": {
+   "count": 30,
+   "ms": 19.82,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:192 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 16,
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:201 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 14
+   }
+  }
+ },
+ "byFingerprint": {
+  "SELECT ? FROM information_schema.tables WHERE table_schema = $? AND table_name = $?": {
+   "count": 90,
+   "ms": 127.2,
+   "sites": {
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 32,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 28,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:190 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 16,
+    "v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:199 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 14
+   }
+  },
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default FROM information_schema.columns WHERE table_s": {
+   "count": 90,
+   "ms": 397.75,
+   "sites": {
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 48,
+    "v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 42
+   }
+  },
+  "SELECT value FROM settings WHERE key = $?": {
+   "count": 30,
+   "ms": 19.82,
+   "sites": {
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:192 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 16,
+    "v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:201 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 14
+   }
+  }
+ },
+ "rawStacks": [],
+ "driverSites": {
+  "query v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 45,
+  "query v3/src/pgSchema.js:66 <- v3/src/pgSchema.js:171 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 45,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 30,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 30,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:190 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:192 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15,
+  "query v3/src/pgSchema.js:57 <- v3/src/pgSchema.js:165 <- v3/src/pgSchema.js:184 <- v3/src/listingSimilarityAsync.js:152 <- v3/src/listingSimilarityAsync.js:174 <- v3/src/listingSimilarityAsync.js:199 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:201 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15
+ },
+ "driverCallsTotal": 210,
+ "driverSqls": {
+  "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2": 90,
+  "SELECT column_name AS name, data_type AS type, is_nullable, column_default FROM information_schema.c": 90,
+  "SELECT value FROM settings WHERE key = $1": 30
+ },
+ "driverSettingsSites": {
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:192 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:118 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15,
+  "query v3/src/listingSimilarityAsync.js:175 <- v3/src/repository/listingSimilarity.js:80 <- v3/src/listingSimilarityAsync.js:201 <- v3/src/listingSimilarityAsync.js:176 <- v3/scripts/settings-hot-read-attribution.mjs:119 <- v3/scripts/settings-hot-read-attribution.mjs:139": 15
+ }
+}
