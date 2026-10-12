@@ -181,6 +181,53 @@ test("結構指紋改變（版本沒動）⇒ 立刻全掃：快取不得掩蓋�
   assert.equal(fullScans(calls), 3);
 });
 
+// ── se-p8：指紋降級成「帶外寫入偵測器」後的兩條新紅線 ─────────────────────────────────
+test("【se-p8 反向紅線】revision 沒有前進、但指紋變了 ⇒ 仍必須全掃並判 ok=false", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls, state } = fakeExec({ revision: 120, sentinel: "11", missing: 0 });
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true, "前置：乾淨狀態先驗證通過");
+  assert.equal(fullScans(calls), 1);
+
+  // 有人**不 bump data_revision**直接 INSERT 一列 listings（列增減 ⇒ 指紋變了），
+  // 全掃會看到「listings 有列、投影沒有」＝漂移。這正是指紋降級後最容易破的點：
+  // 若把指紋比較改成永真（`sentinelNow === entry.sentinel` 恆成立），這一條就會紅。
+  state.sentinel = "12";
+  state.missing = 1;
+  assert.equal(
+    await districtProjectionVerified(exec, VERIFY),
+    false,
+    "紅線破了：revision 沒前進但指紋變了（＝沒有 revision 紀錄的列增減）時，守門竟沒有全掃／判成 ok=true（會靜默少算）",
+  );
+  assert.equal(fullScans(calls), 2, "指紋變了必須再全掃一次");
+
+  // 漂移還沒修好（版本仍然沒動、指紋也不再變）⇒ 下一次請求仍須全掃且仍判 false
+  //   （不得因為「指紋與快取一致」就沿用上一輪的結果）。
+  assert.equal(await districtProjectionVerified(exec, VERIFY), false, "漂移未修好前不得判回 true");
+  assert.equal(fullScans(calls), 3, "版本沒前進 ⇒ 每次請求都要重驗（不得被快取掩蓋）");
+});
+
+test("【se-p8 回歸】revision 前進且指紋同時改變（爬蟲的正常寫入）⇒ 走增量，不得每次全掃", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls, state } = fakeExec({
+    revision: 200, sentinel: "20", delta: [{ entity_type: "listing", entity_id: 555 }],
+  });
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 1, "第一次全掃");
+
+  // 爬蟲每秒都在寫：`data_revision` 會前進，`listings` 的列增減指紋也幾乎每次都變。
+  //   修正前：指紋一比對就落到全掃 ⇒ 每請求 1–2 次全表 anti-join（正式庫 110–244ms）。
+  //   修正後：版本有前進就走「delta 增量證明」，指紋不參與。
+  state.revision = 201;
+  state.sentinel = "21";
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  state.revision = 202;
+  state.sentinel = "22";
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+
+  assert.equal(fullScans(calls), 1, "版本有前進就不是帶外寫入：不得再全掃（這一條是 se-p8 的效能修正本體）");
+  assert.equal(scopedScans(calls), 2, "每次版本前進都要對指名的 post_id 跑一次同一組判定式");
+});
+
 test("讀不到結構指紋（統計檢視不可用）⇒ 不可跨請求快取，每次全掃", async () => {
   resetDistrictProjectionCompletenessCache();
   const { exec, calls } = fakeExec({ revision: 100, sentinelTables: null });

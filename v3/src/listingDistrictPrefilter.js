@@ -36,18 +36,30 @@ export function districtPrefilterEnabled() {
 //   2. 之後只重驗 `(watermark, 目前 revision]` 之間**由 data_revision 指名變更過的 post_id**
 //      （有界、走兩張表的主鍵）。那一段用的判定式是原判定式**同一組述詞再加上
 //      `post_id = ANY(...)` 的範圍限制**，不是另一套寫法。
-//   3. 兩道兜底：
-//      a. **結構指紋**：`pg_stat_user_tables` 的 `n_tup_ins + n_tup_del`（`listings` ＋ 投影表）。
-//         任何**沒有 data_revision 紀錄的列增減**（真正的漂移來源：有人直接 INSERT／DELETE）
-//         都會讓指紋改變 ⇒ 立刻全掃，不讓快取掩蓋漂移。
+//   3. 兩道兜底（**se-p8：分工重新界定，判定式一字不動**）：
+//      a. **結構指紋＝帶外寫入偵測器**（`pg_stat_user_tables` 的 `n_tup_ins + n_tup_del`，
+//         `listings` ＋ 投影表）。它**不再是「能不能沿用快取」的前置條件**，只在
+//         **「版本沒有前進（`MAX(id)` 與上次相同）但指紋卻變了」**時才觸發全掃 —— 那正是它
+//         本來要抓的「有人不 bump revision 直接改表（列增減）」。反過來，爬蟲正常寫入時
+//         指紋本來就一直變（`data_revision` 每筆變更一行、與 listings 同交易），舊寫法會把
+//         這種「有 bump、也有記錄」的正常變更誤判成帶外寫入 ⇒ 每請求全掃（正式庫實測：
+//         全掃形狀 anti-join 每請求 1–2 次 × 110–244ms）。**不得**再走回頭路。
 //         ⚠️ 這一項的有效性受 PG 統計落地時機限制（`PGSTAT_MIN_INTERVAL` ≈ 1 秒；寫入端若就此
 //         閒置，要等它下一次 commit 或連線結束才會落地 —— repro 實測「INSERT 後立刻 `end()`」
-//         2ms 可見，「INSERT 後閒置」曾 >8 秒不可見）。所以它是**提早發現**、不是唯一保證：
-//         真正的硬上界是下面的週期全掃。
-//      b. **有界週期全掃**（`FULL_SCAN_INTERVAL_MS`，預設 5 分鐘）：連「沒有版本號也沒有指紋
-//         的變更」（例如有人直接 UPDATE 投影的 `district`）也只在這個窗口內沒被發現。
+//         2ms 可見，「INSERT 後閒置」曾 >8 秒不可見）。所以它是**提早發現**、不是唯一保證。
+//      b. **有界週期全掃**（`FULL_SCAN_INTERVAL_MS`，預設 5 分鐘）：**硬上界**就在這裡。凡是
+//         「沒有版本號、也沒有列增減指紋」的變更（例如有人直接 UPDATE 投影的 `district`、
+//         或 `source_key` 前綴被改），都只在這個窗口內沒被發現；另有兩個同類殘留風險：
+//         (i) 指紋是 `n_tup_ins + n_tup_del` 的**聚合**，同時增列又刪列可能讓它淨值不變；
+//         (ii) `n_tup_upd` 刻意不計（爬蟲每秒 upsert，計入就等於每請求全掃）。
+//         兩者的暴露上界同樣是 `FULL_SCAN_INTERVAL_MS`（預設 300000ms）。
 //   4. 任何不確定都退回全掃：delta 太大、變更列無法逐一列舉（`entity_id IS NULL`／未知
 //      `entity_type`）、指紋讀不到、版本號倒退 —— 一律全掃。誤判 `ok=false` 只是變慢。
+//
+// se-p8 不變式（**紅線**）：回 `true` 的必要條件是「`[0, watermark]` 由全掃證明過 ∧
+// `(watermark, MAX(id)]` 由 data_revision 指名變更的 post_id 逐筆證明過 ∧ 距上次全掃
+// < `FULL_SCAN_INTERVAL_MS`」。指紋只在「版本沒前進卻變了」時把結果降級成全掃，
+// **永遠不會**把結果升級成 `true`。判定式（`missing`／`mismatched`）逐字不變。
 const GUARD_CACHE_LIMIT = 64;
 const guardCache = new Map();
 
@@ -253,9 +265,12 @@ async function safeScopedProof(one, ids, keys, names) {
 }
 
 /**
- * 「全掃 ＋ 只在有結構指紋時才快取」。**指紋先讀、全掃後做**：兩者之間發生的列增減會讓下一次
+ * 「全掃 ＋ 記下已驗證範圍」。**指紋先讀、全掃後做**：兩者之間發生的列增減會讓下一次
  * 請求的指紋對不上 ⇒ 下一請求立刻全掃。反過來（先掃再讀指紋）會把「掃完才發生的變更」記成
  * 已驗證，可能掩蓋漂移。
+ *
+ * se-p8：這裡的指紋**只是「帶外寫入偵測器」的基準值**，不是「能不能快取」的條件。
+ * 沒有指紋（`sentinel == null`）仍然不可跨請求快取（fail-safe：退回舊版「每個請求都全掃」）。
  */
 async function fullScanAndCache(one, runAll, cacheKey, rev, keys, names) {
   const sentinel = await structuralSentinel(runAll);
@@ -277,6 +292,17 @@ async function fullScanAndCache(one, runAll, cacheKey, rev, keys, names) {
 /**
  * 投影「可用」的兩項證明（語意與舊版相同，但只把**已驗證範圍**記進快取；見檔頭）。
  * 回傳 `true` 才准用預篩。
+ *
+ * se-p8 的三段語意（**指紋只降級、不升級**）：
+ *   ① 版本沒前進（`entry.revision === rev`）：
+ *      - 指紋沒變 ⇒ 已驗證範圍仍然有效（`true`）。
+ *      - 指紋**變了** ⇒ 有**沒有 revision 紀錄的列增減**（真正的帶外寫入）⇒ 全掃。
+ *      - 指紋讀不到 ⇒ 不確定 ⇒ 全掃。
+ *   ② 版本前進了（`entry.revision < rev`）：
+ *      - 先用 `data_revision` 指名變更的 post_id 做**增量證明**（有界、走主鍵）。這一條路
+ *        **與指紋無關** —— 有 bump revision 的正常寫入不該被指紋誤判成帶外寫入。
+ *      - 只有「delta 無法逐一列舉／過大／增量證明不過」才全掃。
+ *   ③ 週期硬上界、沒有任何 entry、版本倒退（`entry.revision > rev`）⇒ 全掃。
  */
 export async function districtProjectionVerified(exec, { districtNames = [], allowedKeys = null, runOne = null, revision = undefined } = {}) {
   const one = runOne || defaultRunOne(exec);
@@ -291,10 +317,13 @@ export async function districtProjectionVerified(exec, { districtNames = [], all
   const cacheKey = names.join(",");
   const entry = guardCache.get(cacheKey);
   if (entry && entry.ok && entry.revision <= rev && Date.now() - entry.verifiedAt < FULL_SCAN_INTERVAL_MS) {
-    const sentinel = await structuralSentinel(runAll);
-    if (sentinel != null && sentinel === entry.sentinel) {
-      // 版本沒動、指紋沒動 ⇒ 已驗證範圍仍然有效。
-      if (entry.revision === rev) return true;
+    if (entry.revision === rev) {
+      // ① 版本沒前進：只有「指紋也一樣」才能沿用已驗證範圍。
+      const sentinelNow = await structuralSentinel(runAll);
+      if (sentinelNow != null && sentinelNow === entry.sentinel) return true;
+      // 指紋變了或讀不到 ⇒ 全掃（不回 false：只是變慢，掃完照樣可以判 ok=true）。
+    } else {
+      // ② 版本前進了：走「delta 增量證明」這條路，指紋不參與。
       const ids = await changedPostIdsSince(runAll, entry.revision, rev);
       if (ids != null) {
         if (!ids.length) {
@@ -308,8 +337,10 @@ export async function districtProjectionVerified(exec, { districtNames = [], all
         // 抓到漂移：不推進 watermark、不快取（誤判 ok=false 只會變慢）。
         return false;
       }
+      // delta 無法逐一列舉 ⇒ 落到下面的全掃（fail-safe）。
     }
   }
+  // ③ 全掃。`fullScanAndCache` 接受新的 `rev` 與當下的指紋 ⇒ 下一個請求從這個範圍重新起算。
   return fullScanAndCache(one, runAll, cacheKey, rev, keys, names);
 }
 
