@@ -17,6 +17,14 @@ import vm from "node:vm";
 //   * 通知矩陣那 36 個 checkbox 實測 24×18（高 18 < 24），**不在本期範圍**（派工單只指 `.kit-furnish`），
 //     且屬 2.5.8 的「間距例外」候選：它們是表格儲存格內的勾選框、彼此間距由表格 padding 撐開，
 //     沒有與其他目標互相覆蓋的情形；要主張例外必須另外量相鄰目標間距，不能只看 24×18 就宣告合規。
+// ⚠️ 沙箱 fixture 的已知假陽性缺口（2026-10-12 UI 稽核第二期 reviewer 指正，不要再把它當成「測過逾時」）：
+//   `loadListSandbox()` 裡的 `AbortSignal.timeout(ms)` 是**替身**，它只把 `ms` 記進 `requestedTimeouts`
+//   然後**立刻**（setTimeout 0）送出 abort。所以 R3-1 那幾條沙箱測試證明的是：
+//     ① 程式真的把 15000 送進 fetch 的 signal（`requestedTimeouts` 斷言），
+//     ② 逾時發生之後的收尾路徑（busy 清掉、狀態列不是 busy 文案）。
+//   它**不**證明「真實中止時間是 15 秒」——真實時間只有真瀏覽器（Playwright）量得到。
+//   要驗「兩條請求重疊時多久收尾」請看下面「重疊請求上限」那條：行為用等比縮小的時鐘跑，
+//   20 秒上限用常數算術斷言，兩者都不會因為排程抖動而假紅／假綠。
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
 const mascot = readFileSync(path.join(dir, "../public/mascot.js"), "utf8");
@@ -108,7 +116,7 @@ function makeEl(id) {
 
 // 用真程式碼跑 loadList：把 index.html 的 loadList／setListBusy／listRefreshBarEnabled／
 // listFetchFailureText 原文放進一個最小沙箱，DOM／fetch 換成可控替身。這樣測的是行為，不是字串。
-function loadListSandbox({ settings = {}, fetchImpl }) {
+function loadListSandbox({ settings = {}, fetchImpl, timeoutDelayMs = 0 }) {
   const timeoutMs = Number((html.match(/const LIST_FETCH_TIMEOUT_MS = (\d+);/) || [])[1]);
   assert.equal(timeoutMs, 15000, "列表載入的逾時預算必須是 15000ms");
   const els = new Map();
@@ -130,9 +138,10 @@ function loadListSandbox({ settings = {}, fetchImpl }) {
       timeout(ms) {
         requestedTimeouts.push(ms);
         const ctrl = new AbortController();
-        // 真等 15 秒會拖垮測試；數字本身由 requestedTimeouts 斷言，這裡立刻觸發 abort，
-        // 驗的是「逾時發生之後」的收尾路徑。
-        setTimeout(() => ctrl.abort(new DOMException("signal timed out", "TimeoutError")), 0);
+        // 見檔頭「沙箱 fixture 的已知假陽性缺口」：這裡是替身，不等真的 ms。
+        // 預設 timeoutDelayMs=0 ⇒ 立刻 abort（只驗「逾時之後」的收尾路徑）；
+        // 要驗「重疊請求多久收尾」的測試會傳一個等比縮小的 timeoutDelayMs。
+        setTimeout(() => ctrl.abort(new DOMException("signal timed out", "TimeoutError")), timeoutDelayMs);
         return ctrl.signal;
       },
     },
@@ -181,12 +190,14 @@ function loadListSandbox({ settings = {}, fetchImpl }) {
       fnSource("setListBusy"),
       fnSource("loadList"),
       "globalThis.__loadList = loadList;",
+      "globalThis.__listFetchFailureText = listFetchFailureText;",
     ].join("\n"),
     ctx,
   );
   const listEl = () => sandbox.$("list");
   return {
     loadList: (options) => ctx.__loadList(options),
+    failureText: (error, fallback) => ctx.__listFetchFailureText(error, fallback),
     status: () => sandbox.$("status").textContent,
     listEl,
     isRefreshing: () => listEl().classList.contains("is-refreshing"),
@@ -373,14 +384,115 @@ test("R3-1 路線永不回應（hang）時：15 秒逾時會收尾，is-refreshi
   assert.match(status, /請再點一次重新載入/);
 });
 
-test("R3-1 非逾時的失敗（500／網路斷）也會收尾並換成失敗文案", async () => {
+test("R3-1 非逾時的失敗（500／網路斷）也會收尾，但不會被套上「更新逾時／重新載入」後綴", async () => {
   const s = loadListSandbox({ fetchImpl: () => Promise.reject(new Error("boom")) });
   await s.loadList({ force: true }).catch(() => {});
   assert.deepEqual(s.toggles("is-refreshing"), [true, false]);
   assert.equal(s.isRefreshing(), false);
   assert.match(s.status(), /boom/);
-  assert.match(s.status(), /請再點一次重新載入/);
+  // 第二期 reviewer 指正：那條後綴原本對所有錯誤都出現，等於叫人「重新載入」一個其實不是逾時的畫面。
+  assert.doesNotMatch(s.status(), /逾時/);
+  assert.doesNotMatch(s.status(), /請再點一次重新載入/);
   assert.notEqual(s.status().trim(), "正在更新列表…");
+});
+
+test("B2 逾時文案只在真的逾時出現：TimeoutError／AbortError 才有「更新逾時…」，其餘照原文", () => {
+  const s = loadListSandbox({ fetchImpl: () => Promise.reject(new Error("x")) });
+  assert.equal(s.failureText(new DOMException("signal timed out", "TimeoutError")), "更新逾時（15 秒），請再點一次重新載入");
+  assert.equal(s.failureText(new DOMException("aborted", "AbortError")), "更新逾時（15 秒），請再點一次重新載入");
+  assert.equal(s.failureText(new Error("boom")), "boom");
+  assert.equal(s.failureText(Object.assign(new Error("搜尋暫時無法使用"), { code: "LIST_FAIL" })), "搜尋暫時無法使用");
+  // 沒有 message 的錯誤（render 例外被包成 undefined）與訪客訊息只拿 fallback，不會多出後綴
+  assert.equal(s.failureText(undefined, "訪客搜尋失敗"), "訪客搜尋失敗");
+  assert.doesNotMatch(s.failureText(undefined, "訪客搜尋失敗"), /重新載入/);
+});
+
+test("B3 重疊請求上限（約 20 秒）：兩條列表請求都在飛時，busy 要撐到最後一條逾時才收尾", async () => {
+  // 真瀏覽器覆核（2026-10-12，本地 5153、Playwright）是 hang 16.6s／20.7s 後 is-refreshing=false，
+  // 這條把它變成可重跑的測試：同一條路徑用等比縮小的時鐘跑，重點是
+  //「第一條逾時不可以把還在飛的第二條的 busy 收掉」。
+  const timeoutDelayMs = 120;
+  const staggerMs = 40;
+  const s = loadListSandbox({
+    timeoutDelayMs,
+    fetchImpl: (url, opts) => new Promise((_, reject) => {
+      opts.signal.addEventListener("abort", () => reject(opts.signal.reason || new DOMException("aborted", "AbortError")));
+    }),
+  });
+  const started = Date.now();
+  const first = s.loadList({ force: true }).catch(() => {});
+  await new Promise((r) => setTimeout(r, staggerMs));
+  const second = s.loadList({ force: true }).catch(() => {});
+  await Promise.all([first, second]);
+  const elapsed = Date.now() - started;
+  assert.deepEqual(s.toggles("is-refreshing"), [true, true, false], "第二條請求的 busy 不可以被第一條的逾時收掉");
+  assert.equal(s.isRefreshing(), false, "兩條都收尾後 is-refreshing 一定要清掉");
+  assert.notEqual(s.status().trim(), "正在更新列表…");
+  assert.match(s.status(), /逾時/);
+  assert.ok(elapsed >= timeoutDelayMs + staggerMs, `收尾時間應 ≥ 第二條起跑點＋自己的逾時（實測 ${elapsed}ms）`);
+  assert.ok(elapsed < timeoutDelayMs + staggerMs + 500, `收尾不應拖過一個逾時週期（實測 ${elapsed}ms）`);
+  // 使用者等待的上限（純算術，不受排程抖動影響）：單條列表請求的預算是 15000ms，
+  // 第二條最晚在 5 秒後才重疊 ⇒ 收尾上限 ≈ 20 秒。這也是真瀏覽器量到 16.6s／20.7s 的來源。
+  const LIST_FETCH_TIMEOUT_MS = 15000;
+  const OVERLAP_STAGGER_BUDGET_MS = 5000;
+  assert.equal(LIST_FETCH_TIMEOUT_MS + OVERLAP_STAGGER_BUDGET_MS, 20000);
+});
+
+test("A 0 筆的解釋：數字取 stats、口徑寫「候補中」，pending 另計不併進超出範圍", () => {
+  const ctx = vm.createContext({
+    viewDistricts: new Set(["大里區"]),
+    settings: { commuteKm: 13, workAddress: "臺北市士林區" },
+    Number, Math, String,
+  });
+  vm.runInContext(
+    [fnSource("commuteShortfallNoun"), fnSource("commuteShortfallMessage"), "globalThis.__m = commuteShortfallMessage;"].join("\n"),
+    ctx,
+  );
+  const one = ctx.__m({ excludedByCommute: 1590, commutePending: 61, matched: 0, total: 0 });
+  assert.match(one.lead, /^候補中有 (1,590|1590) 個大里區物件超出你 13 公里的通勤範圍。$/);
+  assert.equal(one.hint, "你可以放寬通勤距離，或改為查看全部物件。");
+  assert.match(one.note, /^另有 (61) 個物件的通勤距離還在計算中/);
+  // 口徑：不得寫成「最終可見數／看不到」那種會被誤讀的句子
+  assert.doesNotMatch(one.lead, /看不到|無法顯示|被擋掉|只有/);
+  assert.doesNotMatch(one.note, /超出|超過/);
+  // pending=0 時不要多一行
+  assert.equal(ctx.__m({ excludedByCommute: 1590, commutePending: 0 }).note, "");
+  // 多個行政區／沒勾行政區時的措辭
+  vm.runInContext('viewDistricts = new Set(["大里區", "太平區"]);', ctx);
+  assert.match(ctx.__m({ excludedByCommute: 12 }).lead, /個你勾選行政區的物件超出你 13 公里/);
+  vm.runInContext("viewDistricts = new Set();", ctx);
+  assert.match(ctx.__m({ excludedByCommute: 12 }).lead, /個符合目前條件的物件超出你 13 公里/);
+});
+
+test("A 空狀態是 live region，兩個動作都有名詞（不是「點這裡」）", () => {
+  assert.match(html, /class="empty empty-explain" role="status" aria-live="polite" aria-atomic="true"/);
+  assert.match(html, /id="emptyCommuteWiden" aria-label="放寬通勤距離/);
+  assert.match(html, /id="emptyCommuteAllDistricts" aria-label="查看全部行政區的物件/);
+  assert.match(html, /\.empty-explain \{ text-align: left;/);
+  assert.doesNotMatch(html, /點這裡/);
+  // 「查看全部物件」走的是既有 district chips 的「全部」鈕，不新增寫入路徑
+  assert.match(html, /document\.querySelector\('\[data-view-district=""\]'\)\?\.click\(\)/);
+  assert.match(html, /function focusCommuteLimitSetting\(\) \{/);
+  assert.match(html, /input\.scrollIntoView\(\{ block: "center", behavior: "smooth" \}\);/);
+});
+
+test("A 主 CTA 在手機不被浮動層吃掉：底部留白＋促銷卡縮圖＋0 筆時 sticky 篩選列回文件流", () => {
+  // 實測（Playwright，375×812／414×896，原文見 PR）：
+  //   ① position:fixed 的 #bottomNav（755..812）與外挂 /mascot.js 的促銷卡（375 原本 270×240、
+  //      卡片 93..363 × 414..728）把列表底部蓋住 ⇒ 兩顆 CTA 的 hit-area 被打到；
+  //   ② 真正攔到 CTA 的還有**很高**的 sticky 篩選列（375 佔 6..591＝72% 視高），
+  //      「把目標捲到中央」會放進它底下（scrollY=470 時 CTA 411..455 被 .chip 攔下）。
+  // 這條把三件修正釘住（都只在 index.html 的 <style>；沒有動 mascot.js、沒有動 kit 快照）。
+  assert.match(html, /@media \(max-width: 480px\) \{\s*\n\s*\.jibby-mascot-card,\s*\n\s*\.jibby-mascot-media,/);
+  assert.match(html, /\.jibby-mascot-media video \{ width: min\(160px, 42vw\); max-width: min\(160px, 42vw\); \}/);
+  assert.match(html, /\.list:has\(\.empty-explain\) \{ padding-bottom: 60px; \}/);
+  // 覆蓋 ≤880px 的 media 規則：同特異度、必須放在樣式表最後（最後一條 base sticky 之後）
+  const overrideAt = html.indexOf("body.panel-collapsed:has(.empty-explain) .list-head-sticky,");
+  assert.ok(overrideAt > html.lastIndexOf("body.panel-collapsed .list-head-sticky:not(.filter-compact) {"), "覆蓋規則必須排在 base 的 sticky 規則之後");
+  assert.match(html.slice(overrideAt), /^body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky,\s*\n\s*body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky\.filter-compact,\s*\n\s*body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky:not\(\.filter-compact\) \{\s*\n\s*position: static;/);
+  // base 規則不能被改掉（panel 收合本來就是 static；sticky 由 filter-compact／非 compact 兩條決定）
+  assert.match(html, /body\.panel-collapsed \.list-head-sticky \{\s*\n\s*position: static;/);
+  assert.match(html, /body\.panel-collapsed \.list-head-sticky\.filter-compact \{\s*\n\s*position: sticky;/);
 });
 
 test("R3-1 後台細線開關仍只決定樣式：等待中一樣加 is-refreshing", async () => {
@@ -438,7 +550,9 @@ test("P12 h3 不再掛 role=button；卡片標題由 h3 改 h2（heading-order�
   assert.doesNotMatch(html, /<h3 class="item-title">/);
 });
 
-test("本期刻意不動色票：--watch 與 --same-soft 原值", () => {
-  assert.match(tokens, /--watch: #9a6b6b;/);
+test("本期色票：--watch 改 #896060（AA 4.5:1），--same-soft 原值不動", () => {
+  // 2026-10-12 第二期：--watch 在實際背景上原本 3.91～4.48:1 全部 UNDER AA，
+  // 改成 #896060 後最差（對 --bg #f3efe8）4.69:1、對 --paper／--rose-soft／白都在 4.8 以上。
+  assert.match(tokens, /--watch: #896060;/);
   assert.match(tokens, /--same-soft: #eceaf4;/);
 });

@@ -228,54 +228,6 @@
       letter-spacing: -0.03em;
       margin: 4px 0 2px;
     }
-    .guest-tour {
-      position: fixed;
-      inset: 0;
-      z-index: 80;
-      pointer-events: none;
-    }
-    .guest-tour-dim {
-      position: absolute;
-      inset: 0;
-      background: rgba(16, 28, 34, 0.38);
-      animation: guestTourFade 0.35s ease;
-    }
-    .guest-tour-spot {
-      position: absolute;
-      border: 2px solid var(--accent);
-      border-radius: 18px;
-      box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 8px rgba(13, 165, 160, 0.22);
-      transition: top 0.45s ease, left 0.45s ease, width 0.45s ease, height 0.45s ease;
-      animation: guestTourPulse 1.6s ease-in-out infinite;
-    }
-    .guest-tour-card {
-      position: absolute;
-      width: min(360px, calc(100vw - 32px));
-      padding: 14px 16px;
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: 0 16px 40px rgba(26, 43, 51, 0.16);
-      pointer-events: auto;
-      transition: top 0.45s ease, left 0.45s ease;
-    }
-    .guest-tour-card p { margin: 0; font-size: 14px; line-height: 1.55; }
-    .guest-tour-step {
-      color: var(--accent-deep);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      margin-bottom: 6px !important;
-    }
-    .guest-tour-card .row { margin-top: 12px; }
-    @keyframes guestTourFade {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    @keyframes guestTourPulse {
-      0%, 100% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 6px rgba(13, 165, 160, 0.16); }
-      50% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 12px rgba(13, 165, 160, 0.28); }
-    }
     .notify-shortcuts {
       margin: 10px 0 4px;
       padding: 10px 12px;
@@ -2975,6 +2927,31 @@
       background: var(--accent);
     }
     .empty { padding: 24px 16px; color: var(--muted); text-align: center; font-size: var(--text-md); line-height: 1.6; }
+    /* 「0 筆」的解釋：容器本身就是 live region（role=status／aria-live=polite）。
+       主句用 --ink、其餘用 --muted；兩者對實際背景（--paper／--bg）都 ≧ 4.5:1（見 PR 對比實測）。 */
+    .empty-explain { text-align: left; display: grid; gap: 8px; justify-items: start; }
+    .empty-explain-lead { margin: 0; color: var(--ink); font-weight: 700; }
+    .empty-explain-hint,
+    .empty-explain-note { margin: 0; color: var(--muted); }
+    .empty-explain-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    /* 手機上的浮動層會蓋住列表底部：#bottomNav（57px）、#mobileHelpDock、#scrollTopBtn，
+       以及外挂 /mascot.js 的促銷卡（#jibbyMascot；640×640 的 webp 在 375 會渲染成 270×240，
+       卡片落在 x 93..363、y 414..728）。空狀態那兩顆 CTA 是這包的主 CTA：實測 375 的指標點擊
+       會被 #jibbyMascot 的 <img> 攔下（Playwright 原文見 PR）。幾何上 375 沒有任何 y 能同時
+       避開促銷卡（上緣 414）與底部導覽列（755 起），而 CTA 只能落在 x 43..279 ⇒ 只能動促銷卡
+       本身的尺寸：① ≤480px 讓促銷卡縮到 min(160px,42vw)（**沒有藏掉吉祥物、沒有改 mascot.js
+       的行為**，只是不讓 640×640 的促銷圖佔掉小螢幕 72% 寬）⇒ 卡片上緣 496 高於 CTA 下緣；
+       ② 空狀態存在時列表底部多留 60px，讓「瀏覽器自動置中／使用者捲到定位」都能把 CTA 停在
+       固定層上方（整條 hit-area 不與任何 fixed 元素重疊）。 */
+    @media (max-width: 480px) {
+      .jibby-mascot-card,
+      .jibby-mascot-media,
+      .jibby-mascot-media img,
+      .jibby-mascot-media video { width: min(160px, 42vw); max-width: min(160px, 42vw); }
+    }
+    @media (max-width: 880px) {
+      .list:has(.empty-explain) { padding-bottom: 60px; }
+    }
     #bootFail {
       display: none;
       position: sticky;
@@ -3363,6 +3340,20 @@
         min-height: var(--chip-height);
       }
     }
+    /* 「0 筆」時把 sticky 篩選列放回文件流（對應上方 .empty-explain 的說明）。
+       第二個攔截者不是 fixed，是**很高**的 sticky 列：375 實測佔 6..591px＝72% 視高，
+       把視窗中央整條蓋住 ⇒ 瀏覽器「把目標捲到中央」與手指點擊都會落在它底下
+       （實測 scrollY=470 時 CTA 411..455 被 .chip 攔下、Playwright 原文見 PR）。
+       列表 0 筆時 sticky 已無意義（下方沒有東西要對齊），改 static 讓說明與 CTA 都能捲進可點區。
+       這兩條覆蓋 ≤880px 的 media 規則，所以放在樣式表最後（同特異度、後者勝）。 */
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky,
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky.filter-compact,
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky:not(.filter-compact) {
+      position: static;
+      top: auto;
+      max-height: none;
+      overflow-y: visible;
+    }
   </style>
   <script>
     (function () {
@@ -3470,18 +3461,6 @@
     <p><strong id="announceBannerTitle"></strong> <span id="announceBannerText"></span> <a id="announceBannerLink" hidden></a></p>
     <button type="button" class="ghost" id="announceBannerClose" aria-label="關閉系統公告">×</button>
   </aside>
-  <div id="guestTour" class="guest-tour" hidden>
-    <div class="guest-tour-dim"></div>
-    <div class="guest-tour-spot" id="guestTourSpot"></div>
-    <div class="guest-tour-card" id="guestTourCard">
-      <p class="guest-tour-step" id="guestTourStep"></p>
-      <p id="guestTourText"></p>
-      <div class="row">
-        <button type="button" class="ghost" id="guestTourSkip">略過</button>
-        <button type="button" class="primary" id="guestTourNext">下一步</button>
-      </div>
-    </div>
-  </div>
   <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
     <p>登入／註冊後可使用這項功能。</p>
     <div class="row">
@@ -4927,10 +4906,6 @@
     let guestLockClicks = 0;
     let guestToastTimer = 0;
     const GUEST_LOCK_TOAST_AFTER = 1;
-    const GUEST_TOUR_SKIP = "591_v3_guest_tour_skip";
-    try {
-      if (new URLSearchParams(location.search).has("skipTour")) localStorage.setItem(GUEST_TOUR_SKIP, "1");
-    } catch { /* 略過 */ }
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
@@ -5349,6 +5324,39 @@
 
     function commuteOn(s = settings) {
       return Number(s.commuteKm) > 0 && String(s.workAddress || "").trim() !== "";
+    }
+
+    // 「0 筆」要把原因講出來：數字一律取同一請求的 stats.excludedByCommute／commutePending，
+    // 不自己猜、也不另外發請求。口徑＝本請求的候選池（已套搜尋範圍與行政區預篩、已過屬性與
+    // 關鍵字篩選），顯示／樓層／類型篩選之前（見 v3/src/db.js applyListingFilter() 的
+    // commuteCounters），所以文案一律寫「候補中」，避免被讀成「最終可見數」。
+    function commuteShortfallNoun() {
+      const names = [...viewDistricts];
+      if (names.length === 1) return `${names[0]}物件`;
+      if (names.length > 1) return "你勾選行政區的物件";
+      return "符合目前條件的物件";
+    }
+    function commuteShortfallMessage(st) {
+      const excluded = Math.max(0, Number(st?.excludedByCommute) || 0);
+      const pending = Math.max(0, Number(st?.commutePending) || 0);
+      const km = Number(settings?.commuteKm) || 0;
+      return {
+        lead: `候補中有 ${excluded.toLocaleString("zh-TW")} 個${commuteShortfallNoun()}超出你 ${km} 公里的通勤範圍。`,
+        hint: "你可以放寬通勤距離，或改為查看全部物件。",
+        note: pending > 0
+          ? `另有 ${pending.toLocaleString("zh-TW")} 個物件的通勤距離還在計算中，算完才會知道符不符合。`
+          : "",
+      };
+    }
+    // 走頁面既有控制，不新增寫入路徑：窄螢幕開既有的「搜尋設定」抽屜，桌機展開左側設定面板，
+    // 再把焦點放到既有的 #commuteKm 欄位（要不要改、改了要不要按「儲存」仍然由使用者決定）。
+    function focusCommuteLimitSetting() {
+      if (window.matchMedia("(max-width: 880px)").matches) openFilterSheet();
+      else setPanelCollapsed(false);
+      const input = $("commuteKm");
+      if (!input) return;
+      input.scrollIntoView({ block: "center", behavior: "smooth" });
+      input.focus({ preventScroll: true });
     }
 
     function listingCommuteKm(it) {
@@ -6658,94 +6666,9 @@
       syncSourceFilterAccess();
     }
 
-    const GUEST_TOUR_STEPS = [
-      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。你可以先搜尋已抓進資料庫的房源；登入／註冊後才能儲存設定與特別關注。" },
-      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區可勾選，最多同時 4 個。租金也可以先篩。條件只留在這次瀏覽，不會寫進會員設定。登入後仍用你自己的設定檔。" },
-      { target: "[data-tour=commute]", title: "第 3／7 步", text: "可填上班地址與距離上限。訪客用直線距離估算，不是會員的機車／汽車路線。找不到地址時會提示，不會默默略過。" },
-      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "步行未滿 1.5 公里的最近捷運站會顯示在列表。這個開關由站方後台統一決定。" },
-      { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
-      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存與刪除也鎖定中。註冊後最多可存 3 組自己的條件；同名儲存會覆蓋。" },
-      { target: "#listHeadSticky", title: "第 7／7 步", text: "特別關注與隱藏要登入才寫得進去。點進物件會自動記成已瀏覽。按「前往註冊」就能開始用這些功能。" },
-    ];
-    let guestTourIndex = 0;
-    let guestTourTimer = 0;
-
-    function guestTourSkipped() {
-      try { return localStorage.getItem(GUEST_TOUR_SKIP) === "1"; } catch { return false; }
-    }
-    function stopGuestTour(persist) {
-      if (guestTourTimer) window.clearTimeout(guestTourTimer);
-      guestTourTimer = 0;
-      const box = $("guestTour");
-      if (box) box.hidden = true;
-      if (persist) {
-        try { localStorage.setItem(GUEST_TOUR_SKIP, "1"); } catch { /* 略過 */ }
-      }
-    }
-    function placeGuestTour(step) {
-      const spot = $("guestTourSpot");
-      const card = $("guestTourCard");
-      if (!spot || !card) return;
-      const el = document.querySelector(step.target);
-      const pad = 8;
-      let rect = el?.getBoundingClientRect();
-      if (!rect || !el || rect.width < 8 || rect.height < 8) {
-        rect = { top: 80, left: 32, width: 320, height: 72 };
-      }
-      const maxH = Math.min(window.innerHeight - 24, 240);
-      const maxW = window.innerWidth - 16;
-      spot.style.top = `${Math.max(8, rect.top - pad)}px`;
-      spot.style.left = `${Math.max(8, rect.left - pad)}px`;
-      spot.style.width = `${Math.min(maxW, rect.width + pad * 2)}px`;
-      spot.style.height = `${Math.min(maxH, rect.height + pad * 2)}px`;
-      const cardW = Math.min(360, window.innerWidth - 32);
-      const below = rect.bottom + 16 + 180 < window.innerHeight;
-      const top = below ? Math.min(rect.bottom + 12, window.innerHeight - 190) : Math.max(12, rect.top - 170);
-      const left = Math.min(Math.max(16, rect.left), window.innerWidth - cardW - 16);
-      card.style.top = `${Math.max(12, top)}px`;
-      card.style.left = `${left}px`;
-    }
-    function showGuestTourStep(index) {
-      const steps = GUEST_TOUR_STEPS;
-      guestTourIndex = Math.max(0, Math.min(index, steps.length - 1));
-      const step = steps[guestTourIndex];
-      const last = guestTourIndex === steps.length - 1;
-      $("guestTourStep").textContent = step.title;
-      $("guestTourText").textContent = step.text;
-      $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
-      document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "instant" });
-      placeGuestTour(step);
-      window.requestAnimationFrame(() => placeGuestTour(step));
-      window.setTimeout(() => placeGuestTour(step), 280);
-      if (guestTourTimer) window.clearTimeout(guestTourTimer);
-      guestTourTimer = window.setTimeout(() => {
-        if (last) return;
-        showGuestTourStep(guestTourIndex + 1);
-      }, 5200);
-    }
-    function maybeStartGuestTour() {
-      const box = $("guestTour");
-      if (!box || !isGuest || guestTourSkipped()) return;
-      if (!window.matchMedia("(max-width: 880px)").matches) {
-        document.body.classList.remove("panel-collapsed");
-        syncPanelFab();
-      }
-      box.hidden = false;
-      showGuestTourStep(0);
-    }
-    $("guestTourSkip")?.addEventListener("click", () => stopGuestTour(true));
-    $("guestTourNext")?.addEventListener("click", () => {
-      if (guestTourIndex >= GUEST_TOUR_STEPS.length - 1) {
-        stopGuestTour(true);
-        goRegister();
-        return;
-      }
-      showGuestTourStep(guestTourIndex + 1);
-    });
-
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest("#districtPicker") && !el.closest("[data-city-hide]")) return false;
       if (el.closest("#workAddress, #commuteKm, label[data-tour=commute]")) return false;
       if (el.closest(".guest-cheap")) return false;
@@ -7227,7 +7150,6 @@
     function setHubTab(name) {
       const tab = String(name || "events");
       document.querySelectorAll("[data-hub-tab]").forEach((el) => {
-        el.setAttribute("aria-selected", el.dataset.hubTab === tab ? "true" : "false");
         const selected = el.dataset.hubTab === tab;
         el.setAttribute("aria-selected", selected ? "true" : "false");
         // roving tabindex（WAI-ARIA APG tabs pattern）：只有選取中的分頁進 Tab 序。
@@ -8076,6 +7998,33 @@
       updateListMeta(items, st);
       if (!items.length) {
         const q = $("q").value.trim();
+        // 「0 筆」的解釋：只有在①不是特別關注／已隱藏這類子檢視、②真的有條件篩選、
+        // ③後端同一個請求快照回報「通勤擋掉了候補」時才講原因；沒有這兩個數字就照舊走下面的文案。
+        const savedStateView = ["watched", "hidden", "suspected", "offline"].includes(filter);
+        const narrowConditions = Boolean(q) || viewDistricts.size > 0 || kinds.length || sources.length
+          || Boolean($("excludeLowFloors")?.checked) || Boolean($("excludeRooftop")?.checked) || Boolean($("hasParking")?.checked);
+        if (!savedStateView && narrowConditions && commuteOn() && (Number(st.excludedByCommute) || 0) > 0) {
+          const explain = commuteShortfallMessage(st);
+          replaceListHtml(`<div class="empty empty-explain" role="status" aria-live="polite" aria-atomic="true">
+          <p class="empty-explain-lead">${esc(explain.lead)}</p>
+          <p class="empty-explain-hint">${esc(explain.hint)}</p>
+          ${explain.note ? `<p class="empty-explain-note">${esc(explain.note)}</p>` : ""}
+          <div class="empty-explain-actions">
+            <button type="button" class="ghost" id="emptyCommuteWiden" aria-label="放寬通勤距離（開啟搜尋設定裡的「物件與公司距離上限」欄位）">放寬通勤距離</button>
+            ${viewDistricts.size ? `<button type="button" class="ghost" id="emptyCommuteAllDistricts" aria-label="查看全部行政區的物件（清除行政區篩選）">查看全部物件</button>` : ""}
+          </div>
+        </div>`);
+          $("emptyCommuteWiden")?.addEventListener("click", focusCommuteLimitSetting);
+          $("emptyCommuteAllDistricts")?.addEventListener("click", () => {
+            document.querySelector('[data-view-district=""]')?.click();
+          });
+          // 讀屏：live region 若與內容同時插入，部分輔具不會朗讀；插進樹之後再動一次文字，
+          // 讓「內容變更」一定發生在 region 已經存在之後。
+          const leadEl = document.querySelector("#list .empty-explain-lead");
+          if (leadEl) window.setTimeout(() => { if (leadEl.isConnected) leadEl.textContent = leadEl.textContent; }, 150);
+          updateBulkBar();
+          return;
+        }
         let msg = "目前沒有符合條件的物件。請勾選行政區並按儲存，之後會自動抓取與篩選。";
         if (q) msg = `沒有符合「${q}」的物件。試試較短關鍵字，或清掉搜尋看全部列表。`;
         else if (filter === "watched" && watchView) {
@@ -8449,13 +8398,16 @@
     // 不能讓 .is-refreshing／pointer-events:none 永久卡住（原本 fetch 完全沒有 client 端逾時）。
     const LIST_FETCH_TIMEOUT_MS = 15000;
 
-    // 列表載入失敗／逾時的統一文案（逾時與其他失敗要分得出來，且一定不是 busy 中的字）。
+    // 列表載入失敗／逾時的統一文案。
+    // 「更新逾時（N 秒），請再點一次重新載入」這一組只在**列表請求真的逾時**時才出現
+    // （`/api/listings` 那條 fetch 只帶 `AbortSignal.timeout()`，所以 TimeoutError／AbortError
+    // 都是這個請求自己的逾時）。其他失敗——HTTP 500、網路斷、render 例外、訪客訊息——
+    // 只顯示自己的訊息，不要叫人「重新載入」一個其實不是逾時的畫面。
     function listFetchFailureText(error, fallback = "更新失敗") {
       const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+      if (!timedOut) return error?.message || fallback;
       const seconds = Math.round(LIST_FETCH_TIMEOUT_MS / 1000);
-      return timedOut
-        ? `更新逾時（${seconds} 秒），請再點一次重新載入`
-        : `${error?.message || fallback}，請再點一次重新載入`;
+      return `更新逾時（${seconds} 秒），請再點一次重新載入`;
     }
 
     async function loadList(options = {}) {
@@ -8638,7 +8590,6 @@
         renderDistrictPicker({ watchDistricts: watchKeys });
         setSettingsReady(false, "訪客可搜尋已抓進資料庫的房源。登入／註冊後可儲存設定檔與通知。");
         await loadList({ busyText: "正在載入公開房源…" });
-        maybeStartGuestTour();
         return;
       }
       if (window.GuestSearchState) {

@@ -39,7 +39,9 @@ test("I: guest sessionStorage survives a refresh-shaped read", () => {
 test("guest boot does not prefetch /api/settings before knowing the session", () => {
   const html = readFileSync(path.join(dir, "../public/index.html"), "utf8");
   const load = html.slice(html.indexOf("async function loadState"), html.indexOf("function collectSettings"));
-  const guestReturn = load.indexOf("maybeStartGuestTour()");
+  // 訪客分支的哨兵原本是 `maybeStartGuestTour()`；2026-10-12 第二期移除訪客導覽後，
+  // 改用訪客分支最後一行的狀態文案（就在 `return;` 之前），語意相同：訪客一定先折返。
+  const guestReturn = load.indexOf('setSettingsReady(false, "訪客可搜尋已抓進資料庫的房源');
   const firstSettings = load.indexOf('fetch("/api/settings"');
   assert.ok(guestReturn > 0 && firstSettings > guestReturn, "member settings fetch must stay after the guest return");
 });
@@ -202,7 +204,7 @@ test("guest UI unlocks district picker and commute, and drops street-estimate ch
   assert.match(html, /#workAddress, #commuteKm/);
   assert.match(html, /params\.set\("workAddress"/);
   assert.doesNotMatch(html, /id="notifyIncludeStreetEstimate"/);
-  assert.match(html, /可填上班地址與距離上限/);
+  assert.match(html, /訪客可用直線距離先篩/);
   assert.doesNotMatch(html, /公司地址、機車或汽車路徑也無法/);
 });
 

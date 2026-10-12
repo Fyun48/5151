@@ -412,7 +412,7 @@ test("guest demo is read-only and work prompt can be skipped", () => {
   assert.match(html, /data-tour="guestWho"/);
   assert.match(html, /class="site-footer"/);
   assert.match(html, /reversal play tech \| 逆遊科技/);
-  assert.match(html, /你可以先搜尋已抓進資料庫的房源/);
+  assert.match(html, /訪客可搜尋已抓進資料庫的房源/);
   assert.match(html, /id="workAddress"/);
   assert.match(html, /class="guest-cheap" placeholder="例如：臺北市南港區經貿一路170號"/);
   assert.match(html, /id="commuteKm" class="guest-cheap"/);
@@ -517,7 +517,7 @@ test("product name is 吉比租房物件追蹤 without v2 開發版 copy", () =>
   assert.match(login, /ver\. 3\.57/);
 });
 
-test("MRT is admin-only and guest tour is in the page", () => {
+test("MRT is admin-only and the guest tour is gone", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.doesNotMatch(html, /id="showMrt"/);
   assert.match(html, /id="helpQaBtn"/);
@@ -528,13 +528,13 @@ test("MRT is admin-only and guest tour is in the page", () => {
   assert.doesNotMatch(html, /· 步行約 \$\{esc\(walkKm\)\} 公里/);
   assert.doesNotMatch(html, /騎車約/);
   assert.match(html, /walkKm < 1\.5/);
-  assert.match(html, /id="guestTour"/);
-  assert.match(html, /GUEST_TOUR_STEPS/);
-  assert.match(html, /function maybeStartGuestTour/);
-  assert.match(html, /\[data-tour=guestWho\]/);
-  assert.match(html, /前往註冊/);
-  assert.match(html, /#listHeadSticky/);
-  assert.match(html, /behavior: "instant"/);
+  // 2026-10-12 第二期（Owner 未回覆時的預設處置，見 PR 說明）：訪客首屏 7 步導覽整組移除，
+  // DOM／CSS／JS／啟動點都不留；`?skipTour=` 這個只為導覽存在的參數也一起移除。
+  assert.doesNotMatch(html, /id="guestTour"/);
+  assert.doesNotMatch(html, /GUEST_TOUR_STEPS/);
+  assert.doesNotMatch(html, /function maybeStartGuestTour/);
+  assert.doesNotMatch(html, /guest-tour/);
+  assert.doesNotMatch(html, /skipTour/);
   assert.match(html, /id="notifyHub"/);
   assert.match(html, /data-hub-tab="webhook"/);
   assert.match(html, /id="notifyInbox"/);
@@ -589,7 +589,8 @@ test("listing chips use Hermes orange and do not escape chip HTML", () => {
   assert.match(feeCss, /font-weight:\s*800/);
   assert.match(feeCss, /color:\s*var\(--ink\)/);
   assert.doesNotMatch(feeCss, /linear-gradient/);
-  const rentCss = html.slice(html.indexOf(".rent-price"), html.indexOf(".guest-tour"));
+  // 邊界原本是 `.guest-tour`；導覽移除後改用下一段 CSS（`.notify-shortcuts`）當邊界。
+  const rentCss = html.slice(html.indexOf(".rent-price"), html.indexOf(".notify-shortcuts"));
   assert.match(rentCss, /font-weight:\s*700/);
   assert.match(rentCss, /color:\s*var\(--ink\)/);
   assert.match(html, /<div class="mrt-line">\$\{mrtText\(item\)\}<\/div>/);
