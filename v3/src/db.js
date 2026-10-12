@@ -50,6 +50,7 @@ import {
 } from "./userSameHouse.js";
 import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
 import { ensureMrtCacheContractForRead } from "./mrtCacheSchema.js";
+import { listingHotPathIndexStatements } from "./listingHotPathPgIndexes.js";
 import { createWritePath, ensureFoldColumnsSqlite, foldColumnsDdlStatements } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -4424,6 +4425,10 @@ export function decorationRequestContextFromRows(globalRows) {
 export async function buildListRequestContextFromPg(exec, { settingsTable = "settings", namespace = "", asOf = null, resolvedSearchKeys = undefined } = {}) {
   if (typeof exec !== "function") throw new Error("buildListRequestContextFromPg requires exec");
   const clock = listingRequestTime(asOf);
+  // hot path 索引確保（冪等、fail-soft、只在 PG 模式、每行程一輪）：必須在 buildSearchKeysFromPg
+  // 的 `to_regclass('idx_listings_search')` 探測**之前**跑，否則第一個請求仍會退回 DISTINCT。
+  // 失敗只 warn 不外拋（見 ensureListingHotPathIndexes）。
+  await ensureListingHotPathIndexes();
   // These tables define visibility and scope. Missing schema is a failure, not
   // an empty database or permission to broaden the search.
   const globalRows = await exec(`SELECT key, value FROM ${settingsTable}`);
@@ -4912,6 +4917,57 @@ async function ensureFoldColumnsOnce(pgDriver) {
     await pgDriver.exec(statement);
   }
   foldColumnsReady.add(pgDriver);
+}
+
+// listings 的 hot path 索引（PG 原生、冪等、autocommit）。
+//
+// 為什麼要這一支：db.js 裡那批 `CREATE INDEX IF NOT EXISTS` 是 SQLite 時代的陳述，
+// `DB_DRIVER=postgres` 時整段不跑 ⇒ PG 側一條都沒有。2026-10-12 唯讀實測正式庫：
+// `to_regclass('idx_listings_search')` → NULL，於是 `storedSearchKeysFromPg()` 的探測
+// 每請求都落空、一路退回 `SELECT DISTINCT search_key FROM listings`
+// （正式庫 EXPLAIN 225ms／次、`pg_stat_statements` 累計 2,244 次／平均 385.9ms）。
+// 逐條盤點與「為什麼只補這幾條」寫在 listingHotPathPgIndexes.js 的檔頭。
+//
+// 時機與語意：
+//   • 在**讀路徑第一次組請求 context** 時跑（`buildListRequestContextFromPg`），也就是
+//     「第一個真的需要這條索引的請求」之前，因此同一個請求的 `to_regclass` 探測就能看到它。
+//   • 全部是 `CREATE INDEX IF NOT EXISTS`、autocommit、不包交易；已存在時只花約 1ms。
+//   • `WeakSet` 記在 driver 實例上 ⇒ 同一行程只跑一輪，重跑不會再發 DDL。
+//
+// fail-soft（硬性）：索引建不起來**不得讓服務起不來、也不得讓請求失敗**。
+// 這裡吞掉錯誤、只留 warn；失敗時 `to_regclass` 探測照樣落空，自動退回 `DISTINCT` 路徑
+//（正確、只是慢）。注意「沒有索引時絕對不能走 loose scan」——正式庫同一條 recursive SQL
+// 在無索引環境實測 15,217ms，比 DISTINCT 的 225ms 差 67 倍，所以 fallback 是保命設計，
+// 不得移除、不得弱化。
+const hotPathIndexesReady = new WeakSet();
+async function ensureListingHotPathIndexesOnce(pgDriver) {
+  if (!pgDriver || hotPathIndexesReady.has(pgDriver)) return;
+  try {
+    for (const statement of listingHotPathIndexStatements()) {
+      await pgDriver.exec(statement);
+    }
+    hotPathIndexesReady.add(pgDriver);
+  } catch (error) {
+    // 只 warn 不 throw：索引缺席時 loose scan 會自動退回 DISTINCT，服務仍正確。
+    console.warn("hot path 索引確保失敗（不影響服務，查詢會退回較慢但正確的路徑）：", error?.message || error);
+  }
+}
+
+// 讀路徑用的對外入口：自行解析共享 pool，並把「拿不到 pool」也當 fail-soft（不外拋）。
+// 不把 driver 當參數是刻意的——呼叫端是每個請求的 `buildListRequestContextFromPg`，
+// 不該為此多拿一次連線；`sharedPgDriver()` 已經是行程單例（第二次起只回同一個 promise）。
+export async function ensureListingHotPathIndexes() {
+  if (resolveDbDriver() !== "postgres") return;
+  try {
+    await ensureListingHotPathIndexesOnce(await sharedPgDriver());
+  } catch (error) {
+    console.warn("hot path 索引確保略過（取得 PG pool 失敗，不影響服務）：", error?.message || error);
+  }
+}
+
+// 暴露給測試／診斷：直接驅動 PG 端 schema 準備（與 ensureChangeLogStoreOnceForTest 同慣例）。
+export function ensureListingHotPathIndexesForTest(pgDriver) {
+  return ensureListingHotPathIndexesOnce(pgDriver);
 }
 
 // 暴露給測試／診斷：直接驅動 PG 端 schema 準備（不傳 sqliteDb 即走 PG 原生 DDL）。
