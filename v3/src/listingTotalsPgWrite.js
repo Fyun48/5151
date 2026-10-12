@@ -16,7 +16,7 @@
 //      這一次 delta（計數器會因此暫時不準，但讀取端有 fail-safe、對帳會在一個週期內覆蓋成真值）。
 //      「多 +1」**不可以**用 rollback 之外的方式補償——那就變成估算值了。
 import { toPostgresSql } from "./sqlDialect.js";
-import { DEFAULT_LISTING_TOTALS_BUCKET, LISTING_TOTALS_TABLE } from "./listingTotalsPgSchema.js";
+import { DEFAULT_LISTING_TOTALS_BUCKET, DEFAULT_LISTING_TOTALS_PREDICATE, LISTING_TOTALS_TABLE } from "./listingTotalsPgSchema.js";
 import { quoteIdent } from "./pgSchema.js";
 
 /** 物理列增減（給 `pg_stat_user_tables` 的偵測器與 `listings` 的 row-count 對照）。 */
@@ -44,10 +44,19 @@ export function listingsUpsertRowImpactSql() {
  * • `ON CONFLICT DO UPDATE` ⇒ `total = total + $1`（同交易、精準）。
  * • `INSERT` 分支 ⇒ `GREATEST($1, 0)`：新桶遇到「刪除」時從 0 起算，**不會出現負數**
  *   （負數代表某個更早的 +1 從沒被記到，那由對帳覆蓋，不用捏造值）。
+ * • `predicate_sql` **必須是這一桶的正式述詞**（`$4`），不是空字串。
+ *
+ * ⚠️ 2026-10-12 正式站實測的缺陷（#734 留下）：這一支原本寫死 `''`，而讀取端
+ * （`listingTotalsFastState`）是拿 `normalizeListingTotalsPredicate(桶的述詞)` 跟列上的
+ * `predicate_sql` 比對 ⇒ 空字串永遠不合 ⇒ `usable=false` ⇒ **每個請求退回一次全表 COUNT**
+ * （單請求窗口實測 Δcalls=1／Δms=173–465，正式站四輪全部 `db_total_source=unusable`）。
+ * 值本身是準的（對帳覆蓋 total），壞掉的只有指紋。既有列由 `repairListingTotalsPredicateOnce()`
+ * 自癒（見 `listingTotalsPgCounter.js`）。
  */
-export function listingTotalsDeltaSql(bucketKey = DEFAULT_LISTING_TOTALS_BUCKET) {
+export function listingTotalsDeltaSql(bucketKey = DEFAULT_LISTING_TOTALS_BUCKET, predicateSql = DEFAULT_LISTING_TOTALS_PREDICATE) {
+  void bucketKey;
   return `INSERT INTO ${quoteIdent(LISTING_TOTALS_TABLE)} (bucket_key, predicate_sql, total, usable, ensured_at, last_reconcile_at)
-    VALUES ($3, '', GREATEST($1::bigint, 0), 1, $2, 0)
+    VALUES ($3, $4, GREATEST($1::bigint, 0), 1, $2, 0)
     ON CONFLICT (bucket_key) DO UPDATE SET
       total = ${quoteIdent(LISTING_TOTALS_TABLE)}.total + $1::bigint,
       usable = 1,
@@ -59,7 +68,7 @@ export function listingTotalsDeltaSql(bucketKey = DEFAULT_LISTING_TOTALS_BUCKET)
  *
  * 回傳 `{ applied, reason }`。**永不丟例外**（只 warn）——計數器壞掉不可以讓入庫失敗。
  */
-export async function applyListingTotalsDelta(client, { bucketKey = DEFAULT_LISTING_TOTALS_BUCKET, delta, now = Date.now(), log = console } = {}) {
+export async function applyListingTotalsDelta(client, { bucketKey = DEFAULT_LISTING_TOTALS_BUCKET, predicateSql = DEFAULT_LISTING_TOTALS_PREDICATE, delta, now = Date.now(), log = console } = {}) {
   if (!client?.query) return { applied: false, reason: "no-client" };
   if (!bucketKey) return { applied: false, reason: "no-bucket" };
   if (!Number.isFinite(delta) || delta === 0) return { applied: false, reason: "no-op" };
@@ -70,7 +79,7 @@ export async function applyListingTotalsDelta(client, { bucketKey = DEFAULT_LIST
     // 有些 driver（例如測試替身）不支援 SAVEPOINT ⇒ 照樣嘗試直接套用。
   }
   try {
-    await client.query(toPostgresSql(listingTotalsDeltaSql(bucketKey)), [delta, now, bucketKey]);
+    await client.query(toPostgresSql(listingTotalsDeltaSql(bucketKey, predicateSql)), [delta, now, bucketKey, predicateSql]);
     return { applied: true, reason: "ok" };
   } catch (error) {
     try {

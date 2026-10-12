@@ -95,6 +95,8 @@ export function resetListingTotalsForTests() {
   reconcileInFlight = null;
   reconcileBackoffUntil = 0;
   lastReconcile = { at: 0, bucket: null, value: null, drift: 0, error: null };
+  predicateRepairInFlight = null;
+  predicateRepairBackoffUntil = 0;
 }
 
 export function lastListingTotalsReconcile() {
@@ -177,7 +179,7 @@ export async function listingTotalsFastState({ pgDriver = null, exec = null, buc
     [bucketKey],
   );
   const row = out[0] || null;
-  if (!row) return { exists: false, usable: false, total: null, lastReconcileAt: 0 };
+  if (!row) return { exists: false, usable: false, total: null, lastReconcileAt: 0, predicateSql: null };
   const predicateMatches = predicateSql == null
     || normalizeListingTotalsPredicate(row.predicate_sql) === normalizeListingTotalsPredicate(predicateSql);
   const usable = Number(row.usable) === 1 && predicateMatches;
@@ -186,7 +188,92 @@ export async function listingTotalsFastState({ pgDriver = null, exec = null, buc
     usable,
     total: usable ? Number(row.total) : null,
     lastReconcileAt: Number(row.last_reconcile_at) || 0,
+    // 列上的原始指紋（給自癒判定用；`usable=false` 的兩個原因——`usable=0` 與指紋不合——
+    // 只有這裡分得出來）。呼叫端不得把它當成「可用」的依據。
+    predicateSql: row.predicate_sql == null ? null : String(row.predicate_sql),
   };
+}
+
+/**
+ * 這一列需不需要**就地修指紋**（純函式，方便逐條斷言）。
+ *
+ * 只有「空指紋」會被修：`predicate_sql` 是空字串（或只有空白）代表這一列是 #734 的寫入端
+ * 用 `''` 建出來的，它的桶（`bucket_key`）已經決定了它描述哪一條述詞，把指紋補成該桶的
+ * 正式述詞**不會改變任何數字**（`total` 不動、述詞語意不變），只是讓讀取端認得它。
+ * 有指紋但不合的列（例如 fixture 桶被拿來比對產品述詞）**一律不修**——那代表兩者是不同的桶。
+ */
+export function listingTotalsPredicateNeedsRepair({ storedPredicateSql = null, expectedPredicateSql = null } = {}) {
+  if (expectedPredicateSql == null || storedPredicateSql == null) return false;
+  const stored = normalizeListingTotalsPredicate(storedPredicateSql);
+  if (stored !== "") return false;
+  return stored !== normalizeListingTotalsPredicate(expectedPredicateSql);
+}
+
+/**
+ * 指紋修復語句（冪等）：只碰「空指紋」的那一列，而且值已經對時**不寫**（`IS DISTINCT FROM`）
+ * ⇒ 第二次執行 `rowCount=0`。不改 `total`，也不動 `usable` 以外的任何欄位。
+ */
+export function listingTotalsPredicateRepairSql() {
+  return `UPDATE ${LISTING_TOTALS_TABLE}
+     SET predicate_sql = $2, usable = 1
+   WHERE bucket_key = $1
+     AND btrim(COALESCE(predicate_sql, ''), E' \\t\\r\\n') = ''
+     AND predicate_sql IS DISTINCT FROM $2`;
+}
+
+/** 沒有 primary 連線設定時不要排修復（離線單元測試裡不該去嘗試連線）。鍵清單同 driver。 */
+function primaryConnectionConfigured(env = process.env) {
+  return ["PG_URL", "DATABASE_URL", "POSTGRES_URL", "PGHOST"].some((key) => String(env?.[key] || "").trim() !== "");
+}
+
+/** 一次修復（**只在 primary**；待機只問 `pg_is_in_recovery()`、不寫）。永不丟例外。 */
+export async function repairListingTotalsPredicateNow({
+  pgDriver = null, bucketKey = DEFAULT_LISTING_TOTALS_BUCKET,
+  predicateSql = DEFAULT_LISTING_TOTALS_PREDICATE, log = console,
+} = {}) {
+  if (!pgDriver?.query) return { repaired: false, rows: 0, reason: "no-driver" };
+  try {
+    const recovery = (await pgDriver.query("SELECT pg_is_in_recovery() AS in_recovery")).rows?.[0];
+    if (recovery?.in_recovery === true) return { repaired: false, rows: 0, reason: "standby" };
+    const res = await pgDriver.query(toPostgresSql(listingTotalsPredicateRepairSql()), [bucketKey, predicateSql]);
+    const rows = Number(res?.rowCount ?? 0) || 0;
+    return { repaired: rows > 0, rows, reason: "ok" };
+  } catch (error) {
+    log?.warn?.("[listing-totals] 指紋修復失敗（讀取端照樣退回真 COUNT，不影響回應）：", error?.message || error);
+    return { repaired: false, rows: 0, reason: String(error?.message || error) };
+  }
+}
+
+// 讀取端觸發的自癒：**fire-and-forget**（讀取路徑不得因為修指紋而變慢或變紅）。
+// 只有「偵測到空指紋」才會排；同一行程同時只跑一條；失敗退避（有界，不會每個請求都打一次
+// 失敗的寫入）。
+let predicateRepairInFlight = null;
+let predicateRepairBackoffUntil = 0;
+const PREDICATE_REPAIR_RETRY_MS = 60_000;
+
+/** 等待目前排隊中的指紋修復落地（測試／診斷用；回傳最後一次的結果或 `null`）。 */
+export async function awaitListingTotalsPredicateRepair() {
+  const job = predicateRepairInFlight;
+  if (!job) return null;
+  try { return await job; } catch { return null; }
+}
+
+function scheduleListingTotalsPredicateRepair({ bucketKey, predicateSql, log = console }) {
+  if (predicateRepairInFlight) return predicateRepairInFlight;
+  if (Date.now() < predicateRepairBackoffUntil) return null;
+  if (!primaryConnectionConfigured()) return null; // 離線／沒有 primary 設定：不排、不連線
+  const job = (async () => {
+    const pgDriver = await defaultPrimaryDriver();
+    const result = await repairListingTotalsPredicateNow({ pgDriver, bucketKey, predicateSql, log });
+    if (result.rows > 0) {
+      log?.warn?.(`[listing-totals] 修復 ${bucketKey} 的空指紋（#734 缺陷；值不變，只是讓讀取端認得）：${result.rows} 列`);
+    }
+    if (result.reason !== "ok" && result.reason !== "standby") predicateRepairBackoffUntil = Date.now() + PREDICATE_REPAIR_RETRY_MS;
+    return result;
+  })();
+  predicateRepairInFlight = job;
+  void job.catch(() => {}).finally(() => { if (predicateRepairInFlight === job) predicateRepairInFlight = null; });
+  return job;
 }
 
 /**
@@ -368,6 +455,14 @@ export async function readListingTotalsForStats({ exec, isolation, now = Date.no
     const state = await withSavepoint(query, "listing_totals", () =>
       listingTotalsFastState({ exec: query, bucketKey: bucket.bucketKey, predicateSql: bucket.predicateSql }));
     if (state.usable && Number.isFinite(state.total) && state.total >= 0) return finish(state.total, "counter");
+    // 自癒（2026-10-12）：既有列的**空指紋**（#734 的寫入端缺陷）就地補成這一桶的正式述詞。
+    // 這裡**不 await**：讀取路徑不得因為修指紋而變慢、更不得因為它失敗而變紅（失敗只 warn，
+    // 本次請求照樣退回真 COUNT）。修好之後（primary → 待機複製，約 1 秒）下一個請求就走計數器。
+    if (state.exists && listingTotalsPredicateNeedsRepair({
+      storedPredicateSql: state.predicateSql, expectedPredicateSql: bucket.predicateSql,
+    })) {
+      void scheduleListingTotalsPredicateRepair({ bucketKey: bucket.bucketKey, predicateSql: bucket.predicateSql });
+    }
     return finish(null, state.exists ? "unusable" : "missing");
   } catch {
     return finish(null, "error");
