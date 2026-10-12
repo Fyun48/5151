@@ -481,10 +481,16 @@ export function stopListingTotalsReconciler() {
   reconcilerTimer = null;
 }
 
-/** 預設的 primary driver（行程共用的那一個 pool；`PG_URL` 那一側）。 */
+/**
+ * 預設的 primary driver（行程共用的那一個 pool；`PG_URL` 那一側）。
+ *
+ * ⚠️ `sharedPgDriver()` 是 async ⇒ **一定要 await**（少一個 await 會拿到 Promise，
+ * 之後 `pgDriver.query is not a function`）。`v3/test/server-module-wiring.test.js` 會靜態
+ * 掃這一條（第五十四批的 Promise 型缺陷），所以這裡刻意寫 `return await`。
+ */
 async function defaultPrimaryDriver() {
   const { sharedPgDriver } = await import("./pgSharedDriver.js");
-  return sharedPgDriver();
+  return await sharedPgDriver();
 }
 
 /** 一次性對帳（測試／診斷用）：`force` 預設 true（不受週期節流）。 */

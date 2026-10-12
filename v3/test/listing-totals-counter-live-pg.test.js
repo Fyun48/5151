@@ -114,7 +114,9 @@ test("live PG：同交易維護 ＋ 對帳 ＋ 繞過偵測 ＋ fail-safe ＋ �
 
   await t.test("① 對帳建立桶並以真 COUNT 覆蓋（第一次不算 drift）", async () => {
     const report = await counter.reconcileListingTotalsOnce({ pgDriver });
-    assert.ok(Number.isFinite(report.value) && report.value > 0);
+    // CI 的整合庫可能是**空的**（`listings` 0 列）⇒ 這裡只要求「是一個合法的精準值」，
+    // 真正的不變式是下面的「同一個快照內逐位相等」。
+    assert.ok(Number.isFinite(report.value) && report.value >= 0);
     assert.equal(report.drift, 0, "第一次建立桶不算 drift");
     const snap = await snapshotPair();
     assert.equal(snap.counter, snap.truth, "同一個快照內，計數器必須逐位等於真 COUNT");
@@ -264,7 +266,8 @@ test("live PG：計數器讀取失敗不得毒化呼叫端的交易（頁面不�
   await counter.ensureListingTotalsReady(pgDriver, {
     bucketKey: schema.DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: schema.DEFAULT_LISTING_TOTALS_PREDICATE,
   });
-  assert.ok(Number.isFinite(await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION })));
+  assert.ok(Number.isFinite(await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION })),
+    "確保表存在後，讀取必須回一個數字（不可以是 null）");
 
   const client = await pgDriver.pool.connect();
   const exec = async (sql, params = []) => client.query(sql, params).then((res) => res.rows);
@@ -284,7 +287,7 @@ test("live PG：計數器讀取失敗不得毒化呼叫端的交易（頁面不�
   counter.forgetListingTotalsEnsured(pgDriver);
   counter.resetListingTotalsPresenceForTests();
   const healed = await counter.reconcileListingTotalsOnce({ pgDriver });
-  assert.ok(Number.isFinite(healed.value) && healed.value > 0);
+  assert.ok(Number.isFinite(healed.value) && healed.value >= 0);
   const snap = await snapshotPair();
   assert.equal(snap.counter, snap.truth);
 });
