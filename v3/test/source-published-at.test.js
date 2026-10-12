@@ -150,12 +150,14 @@ test("③ 前端文案：由絕對時間戳現算（<24h 小時、0 小時剛剛
   assert.equal(fn({ source: "591" }), "");
   assert.equal(fn({}), "");
 
-  // 卡片：發佈列必須在「更新」列**上方**，且沿用 .when／.when-label（label 用「發佈」）
+  // 卡片：發佈列必須在「更新」列**上方**，沿用 .when 列樣式，且只留句子本身
+  //（2026-10-12 裁決：不再放 .when-label「發佈」，避免「發佈 …發佈」重複）。
   const card = html.slice(html.indexOf('class="item-title"'), html.indexOf('class="item-details"'));
   const publishedIdx = card.indexOf("formatListingPublished(item)");
   const whenIdx = card.indexOf("formatListingWhen(item)");
   assert.ok(publishedIdx > 0 && whenIdx > publishedIdx, "發佈列要在更新列上方");
-  assert.match(card, /class="when"><span class="when-label">發佈<\/span>\$\{esc\(formatListingPublished\(item\)\)\}/);
+  assert.match(card, /<div class="when">\$\{esc\(formatListingPublished\(item\)\)\}<\/div>/);
+  assert.doesNotMatch(card, /when-label">發佈/, "發佈列不得再帶「發佈」label（會與句子重複）");
 });
 
 test("④ 既有 PG 表要冪等補欄，而且讀路徑也要補（否則候選／peer SELECT 會 42703）", async () => {

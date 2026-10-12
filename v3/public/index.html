@@ -8157,7 +8157,7 @@
             <h2 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h2>
-            ${formatListingPublished(item) ? `<div class="when"><span class="when-label">發佈</span>${esc(formatListingPublished(item))}</div>` : ""}
+            ${formatListingPublished(item) ? `<div class="when">${esc(formatListingPublished(item))}</div>` : ""}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             </div>
             <div class="item-details">
