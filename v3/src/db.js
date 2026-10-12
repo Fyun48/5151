@@ -38,7 +38,7 @@ import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrat
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
 import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, sortGroupListings, refreshFoldColumnsSync } from "./match.js";
 import { noteRefreshFailure } from "./listingRefreshHealth.js";
-import { buildSameHouseComponents } from "./foldComponentRoot.js";
+import { buildSameHouseComponents, foldRootRefreshReady } from "./foldComponentRoot.js";
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
@@ -3222,6 +3222,9 @@ export function preloadedDecorationProvider({
   splitPairs = new Set(),
   groupIds = new Map(),
   groupMembers = new Map(),
+  // Owner 2026-10-12 群內代表：折疊分組鍵（固化欄）。只有 PG ＋ 欄位已部署時才會是 Map
+  // ⇒ `typeof provider.foldRoot === "function"` 就是「讀取端要走固化欄分組」的開關。
+  foldRoots = null,
   peers = new Map(),
   extras = new Map(),
   routeCache = new Map(),
@@ -3249,6 +3252,9 @@ export function preloadedDecorationProvider({
     },
     splitPairs: () => splitPairs,
     groupId: (postId) => groupIds.get(Number(postId) || 0) || "",
+    ...(foldRoots instanceof Map
+      ? { foldRoot: (postId) => (foldRoots.get(Number(postId) || 0) == null ? null : Number(foldRoots.get(Number(postId) || 0))) }
+      : {}),
     groupMemberRows: (groupId) => groupMembers.get(String(groupId || "")) || [],
     // The preloader stored every peer row under both its post_id and its match_post_id.
     peerRows: (ids) => {
@@ -3518,6 +3524,18 @@ export async function preloadDecorationProviderAsync({
   const routeJobs = new Map();
   for (const [key, row] of await loader.routeJobsMap(jobKeys)) if (row) routeJobs.set(key, row);
 
+  // Owner 2026-10-12 群內代表：分組鍵＝固化欄 `listings.fold_component_root`。
+  // 只在「真的要做 role 指派」（`foldGroups`，候選階段）且這一欄已部署（PG ＋ 欄位存在）時載入。
+  // SQLite 沒有這一欄、正式庫在 Owner 跑 DDL 之前也沒有 ⇒ 不載入，讀取端走 legacy union-find（§1.4）。
+  // 只查候選 id（`onPage`）：代表列只在候選列內選，非候選列的 root 不影響結果。
+  let foldRoots = null;
+  if (foldGroups && await foldRootRefreshReady(exec)) {
+    foldRoots = new Map();
+    for (const [id, root] of await loader.foldRootMap([...onPage])) {
+      if (root != null) foldRoots.set(Number(id), Number(root));
+    }
+  }
+
   return preloadedDecorationProvider({
     userId: voteUid,
     crawlSources,
@@ -3528,6 +3546,7 @@ export async function preloadDecorationProviderAsync({
     splitPairs,
     groupIds,
     groupMembers,
+    foldRoots,
     peers,
     extras,
     routeCache,
@@ -3648,6 +3667,13 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   const byId = new Map();
   const linked = [];
   const grouped = new Map();
+  // Owner 2026-10-12 裁決（群內代表）：PG 讀取端由 decoration provider 的 `foldRoot()` 拿到
+  // 固化欄 `listings.fold_component_root`（preload 時一批查詢載入；不進候選載體，因為 SQLite
+  // 沒有這一欄），直接拿它當**分組鍵**，**不再做 1-hop 走訪**。舊的 1-hop（候選集＋match/extras）
+  // 會把鏈狀分量切開：root=22075220 是 33 列同租金 10999 的線狀鏈，舊 Node 只看到 9 列、
+  // 還選出 7 個 primary，SQL 只出 1 列。SQLite 沒有這個欄位（也沒有折疊固化欄的寫入端），
+  // 沿用原本的 union-find 路徑 —— 兩條路徑的**分組定義**因此都只有一份：分量標籤。
+  const frozenRoot = typeof source.foldRoot === "function";
   let visited = 0;
   for (const row of list) {
     byId.set(Number(row.post_id), row);
@@ -3663,55 +3689,102 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   }
   if (visited % 256) yield {label:'relations.index',units:visited % 256};
   visited = 0;
-  const missing = new Set();
-  // Most candidates have no relation. Keep their index for resolution without
-  // repeatedly walking them in each relation-only pass. Input order is retained.
-  for (const row of linked) {
-    const mid = Number(row.match_post_id) || 0;
-    if (mid && !byId.has(mid)) missing.add(mid);
-    if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
-  }
-  if (hasPersonal) for (const members of grouped.values()) {
-    for (const row of members) {
-      if (String(row.match_verdict || "") === "no") continue;
-      for (const pid of personal.peers(row.post_id)) {
-        if (!byId.has(pid)) missing.add(pid);
-        if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+  const splits = source.splitPairs();
+  let groups;
+  if (frozenRoot) {
+    // ── 固化欄分組（PG 讀取端）────────────────────────────────────────
+    // 分組鍵＝`fold_component_root`（NULL ⇒ 自己一群，key 用 post_id）。代表列只在
+    // **本次候選列**之內選（下面共用的 eligible＋sortGroupListings），所以「全域主卡
+    // 不符本次篩選」不會讓整群消失，而「同群在不同篩選下可能露出不同代表列」是這個
+    // 語意的既定代價（docs/same-house-fold-spec.md §1.5）。
+    const keyOf = (row) => {
+      const root = source.foldRoot(row?.post_id);
+      const n = root == null ? 0 : Number(root);
+      return n > 0 ? `r${n}` : `s${Number(row?.post_id) || 0}`;
+    };
+    const parent = new Map();
+    const find = (k) => {
+      const p = parent.get(k);
+      if (p == null) { parent.set(k, k); return k; }
+      if (p === k) return k;
+      const r = find(p);
+      parent.set(k, r);
+      return r;
+    };
+    const union = (a, b) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+    const keyByPost = new Map();
+    for (const [id, row] of byId) {
+      const k = keyOf(row);
+      keyByPost.set(id, k);
+      find(k);
+      if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+    }
+    // 個人併組（user_same_house_members）**不**固化在 fold_component_root（B-plan）⇒
+    // 讀取端另疊一層：同一個 personal.groupKey 的候選列，其分量鍵互相 union。
+    if (hasPersonal) {
+      for (const members of grouped.values()) {
+        const keys = members.map((row) => keyByPost.get(Number(row.post_id))).filter(Boolean);
+        for (let i = 1; i < keys.length; i += 1) union(keys[0], keys[i]);
       }
     }
+    groups = new Map();
+    for (const [id, row] of byId) {
+      const k = find(keyByPost.get(id));
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push({ id, row });
+    }
+  } else {
+    const missing = new Set();
+    // Most candidates have no relation. Keep their index for resolution without
+    // repeatedly walking them in each relation-only pass. Input order is retained.
+    for (const row of linked) {
+      const mid = Number(row.match_post_id) || 0;
+      if (mid && !byId.has(mid)) missing.add(mid);
+      if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+    }
+    if (hasPersonal) for (const members of grouped.values()) {
+      for (const row of members) {
+        if (String(row.match_verdict || "") === "no") continue;
+        for (const pid of personal.peers(row.post_id)) {
+          if (!byId.has(pid)) missing.add(pid);
+          if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+        }
+      }
+    }
+    if (visited % 256) yield {label:'relations.missing',units:visited % 256};
+    const extras = new Map();
+    if (missing.size) {
+      for (const [id, item] of source.extras([...missing])) extras.set(id, item);
+    }
+    const resolve = (id) => byId.get(id) || extras.get(id) || null;
+    // ── 一群一主：連通分量（union-find，SQLite 讀取端）──────────────────
+    // 舊版是「first-incident-edge 成對」——每條邊各自算贏家再先到先贏，所以同一連通群
+    // 可以出現多個 primary（鏈狀 A–B–C 就是反例）。這裡改成把三種關係全部併進同一張
+    // 無向圖，一個分量只選一個 primary（比較式仍是 match.js 的 sortGroupListings）：
+    //   ① match 邊（維持既有三道跳過規則：verdict='no'／houseprice 未就緒／split）
+    //   ② listing_group_members（系統同屋源群組；群內兩兩連通）
+    //   ③ user_same_house_members（會員自己的併組，personalIndex）
+    const universe = new Map();
+    for (const [id, row] of byId) universe.set(id, row);
+    for (const [id, row] of extras) if (!universe.has(id)) universe.set(id, row);
+    // 分量（連通分量）併法只有一份：foldComponentRoot.js 的 buildSameHouseComponents。
+    // 刷新端（fold 漏斗）／回填端用它把結果固化成 fold_component_root，這裡是 SQLite 的
+    // 請求期替代路徑（沒有固化欄可讀）。
+    const { comps } = yield* buildSameHouseComponents({
+      universe,
+      linked,
+      resolve,
+      splits,
+      isNotDisplayReady: (row) => housepriceNotDisplayReady(row, source),
+      groupIdOf: typeof source.groupId === "function" ? (pid) => source.groupId(pid) : null,
+      personal,
+      grouped,
+      hasPersonal,
+    });
+    groups = comps;
   }
-  if (visited % 256) yield {label:'relations.missing',units:visited % 256};
-  const extras = new Map();
-  if (missing.size) {
-    for (const [id, item] of source.extras([...missing])) extras.set(id, item);
-  }
-  const resolve = (id) => byId.get(id) || extras.get(id) || null;
-  const splits = source.splitPairs();
-  // ── 一群一主：連通分量（union-find）──────────────────────────────────
-  // 舊版是「first-incident-edge 成對」——每條邊各自算贏家再先到先贏，所以同一連通群
-  // 可以出現多個 primary（鏈狀 A–B–C 就是反例）。這裡改成把三種關係全部併進同一張
-  // 無向圖，一個分量只選一個 primary（比較式仍是 match.js 的 sortGroupListings）：
-  //   ① match 邊（維持既有三道跳過規則：verdict='no'／houseprice 未就緒／split）
-  //   ② listing_group_members（系統同屋源群組；群內兩兩連通）
-  //   ③ user_same_house_members（會員自己的併組，personalIndex）
-  const universe = new Map();
-  for (const [id, row] of byId) universe.set(id, row);
-  for (const [id, row] of extras) if (!universe.has(id)) universe.set(id, row);
-  // 分量（連通分量）併法只有一份：foldComponentRoot.js 的 buildSameHouseComponents。
-  // 讀取端（本函式）與刷新端（fold 漏斗）／回填端共用同一段 union-find，不再各寫一份。
-  const { comps } = yield* buildSameHouseComponents({
-    universe,
-    linked,
-    resolve,
-    splits,
-    isNotDisplayReady: (row) => housepriceNotDisplayReady(row, source),
-    groupIdOf: typeof source.groupId === "function" ? (pid) => source.groupId(pid) : null,
-    personal,
-    grouped,
-    hasPersonal,
-  });
   visited = 0;
-  for (const members of comps.values()) {
+  for (const members of groups.values()) {
     if (members.length < 2) continue;
     // Owner 2026-10-12 定案：確認下架（offline_confirmed=1）不參與選主。
     // 未就緒（houseprice 無 prep／來源停用）同樣不得當贏家，否則會「不顯示卻把可顯示的擠掉」。

@@ -140,6 +140,24 @@ export async function loadGroupIds(exec, postIds, driver = "sqlite") {
   return map;
 }
 
+// Owner 2026-10-12 群內代表：讀取端的分組鍵＝固化欄 `listings.fold_component_root`。
+// **不放進候選載體**（載體由 SQLite 與 PG 共用，SQLite 沒有這一欄）⇒ 候選階段另外一批查詢。
+// 缺列一律回 null（＝單節點群，讀取端用 post_id 當鍵），與 §1.4 的語意一致。
+export async function loadFoldRoots(exec, postIds, driver = "sqlite") {
+  const map = new Map();
+  const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
+  if (!ids.length) return map;
+  const filter = idFilter("post_id", ids, driver);
+  const rows = await exec(
+    `SELECT post_id, fold_component_root FROM listings WHERE ${filter.sql}`,
+    filter.params,
+  );
+  for (const row of rows || []) {
+    map.set(Number(row.post_id), row.fold_component_root == null ? null : Number(row.fold_component_root));
+  }
+  return map;
+}
+
 // db.js loadSameHousePeers(): the direct listings neighbours (post_id / match_post_id).
 // The id list appears twice, so the PostgreSQL placeholders must keep counting
 // ($1..$n for the first IN list, then $n+1.. for the second) while SQLite just repeats `?`.
@@ -343,6 +361,7 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
     // 各查一次（prep／extras／groupIds 各 2 筆）。改成只查「缺少的 id」⇒ 集合重疊時天然不重查，
     // 語意完全不變。
     groupIdsRows: new Map(),
+    foldRootRows: new Map(),
     prepRows: new Map(),
     extrasRows: new Map(),
     // 進行中的查詢（同一組缺少 id 的併發呼叫共用一個 promise，保留舊 memo 的併發語意）
@@ -414,6 +433,14 @@ export function createDecorationDataLoader({ exec, driver = "sqlite" }) {
       if (!ids.length) return new Map();
       const map = await rowsByIds(cache.groupIdsRows, ids, (miss) => loadGroupIds(exec, miss, driver), "groupIds");
       return new Map(ids.map((id) => [id, map.get(id) || ""]));
+    },
+    // Owner 2026-10-12 群內代表：候選階段的折疊分組鍵（固化欄）。與 groupIds 同一個 id 快取機制，
+    // 頁面階段呼叫同一組 id 時零查詢。
+    async foldRootMap(postIds) {
+      const ids = [...new Set((postIds || []).map(normalizeId).filter(Boolean))];
+      if (!ids.length) return new Map();
+      const map = await rowsByIds(cache.foldRootRows, ids, (miss) => loadFoldRoots(exec, miss, driver), "foldRoots");
+      return new Map(ids.map((id) => [id, map.get(id) == null ? null : Number(map.get(id))]));
     },
     async peerRowsFor(ids) {
       const wanted = [...new Set((ids || []).map(normalizeId).filter(Boolean))];
