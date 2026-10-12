@@ -37,7 +37,8 @@ function normalizeRow(row, keys) {
 const PEER_COLUMNS = `post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
        price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
        hidden, match_post_id, match_level, match_verdict, match_detail,
-       cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time`;
+       cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time,
+       source_published_at`;
 
 // Every column has to carry the `l.` prefix: the join also reads listing_group_members, and an
 // unqualified name that exists in both tables makes PostgreSQL reject the statement
@@ -235,7 +236,8 @@ export async function loadUserSplitPairSet(exec, userId) {
 
 // db.js attachSameHouseRoles(): same-house partners of the page that are NOT on the page.
 const EXTRAS_COLUMNS = `post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
-       price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level`;
+       price_contain_text, refresh_time, last_seen_at, hidden, offline, match_verdict, match_level,
+       source_published_at`;
 const EXTRAS_KEYS = EXTRAS_COLUMNS.split(",").map(key => key.trim());
 
 export function listingExtrasSnapshot(rows) {

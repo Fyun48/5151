@@ -52,7 +52,7 @@ import {
 import { createDecorationDataLoader, listingExtrasSnapshot } from "./repository/decorationData.js";
 import { ensureMrtCacheContractForRead } from "./mrtCacheSchema.js";
 import { listingHotPathIndexStatements } from "./listingHotPathPgIndexes.js";
-import { createWritePath, ensureFoldColumnsSqlite, foldColumnsDdlStatements } from "./repository/writePath.js";
+import { createWritePath, ensureFoldColumnsSqlite, ensureSourcePublishedAtOnce, foldColumnsDdlStatements } from "./repository/writePath.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { canAddWatch, countWatched } from "./watchLimits.js";
@@ -856,6 +856,9 @@ addColumnsIfMissing(db, "listings", [
   ["cost_change_detail", "TEXT"],
   ["cost_change_type", "TEXT"],
   ["community_linked", "INTEGER NOT NULL DEFAULT 0"],
+  // 591 詳情的絕對發佈時間（ISO 字串，見 client591.sourcePublishedAtFromDetail）。
+  // 讀取端（listingEffectiveUpdatedAt）早就引用這個欄名，補上欄位即接回原設計。
+  ["source_published_at", "TEXT"],
 ]);
 try {
   db.exec(`UPDATE listings SET community_linked = 1
@@ -4430,6 +4433,9 @@ export async function buildListRequestContextFromPg(exec, { settingsTable = "set
   // 的 `to_regclass('idx_listings_search')` 探測**之前**跑，否則第一個請求仍會退回 DISTINCT。
   // 失敗只 warn 不外拋（見 ensureListingHotPathIndexes）。
   await ensureListingHotPathIndexes();
+  // 同一個時機確保 source_published_at（候選 SELECT／peer SELECT 都引用它；fail-soft，
+  // 見 ensureSourcePublishedAtSchema）。
+  await ensureSourcePublishedAtSchema();
   // These tables define visibility and scope. Missing schema is a failure, not
   // an empty database or permission to broaden the search.
   const globalRows = await exec(`SELECT key, value FROM ${settingsTable}`);
@@ -4713,8 +4719,9 @@ export function upsertListing(listing) {
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
-      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail,
+      source_published_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -4782,6 +4789,10 @@ export function upsertListing(listing) {
       cost_change_detail = CASE
         WHEN IFNULL(excluded.cost_change_detail, '') != '' THEN excluded.cost_change_detail
         ELSE listings.cost_change_detail
+      END,
+      source_published_at = CASE
+        WHEN IFNULL(excluded.source_published_at, '') != '' THEN excluded.source_published_at
+        ELSE listings.source_published_at
       END
   `).run(
     listing.post_id,
@@ -4816,6 +4827,7 @@ export function upsertListing(listing) {
     costChangedAt,
     costChangeType,
     costChangeDetail,
+    String(listing.source_published_at || "").trim(),
   );
   invalidateSearchKeyMemo();
   const origin = String(listing.source || "591").trim() || "591";
@@ -4971,6 +4983,22 @@ export function ensureListingHotPathIndexesForTest(pgDriver) {
   return ensureListingHotPathIndexesOnce(pgDriver);
 }
 
+// 讀路徑的 `source_published_at` 欄確保（fail-soft，慣例同 ensureListingHotPathIndexes）。
+//
+// 為什麼讀路徑也要：候選 SELECT（LIST_CANDIDATE_COLUMNS）與同戶 peer SELECT（decorationData
+// 的 PEER_COLUMNS）都已經引用這個欄名，而既有 PG 表要等第一次寫入（persistListing／詳情 UPDATE）
+// 才會補欄。只靠寫入端補的話，滾動部署的空窗內那幾條讀取會整批失敗——2026-10-12 沙盒實測就是
+// 這個症狀：`column l.source_published_at does not exist`（下架掃描的 peer 查詢，掃描整輪被跳過）。
+// DDL 一律走 `sharedPgDriver()`（primary）：唯讀快照／待機不能執行 DDL。
+export async function ensureSourcePublishedAtSchema() {
+  if (resolveDbDriver() !== "postgres") return;
+  try {
+    await ensureSourcePublishedAtOnce(await sharedPgDriver());
+  } catch (error) {
+    console.warn("source_published_at 欄確保略過（不影響服務啟動）：", error?.message || error);
+  }
+}
+
 // 暴露給測試／診斷：直接驅動 PG 端 schema 準備（不傳 sqliteDb 即走 PG 原生 DDL）。
 export function ensureChangeLogStoreOnceForTest(pgDriver, sqliteDb) {
   return ensureChangeLogStoreOnce(pgDriver, sqliteDb);
@@ -4999,6 +5027,8 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
   const pool = pgDriver || (await sharedPgDriver());
   await ensureChangeLogStoreOnce(pool);
   await ensureFoldColumnsOnce(pool);
+  // 591 發佈日欄（source_published_at）：upsert 會寫它 ⇒ 既有 PG 表要先冪等補欄。
+  await ensureSourcePublishedAtOnce(pool);
   // `dbTotal` 精準計數器的**背景對帳器**（有界：啟動後一次、之後每
   // `LISTING_TOTALS_RECONCILE_MS`＝預設 5 分鐘）。刻意從寫入收口點啟動而不是讀取端：
   // 寫入端一定是 primary（待機是 read-only，對帳器自己也會用 `pg_is_in_recovery()` 再確認），
@@ -5105,7 +5135,8 @@ export const LISTING_DETAIL_SQL = `UPDATE listings SET
       address = CASE WHEN ? = 1 THEN listings.address ELSE ? END,
       community_id = CASE WHEN ? > 0 THEN ? ELSE community_id END,
       community_name = CASE WHEN ? != '' THEN ? ELSE community_name END,
-      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END
+      community_linked = CASE WHEN ? > 0 THEN 1 ELSE community_linked END,
+      source_published_at = CASE WHEN ? != '' THEN ? ELSE source_published_at END
      WHERE post_id = ?`;
 
 export const LISTING_DETAIL_KIT_SQL = `UPDATE listings
@@ -6190,6 +6221,7 @@ export function listingDetailPlan(listing, input = {}) {
   const {
     extraFees, contact, fetched = 1, lat, lng, address, community_id, community_name,
     community_linked, geo_source, has_natural_gas, has_balcony, furnish_items, kit_fetched,
+    source_published_at,
   } = input;
   const postId = Number(listing.post_id) || 0;
   const fees = extraFees === undefined
@@ -6223,6 +6255,8 @@ export function listingDetailPlan(listing, input = {}) {
   // 有實際帶入非空聯絡資料（非只補社區座標／空字串）才更新 contact_fetched_at。
   const contactRefreshed = Boolean(fetched) && contactPayloadHasValue(contact);
   const contactStamp = new Date().toISOString();
+  // 591 發佈日（ISO 字串）：空字串＝這次詳情沒帶到，保留舊值（與 refresh_time／cost_* 同規則）。
+  const nextPublishedAt = String(source_published_at || "").trim();
   const updates = [{
     sql: LISTING_DETAIL_SQL,
     tolerant: false,
@@ -6253,6 +6287,8 @@ export function listingDetailPlan(listing, input = {}) {
       nextCommunityName,
       nextCommunityName,
       nextCommunityLinked,
+      nextPublishedAt,
+      nextPublishedAt,
       postId,
     ],
   }];

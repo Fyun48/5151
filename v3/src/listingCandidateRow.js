@@ -44,6 +44,9 @@ export function candidateRowFromValues(values) {
     refresh_time: values[39],
     listed_by_user_id: values[40],
     self_status: values[41],
+    // 591 詳情帶回的絕對發佈時間（ISO 字串）。**一律加在清單尾端**：values 是位置對應，
+    // 插在中間會讓下面每一個索引位移。排序（listingEffectiveUpdatedAt）與列表卡都要它。
+    source_published_at: values[42],
   };
 }
 
@@ -62,6 +65,8 @@ export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");
 // 因此本包不做欄位級瘦身 —— `listingSearchAsync.js:53-58` 記載的 astra 2026-09-25 §2.1
 // 「窄欄位實驗已撤回、撤回條件是要先有完整 parity」正是同一個結論。
 // 本包真正縮窄的是**候選集合本身**（行政區投影預篩），不是列寬。
+// 2026-10-12：新增 source_published_at（591 詳情的絕對發佈日）⇒ 載體為 43 欄；讀取點是
+// 排序用的 `listingEffectiveUpdatedAt`（db.js）與列表卡的「發佈」列，需求表同步更新。
 export const MEMBER_LIST_REQUIRED_COLUMNS = Object.freeze([...LIST_CANDIDATE_KEYS]);
 export const MEMBER_LIST_CANDIDATE_KEYS = MEMBER_LIST_REQUIRED_COLUMNS;
 export const MEMBER_LIST_CANDIDATE_COLUMNS = MEMBER_LIST_CANDIDATE_KEYS.join(", ");
@@ -78,6 +83,9 @@ export function missingMemberListColumns(columns) {
 // 公開候選階段碰不到。頁面資料仍由 `post_id = ANY` 的 `SELECT *` 完整補回，語意不變。
 // 每欄被哪一道過濾/排序/affiliate 判定讀到，見 v3/test/public-listings-candidate-columns.test.js
 // 的欄位需求查證表。
+// 2026-10-12：source_published_at 併入這一組——訪客的 `sort=newest` 由 Node 端的
+// sortListingsSteps 讀 listingEffectiveUpdatedAt（發佈日是它的第二順位來源），只在頁面
+// SELECT * 補回會讓「排序」看不到它（顯示看得到、順序卻是舊的 refresh_time 快照）。
 export const PUBLIC_LISTING_CANDIDATE_COLUMNS = [
   "post_id", "source", "source_id", "source_key", "url", "price", "price_num",
   "extra_fee", "extra_fees", "extra_fee_text", "price_contain_text", "title",
@@ -85,7 +93,7 @@ export const PUBLIC_LISTING_CANDIDATE_COLUMNS = [
   "contact_name", "contact_role", "contact_uid", "agency", "lat", "lng",
   "geo_source", "location_class", "match_post_id", "match_level", "match_verdict",
   "offline", "offline_confirmed", "hidden", "first_seen_at", "last_seen_at",
-  "refresh_time", "listed_by_user_id",
+  "refresh_time", "listed_by_user_id", "source_published_at",
 ].join(", ");
 
 // Only for the canonical 42-column PG candidate projection, before decoration.
@@ -135,6 +143,7 @@ export function candidateRowWithPersonal(row, personal) {
     refresh_time: row.refresh_time,
     listed_by_user_id: row.listed_by_user_id,
     self_status: row.self_status,
+    source_published_at: row.source_published_at,
     viewed: personal.viewed,
     watched: personal.watched,
     watch_note: personal.watch_note,

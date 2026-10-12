@@ -58,6 +58,7 @@ const REQUIREMENT_TABLE = Object.freeze({
   "refresh_time": "listingEffectiveUpdatedAt",
   "listed_by_user_id": "keepSelfListingForViewer／isSelfListingRow（selfListings.js）",
   "self_status": "keepSelfListingForViewer（selfListings.js:522 契約）",
+  "source_published_at": "newest 排序的 listingEffectiveUpdatedAt（db.js，發佈日為第二順位時間來源）＋列表卡「發佈」列（index.html formatListingPublished）",
 });
 
 test("(a) 候選 SELECT 不含 LIMIT：載體由完整候選集合決定", () => {
@@ -106,15 +107,17 @@ test("(c) 窄化欄位不足以支撐任一排序鍵／判定時必須失敗", (
     ["address", "title"], "少了 address/title 一定要被驗證器抓到（關鍵字與行政區 fallback）");
 });
 
-test("候選載體是 42 欄全集的子集，且與 PG 路徑用的是同一份定義", () => {
+test("候選載體是 43 欄全集的子集，且與 PG 路徑用的是同一份定義", () => {
   const full = new Set(LIST_CANDIDATE_KEYS);
-  assert.equal(full.size, 42, "canonical candidate 仍為 42 欄");
+  assert.equal(full.size, 43, "canonical candidate 仍為 43 欄（2026-10-12 起：42 ＋ source_published_at）");
   for (const column of MEMBER_LIST_CANDIDATE_KEYS) {
-    assert.ok(full.has(column), `${column} 必須是 42 欄全集的子集`);
+    assert.ok(full.has(column), `${column} 必須是 43 欄全集的子集`);
   }
   // 逐欄查證（2026-10-11）：42 欄**全部**都有候選階段的讀取點 ⇒ 本包不做欄位級瘦身，
   // 只做「集合級」縮窄（投影預篩）。這條斷言把「不得無證據瘦身」固定住。
-  assert.equal(MEMBER_LIST_CANDIDATE_KEYS.length, 42,
+  // 2026-10-12 追加 source_published_at（讀取點：newest 排序的 listingEffectiveUpdatedAt、
+  // 列表卡的「發佈」列）⇒ 43 欄，REQUIREMENT_TABLE 同步補上。
+  assert.equal(MEMBER_LIST_CANDIDATE_KEYS.length, 43,
     "目前沒有任何欄位有『候選階段不讀』的證據；若未來要瘦身，必須先更新 REQUIREMENT_TABLE 並附 parity");
   assert.equal(MEMBER_LIST_CANDIDATE_COLUMNS, LIST_CANDIDATE_COLUMNS);
 });

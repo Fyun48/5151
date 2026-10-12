@@ -296,6 +296,25 @@ export function contactFromLink(link = {}) {
   };
 }
 
+// 591 詳情 `data.favData.posttime`＝epoch 秒（絕對時間戳）。列表 API 沒有發佈日，所以列表卡的
+// 「發佈」只能靠詳情補抓落地；存進 DB 的是我們自己格式化的 ISO 字串（自算的絕對時間戳，
+// 不像 refresh_time 是 591 給的相對字串快照，會凍結在最後一次改價）。
+// fail-soft：缺值／壞值／不合理值一律回空字串（＝當成缺資料），不得 throw，也不得影響同一輪
+// 詳情的其他欄位。
+const POSTTIME_MIN_SEC = 946684800; // 2000-01-01T00:00:00Z
+const POSTTIME_MAX_SEC = 4102444800; // 2100-01-01T00:00:00Z
+export function sourcePublishedAtFromDetail(detail = {}) {
+  try {
+    const raw = detail?.favData?.posttime;
+    if (raw === null || raw === undefined || raw === "") return "";
+    const sec = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(sec) || sec < POSTTIME_MIN_SEC || sec > POSTTIME_MAX_SEC) return "";
+    return new Date(Math.floor(sec) * 1000).toISOString();
+  } catch {
+    return "";
+  }
+}
+
 const communityMemo = new Map();
 
 export async function fetchCommunityLocation(communityId) {
@@ -476,6 +495,7 @@ export async function fetchListingDetail(postId, options = {}) {
     has_natural_gas: kit.has_natural_gas ? 1 : 0,
     has_balcony: kit.has_balcony ? 1 : 0,
     furnish_items: kit.furnish_items,
+    source_published_at: sourcePublishedAtFromDetail(body.data),
   };
 }
 
