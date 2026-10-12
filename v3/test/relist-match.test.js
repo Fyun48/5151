@@ -232,10 +232,11 @@ test("suspected peer payload includes source and confirm keeps cheaper listing",
   assert.match(matchFns, /overlayPersonal/);
   assert.doesNotMatch(matchFns, /decorateListing\(/);
   assert.match(dbSrc, /source_label: selfSourceLabel\(source\)/);
-  assert.match(dbSrc, /const primary = preferPrimaryListing\(row, peer, now\)/);
-  // 同源成對關係：兩側都指派角色，避免疑似同源同一對在主列表出現兩次
-  assert.match(dbSrc, /assignRole\(row\)/);
-  assert.match(dbSrc, /assignRole\(byId\.get\(mid\)\)/);
+  // 2026-10-12「一群一主」：先建連通分量（union-find），再用唯一比較式
+  // sortGroupListings(...)[0] 選出恰好一個 primary。舊的成對 assignRole 先到先贏已移除。
+  assert.match(dbSrc, /sortGroupListings\(eligible\.map\(\(m\) => m\.row\), now\)\[0\]/);
+  assert.match(dbSrc, /compUnion\(Number\(row\.post_id\), mid\)/);
+  assert.doesNotMatch(dbSrc, /const primary = preferPrimaryListing\(row, peer, now\)/);
   assert.match(dbSrc, /hidden = 1/);
   const suspected = dbSrc.slice(dbSrc.indexOf('if (filter === "suspected")'), dbSrc.indexOf('} else if (filter === "offline")'));
   assert.match(suspected, /match_verdict/);

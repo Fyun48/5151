@@ -3733,6 +3733,10 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
     const byGroupId = new Map();
     for (const [id, row] of universe) {
       if (row.same_house_split) continue;
+      // 已被明確否決（`match_verdict='no'`，例如拆開後升級成全站）的列不得再由
+      // `listing_group_members` 黏回同一群，否則拆開後兩則又會被折成一則
+      // （見 v3/test/match-votes.test.js）。群組表在否決時不會被清，屬既知資料落後。
+      if (String(row.match_verdict || "") === "no") continue;
       if (housepriceNotDisplayReady(row, source)) continue;
       let gid = "";
       try { gid = String(source.groupId(id) || ""); } catch { gid = ""; }
@@ -3758,6 +3762,10 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
       const add = (item) => {
         const id = Number(item?.post_id) || 0;
         if (!id || item.same_house_split || !universe.has(id)) return;
+        if (String(item.match_verdict || "") === "no") return;
+        // 未就緒（houseprice 無 prep／來源停用）不得把兩個群黏起來，也不得當贏家
+        // （沿用舊版 `visible` 的過濾；見 v3/test/listing-prep-5168.test.js）。
+        if (housepriceNotDisplayReady(item, source)) return;
         if (ids.includes(id)) return;
         ids.push(id);
       };
@@ -3787,7 +3795,10 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   for (const members of comps.values()) {
     if (members.length < 2) continue;
     // Owner 2026-10-12 定案：確認下架（offline_confirmed=1）不參與選主。
-    const eligible = members.filter((m) => Number(m.row.offline_confirmed) !== 1);
+    // 未就緒（houseprice 無 prep／來源停用）同樣不得當贏家，否則會「不顯示卻把可顯示的擠掉」。
+    const eligible = members.filter((m) => (
+      Number(m.row.offline_confirmed) !== 1 && !housepriceNotDisplayReady(m.row, source)
+    ));
     if (!eligible.length) continue;
     const primary = sortGroupListings(eligible.map((m) => m.row), now)[0];
     if (!primary) continue;

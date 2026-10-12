@@ -30,7 +30,12 @@ test("listing cards keep a photo frame and hide mobile pick boxes", () => {
   // Owner 2026-10-07：會員與贊助會員不再顯示「物件連結失效」回報鈕（訪客本來就看不到）。
   // CSS 殘留的 .btn-report-gone 樣式規則不算，這裡綁的是「卡片上不會再生出那個按鈕」。
   assert.doesNotMatch(html, /btn-card-action btn-report-gone/);
-  assert.match(html, /function sameHouseGoneBtn\(peer\) \{\s*\n\s*return "";/);
+  // Owner 2026-10-12：三個清單不再豁免折疊，逐則「取消關注／解除隱藏」改由展開面板提供
+  // （沿用既有端點 /api/listings/:id/flags，不新增端點）。
+  assert.match(html, /function sameHouseGoneBtn\(peer\) \{/);
+  assert.match(html, /data-peer-flag="unwatch" data-peer-post="\$\{id\}"/);
+  assert.match(html, /data-peer-flag="unhide" data-peer-post="\$\{id\}"/);
+  assert.doesNotMatch(html, /function sameHouseGoneBtn\(peer\) \{\s*\n\s*return "";/);
 });
 
 test("filter chips follow the 2026-10-07 rules (viewed chip, member-hidden same-source chips)", () => {

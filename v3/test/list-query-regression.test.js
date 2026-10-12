@@ -422,7 +422,10 @@ test("list API whole+building+elevator drops walk-up 公寓 without shape tags",
   `);
 });
 
-test("watched list keeps listings outside district, kind, and confirmed offline", () => {
+// Owner 2026-10-12 定案：確認下架（offline_confirmed=1）三個清單都不顯示
+// ⇒ 原本斷言「watched 清單保留 confirmed-offline」的語意已被取代，這裡改成
+// 「watched 清單仍保留行政區／類型篩選外的列，但確認下架的不再出現」。
+test("watched list keeps listings outside district and kind, but not confirmed offline", () => {
   runIsolated(`
     seed(830001, {
       title: "關注士林",
@@ -452,7 +455,11 @@ test("watched list keeps listings outside district, kind, and confirmed offline"
       settings: { ...settings, watchDistricts: ["1-8"], priceMax: 15000 },
     });
     const got = ids(watched).sort((a, b) => a - b);
-    assert.deepEqual(got, [830001, 830002, 830003]);
+    assert.deepEqual(got, [830001, 830002]);
+    assert.ok(!got.includes(830003), "確認下架不出現在特別關注清單");
+    // 其他兩個清單同樣不得出現。
+    assert.ok(!ids(query({ filter: "all" })).includes(830003));
+    assert.ok(!ids(query({ filter: "hidden" })).includes(830003));
     assert.equal(app.stats([], uid).watchedTotal, 2);
   `);
 });
