@@ -364,6 +364,22 @@ export async function districtProjectionComplete(exec, { runOne = null } = {}) {
  * `memberRegionDistrictNames`／`resolveListDistrictNames` 在預設情境下是同一組），
  * 而每次查詢都要把上萬個 post_id 從 PG 搬回 Node（repro 實測 33–80ms）。
  * 快取只依 `data_revision` 與行政區組合，**不依時間**，所以不會讓過期結果被沿用。
+ *
+ * ⚠️ 為什麼「依 `data_revision` 版本化快取」**不能照抄到 `districtClosureIds()`**（2026-10-12 實測）：
+ *   • 這一支快取的東西（投影的行政區 id 集合）與 `data_revision` 的推進**同源**（投影跟著
+ *     listings 變），換代＝該重算，語意剛好對上。
+ *   • `districtClosureIds()` 的輸入是 **match 圖**（`listings.match_post_id` 的連通分量），
+ *     跟 `data_revision` **不同源**：`data_revision` 只記 `entity_type`／`entity_id`，
+ *     **不記改了哪一欄**，價格或 `last_seen` 的更新也會讓它前進。正式站待機庫實測
+ *     （腳本 `sw1-hitrate.mjs`，每 3 秒取樣 ×10）：`MAX(data_revision.id)` **約 +1.3 次/秒**，
+ *     會員請求間隔 ~3 秒 ⇒ **快取命中率 0/9（0%）**；同一段時間裡 closure 的真輸入
+ *     （`listings` 有 match 邊的列數 80,802）只變 1 次 ⇒「世代換了但圖沒變」是常態，
+ *     這種快取在爬蟲活躍時**永遠不會命中**（死碼）。
+ *   • 退而用便宜的圖指紋（例如 `count(*)`／`max(match_post_id)`）當鍵也不行：那個查詢掃的是
+ *     同一顆 `idx_listings_match_post_id`（正式站 index-only scan 實測 203ms，吃掉大半收益），
+ *     而且換一組 match 可能讓指紋不變（淨值相同）⇒ **無法證明不多算／不少算**，
+ *     違反「資料精準優先」。真要做得先有「match 變更專屬的 revision bump」。
+ *   證據與可重跑指令：`agent-brain` L-0862；腳本 `/home/cline/lab/5151-stats-w1-evidence/sw1-hitrate.mjs`。
  */
 const idsCache = new Map();
 const IDS_CACHE_LIMIT = 64;
