@@ -36,6 +36,11 @@ const handle = () => dbMod.sqliteHandle();
 const OLD = "2026-01-01T00:00:00.000Z"; // 遠早於 24 小時門檻
 const NOW = "2026-09-28T00:00:00.000Z";
 const EXPIRES = "2099-01-01T00:00:00.000Z";
+// 生命週期開啟時，`expires_at` 必須**正好**是 `NOW + DEMAND_TTL_DAYS` 天。
+// ⚠️ 這裡刻意自己算一次，而不是呼叫產品碼的 `ttlExpiresAt()`：拿產品的算式當期望值，
+// 算式被改壞時期望值會一起壞掉，那條變異就永遠殺不掉（原本只看
+// `expires_at < EXPIRES` 只證明「不是遠期哨兵值」，證明不了 TTL 真的生效）。
+const TTL_EXPIRES = new Date(Date.parse(NOW) + syncMod.DEMAND_TTL_DAYS * 86400000).toISOString();
 
 // PG 不接受的方言（SQLite 專屬）。夾具主動拒絕，否則寫錯照樣綠燈。
 const PG_ILLEGAL = [
@@ -792,26 +797,55 @@ test("建立：先前有『已找到房』的許願 ⇒ 要記一次 wish_cloned
   assert.equal(analyticsValue(exec.raw, "wish_cloned"), 1, "PG 版也要記一次 wish_cloned");
 });
 
-test("建立：生命週期開啟時 expires_at 用 TTL，而且兩邊相同", async () => {
-  const [disk, exec] = resetBoth();
-  for (const h of [disk, exec.raw]) {
-    h.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
-  }
-  // ⚠️ 生命週期開關讀的是**行程內快取**（`demand.js` 的 `marketplaceFlags`），而同步版的
-  // 真正入口 `db.js createDemand()` 會先呼叫 `getWishConditions()` 把它灌好——這裡照做。
-  dbMod.getWishConditions();
-  const lite = syncMod.createDemandPost(disk, 8, WISH_INPUT, new Date(NOW));
-  const liteRow = wishRow(disk, lite.id);
-  assert.ok(liteRow.expires_at < EXPIRES, `生命週期開啟時要用 TTL，實際 ${liteRow.expires_at}`);
+test("建立：生命週期開啟時 expires_at 用 TTL，而且兩邊相同", async (t) => {
+  // ⏱️ **凍結時鐘**（`node:test` 內建 mock timers，只鎖 `Date`；用完就還原，不外溢）。
+  //
+  // 為什麼非凍不可：這條測試把 `NOW` 注入成 2026-09-28，TTL 是 14 天 ⇒ `expires_at`
+  // 恰好落在 **2026-10-12T00:00:00Z**。而**讀取路徑自己會跑一次過期掃描，用的卻是
+  // 真實時鐘、不是注入值**：
+  //   - 同步版 `getDemandPost()`（`demand.js:1280`）→ `expireOpenPosts(db)`（`demand.js:1281`），
+  //     預設參數 `now = new Date()`（`demand.js:826`）；
+  //   - PG 版 `getDemandPostAsync()`（`demandAsync.js:532`）→
+  //     `expireOpenPostsAsync(run, new Date())`（`demandAsync.js:535`，預設見 `demandAsync.js:357`）。
+  // 兩支都會跑 `EXPIRE_CONFIRM_SQL`（`demand.js:797`）：`lifecycle = 'needs_confirmation',
+  // updated_at = ?`，`?` 就是那份真實時鐘的 ISO 字串。
+  // ⇒ 只要真實時間越過 `expires_at`，剛建立的這一列就被翻成 `needs_confirmation`，
+  // 而且兩個 store **各自**蓋上自己當下的時間（同步版先跑、PG 版後跑，相差几毫秒到數秒）
+  // ⇒ `deepEqual` 在 `updated_at` 上假紅。時間炸彈的引信日正是 `NOW + 14 天`：
+  // base `62b4d25` 的 2026-10-11T23:41Z push run 還是綠的，2026-10-12T00:00Z 之後必紅。
+  //
+  // 凍結後，「注入的 now」與產品碼內部的 `new Date()` 是同一個值，掃描對這一列是 no-op
+  // （`expires_at = NOW + 14 天 > NOW`），`updated_at` 只由注入時鐘決定。
+  // ⚠️ 這不是放寬斷言：`expires_at` 仍要求**正好**是 TTL、仍要求兩邊逐欄相同，
+  // 下面還加了一條「剛建立要維持 active」——真實時鐘若再滲進來，那一條會立刻紅。
+  t.mock.timers.enable({ apis: ["Date"], now: Date.parse(NOW) });
+  try {
+    const [disk, exec] = resetBoth();
+    for (const h of [disk, exec.raw]) {
+      h.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
+    }
+    // ⚠️ 生命週期開關讀的是**行程內快取**（`demand.js` 的 `marketplaceFlags`），而同步版的
+    // 真正入口 `db.js createDemand()` 會先呼叫 `getWishConditions()` 把它灌好——這裡照做。
+    dbMod.getWishConditions();
+    const lite = syncMod.createDemandPost(disk, 8, WISH_INPUT, new Date(NOW));
+    const liteRow = wishRow(disk, lite.id);
+    assert.equal(liteRow.expires_at, TTL_EXPIRES, `生命週期開啟時要用 TTL（NOW + ${syncMod.DEMAND_TTL_DAYS} 天），實際 ${liteRow.expires_at}`);
+    assert.ok(liteRow.expires_at < EXPIRES, `TTL 不可以是遠期哨兵值，實際 ${liteRow.expires_at}`);
+    assert.equal(liteRow.lifecycle, "active", "剛建立的公開許願房要維持 active（讀取路徑的過期掃描要吃注入的時鐘）");
 
-  clearDemand(disk);
-  seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
-  exec.raw.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-    .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
-  const pg = await asyncMod.createDemandAsync(8, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
-  assert.deepEqual(withoutId(wishRow(exec.raw, pg.id)), withoutId(liteRow), "TTL 與其他欄位都要與同步版相同");
-  assert.ok(wishRow(exec.raw, pg.id).lifecycle_migrated_at, "開啟生命週期時要補上遷移標記");
+    clearDemand(disk);
+    seedUsers(disk, [1, 2, 3, 4, 5, 6, 7, 8]);
+    exec.raw.prepare("INSERT INTO settings(key, value) VALUES ('rentalMarketplaceFlags', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(JSON.stringify({ wish: { lifecycle_enabled: true } }));
+    const pg = await asyncMod.createDemandAsync(8, WISH_INPUT, { ...PG, exec, strict: true, now: NOW });
+    const pgRow = wishRow(exec.raw, pg.id);
+    assert.equal(pgRow.expires_at, TTL_EXPIRES, `PG 版的到期時間也要是 NOW + ${syncMod.DEMAND_TTL_DAYS} 天，實際 ${pgRow.expires_at}`);
+    assert.deepEqual(withoutId(pgRow), withoutId(liteRow), "TTL 與其他欄位都要與同步版相同");
+    assert.ok(pgRow.lifecycle_migrated_at, "開啟生命週期時要補上遷移標記");
+  } finally {
+    t.mock.timers.reset();
+  }
 });
 
 test("建立：競態（插入前先被建立草稿）要在新交易接手並就地刊登", async () => {
