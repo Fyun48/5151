@@ -158,9 +158,21 @@ test("審計：候選階段（篩選＋分頁）對候選列實際讀取哪些�
   // object in one spread. In-place additions to wide PG rows made V8 use much
   // larger dictionary properties; zero spreads is not a useful performance gate.
   // Keep auditing every copied field, and require the full candidate contract.
+  //
+  // 例外（2026-10-12）：`source_published_at` 是**條件讀取** —— `listingEffectiveUpdatedAt`
+  // 走「來源優先序」，只有 `source_updated_at` 缺席（或排序真正走到 tie-break）時才會讀到它。
+  // 上面的 mode 矩陣不含 `newest` 排序，所以某些 mode 不會碰它。它仍然必須在**至少一個** mode
+  // 被讀到（下面的斷言），否則它就是沒有讀取點的冗欄。
+  const CONDITIONAL_CANDIDATE_READS = new Set(["source_published_at"]);
   for (const entry of perMode) {
     assert.equal(entry.spreadCount, ROWS.length, 'each input row is copied once for personal flags');
-    for (const key of candidate) assert.ok(entry.modeReads.has(key), `full candidate copy includes ${key}`);
+    for (const key of candidate) {
+      if (CONDITIONAL_CANDIDATE_READS.has(key)) continue;
+      assert.ok(entry.modeReads.has(key), `full candidate copy includes ${key}`);
+    }
+  }
+  for (const key of CONDITIONAL_CANDIDATE_READS) {
+    assert.ok(all.includes(key), `條件讀取的候選欄位 ${key} 必須至少被一個 mode 讀到（有讀取點）`);
   }
   assert.ok(ROWS.every(row => !Object.hasOwn(row, 'viewed') && !Object.hasOwn(row, 'watched')),
     'personal flags do not mutate the canonical input rows');

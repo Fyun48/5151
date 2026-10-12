@@ -25,7 +25,7 @@ export const SOURCE_FIELD_MATRIX = [
       elevator: "parsed",
       parking: "not_fetched",
       photos: "cover_only",
-      posted_at: "not_provided",
+      posted_at: "parsed",
       source_updated_at: "parsed",
       fetched_at: "parsed",
       url: "parsed",

@@ -47,7 +47,7 @@ const LISTING_COLUMNS = [
   "extra_fee_text", "price_contain_text", "floor_name", "area_name", "layout", "source",
   "offline", "offline_confirmed", "hidden", "match_post_id", "match_level", "match_verdict",
   "match_detail", "cost_changed_at", "cost_change_detail", "cost_change_type", "last_seen_at",
-  "refresh_time",
+  "refresh_time", "source_published_at",
 ];
 
 const INT_COLUMNS = new Set(["price_num", "offline", "offline_confirmed", "hidden", "match_post_id"]);

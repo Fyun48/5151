@@ -5468,6 +5468,24 @@
       return date.toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
     }
 
+    // 591 列表卡的「發佈」列。只有 591 來源、且詳情補抓已帶回發佈日（source_published_at）才顯示。
+    // 文案由**絕對時間戳**（詳情 API 的 epoch 秒，落庫時已轉成 ISO）現算 —— 這跟 refresh_time 不同：
+    // 後者是 591 給的相對字串快照，物件掉出覆蓋範圍後就不再前進；發佈日天天自己算，不會凍結。
+    function formatListingPublished(item) {
+      if (!is591Source(item)) return "";
+      const raw = String(item?.source_published_at || "").trim();
+      if (!raw) return "";
+      const at = new Date(raw);
+      if (Number.isNaN(at.getTime())) return "";
+      const ageMs = Date.now() - at.getTime();
+      // 未來時間（站方時鐘偏移）一律當「剛剛」，不要出現「-2小時前」。
+      if (ageMs < 60 * 60 * 1000) return "此房屋剛剛發佈";
+      if (ageMs < 24 * 60 * 60 * 1000) return `此房屋在${Math.floor(ageMs / (60 * 60 * 1000))}小時前發佈`;
+      const year = at.getFullYear();
+      const prefix = year === new Date().getFullYear() ? "" : `${year}年`;
+      return `此房屋在${prefix}${at.getMonth() + 1}月${at.getDate()}日發佈`;
+    }
+
     function esc(value) {
       return String(value ?? "")
         .replace(/&/g, "&amp;")
@@ -8088,6 +8106,7 @@
             <h2 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
             </h2>
+            ${formatListingPublished(item) ? `<div class="when">${esc(formatListingPublished(item))}</div>` : ""}
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             </div>
             <div class="item-details">

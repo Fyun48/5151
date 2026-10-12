@@ -34,6 +34,24 @@ export function foldColumnsDdlStatements() {
   ];
 }
 
+// 591 詳情帶回來的絕對發佈時間（ISO 字串，`client591.sourcePublishedAtFromDetail`）。
+// 讀取端本來就引用這個欄名（db.js `listingEffectiveUpdatedAt`、listingSearchProjection.js），
+// 所以補欄只是把原設計接回來；既有列補欄後是 NULL／空字串 ⇒ 讀取端照舊退回下一個時間來源。
+// PG 的 listings 是既有表，`pgSchema.js` 只做 CREATE、沒有 ALTER ⇒ 要在第一次寫入前冪等補欄，
+// 否則 upsert／詳情 UPDATE 會以 42703 整批失敗（同 fold_* 欄的理由）。
+export function sourcePublishedAtDdlStatements() {
+  return ["ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_published_at text"];
+}
+
+// 同一條 DDL 的冪等入口（WeakSet 記在 driver 上 ⇒ 同一行程只跑一輪）。時機：任何會寫這個欄位的
+// 路徑在第一次寫入前呼叫一次。
+const sourcePublishedAtReady = new WeakSet();
+export async function ensureSourcePublishedAtOnce(pgDriver) {
+  if (!pgDriver || sourcePublishedAtReady.has(pgDriver)) return;
+  for (const statement of sourcePublishedAtDdlStatements()) await pgDriver.exec(statement);
+  sourcePublishedAtReady.add(pgDriver);
+}
+
 // SQLite 版冪等 DDL：SQLite 不支援 `ADD COLUMN IF NOT EXISTS`，用 PRAGMA table_info 判斷。
 // 讓 fold_* 在兩個 driver 上都存在（PG 鏡射 SQLite schema 的 parity／integration 測試需要它）。
 export function ensureFoldColumnsSqlite(sqliteDb) {
@@ -110,8 +128,9 @@ export function listingsUpsertSql() {
       price_contain_text, extra_fees, extra_fees_fetched, address, area_name,
       layout, floor_name, kind_name, role_name, cover, tags, refresh_time,
       first_seen_at, last_seen_at, last_event, viewed, watched, lat, lng,
-      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+      community_id, community_name, community_linked, cost_changed_at, cost_change_type, cost_change_detail,
+      source_published_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(post_id) DO UPDATE SET
       source_key = excluded.source_key,
       search_key = excluded.search_key,
@@ -179,6 +198,10 @@ export function listingsUpsertSql() {
       cost_change_detail = CASE
         WHEN IFNULL(excluded.cost_change_detail, '') != '' THEN excluded.cost_change_detail
         ELSE listings.cost_change_detail
+      END,
+      source_published_at = CASE
+        WHEN IFNULL(excluded.source_published_at, '') != '' THEN excluded.source_published_at
+        ELSE listings.source_published_at
       END`;
 }
 
@@ -227,6 +250,7 @@ export function listingsUpsertParams(listing, existing = null) {
     String(listing.cost_changed_at || "").trim(),
     String(listing.cost_change_type || "").trim(),
     String(listing.cost_change_detail || "").trim(),
+    String(listing.source_published_at || "").trim(),
   ];
 }
 

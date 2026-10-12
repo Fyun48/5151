@@ -43,6 +43,7 @@ import {
 import { resolveDbDriver } from "./dbDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
+import { ensureSourcePublishedAtOnce } from "./repository/writePath.js";
 import { enqueueListingEventAsync } from "./notifyEnqueueAsync.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
 import { sqliteHandleIsUsable } from "./sqliteHandle.js";
@@ -152,6 +153,11 @@ export async function setListingDetailAsync(postId, input = {}, options = {}) {
     const deps = options.deps || listingFieldsBuildContext();
     const listing = options.listing || await loadListingForWrite(postId, options);
     if (!listing) return null;
+    // 591 發佈日欄：詳情 UPDATE 會寫它，既有 PG 表要先冪等補欄（否則 42703 會讓整包詳情寫入失敗）。
+    // 測試注入 exec 時不碰 DDL（同 setCachedMrtAsync 的 `!options.exec` 慣例）。
+    if (!options.exec) {
+      await ensureSourcePublishedAtOnce(options.pgDriver || (await sharedPgDriver()));
+    }
     const result = await setListingDetailRepo(exec, { deps, listing, input });
     // The fee change db.js enqueues inline on SQLite; PostgreSQL goes through the driver-aware
     // entry point so the event lands in the queue the site reads (POSTGRES_SWITCH_PLAN ③).

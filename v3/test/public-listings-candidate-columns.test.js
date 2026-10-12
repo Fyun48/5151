@@ -1,10 +1,10 @@
-// 公開列表候選查詢瘦身（PG 路徑 42 → 36 欄）的離線斷言。
+// 公開列表候選查詢瘦身（PG 路徑 43 → 37 欄）的離線斷言。
 //
 // 目標：證明把 `searchPublicListingsAsync` 的候選 SELECT 從 `LIST_CANDIDATE_COLUMNS`
-// （42 欄）縮到 `PUBLIC_LISTING_CANDIDATE_COLUMNS`（36 欄）不會改變任何結果，並把
+// （43 欄）縮到 `PUBLIC_LISTING_CANDIDATE_COLUMNS`（37 欄）不會改變任何結果，並把
 // 「哪一道過濾／排序讀哪些欄」的查證表固化成一組迴歸斷言。
 //
-// 對照（42 vs 36）的**真實 30＋ 組合 parity** 走 `v3/scripts/public-candidate-slim-parity.mjs`
+// 對照（43 vs 37）的**真實 30＋ 組合 parity** 走 `v3/scripts/public-candidate-slim-parity.mjs`
 // （連隔離庫 repro）；本檔用離線 fixture 跑同一套管線的同步版，供 CI 快速迴歸。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -45,33 +45,33 @@ const KEPT_COLUMNS = [
   "contact_name", "contact_role", "contact_uid", "agency", "lat", "lng",
   "geo_source", "location_class", "match_post_id", "match_level", "match_verdict",
   "offline", "offline_confirmed", "hidden", "first_seen_at", "last_seen_at",
-  "refresh_time", "listed_by_user_id",
+  "refresh_time", "listed_by_user_id", "source_published_at",
 ];
 // 這 6 欄在公開候選階段**不會被讀到**：只在「頁面二次 SELECT *」、成員/自我列表、
 // 通知、或配對（match）路徑才會用到。
 const DROPPED_COLUMNS = ["address_norm", "layout", "match_rejected", "hidden_at", "last_event", "self_status"];
 
-test("PG 公開候選欄位＝42 欄減去 6 欄未用欄，且不超出 42 欄全集", () => {
+test("PG 公開候選欄位＝43 欄減去 6 欄未用欄，且不超出 43 欄全集", () => {
   const full = LIST_CANDIDATE_KEYS;
-  assert.equal(full.length, 42, "canonical candidate 仍為 42 欄");
+  assert.equal(full.length, 43, "canonical candidate 仍為 43 欄（2026-10-12 起：42 ＋ source_published_at）");
   const slim = new Set(PUBLIC_LISTING_CANDIDATE_COLUMNS.split(",").map((s) => s.trim()).filter(Boolean));
-  assert.equal(slim.size, 36, "公開候選為 36 欄");
+  assert.equal(slim.size, 37, "公開候選為 37 欄");
   for (const col of KEPT_COLUMNS) assert.ok(slim.has(col), `保留欄位 ${col} 應在公開候選內`);
   for (const col of DROPPED_COLUMNS) assert.ok(!slim.has(col), `未用欄位 ${col} 不應在公開候選內`);
-  for (const col of slim) assert.ok(full.includes(col), `公開候選欄位 ${col} 必須是 42 欄子集`);
+  for (const col of slim) assert.ok(full.includes(col), `公開候選欄位 ${col} 必須是 43 欄子集`);
 });
 
-test("sqlite 路徑的候選 SQL 逐字不變（仍是 42 欄 LIST_CANDIDATE_COLUMNS）", () => {
+test("sqlite 路徑的候選 SQL 逐字不變（仍是 43 欄 LIST_CANDIDATE_COLUMNS）", () => {
   // sqlite 的 listPublicListings（db.js:8100）與 listListings（db.js:7313）都仍用
-  // LIST_CANDIDATE_COLUMNS；listingSearchBuildContext().candidateColumns 也維持 42 欄
+  // LIST_CANDIDATE_COLUMNS；listingSearchBuildContext().candidateColumns 也維持 43 欄
   // （供 SQL-first/entry/stats 共用）。本檔只改 searchPublicListingsAsync 那一句。
   assert.equal(LIST_CANDIDATE_COLUMNS, LIST_CANDIDATE_KEYS.join(", "), "LIST_CANDIDATE_COLUMNS 逐字不變");
   assert.equal(listingSearchBuildContext().candidateColumns, LIST_CANDIDATE_COLUMNS,
-    "listingSearchBuildContext 仍回 42 欄（SQL-first/entry/stats 不受影響）");
-  assert.equal(new Set(LIST_CANDIDATE_COLUMNS.split(",").map((s) => s.trim())).size, 42, "仍為 42 欄");
+    "listingSearchBuildContext 仍回 43 欄（SQL-first/entry/stats 不受影響）");
+  assert.equal(new Set(LIST_CANDIDATE_COLUMNS.split(",").map((s) => s.trim())).size, 43, "仍為 43 欄");
 });
 
-// 離線管線審計：公開候選階段的篩選＋排序實際讀到的 DB 欄位必須 ⊆ 36 欄，且不碰那 6 欄。
+// 離線管線審計：公開候選階段的篩選＋排序實際讀到的 DB 欄位必須 ⊆ 37 欄，且不碰那 6 欄。
 function spyProvider(record = { calls: [] }) {
   const emptyIndex = { groupKey: () => "", peers: () => [], agrees: () => true, size: 0 };
   const note = (label) => (arg) => {
@@ -148,7 +148,7 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
-test("審計：公開候選階段讀到的 DB 欄位 ⊆ 36 欄，且不碰那 6 欄", () => {
+test("審計：公開候選階段讀到的 DB 欄位 ⊆ 37 欄，且不碰那 6 欄", () => {
   const reads = new Set();
   const raw = FULL_ROWS.map((r) => candidateRowFrom(r, FULL_KEYS)).map((row) => new Proxy(row, {
     get(target, prop, receiver) { if (typeof prop === "string") reads.add(prop); return Reflect.get(target, prop, receiver); },
@@ -165,7 +165,7 @@ test("審計：公開候選階段讀到的 DB 欄位 ⊆ 36 欄，且不碰那 6
   const slim = new Set(SLIM_KEYS);
   const droppedRead = DROPPED_COLUMNS.filter((c) => reads.has(c));
   assert.deepEqual(droppedRead, [], `公開候選階段不應讀到未用欄位：${droppedRead.join(", ")}`);
-  // 讀到的「DB 欄位」只能是 36 欄子集（管線自建欄位與 provider 別名除外）。
+  // 讀到的「DB 欄位」只能是 37 欄子集（管線自建欄位與 provider 別名除外）。
   const known = new Set([
     "commute_km", "route_km", "source_updated_at", "source_published_at",
     "buildingType", "building_type", "caseTypeName", "listing_kind",
@@ -178,7 +178,7 @@ test("審計：公開候選階段讀到的 DB 欄位 ⊆ 36 欄，且不碰那 6
   assert.deepEqual(unregistered, [], `公開候選階段讀到未登錄欄位：${unregistered.join(", ")}`);
 });
 
-test("離線 parity：42 欄 vs 36 欄候選，結果（totalMatched／順序／裝飾值）完全一致", () => {
+test("離線 parity：43 欄 vs 37 欄候選，結果（totalMatched／順序／裝飾值）完全一致", () => {
   const full = runPipeline(FULL_KEYS);
   const slim = runPipeline(SLIM_KEYS);
   assert.equal(full.totalMatched, slim.totalMatched, "totalMatched 一致");

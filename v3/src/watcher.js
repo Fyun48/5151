@@ -24,6 +24,7 @@ import {
   persistListing,
   routeJobKeyFor,
   pushPayloadFromEvents,
+  ensureSourcePublishedAtSchema,
 } from "./db.js";
 // SQLite 退場 P1：`getCommunityCache`（同步讀本機 `community_cache`）換成 PG 版。
 // 原本 PG 模式下這一支讀節點本機，開閘時 `ingestListingGeo()` 的呼叫是未捕捉的 rejection，
@@ -350,6 +351,8 @@ async function applyFetchedDetail(listing, detail) {
     has_balcony: detail.has_balcony,
     furnish_items: detail.furnish_items,
     kit_fetched: 1,
+    // 591 詳情 API 的絕對發佈日（epoch 秒→ISO；失敗時是空字串 ⇒ 不動既有值）。
+    source_published_at: detail.source_published_at,
   });
   try { await reconcileListingByIdAsync(listing.post_id, { reason: "detail_enrichment" }); } catch { /* ignore */ }
   return saved;
@@ -881,6 +884,11 @@ export async function runWatch(options = {}) {
     workLat: settings.workLat,
     workLng: settings.workLng,
   };
+
+  // source_published_at 欄確保（fail-soft，PG 模式才動作）：下面下架掃描的 peer SELECT、以及
+  // 這一輪之後的候選 SELECT 都已經引用這個欄名，而既有 PG 表要等第一次寫入才會有欄位。
+  // 掃描排在抓取之前 ⇒ 這裡先補一次，免得整輪掃描被 42703 跳過（2026-10-12 沙盒實測症狀）。
+  await ensureSourcePublishedAtSchema();
 
   // 下架掃描排在「抓來源之前」（2026-10-09，提案選項 B）：可見優先的探測要在這一輪抓頁落地
   // 之前先做一小段，才不會像 2026-10-09 實測那樣——整輪預算被輪尾（落地＋明細＋套件＋通知）
