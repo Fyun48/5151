@@ -1,4 +1,5 @@
 import { extraMonthlyAmount, listingCompareCost, rentAmount } from "./listingCost.js";
+import { refreshFoldComponentRoot, foldRootRefreshReady } from "./foldComponentRoot.js";
 
 export const MATCH_GEO_MAX_METERS = 120;
 export const MATCH_AREA_TIGHT = 0.5;
@@ -176,6 +177,11 @@ export async function refreshFoldColumns(exec, postId) {
   const row = rows?.[0];
   if (!row) return false;
   await exec(foldColumnsUpdateSql(), bindFoldColumnValues(computeFoldColumns(row), id));
+  // 同屋源分量 root 也在**同一個漏斗**裡刷新（Owner 2026-10-12 准 (B)）：不另開第二條刷新鏈。
+  // 只有 PG 且 `listings.fold_component_root` 已部署（Owner 發版時執行 DDL）才啟用；
+  // SQLite 沒有這個欄位、讀取端也不讀它（SQLite 讀取端在請求期自己算分量），故略過。
+  // 失敗一律向上拋，由呼叫端累進既有 fold_refresh_failed（與 fold_* 的處理一致，不吞）。
+  if (await foldRootRefreshReady(exec)) await refreshFoldComponentRoot(exec, id);
   return true;
 }
 

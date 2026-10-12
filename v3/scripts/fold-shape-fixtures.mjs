@@ -1,14 +1,20 @@
-// (C) 4 種折疊邊形的合成列 fixture（repro 隔離庫，插入合成列 → Node vs SQL 折疊 → 斷言 → 清理）。
-// 驗證 foldRoleCte 與 attachSameHouseRoles 對「危險邊形」逐位元一致：
+// (C) 5 種折疊邊形的合成列 fixture（repro 隔離庫，插入合成列 → Node vs SQL 折疊 → 斷言 → 清理）。
+// 驗證 foldRoleCte（Owner 2026-10-12 准 (B)：讀 fold_component_root ＋分量內排名）與
+// attachSameHouseRoles 對「危險邊形」逐位元一致：
 //   ① 只有入邊（我沒有 match_post_id，別人指我）
 //   ② 對端 match_verdict='no'
 //   ③ 對端是 houseprice 且沒有 listing_prep 列（不顯示就緒）
 //   ④ split 對（user_match_votes vote='split'）—— 訪客 uid=0 無 split，故只驗 Node 側語意標記。
+//   ⑤ 鏈狀 P–Q–R：舊的 first-incident-edge 會產生兩個 primary，現在兩條路徑都必須只有 R。
+// root 由 foldComponentRoot.js 的同一份 union-find 在「這組合成列」上算出（與 Node 同一個 universe），
+// 以參數餵給 SQL（rootSource）⇒ 不寫任何列、也不依賴回填狀態。
 // 用法：PG_URL=$PG_LIVE_REPRO_URL node v3/scripts/fold-shape-fixtures.mjs
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { attachSameHouseRoles } from "../src/db.js";
+import { componentRootMap } from "../src/foldComponentRoot.js";
+import { foldRoleCte } from "../src/listingSearchSql.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
 
 assertPgTargetAllowed("fold-shape-fixtures", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
@@ -25,6 +31,9 @@ const ids = {
   H: BASE + 6,      // houseprice、無 prep 列
   F: BASE + 7,      // split 對：F ↔ G，user_match_votes 有 vote='split'
   G: BASE + 8,
+  P: BASE + 11,     // 鏈狀 P → Q → R（Q 與 R 都比 P 便宜 ⇒ 舊演算法會出兩個 primary）
+  Q: BASE + 12,
+  R: BASE + 13,
 };
 const all = Object.values(ids);
 
@@ -54,6 +63,10 @@ const shapeRows = [
   //    避免將來有人修 loadUserSplitPairSet 時悄悄改變訪客顯示）。
   listing(ids.F, { match_post_id: ids.G }),
   listing(ids.G, { match_post_id: ids.F }),
+  // ⑤ 鏈狀：P → Q → R，租金 R < Q < P ⇒ 唯一主卡應該是 R
+  listing(ids.P, { match_post_id: ids.Q, fold_rent_num: 20000, price_num: 20000 }),
+  listing(ids.Q, { match_post_id: ids.R, fold_rent_num: 18000, price_num: 18000 }),
+  listing(ids.R, { fold_rent_num: 16000, price_num: 16000 }),
 ];
 
 // 插入合成列（listings 的 NOT NULL 欄由 information_schema 推導）。
@@ -120,64 +133,26 @@ const nodeRows = readBack.map((r) => ({ ...r }));
 attachSameHouseRoles(nodeRows, 0, provider, provider.now);
 const nodeRole = new Map(nodeRows.map((r) => [Number(r.post_id), r.same_house_role || null]));
 
-// SQL fold（foldRoleCte 演算法，scope 到合成 post_id）
-const SQL_ROLE = `
-WITH cand AS (
-  SELECT post_id, source, source_id, url, last_seen_at, offline, match_post_id, match_verdict,
-         fold_rent_num, fold_refresh_kind, fold_refresh_rel_ms, fold_refresh_abs_ms
-  FROM listings WHERE post_id = ANY($1::bigint[])
-),
-extras AS (
-  SELECT l.post_id, l.source, l.source_id, l.url, l.last_seen_at, l.offline, l.match_post_id, l.match_verdict,
-         l.fold_rent_num, l.fold_refresh_kind, l.fold_refresh_rel_ms, l.fold_refresh_abs_ms
-  FROM listings l
-  WHERE l.post_id IN (SELECT match_post_id FROM cand WHERE match_post_id IS NOT NULL AND match_post_id > 0 AND COALESCE(match_verdict,'') <> 'no')
-    AND l.post_id NOT IN (SELECT post_id FROM cand)
-),
-display AS (
-  SELECT u.*,
-    (u.source = ANY($2::text[]) AND (u.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
-    (CASE WHEN u.fold_refresh_kind = 1 THEN $3::bigint - u.fold_refresh_rel_ms ELSE u.fold_refresh_abs_ms END) AS refresh_ms,
-    (u.source || ':' || COALESCE(NULLIF(u.source_id,''), NULLIF(u.url,''), NULLIF(u.post_id,0)::text, '') || ':' || u.post_id::text) AS tie_key
-  FROM (SELECT * FROM cand UNION ALL SELECT * FROM extras) u
-  LEFT JOIN listing_prep p ON p.post_id = u.post_id
-),
-edges AS (
-  SELECT d.post_id AS src, d.match_post_id AS dst FROM display d
-  WHERE d.match_post_id IS NOT NULL AND d.match_post_id > 0 AND COALESCE(d.match_verdict,'') <> 'no'
-    AND d.post_id IN (SELECT post_id FROM cand)
-),
-eff AS (
-  SELECT e.src, e.dst FROM edges e JOIN display s ON s.post_id = e.src JOIN display d ON d.post_id = e.dst
-  WHERE s.display_ready AND d.display_ready AND COALESCE(d.match_verdict,'') <> 'no'
-),
-inc AS (
-  SELECT src AS x, src AS ord, src, dst FROM eff
-  UNION ALL
-  SELECT dst AS x, src AS ord, src, dst FROM eff WHERE dst IN (SELECT post_id FROM cand)
-),
-rk AS (SELECT x, src, dst, row_number() OVER (PARTITION BY x ORDER BY ord ASC, dst ASC) AS rn FROM inc),
-fe AS (SELECT x, src, dst FROM rk WHERE rn = 1),
-winner AS (
-  SELECT fe.x,
-    CASE
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NULL THEN a.post_id
-      WHEN b.fold_rent_num IS NOT NULL AND a.fold_rent_num IS NULL THEN b.post_id
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NOT NULL AND a.fold_rent_num <> b.fold_rent_num
-        THEN CASE WHEN a.fold_rent_num < b.fold_rent_num THEN a.post_id ELSE b.post_id END
-      WHEN a.refresh_ms <> b.refresh_ms THEN CASE WHEN a.refresh_ms > b.refresh_ms THEN a.post_id ELSE b.post_id END
-      WHEN COALESCE(b.last_seen_at,'') <> COALESCE(a.last_seen_at,'')
-        THEN CASE WHEN COALESCE(b.last_seen_at,'') < COALESCE(a.last_seen_at,'') THEN a.post_id ELSE b.post_id END
-      WHEN a.tie_key <> b.tie_key THEN CASE WHEN a.tie_key < b.tie_key THEN a.post_id ELSE b.post_id END
-      ELSE CASE WHEN a.post_id <= b.post_id THEN a.post_id ELSE b.post_id END
-    END AS winner_id, a.offline AS a_offline, b.offline AS b_offline, fe.src AS src, fe.dst AS dst
-  FROM fe JOIN display a ON a.post_id = fe.src JOIN display b ON b.post_id = fe.dst
-)
-SELECT x, (CASE WHEN winner_id = x THEN 'primary' ELSE 'affiliate' END) AS role
-FROM (SELECT w.x, w.winner_id FROM winner w JOIN fe ON fe.x = w.x) w
-`;
-const sqlRows = (await drv.pool.query(SQL_ROLE, [all, enabledSources, provider.now])).rows;
-const sqlRole = new Map(sqlRows.map((r) => [Number(r.x), r.role]));
+// root：用讀取端／刷新端同一份 union-find，在「這組合成列」上算（universe 與 Node 相同）。
+const gidOf = new Map(); // 這組 fixture 沒有 listing_group_members
+const rootMap = componentRootMap({
+  rows: readBack.map((r) => ({ ...r, prep_display_ready: Number(prepById.get(Number(r.post_id))?.display_ready) === 1 ? 1 : 0 })),
+  groupIdOf: (pid) => gidOf.get(Number(pid)) || "",
+  splits: new Set(),
+  isNotDisplayReady: (row) => {
+    if (!enabledSources.includes(String(row.source || "591"))) return true;
+    if (String(row.source) !== "houseprice") return false;
+    return Number(row.prep_display_ready) === 1 ? false : true;
+  },
+});
+
+// SQL fold：**用生產路徑的同一支 foldRoleCte**（root 以參數餵入；不寫任何列）
+const rootIds = all.map((id) => Number(id));
+const rootVals = all.map((id) => (rootMap.get(Number(id)) == null ? null : Number(rootMap.get(Number(id)))));
+const cte = foldRoleCte("WHERE post_id = ANY(?::bigint[])", { rootSource: "unnest(?::bigint[], ?::bigint[]) AS t(post_id, fold_component_root)" })
+  + "\nSELECT post_id, role, primary_offline, primary_id FROM fold_role";
+const sqlRows = (await drv.pool.query(toPostgresSql(cte), [rootIds, rootVals, all, enabledSources, provider.now])).rows;
+const sqlRole = new Map(sqlRows.map((r) => [Number(r.post_id), r.role || null]));
 
 // 斷言 4 形狀
 const results = [];
@@ -196,6 +171,12 @@ assertRole(ids.E, "③ peer houseprice no-prep: E(src)");
 assertRole(ids.H, "③ peer houseprice no-prep: H(houseprice, no prep)");
 assertRole(ids.F, "④ split pair (guest ignores split): F");
 assertRole(ids.G, "④ split pair (guest ignores split): G");
+assertRole(ids.P, "⑤ chain P-Q-R: P (cheapest is R)");
+assertRole(ids.Q, "⑤ chain P-Q-R: Q");
+assertRole(ids.R, "⑤ chain P-Q-R: R (single primary)");
+const nodePrimaries = nodeRows.filter((r) => r.same_house_role === "primary").map((r) => Number(r.post_id)).sort();
+const sqlPrimaries = sqlRows.filter((r) => r.role === "primary").map((r) => Number(r.post_id)).sort();
+results.push({ label: "⑤ exactly one primary in the chain component", node: nodePrimaries.join(","), sql: sqlPrimaries.join(","), ok: String(nodePrimaries) === String(sqlPrimaries) && nodePrimaries.includes(ids.R) });
 
 for (const r of results) console.log(JSON.stringify(r));
 const allOk = results.every((r) => r.ok);
@@ -205,5 +186,5 @@ await drv.pool.query("DELETE FROM user_match_votes WHERE post_id = ANY($1::bigin
 await drv.pool.query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [all]);
 
 await drv.pool.end();
-console.log(JSON.stringify({ allOk, total: results.length }));
+console.log(JSON.stringify({ allOk, total: results.length, roots: Object.fromEntries(all.map((id) => [id, rootVals[all.indexOf(id)]])) }));
 process.exit(allOk ? 0 : 1);

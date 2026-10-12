@@ -43,6 +43,7 @@ export const MOVE_GROUP_MEMBERS_SQL = "UPDATE listing_group_members SET group_id
 export const DELETE_GROUP_MEMBERS_SQL = "DELETE FROM listing_group_members WHERE group_id = ?";
 
 export const DELETE_MEMBER_SQL = "DELETE FROM listing_group_members WHERE post_id = ?";
+export const GROUP_MEMBERS_POST_IDS_SQL = "SELECT post_id FROM listing_group_members WHERE group_id = ?";
 
 export const COUNT_GROUP_MEMBERS_SQL = "SELECT COUNT(*) AS n FROM listing_group_members WHERE group_id = ?";
 

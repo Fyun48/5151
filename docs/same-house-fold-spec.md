@@ -1,6 +1,6 @@
 # 同屋源主卡／次卡（affiliate）折疊 — 讀取端現行語意完整還原規格
 
-> 最後校對：2026-10-12（對應 commit f33dbf0（本 PR 的程式碼 commit）；Owner 當日五項定案已併入，見 §6）
+> 最後校對：2026-10-12（Owner 當日裁示已併入：五項定案見 §6、(B) 方案落地見 §6.3~§6.6）
 >
 > 本文件是「把 same_house_role 折疊變成 SQL 可表達」的**唯一語意權威**。
 > 每條都附 `檔:行`。SQL 折疊（視窗函式／遞歸 CTE）與寫入端固化欄都必須以本文件為準，
@@ -188,7 +188,7 @@ win(a,b) =
 | 1b | 逐則「取消關注／解除隱藏」改由展開面板提供（不新增端點） | `public/index.html` `sameHouseGoneBtn()`；`POST /api/listings/:id/flags`（`server.js:5033`）body `{watched:false}`／`{hidden:false}` | 同上「same-house panel offers per-post…」（靜態斷言面板按鈕與端點契約） |
 | 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:308-331`（`filter === "all"` → `!watched && !viewed`，且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
 | 3 | 確認下架（`offline_confirmed = 1`）**三個清單都不顯示**、**不參與選主** | 顯示：`personalFlags.js:316-318`；選主：`db.js:3783-3785`；群組成員集合：`listingCompare.js:9-13` | 「offline_confirmed rows are never primary…」 |
-| 3b | 「可能空號」（`offline = 1`、`offline_confirmed = 0`）**維持現行行為**（可比價／可顯示／可參與比較） | 未改（上述三處都只排除 `offline_confirmed`） | 「compensation clause keeps the live affiliate…」 |
+| 3b | **定案（2026-10-12 Owner）**：「尚（未）確認下架」＝`offline = 1` 且 `offline_confirmed = 0`（可能空號）**可以**當 primary，也**計入**「共 N 則」；**程式碼維持現況**（現況就是允許，不另改）。可比價／可顯示／可參與比較 | 未改（上述三處都只排除 `offline_confirmed`；「共 N 則」的 `peer_count` 在 `listingCompare.js:379`） | 「compensation clause keeps the live affiliate…」 |
 | 4 | 「共 N 則」＝**群組真實大小**（截斷只准用於「列出幾則」） | 資料：`listingCompare.js:379`（`peer_count`）；前端：`public/index.html` `sameHouseTag()`（`count = peer_count + 1`） | 「bundle exposes the true group size…」「frontend renders 共 N 則…」 |
 | 5 | 篩選按鈕文案「全部」→「一般」 | `public/index.html`（`data-filter="all"` 按鈕、`renderStats` 標籤、空狀態文案）；`helpQa.js:73` | 「general filter chip is labelled 一般」 |
 
@@ -205,9 +205,65 @@ win(a,b) =
 折疊只會**減少** affiliate 的列數，減少筆數 = 被折疊的 affiliate 筆數；非群組列的
 `totalMatched` 不變（見 PR 描述的實測對照表）。
 
-### 6.3 SQL 折疊的缺口與 (B) 方案（**需 Owner 同意**，尚未落地）
-本包只改 Node 路徑與前端；`foldRoleCte`（`listingSearchSql.js:592-667`）仍是
-first-incident-edge，因此 `fold-role-sql-parity.mjs` 會紅。精確連通分量在 18.4 萬列上
-無法用純 SQL 達成時間門檻（實測：直接遞歸 70s、免剪枝 MATERIALIZED 10.2s、
-群組塌縮虛擬圖 3.3s；現行 guest p50 = 2.88s）⇒ 建議新增固化欄
-`listings.fold_component_root`，沿用既有 `fold_*` 寫入端固化路徑，讀取端兩條路徑都改讀它。
+### 6.3 SQL 折疊的缺口與 (B) 方案（**2026-10-12 Owner 核准、本包落地**）
+`foldRoleCte`（`listingSearchSql.js`）原本用 window function 逐邊算「first-incident-edge」，
+與讀取端（`db.js attachSameHouseRoleSteps` 的連通分量）不一致：**鏈狀分量會出現多個 primary**
+（A–B–C 時舊 SQL 會有兩個 primary），repro 實測 `fold-role-sql-parity.mjs` 只有 87.1341%
+（不一致 23,768＝affiliate_flipped 23,341／primary_flipped 175）。精確連通分量在 18.4 萬列上
+無法用純 SQL 達成時間門檻（實測：直接遞迴 69.7s、免剪枝 MATERIALIZED 10.2s、群組塌縮虛擬圖 3.3s；
+訪客 SQL-first p50 = 2.88s）⇒ 改成**固化欄** `listings.fold_component_root`（Owner 准 (B)）。
+
+### 6.4 `listings.fold_component_root`：形狀、DDL、刷新鏈（唯一一條）
+```sql
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_component_root bigint;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_listings_fold_component_root
+  ON listings (fold_component_root) WHERE fold_component_root IS NOT NULL;
+-- 檔案：v3/migrations/007_listings_fold_component_root.sql（不接 SCHEMA_MIGRATIONS：CONCURRENTLY 不能在交易內）
+```
+- **形狀取舍**：值＝該列所屬連通分量的 canonical label（成員中最小 `post_id`）；NULL＝單節點分量／
+  split 列／尚未回填。挑 label 而不是「贏家 post_id」的原因：選主比較式裡的相對更新時間
+  （`fold_refresh_kind=1`）要用請求當下的 `now`，固化贏家會隨時間過期；固化 label ＋ 讀取端用
+  同一組 `fold_*` 輸入排名則不受時間影響。代價是讀取端要**再排名一次**（見下）。
+- **讀取端**（`foldRoleCte`，SQL 端不再算連通分量）：`roots`（候選列的相異 root）→
+  `comp`＝`JOIN listings ON fold_component_root = root` 的**一次索引查詢**（取回同分量所有列，
+  含不在候選集者）→ `ranked` 用與 `preferPrimaryListing` 逐條對應的 ORDER BY 取 `rn = 1`；
+  排名鍵順序＝`(rent IS NULL) ASC, rent ASC, refresh_ms DESC, last_seen_at DESC, tie_key ASC,
+  post_id ASC`（§4.3 的 SQL 表達；`last_seen_at` **較大者贏**）。
+- **寫入端（唯一漏斗）**：`match.js refreshFoldColumns`（`d4854a0` 收斂出的同一條鏈）在 fold_* 寫完後
+  呼叫 `foldComponentRoot.js refreshFoldComponentRoot(exec, postId)`；union-find **只有一份**
+  （`foldComponentRoot.js buildSameHouseComponents`，`db.js` 的讀取端以 `yield*` 共用）。
+  髒觸發＝群組成員進出、match 邊新增／撤銷（含 verdict 變 `no`）、`offline_confirmed` 變化、split 變化；
+  閉包種子取「舊分量全體成員 ∪ 新舊 match 對端 ∪ 自己與鄰居的群組成員」，超過 20,000 節點就放棄
+  （回報 `capped`，改跑全表回填；repro 實測最大分量 107）。
+- **回填**：`v3/scripts/fold-root-backfill.mjs`（冪等：每次重算全表、只寫與現值不同的列；分批 2,000／批、
+  每批一個交易；中斷後直接重跑）。落地順序硬規則（L-0595／L-0571）：ALTER → 回填 → **逐欄抽樣
+  `columnMismatch = 0`**（`projection-freshness-check.mjs` 的 `foldRoot`）→ 才切讀取（部署新程式）。
+- **權限**：DDL 與回填只跑隔離庫（`assertPgTargetAllowed`：repro／crawl_sandbox）。正式庫一律唯讀；
+  正式庫回填屬發版動作，由 Owner 依 PR 描述的一次性指令清單執行。
+- **部署閘門**：`refreshFoldColumns` 先用 `foldRootRefreshReady()` 探測（PG ＋ 欄位存在）才刷新 root；
+  欄位還沒部署時不刷、也不計失敗（明確的部署閘門，不是吞錯）。
+
+### 6.5 個人範圍輸入為什麼不固化（仍然正確的論證）
+`fold_component_root` 只含**全域關係**：match 邊（三道跳過：verdict='no'／兩端 display-ready／split）＋
+`listing_group_members`。不固化的是 uid 相關輸入：
+1. `user_same_house_members`（會員自己併組）與 2. `user_match_votes` 的 split 票。
+理由：(a) 一列只能存一個 root，而這兩者是 per-uid 的；(b) 訪客／SQL-first 路徑本來就沒有 uid 併組語意
+（`fold-role-sql-parity.mjs` 的 ground truth 用 `userId = 0`，兩條路徑在 uid=0 下逐位元一致）；
+(c) Node 讀取端（`attachSameHouseRoleSteps`）保留 per-request 併組，uid>0 的會員清單仍走 Node 路徑，
+所以「SQL 讀固化欄」不會把它們的顯示改掉。**殘留差異（已知、已量測）**：Node 讀取端的分量是在
+`候選集 ∪ extras` 上算的，SQL 讀的是全域分量；當分量跨越候選集邊界時，兩者的主卡可能不同
+（正式庫唯讀的 parity 實測見 PR 描述）。這在「同一列只看一次折疊」的目標下是 SQL 端較嚴格的語意。
+
+### 6.6 次卡跟著主卡走（Owner 2026-10-12 裁示③）
+一群在清單裡**只有一列代表，且代表永远是群主卡**：
+- **一般**：由**代表列（＝主卡）自己**的 `watched`／`hidden` 決定整群；次卡本來就被折疊
+  （`listingIsMainListAffiliate` 先擋），所以不可能變成「逐則自判」。
+- **特別關注**：群內**任一**成員 `watched` ⇒ 該群出現，出現的那一列是主卡（即使主卡自己沒被關注）。
+- **已隱藏**：同上，任一成員 `hidden` ⇒ 以主卡列示。
+- 實作：`db.js attachSameHouseRoleSteps` 在分量內算 `same_house_group_watched`／
+  `same_house_group_hidden`（涵蓋這次候選集內所有成員），`personalFlags.js listingMatchesListFilter`
+  用它決定 `watched`／`hidden` 清單是否以主卡列示。非對稱測試：
+  `v3/test/same-house-fold-representative.test.js`（primary 未關注／affiliate 已關注 ⇒ 一般出現 primary；
+  特別關注出現 **primary 而不是那則 affiliate**）。
+- 逐則取消關注／解除隱藏仍走**既有**展開面板按鈕 `sameHouseGoneBtn()` → `POST /api/listings/:id/flags`
+  （**不新增端點**）。

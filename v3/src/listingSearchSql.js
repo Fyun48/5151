@@ -350,8 +350,8 @@ export function buildPublicListingSearchSql(args = {}, deps = {}) {
 //   1. searchKeys=[]：訪客路徑 `searchWhere([])`（原先是 searchWhere(undefined) → 展開 28 鍵，
 //      少算 2,265 筆）。
 //   2. `COALESCE(hidden,0) != 1`：`listingMatchesListFilter("all")` 的 hidden 分支。
-//   3. 同屋源次卡（affiliate）折疊：用 fold_role CTE（window function 的 first-incident-edge，
-//      見 docs/same-house-fold-spec.md §4）在 SQL 內算 role，再排除 affiliate。
+//   3. 同屋源次卡（affiliate）折疊：用 fold_role CTE（讀固化欄 `listings.fold_component_root`
+//      ＋分量內排名，見 docs/same-house-fold-spec.md §4／§6.4）在 SQL 內算 role，再排除 affiliate。
 //
 // 額外依賴（呼叫端注入）：args.enabledSources（enabled crawl source ids，text[]）、
 // args.now（與 Node 路徑同一個 asOf 的時間戳，bigint ms）。
@@ -578,90 +578,90 @@ LIMIT ?${useCursor ? "" : " OFFSET ?"}`;
 }
 
 // fold_role CTE：對候選集（cand，其 where 由呼叫端以 `?` 佔位、參數在前面）算 role。
-// enabledSources 與 now 各佔一個 `?`（出現在 display CTE），順序排在候選參數之後。
+// enabledSources 與 now 各佔一個 `?`（出現在 comp CTE），順序排在候選參數之後。
 //
-// 與讀取端 attachSameHouseRoles（db.js）的三道「不對稱跳過」逐條對應，**不可移除任一**（
-// 合成列 fixture `v3/scripts/fold-shape-fixtures.mjs` 對四種邊形各一條斷言，repro 100%＋
-// 正式庫唯讀 100% 才算過）：
-//   1. 對端 verdict='no' 跳過：`eff` 的 `COALESCE(d.match_verdict,'') <> 'no'`（d=對端）。
-//   2. 兩側 display-ready：`eff` 的 `s.display_ready AND d.display_ready`；display_ready 的
-//      定義＝`source=ANY(enabled) AND (非 houseprice OR listing_prep.display_ready=1)`，與
-//      housepriceNotDisplayReady 的 `decorationSourceEnabled + listingIsDisplayable` 等價。
-//   3. 只有入邊（dst 不在候選集）不算：`inc` 的 `dst IN (SELECT post_id FROM cand)`，對應
-//      Node 的 `assignRole(byId.get(mid))` 只標記「在同一個 list 裡」的對端。
-export function foldRoleCte(candWhere) {
-  return `WITH cand AS (
-    SELECT post_id, source, source_id, url, last_seen_at, offline, match_post_id, match_verdict,
-           fold_rent_num, fold_refresh_kind, fold_refresh_rel_ms, fold_refresh_abs_ms
-    FROM listings ${candWhere}
+// Owner 2026-10-12 准 (B)：**SQL 端不再算連通分量**。分量由寫入端的 fold 刷新漏斗
+// （match.js refreshFoldColumns → foldComponentRoot.js 的同一份 union-find）固化在
+// `listings.fold_component_root`，讀取端只做兩件事：
+//   1. `roots`＋`comp`：用 `fold_component_root` 的索引（idx_listings_fold_component_root）
+//      一次取出「與候選列同分量」的所有列（含不在候選集者，選主時才看得到全部成員）。
+//   2. `ranked`／`winner`：在分量內用**與 match.js preferPrimaryListing 逐條對應**的
+//      ORDER BY 排名取 rn=1 當主卡（不用 first-incident-edge 的成對演算法，那會在
+//      鏈狀分量產生多個 primary；見 docs/same-house-fold-spec.md §6.3／§6.4）。
+// 三條與讀取端（db.js 的 attachSameHouseRoleSteps）相同的輸入規則，現在固化在同一欄裡：
+//   match 邊（verdict='no' 跳過／兩端 display-ready／非 split）＋ listing_group_members。
+// 個人範圍（user_same_house_members／user_match_votes 的 split）依 B-plan 不固化。
+export function foldRoleCte(candWhere, { rootSource = null } = {}) {
+  // rootSource：只有 parity 腳本在「還沒部署 fold_component_root 的庫」（正式庫唯讀）上才用；
+  // 傳入一個提供 (post_id, fold_component_root) 的 SQL 片段（例如
+  // `unnest($1::bigint[], $2::bigint[]) AS t(post_id, fold_component_root)` 或一張 session TEMP 表）。
+  // 生產路徑一律 null ⇒ 讀實體欄 listings.fold_component_root。
+  const override = typeof rootSource === "string" && rootSource.trim() !== "";
+  const rootSrcCte = override
+    ? `root_src AS MATERIALIZED (
+    SELECT post_id AS root_pid, fold_component_root AS root_override FROM ${rootSource}
   ),
-  extras AS (
-    SELECT l.post_id, l.source, l.source_id, l.url, l.last_seen_at, l.offline, l.match_post_id, l.match_verdict,
-           l.fold_rent_num, l.fold_refresh_kind, l.fold_refresh_rel_ms, l.fold_refresh_abs_ms
-    FROM listings l
-    WHERE l.post_id IN (SELECT match_post_id FROM cand WHERE match_post_id IS NOT NULL AND match_post_id > 0 AND COALESCE(match_verdict, '') <> 'no')
-      AND l.post_id NOT IN (SELECT post_id FROM cand)
+  `
+    : "";
+  // ⚠️ cand 的 `FROM listings` **不可加別名**：呼叫端傳進來的 where 子句用 `listings.post_id`
+  // 全名限定（例如 hidden/watched 的 NOT EXISTS 子查詢），加 alias 會讓它變成
+  // `invalid reference to FROM-clause entry for table "listings"`。
+  const rootExpr = override ? "rs.root_override" : "fold_component_root";
+  const rootJoin = override ? "LEFT JOIN root_src rs ON rs.root_pid = listings.post_id" : "";
+  // 覆寫模式下連「分量成員」也來自同一個來源（正式庫在 Owner 跑 DDL 之前沒有這一欄，
+  // 讀實體欄會直接 42703）；生產路徑永遠走 `l.fold_component_root` 的索引查詢。
+  const compFrom = override
+    ? `FROM listings l
+    JOIN root_src rs ON rs.root_pid = l.post_id AND rs.root_override IS NOT NULL
+    JOIN roots r ON r.croot = rs.root_override
+    LEFT JOIN listing_prep p ON p.post_id = l.post_id`
+    : `FROM listings l
+    JOIN roots r ON r.croot = l.fold_component_root
+    LEFT JOIN listing_prep p ON p.post_id = l.post_id`;
+  const compRoot = override ? "rs.root_override AS croot" : "l.fold_component_root AS croot";
+  return `WITH ${rootSrcCte}cand AS (
+    SELECT post_id, offline, ${rootExpr} AS fold_component_root
+    FROM listings ${rootJoin}
+    ${candWhere}
   ),
-  display AS (
-    SELECT u.*,
-      (u.source = ANY(?::text[]) AND (u.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
-      (CASE WHEN u.fold_refresh_kind = 1 THEN ?::bigint - u.fold_refresh_rel_ms ELSE u.fold_refresh_abs_ms END) AS refresh_ms,
-      (u.source || ':' || COALESCE(NULLIF(u.source_id, ''), NULLIF(u.url, ''), NULLIF(u.post_id, 0)::text, '') || ':' || u.post_id::text) AS tie_key
-    FROM (SELECT * FROM cand UNION ALL SELECT * FROM extras) u
-    LEFT JOIN listing_prep p ON p.post_id = u.post_id
+  roots AS MATERIALIZED (
+    -- 候選列的相異分量標籤（cand 已帶 fold_component_root ⇒ 不必再掃 listings）
+    SELECT DISTINCT c.fold_component_root AS croot
+    FROM cand c
+    WHERE c.fold_component_root IS NOT NULL
   ),
-  edges AS (
-    SELECT d.post_id AS src, d.match_post_id AS dst
-    FROM display d
-    WHERE d.match_post_id IS NOT NULL AND d.match_post_id > 0 AND COALESCE(d.match_verdict, '') <> 'no'
-      AND d.post_id IN (SELECT post_id FROM cand)
+  comp AS (
+    SELECT l.post_id, l.offline, l.offline_confirmed, l.last_seen_at, l.fold_rent_num,
+           ${compRoot},
+           (l.source = ANY(?::text[]) AND (l.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
+           COALESCE(CASE WHEN l.fold_refresh_kind = 1 THEN ?::bigint - l.fold_refresh_rel_ms ELSE l.fold_refresh_abs_ms END, 0) AS refresh_ms,
+           (l.source || ':' || COALESCE(NULLIF(l.source_id, ''), NULLIF(l.url, ''), NULLIF(l.post_id, 0)::text, '') || ':' || l.post_id::text) AS tie_key
+    ${compFrom}
   ),
-  eff AS (
-    SELECT e.src, e.dst
-    FROM edges e JOIN display s ON s.post_id = e.src JOIN display d ON d.post_id = e.dst
-    WHERE s.display_ready AND d.display_ready AND COALESCE(d.match_verdict, '') <> 'no'
+  ranked AS (
+    SELECT c.post_id, c.croot, c.offline,
+      row_number() OVER (
+        PARTITION BY c.croot
+        ORDER BY (c.fold_rent_num IS NULL) ASC, c.fold_rent_num ASC,
+                 c.refresh_ms DESC, COALESCE(c.last_seen_at, '') DESC, c.tie_key ASC, c.post_id ASC
+      ) AS rn
+    FROM comp c
+    -- 與 db.js 的 eligible 同一條：確認下架不參與選主；未就緒（houseprice 無 prep／來源停用）
+    -- 不得當贏家，否則會「不顯示卻把可顯示的擠掉」。
+    WHERE c.offline_confirmed IS DISTINCT FROM 1 AND c.display_ready
   ),
-  inc AS (
-    SELECT src AS x, src AS ord, src, dst FROM eff
-    UNION ALL
-    SELECT dst AS x, src AS ord, src, dst FROM eff WHERE dst IN (SELECT post_id FROM cand)
-  ),
-  rk AS (
-    SELECT x, src, dst, row_number() OVER (PARTITION BY x ORDER BY ord ASC, dst ASC) AS rn FROM inc
-  ),
-  fe AS (SELECT x, src, dst FROM rk WHERE rn = 1),
   winner AS (
-    SELECT fe.x,
-      CASE
-        WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NULL THEN a.post_id
-        WHEN b.fold_rent_num IS NOT NULL AND a.fold_rent_num IS NULL THEN b.post_id
-        WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NOT NULL AND a.fold_rent_num <> b.fold_rent_num
-          THEN CASE WHEN a.fold_rent_num < b.fold_rent_num THEN a.post_id ELSE b.post_id END
-        WHEN a.refresh_ms <> b.refresh_ms
-          THEN CASE WHEN a.refresh_ms > b.refresh_ms THEN a.post_id ELSE b.post_id END
-        WHEN COALESCE(b.last_seen_at, '') <> COALESCE(a.last_seen_at, '')
-          THEN CASE WHEN COALESCE(b.last_seen_at, '') < COALESCE(a.last_seen_at, '') THEN a.post_id ELSE b.post_id END
-        WHEN a.tie_key <> b.tie_key
-          THEN CASE WHEN a.tie_key < b.tie_key THEN a.post_id ELSE b.post_id END
-        ELSE CASE WHEN a.post_id <= b.post_id THEN a.post_id ELSE b.post_id END
-      END AS winner_id,
-      a.offline AS a_offline, b.offline AS b_offline,
-      fe.src AS src, fe.dst AS dst
-    FROM fe
-    JOIN display a ON a.post_id = fe.src
-    JOIN display b ON b.post_id = fe.dst
-  ),
-  role AS (
-    SELECT w.x AS post_id,
-      CASE WHEN w.winner_id = w.x THEN 'primary' ELSE 'affiliate' END AS role,
-      CASE WHEN w.winner_id = w.src THEN w.a_offline ELSE w.b_offline END AS primary_offline,
-      d.offline AS offline
-    FROM winner w
-    JOIN display d ON d.post_id = w.x
+    SELECT croot, post_id AS primary_id, offline AS primary_offline FROM ranked WHERE rn = 1
   ),
   fold_role AS MATERIALIZED (
-    SELECT c.post_id, r.role, r.primary_offline, c.offline AS offline
+    SELECT c.post_id,
+      CASE WHEN w.primary_id IS NULL THEN NULL
+           WHEN w.primary_id = c.post_id THEN 'primary'
+           ELSE 'affiliate' END AS role,
+      w.primary_offline,
+      c.offline,
+      w.primary_id
     FROM cand c
-    LEFT JOIN role r ON r.post_id = c.post_id
+    LEFT JOIN winner w ON w.croot = c.fold_component_root
   )`;
 }

@@ -1,39 +1,61 @@
-// 驗證「SQL 折疊（window function + preferPrimaryListing 的 SQL 表達）」與讀取端 100% 一致。
-// 只連隔離庫，唯讀 + 一張 session TEMP 表（連線關閉即消失，不落 DDL）。
+// 驗證「SQL 折疊（讀 fold_component_root ＋ 分量內排名）」與讀取端逐位元一致。
 //
-// 流程：
-//   1. ground truth role = attachSameHouseRoles（讀取端）。
-//   2. 用 computeFoldColumns 算 fold_*，寫進 TEMP 表 fold_tmp。
-//   3. 跑 SQL role 查詢（first-incident-edge + SQL 版 preferPrimaryListing 贏家）。
-//   4. 全表逐列比對 role 與 primary_offline，輸出一致率 + 差異分類。
+// 演算法本體只有一份：SQL 用 listingSearchSql.js 的 `foldRoleCte()`（不是這裡另抄一份）。
+// 兩種 root 來源（依 L-0506：repro 與正式庫兩邊都要跑）：
+//   --roots=column （預設）讀實體欄 `listings.fold_component_root`；需要先跑過
+//                  v3/scripts/fold-root-backfill.mjs（repro 等可寫隔離庫）。
+//   --roots=param  正式庫唯讀用：不碰任何 DDL／TEMP 表，用 `unnest($1::bigint[],$2::bigint[])`
+//                  把 Node 算出的 root 當參數餵進去（正式庫在 Owner 跑 DDL 之前也能量）。
 //
-// 用法：PG_URL=$PG_LIVE_REPRO_URL node v3/scripts/fold-role-sql-parity.mjs
+// 用法：
+//   PG_URL=$PG_LIVE_REPRO_URL node v3/scripts/fold-role-sql-parity.mjs
+//   PG_URL=$PG_URL node v3/scripts/fold-role-sql-parity.mjs --roots=param --label=prod-readonly
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { withPgReadSnapshot, readPgRows } from "../src/pgReadSnapshot.js";
 import { attachSameHouseRoles, listingSearchBuildContext, buildListRequestContextFromPg, publicSearchSettings, preloadDecorationProviderAsync } from "../src/db.js";
 import { createDecorationDataLoader } from "../src/repository/decorationData.js";
-import { computeFoldColumns } from "../src/match.js";
+import { foldRoleCte } from "../src/listingSearchSql.js";
+import { componentRootMap, enabledSourcesFromPg } from "../src/foldComponentRoot.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
 
-assertPgTargetAllowed("fold-role-sql-parity", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
+const args = process.argv.slice(2);
+const flag = (name, fallback = "") => {
+  const hit = args.find((a) => a.startsWith(`--${name}=`));
+  return hit ? hit.slice(name.length + 3) : fallback;
+};
+const rootsMode = flag("roots", "column");
+const label = flag("label", process.env.PG_URL || "");
+const rootsByParam = rootsMode === "param";
+// `--roots=param` 是唯讀量測（正式庫）：不建 TEMP 表、不 DDL，寫入白名單也不適用。
+// `--roots=column` 會讀/寫隔離庫的 fold 欄，必須過 assertPgTargetAllowed。
+if (!rootsByParam) assertPgTargetAllowed("fold-role-sql-parity", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
 
 const drv = await createPostgresDriver({ env: process.env });
-const cols = listingSearchBuildContext().candidateColumns;
+// 正式庫唯讀的硬保證：--roots=param 配 --require-readonly 時，先確認這個 session 是唯讀，
+// 不是唯讀就直接退出（寧可拿不到數字，也不要對正式庫送寫入）。
+if (args.includes("--require-readonly")) {
+  const ro = (await drv.pool.query("SELECT current_setting('default_transaction_read_only') AS ro")).rows[0]?.ro;
+  if (String(ro) !== "on") {
+    console.error(`--require-readonly：session 不是唯讀（default_transaction_read_only=${ro}）⇒ 中止`);
+    await drv.pool.end();
+    process.exit(2);
+  }
+  console.log("read-only session confirmed:", ro);
+}
 
-const { raw, gtRole, gtPrimaryOffline, enabledSources, now } = await withPgReadSnapshot(drv, async snapshot => {
-  await snapshot.query("SET LOCAL statement_timeout = '120s'");
-  const exec = (sql, params = [], { batch = false } = {}) => batch
-    ? readPgRows(snapshot, toPostgresSql(sql), params)
-    : snapshot.query(toPostgresSql(sql), params).then(r => r.rows);
+// 1) ground truth role = attachSameHouseRoles（讀取端，全表當候選集）
+const { raw, gtRole, gtPrimaryOffline, enabledSources, now } = await withPgReadSnapshot(drv, async (snapshot) => {
+  await snapshot.query("SET LOCAL statement_timeout = '300s'");
+  const exec = (sql, params = []) => readPgRows(snapshot, toPostgresSql(sql), params);
+  const cols = listingSearchBuildContext().candidateColumns;
   const ASOF = new Date().toISOString();
   const context = await buildListRequestContextFromPg(exec, { asOf: ASOF });
   const settings = publicSearchSettings({});
   const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${cols} FROM listings ORDER BY post_id`), []);
   const loader = createDecorationDataLoader({ exec, driver: "postgres" });
   const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, foldGroups: true, requestContext: context });
-
   attachSameHouseRoles(raw, 0, provider, context.now);
   const gtRole = new Map();
   const gtPrimaryOffline = new Map();
@@ -41,103 +63,58 @@ const { raw, gtRole, gtPrimaryOffline, enabledSources, now } = await withPgReadS
     gtRole.set(Number(r.post_id), r.same_house_role || null);
     gtPrimaryOffline.set(Number(r.post_id), r.same_house_primary_offline ? 1 : 0);
   }
-  const enabledSources = normalizeCrawlSources(context.crawlSources.items).filter(x => x.enabled).map(x => x.id);
+  const enabledSources = normalizeCrawlSources(context.crawlSources.items).filter((x) => x.enabled).map((x) => x.id);
   return { raw, gtRole, gtPrimaryOffline, enabledSources, now: context.now };
 });
 
-// 寫 fold_* 到 TEMP 表
-await drv.pool.query("CREATE TEMP TABLE fold_tmp (post_id bigint PRIMARY KEY, fold_rent_num double precision, fold_refresh_kind smallint, fold_refresh_rel_ms bigint, fold_refresh_abs_ms bigint)");
-{
-  const client = await drv.pool.connect();
-  try {
-    await client.query("BEGIN");
-    for (let i = 0; i < raw.length; i++) {
-      const f = computeFoldColumns(raw[i]);
-      await client.query(
-        "INSERT INTO fold_tmp (post_id, fold_rent_num, fold_refresh_kind, fold_refresh_rel_ms, fold_refresh_abs_ms) VALUES ($1,$2,$3,$4,$5)",
-        [Number(raw[i].post_id), f.fold_rent_num, f.fold_refresh_kind, f.fold_refresh_rel_ms, f.fold_refresh_abs_ms],
-      );
-    }
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
+// 2) SQL 端：foldRoleCte（同一份實作）＋ root 來源
+let sql;
+if (rootsByParam) {
+  // root 由 Node 端同一支計算器算出後當參數帶進去（正式庫唯讀；沒有 fold_component_root 欄也能量）。
+  const enabled = await enabledSourcesFromPg((s, p = []) => drv.pool.query(toPostgresSql(s), p).then((r) => r.rows));
+  const prepRows = new Map();
+  for (const row of (await drv.pool.query("SELECT post_id, COALESCE(display_ready, 0) AS display_ready FROM listing_prep")).rows) {
+    prepRows.set(Number(row.post_id), Number(row.display_ready) === 1);
   }
+  const gidOf = new Map();
+  for (const row of (await drv.pool.query("SELECT post_id, group_id FROM listing_group_members ORDER BY post_id, group_id")).rows) {
+    gidOf.set(Number(row.post_id), String(row.group_id || ""));
+  }
+  const isNotDisplayReady = (row) => {
+    const source = String(row?.source || "591") || "591";
+    if (!enabled.has(source)) return true;
+    if (source !== "houseprice") return false;
+    return prepRows.get(Number(row?.post_id)) !== true;
+  };
+  const rootMap = componentRootMap({ rows: raw, groupIdOf: (pid) => gidOf.get(Number(pid)) || "", splits: new Set(), isNotDisplayReady });
+  const rootIds = [];
+  const rootVals = [];
+  for (const row of raw) {
+    const pid = Number(row.post_id);
+    rootIds.push(pid);
+    const root = rootMap.get(pid) == null ? null : Number(rootMap.get(pid));
+    rootVals.push(root);
+  }
+  const cte = foldRoleCte("", { rootSource: "unnest(?::bigint[], ?::bigint[]) AS t(post_id, fold_component_root)" })
+    + "\nSELECT post_id, role, primary_offline, primary_id FROM fold_role";
+  sql = await drv.pool.query(toPostgresSql(cte), [rootIds, rootVals, enabledSources, now]);
+} else {
+  const cte = foldRoleCte("") + "\nSELECT post_id, role, primary_offline, primary_id FROM fold_role";
+  sql = await drv.pool.query(toPostgresSql(cte), [enabledSources, now]);
 }
 
-// SQL role 查詢
-const SQL_ROLE = `
-WITH fold AS (
-  SELECT
-    l.post_id,
-    l.source, l.source_id, l.url, l.last_seen_at, l.offline, l.match_post_id, l.match_verdict,
-    f.fold_rent_num, f.fold_refresh_kind, f.fold_refresh_rel_ms, f.fold_refresh_abs_ms,
-    (l.source = ANY($1::text[]) AND (l.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
-    (CASE WHEN f.fold_refresh_kind = 1 THEN $2::bigint - f.fold_refresh_rel_ms ELSE f.fold_refresh_abs_ms END) AS refresh_ms,
-    (l.source || ':' || COALESCE(NULLIF(l.source_id,''), NULLIF(l.url,''), NULLIF(l.post_id,0)::text, '') || ':' || l.post_id::text) AS tie_key
-  FROM listings l
-  LEFT JOIN listing_prep p ON p.post_id = l.post_id
-  LEFT JOIN fold_tmp f ON f.post_id = l.post_id
-),
-edges AS (
-  SELECT post_id AS src, match_post_id AS dst FROM fold
-  WHERE match_post_id IS NOT NULL AND match_post_id > 0 AND COALESCE(match_verdict,'') <> 'no'
-),
-eff AS (
-  SELECT e.src, e.dst
-  FROM edges e
-  JOIN fold s ON s.post_id = e.src
-  JOIN fold d ON d.post_id = e.dst
-  WHERE s.display_ready AND d.display_ready AND COALESCE(d.match_verdict,'') <> 'no'
-),
-inc AS (
-  SELECT src AS x, src AS ord, src, dst FROM eff
-  UNION ALL
-  SELECT dst AS x, src AS ord, src, dst FROM eff
-),
-rk AS (
-  SELECT x, src, dst, row_number() OVER (PARTITION BY x ORDER BY ord ASC, dst ASC) AS rn FROM inc
-),
-fe AS (SELECT x, src, dst FROM rk WHERE rn = 1),
-winner AS (
-  SELECT fe.x,
-    CASE
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NULL THEN a.post_id
-      WHEN b.fold_rent_num IS NOT NULL AND a.fold_rent_num IS NULL THEN b.post_id
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NOT NULL AND a.fold_rent_num <> b.fold_rent_num
-        THEN CASE WHEN a.fold_rent_num < b.fold_rent_num THEN a.post_id ELSE b.post_id END
-      WHEN a.refresh_ms <> b.refresh_ms
-        THEN CASE WHEN a.refresh_ms > b.refresh_ms THEN a.post_id ELSE b.post_id END
-      WHEN COALESCE(b.last_seen_at,'') <> COALESCE(a.last_seen_at,'')
-        THEN CASE WHEN COALESCE(b.last_seen_at,'') < COALESCE(a.last_seen_at,'') THEN a.post_id ELSE b.post_id END
-      WHEN a.tie_key <> b.tie_key
-        THEN CASE WHEN a.tie_key < b.tie_key THEN a.post_id ELSE b.post_id END
-      ELSE CASE WHEN a.post_id <= b.post_id THEN a.post_id ELSE b.post_id END
-    END AS winner_id,
-    a.offline AS a_offline, b.offline AS b_offline
-  FROM fe
-  JOIN fold a ON a.post_id = fe.src
-  JOIN fold b ON b.post_id = fe.dst
-)
-SELECT
-  x,
-  (CASE WHEN winner_id = x THEN 'primary' ELSE 'affiliate' END) AS role,
-  (CASE WHEN winner_id = fe.src THEN fe.a_offline ELSE fe.b_offline END) AS primary_offline
-FROM (SELECT w.x, w.winner_id, w.a_offline, w.b_offline, fe.src, fe.dst FROM winner w JOIN fe ON fe.x = w.x) fe
-`;
-
-const sqlResult = await drv.pool.query(SQL_ROLE, [enabledSources, now]);
 const sqlRole = new Map();
 const sqlPrimaryOffline = new Map();
-for (const r of sqlResult.rows) {
-  sqlRole.set(Number(r.x), r.role);
-  sqlPrimaryOffline.set(Number(r.x), Number(r.primary_offline) === 1 ? 1 : 0);
+const sqlPrimaryId = new Map();
+for (const r of sql.rows) {
+  sqlRole.set(Number(r.post_id), r.role || null);
+  sqlPrimaryOffline.set(Number(r.post_id), Number(r.primary_offline) === 1 ? 1 : 0);
+  if (r.primary_id != null) sqlPrimaryId.set(Number(r.post_id), Number(r.primary_id));
 }
 
-// compare (only nodes that GT or SQL assigned a role matter; nodes with no role in both are trivially equal)
-let total = 0, roleMatch = 0, roleMismatch = 0, offlineMismatch = 0;
+const gtById = new Map(raw.map((r) => [Number(r.post_id), r]));
+// 3) 逐列比對（role／primary_offline／primary_id）
+let total = 0, roleMatch = 0, roleMismatch = 0, offlineMismatch = 0, primaryIdMismatch = 0;
 const roleDiffs = [];
 const offlineDiffs = [];
 for (const x of gtRole.keys()) {
@@ -145,10 +122,23 @@ for (const x of gtRole.keys()) {
   const sq = sqlRole.get(x) || null;
   total += 1;
   if (gt === sq) roleMatch += 1;
-  else { roleMismatch += 1; roleDiffs.push({ post_id: x, gt, sq }); }
+  else {
+    roleMismatch += 1;
+    const gtRow = gtById.get(x);
+    roleDiffs.push({
+      post_id: x,
+      gt,
+      sq,
+      gt_primary: gtRow ? Number(gtRow.same_house_primary_id) || null : null,
+      sq_primary: sqlPrimaryId.has(x) ? sqlPrimaryId.get(x) : null,
+    });
+  }
   const gto = gtPrimaryOffline.get(x);
   const sqo = sqlPrimaryOffline.has(x) ? sqlPrimaryOffline.get(x) : 0;
-  if (gto !== sqo && gt !== null) offlineMismatch += 1;
+  if (gto !== sqo && gt !== null) { offlineMismatch += 1; if (offlineDiffs.length < 10) offlineDiffs.push({ post_id: x, gt: gto, sq: sqo }); }
+  const gtRow = gtById.get(x);
+  const gtPrimary = gtRow && gtRow.same_house_primary_id ? Number(gtRow.same_house_primary_id) : null;
+  if (gtPrimary != null && sqlPrimaryId.has(x) && sqlPrimaryId.get(x) !== gtPrimary) primaryIdMismatch += 1;
 }
 
 const buckets = {};
@@ -163,15 +153,19 @@ for (const d of roleDiffs) {
 }
 
 console.log(JSON.stringify({
+  label,
+  roots: rootsMode,
   total,
   roleMatch,
   roleMismatch,
   pct: (roleMatch / total * 100).toFixed(4) + "%",
   offlineMismatch,
+  primaryIdMismatch,
   buckets,
   enabledSources,
   now,
-  sample: roleDiffs.slice(0, 40),
+  offlineSample: offlineDiffs,
+  sample: roleDiffs.slice(0, 20),
 }, null, 2));
 
 await drv.pool.end();

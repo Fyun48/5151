@@ -19,7 +19,8 @@ import {
   unbindListingFromGroup as unbindListingFromGroupSync,
   writeGroupAudit as writeGroupAuditSync,
 } from "./listingGroups.js";
-import { sortGroupListings } from "./match.js";
+import { refreshFoldColumns, sortGroupListings } from "./match.js";
+import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import * as repo from "./repository/listingGroups.js";
 import { resolveDbDriver } from "./dbDriver.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
@@ -106,7 +107,21 @@ export async function refreshGroupPrimary(exec, groupId, now = new Date()) {
   if (!members.length) return null;
   const primary = sortGroupListings(members, now instanceof Date ? now.getTime() : Number(now) || Date.now())[0];
   await exec(repo.SET_PRIMARY_SQL, [Number(primary.post_id), stamp(now), groupId]);
+  // Owner 2026-10-12 准 (B)：`listing_group_members` 成員進出是 fold_component_root 的髒事件。
+  // 這裡走**同一個** fold 刷新漏斗（match.js refreshFoldColumns → foldComponentRoot.js 的
+  // 同一份 union-find）——不另開第二條刷新鏈。失敗照既有慣例記 fold_refresh_failed，不吞。
+  await refreshFoldAfterGroupChange(exec, members.map((row) => Number(row.post_id) || 0));
   return primary;
+}
+
+/** 群組成員變動後的 fold 刷新（漏斗唯一入口；best-effort 但**失敗會被計數**）。 */
+export async function refreshFoldAfterGroupChange(exec, postIds) {
+  const ids = [...new Set((postIds || []).map((id) => Number(id) || 0).filter(Boolean))];
+  for (const pid of ids) {
+    try { await refreshFoldColumns(exec, pid); }
+    catch (error) { noteRefreshFailure("fold", error); }
+  }
+  return ids.length;
 }
 
 async function migrateGroupBindings(exec, loserIds, winnerId) {
@@ -233,11 +248,15 @@ export async function unbindListingFromGroup(exec, postId, { now = new Date() } 
   const left = Number(one(await exec(repo.COUNT_GROUP_MEMBERS_SQL, [gid]))?.n) || 0;
   if (!left) {
     await exec(repo.DELETE_GROUP_SQL, [gid]);
+    // 離開的那一列不再屬於任何群組 ⇒ 也要刷新（否則 root 會留著過期的分量標籤）。
+    await refreshFoldAfterGroupChange(exec, [pid]);
     return "";
   }
   if (left === 1) {
+    const survivors = (await exec(repo.GROUP_MEMBERS_POST_IDS_SQL, [gid])).map((row) => Number(row.post_id) || 0);
     await exec(repo.DELETE_GROUP_MEMBERS_SQL, [gid]);
     await exec(repo.DELETE_GROUP_SQL, [gid]);
+    await refreshFoldAfterGroupChange(exec, [pid, ...survivors]);
     return "";
   }
   await refreshGroupPrimary(exec, gid, now);

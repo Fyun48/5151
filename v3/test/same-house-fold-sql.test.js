@@ -104,10 +104,14 @@ test("buildPublicListingsFoldSql uses searchWhere([]) and hidden/affiliate claus
   assert.match(built.pageQuery({ limit: 5 }).sql, /LIMIT \? OFFSET \?/);
 });
 
-// foldRoleCte 是「可終止、不遞歸」的 window-function 折疊（沒有 RECURSIVE／depth 截斷）。
-test("foldRoleCte is a terminating non-recursive window-function fold", () => {
+// foldRoleCte：Owner 2026-10-12 准 (B) ⇒ SQL 端**不再算連通分量**，改讀固化欄
+// `listings.fold_component_root`，只在分量內排名取 rn=1 當主卡（可終止、不遞歸）。
+test("foldRoleCte reads fold_component_root and ranks inside the component", () => {
   const cte = foldRoleCte("");
   assert.ok(!/RECURSIVE/i.test(cte), "must not use recursive CTE");
-  assert.ok(/row_number\(\) OVER \(PARTITION BY x ORDER BY ord ASC/i.test(cte), "first-incident-edge via row_number");
+  assert.ok(/JOIN roots r ON r\.croot = l\.fold_component_root/.test(cte), "same-component rows come from one indexed lookup");
+  assert.ok(/PARTITION BY c\.croot/.test(cte) && /\(c\.fold_rent_num IS NULL\) ASC, c\.fold_rent_num ASC/.test(cte), "component-internal ranking");
+  assert.ok(/WHERE c\.offline_confirmed IS DISTINCT FROM 1 AND c\.display_ready/.test(cte), "eligible filter mirrors db.js");
+  assert.ok(!/inc AS|\(SELECT src AS x, src AS ord/.test(cte), "first-incident-edge pairing must be gone");
   assert.ok(/fold_role AS/.test(cte));
 });
