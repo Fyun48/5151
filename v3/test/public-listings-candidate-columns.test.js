@@ -171,7 +171,11 @@ test("審計：公開候選階段讀到的 DB 欄位 ⊆ 36 欄，且不碰那 6
     "buildingType", "building_type", "caseTypeName", "listing_kind",
     "region_id", "regionid", "section_id", "sectionid", "shape", "shape_name",
     "district", "fit_score", "same_house_role", "same_house_split", "same_house_primary_id",
-    "same_house_primary_offline", "same_house_personal", "guest_commute_km",
+    "same_house_primary_offline", "same_house_personal",
+    // Owner 2026-10-12 裁示③：同屋群「任一成員被關注／被隱藏」的群級聚合（管線自建欄，
+    // 由 db.js attachSameHouseRoleSteps 掛上，不是候選 SELECT 的 DB 欄位）。
+    "same_house_group_watched", "same_house_group_hidden",
+    "guest_commute_km",
     "fixture_namespace", "mine", "watched", "viewed",
   ]);
   const unregistered = [...reads].filter((k) => !slim.has(k) && !known.has(k));

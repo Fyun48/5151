@@ -21,6 +21,7 @@
 // 個人範圍的輸入（user_same_house_members／user_match_votes 的 split）依 B-plan 不固化，
 // 理由與正確性論證見 docs/same-house-fold-spec.md §6.5／§6.6。
 import { normalizeCrawlSources, publicCrawlSources, defaultCrawlSources } from "./crawlSources.js";
+import { votePairKey } from "./matchVotes.js";
 
 export const LABEL_NONE = null;
 
@@ -67,7 +68,9 @@ export function* buildSameHouseComponents({
 }) {
   const splitsHas = (key) => (typeof splits?.has === "function" ? splits.has(key) : false);
   const notReady = (row) => (typeof isNotDisplayReady === "function" ? Boolean(isNotDisplayReady(row)) : false);
-  const pairKey = (a, b) => `${Number(a) || 0}:${Number(b) || 0}`;
+  // split 的 pair key **必須**用 matchVotes 的 votePairKey（有序化 `${lo}:${hi}`）：寫入端
+  // 用同一支（db.js `loadUserSplitPairSet` → `votePairKey`），用未排序的 key 會漏掉反向的票。
+  const pairKey = (a, b) => votePairKey(a, b);
   const { ensure: compEnsure, find: compFind, union: compUnion } = createUnionFind();
 
   for (const id of universe.keys()) compEnsure(id);
