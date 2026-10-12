@@ -10,7 +10,6 @@ import { listingRequestTime } from "./listingRequestTime.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { PUBLIC_LISTING_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
 import { districtClosureIds } from "./listingSearchNodePg.js";
-import { matchComponentMaintenance } from "./listingMatchComponents.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { buildPublicListingsFoldSql } from "./listingSearchSql.js";
 import { normalizeCrawlSources } from "./crawlSources.js";
@@ -69,11 +68,7 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
       const settings = args.settings || publicSearchSettings(args);
       const districts = (Array.isArray(args.districts) ? args.districts : String(args.districts || "").split(","))
         .map(x => String(x).trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
-      // 訪客路徑：材料化分量算「關係閉包」，直接行政區列照舊由 `appendDistrictCandidates`
-      // 的同一組述詞提供（`relatedOnly=false` 的舊契約＝種子 ∪ 含種子的分量）。
-      const districtIds = await districtClosureIds(exec, {
-        districtNames: districts, userId: 0, maintenance: matchComponentMaintenance,
-      });
+      const districtIds = await districtClosureIds(exec, { districtNames: districts, userId: 0 });
       const loader = createDecorationDataLoader({ exec, driver: "postgres" });
       // SQL-first 折疊（預設 off；外框外回 null → 走 Node 路徑）。
       const sqlFirst = await tryPublicListingsSqlFirst({ exec, args, settings, districts, districtIds, context, loader });
