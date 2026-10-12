@@ -47,34 +47,38 @@ const ISOLATION = { sql: schema.DEFAULT_LISTING_TOTALS_PREDICATE, params: [] };
 // ── 自我隔離（2026-10-12 修正）──────────────────────────────────────────────
 // 這一支原本在**共用靶**（`repro`／`tracker_test`）上 `DROP TABLE listing_totals_counter`：
 // 跑一次測試就會把別人的靶打掉（而且跑完還留一張被 DROP 掉的表）。
-// 現在照抄 `v3/test/write-path-parity.test.js` 的既有形狀：**自建 schema** ＋
-// `poolOptions.options = -c search_path=<schema>,public`，收尾 `DROP SCHEMA … CASCADE`。
-//   • 計數器表（`listing_totals_counter`）完全落在自己的 schema ⇒ DROP 掉的是自己的東西；
-//   • `listings` 沿用 `public`（**不鏡射、不重建**）：一來不必複製 18 萬列，二來
-//     `listingTotalsScanDue()` 的偵測器是 `pg_stat_user_tables WHERE relname='listings'`
-//     （沒有 schema 條件）——多一張同名表就會讓它讀到另一張、把「繞過收口點的寫入」判成沒發生。
+// 現在跑在**自己建的資料庫**（`sw1_lt_<pid>`，收尾 `DROP DATABASE … WITH (FORCE)`）。
+//
+// 為什麼是獨立「資料庫」而不是獨立 schema（兩個都試過，第二個會壞）：
+//   schema 版必須把 `public` 留在 `search_path` 才看得到 `listings`，於是「測到一半 DROP 掉自己的
+//   計數器表」時，`SELECT … FROM listing_totals_counter` 會**靜默落回 `public` 的那張表**
+//   （讀到共用靶的 184,746）⇒ 測試紅，而且 `DROP TABLE` 在同名表不存在時也會打到 `public`。
+//   獨立資料庫裡只有一張 `listings`、一張 `listing_totals_counter`，沒有落回問題，
+//   `listingTotalsScanDue()` 的 `pg_stat_user_tables WHERE relname='listings'` 也只會看到一張。
 // **不對共用庫的任何既有物件做 DROP／TRUNCATE／ALTER。**
 //
-// ⚠️ 自癒路徑（`defaultPrimaryDriver()`）走 `PG_URL` ⇒ 這裡也把它指到同一個 search_path，
+// ⚠️ 自癒路徑（`defaultPrimaryDriver()`）走 `PG_URL` ⇒ 這裡也把它指到自建庫，
 // 否則測試會去打共用庫的 `public`（那正是要避免的事）。
-const SCHEMA = `sw1_listing_totals_${process.pid}`;
-const withSearchPath = (url, name) => {
+const DB_NAME = `sw1_lt_${process.pid}`;
+const withDatabase = (url, name) => {
   const u = new URL(url);
-  u.searchParams.set("options", `-c search_path=${name},public`);
+  u.pathname = `/${name}`;
   return u.toString();
 };
-// ⚠️ 只有「真的連得到隔離庫」時才動 `PG_URL`：沒有 `PG_LIVE_REPRO_URL`（離線 `npm test`）
-// 或資料庫不在允許清單時，這一支整支 skip，**不得**在 import 期就把 `new URL("")` 拋出去
-// （CI 的 `Run Tests` job 就是這樣紅的：檔案層級 'test failed'）。
-if (RAW && !REFUSED) process.env.PG_URL = withSearchPath(RAW, SCHEMA);
+if (RAW && !REFUSED) process.env.PG_URL = withDatabase(RAW, DB_NAME);
 
 let pgDriver = null;
 let adminDriver = null;
 
 after(async () => {
   if (pgDriver) await pgDriver.close().catch(() => {});
+  // 自癒路徑用的是行程共用的 primary pool ⇒ 收尾前要關掉，否則 DROP DATABASE 會被連線擋住。
+  try {
+    const { closeSharedPgDriver } = await import("../src/pgSharedDriver.js");
+    await closeSharedPgDriver();
+  } catch { /* 沒建過就沒事 */ }
   if (adminDriver) {
-    try { await adminDriver.exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`); } catch { /* 已經收掉 */ }
+    try { await adminDriver.query(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`); } catch { /* 已經收掉 */ }
     await adminDriver.close().catch(() => {});
   }
   rmSync(dataDir, { recursive: true, force: true });
@@ -83,15 +87,19 @@ after(async () => {
 async function connect() {
   if (pgDriver) return pgDriver;
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  const { sqliteHandle } = await import("../src/db.js");
   adminDriver = await createPostgresDriver({ connectionString: RAW });
-  const who = (await adminDriver.query("SELECT current_database() AS db, current_schema() AS schema")).rows[0];
+  const who = (await adminDriver.query("SELECT current_database() AS db")).rows[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
-  await adminDriver.exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await adminDriver.exec(`CREATE SCHEMA ${SCHEMA}`);
-  pgDriver = await createPostgresDriver({ connectionString: RAW, poolOptions: { options: `-c search_path=${SCHEMA},public` } });
-  const where = (await pgDriver.query("SELECT current_schema() AS schema")).rows[0];
-  assert.equal(where.schema, SCHEMA, "這一支的所有連線都必須落在自己的 schema（不動共用物件）");
-  // 計數器表由模組自己的 DDL 建（`search_path` 讓它落在本 schema）。
+  await adminDriver.query(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`);
+  await adminDriver.query(`CREATE DATABASE ${DB_NAME}`);
+  pgDriver = await createPostgresDriver({ connectionString: withDatabase(RAW, DB_NAME) });
+  const mine = (await pgDriver.query("SELECT current_database() AS db")).rows[0];
+  assert.equal(mine.db, DB_NAME, "這一支必須跑在自己的資料庫（不動共用靶）");
+  // `listings` 由 SQLite schema 鏡射（含 `post_id` 主鍵，收口點的 ON CONFLICT 需要它）；
+  // 計數器是 PG 專屬表（SQLite 沒有），用模組自己的 DDL 建。
+  await ensurePgSchema(pgDriver, sqliteHandle(), { schema: "", tables: ["listings"], indexes: false });
   for (const statement of schema.listingTotalsDdlStatements()) await pgDriver.exec(statement);
   const columns = (await pgDriver.query(
     "SELECT 1 AS present FROM information_schema.columns WHERE table_name = 'listings' AND column_name = 'fixture_namespace' LIMIT 1",
