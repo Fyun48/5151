@@ -6560,14 +6560,25 @@ const LISTINGSTAGETIMING_MUTATIONS = [
     file: "v3/src/listingSearchPage.js",
     from: "    statsArgs.diagnostics.scan_ms = Math.round(performance.now() - scanStarted);",
     to: "",
-    expect: "來源護欄：共趟掃描只以新增鍵掃進 stats_stages",
+    expect: "來源護欄：掃描與 list 側前置只以新增鍵落地",
   },
   {
-    name: "把掃描時間從 stats_ms 扣掉（stats;dur 的既有數字被改）",
+    // 2026-10-12 拆歸因（口徑變更）：`stats_ms` 改由 `attributeListingTiming()` 產生，舊算式
+    // `stats_ms:statsPrepareMs+performance.now()-statsStarted` 已不存在。這條變異改成
+    // 「把扣掉 list 側前置的減法拿掉」——那正是這一包要修的歸因錯誤，必須被來源護欄擋下。
+    name: "把 list 側前置塞回 stats_ms（歸因又錯回去）",
     file: "v3/src/listingSearchPage.js",
-    from: "stats_ms:statsPrepareMs+performance.now()-statsStarted",
-    to: "stats_ms:statsPrepareMs-scanStarted+performance.now()-statsStarted",
-    expect: "stats_ms 的算式",
+    from: "statsMs: Math.max(0, numOr(statsPrepareMs) - listPrepare) + numOr(statsElapsedMs),",
+    to: "statsMs: Math.max(0, numOr(statsPrepareMs)) + numOr(statsElapsedMs),",
+    expect: "來源護欄：掃描與 list 側前置只以新增鍵落地",
+  },
+  {
+    // 「沒有任何時間消失」：`query_ms` 若也把 list 側前置扣掉，stats_ms + query_ms 會比舊口徑少。
+    name: "list 側前置從總帳裡漏掉（query_ms 沒收下它）",
+    file: "v3/src/listingSearchPage.js",
+    from: "queryMs: numOr(listElapsedMs) + listPrepare,",
+    to: "queryMs: numOr(listElapsedMs) - listPrepare,",
+    expect: "來源護欄：掃描與 list 側前置只以新增鍵落地",
   },
 ];
 
