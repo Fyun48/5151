@@ -141,7 +141,11 @@ async function computeListingPage(args = {}, driver = 'sqlite', options = {}) {
     const statsStarted=performance.now();
     const stats=await listingStatsAsync(statsArgs,common);
     return {
-      stats:{...stats,matched:listed.totalMatched},listings:listed.listings,
+      // 通勤計數與 list 同一個請求快照（`listed.queryDetails`），零額外查詢：讓使用者看得懂
+      // 「為什麼這個行政區是 0 筆」——不是沒有資料，而是被通勤條件擋掉（Owner 裁決 2026-10-12）。
+      stats:{...stats,matched:listed.totalMatched,
+        excludedByCommute:Number(listed.queryDetails?.commute_excluded)||0,
+        commutePending:Number(listed.queryDetails?.commute_pending)||0},listings:listed.listings,
       hasMore:listed.hasMore===true,nextOffset:listed.nextOffset||0,
       nextCursor:listed.nextCursor||null,queryVersion:listed.queryVersion||2,
       timing:{query_ms:queryMs,stats_ms:statsPrepareMs+performance.now()-statsStarted,total_ms:performance.now()-started,

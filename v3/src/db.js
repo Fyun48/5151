@@ -6557,6 +6557,11 @@ function parseRouteCacheRow(row) {
   };
 }
 
+/**
+ * 只（重新）建立行程內的 route_cache 備忘 Map（60 秒 TTL）——**不做任何路線計算、也不是
+ * 「非同步暖機」**（所以沒有 await 可言）。真正把路線算好的是背景 job：
+ * `route_jobs` → 外部路線 API → `route_cache` upsert。名字容易誤導，別把它當成「冷快取止血點」。
+ */
 export function warmRouteCache() {
   const stamp = Date.now();
   if (routeCacheMemo && stamp - routeCacheMemoAt < ROUTE_CACHE_MEMO_MS) return routeCacheMemo;
@@ -7175,15 +7180,29 @@ export function listingCommutePatch(postId, userId, settingsOverride) {
   return commutePatchFields(lite, settings);
 }
 
-function applyListingFilter(rows, settings = getSettings(), provider = null) {
-  // 列表用非嚴格通勤：還沒算完路線的先顯示（排在離公司排序末端），避免新北等區整批空白
+/**
+ * 列表的 geo／通勤這一層。**通勤一律 strict**（Owner 裁決 2026-10-12：「最後資料精準」）：
+ * 路線還沒算好（pending）的列不算符合——不得先顯示再由背景 route job 撤掉（假陽性）。
+ * 使用者看到 0 筆時的原因，由 `commuteCounters` 這兩個計數解釋（不靠放寬過濾）：
+ *   - `excludedByCommute`：已知距離超過 `commuteKm` 而被排除的列數。
+ *   - `commutePending`   ：座標可信、路段類別可用，但 `route_cache` 還沒有值的列數。
+ * 計數口徑＝**本請求的候選池**（已套搜尋範圍與行政區預篩，且已過屬性篩選），
+ * 顯示／樓層／類型篩選之前；與 list 同一個請求快照，**不另開查詢**。
+ */
+function applyListingFilter(rows, settings = getSettings(), provider = null, commuteCounters = null) {
   const commuteOn = Number(settings.commuteKm) > 0 && hasWorkPoint(settings);
   if (commuteOn && !provider) warmRouteCache();
   // Price/keyword/agent/area checks do not depend on routes. Avoid fetching
   // cached routes and cloning wide rows that these checks already exclude.
   const candidates = rows.filter(createAttributeFilter(settings));
   const prepared = commuteOn ? candidates.map((row) => applyCachedCoords(row, settings, provider)) : candidates;
-  return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn }));
+  const countExclusion = commuteCounters && commuteOn
+    ? (reason) => {
+      if (reason === "commute_pending") commuteCounters.commutePending += 1;
+      else if (reason === "commute_over_limit") commuteCounters.excludedByCommute += 1;
+    }
+    : null;
+  return prepared.filter((row) => passesGeoFilters(row, settings, { strict: commuteOn, onExclude: countExclusion }));
 }
 
 function listingDistrictName(row) {
@@ -7469,6 +7488,9 @@ function* buildListListingsSteps(raw, {
   filter, kind, sources, sort, uid, voteUid, settings, districtSet,
   provider = null, flagMap = null, markStage = () => {},
   now = provider?.now ?? Date.now(), requireProvider = false,
+  // 可選的計數器（呼叫端傳入物件、由這裡累加）：本請求被通勤這一層擋掉幾筆。
+  // 只累加、不影響回傳值；不傳＝行為與以前逐字相同。
+  commuteCounters = null,
   candidateShape = false,
 } = {}) {
   if (requireProvider) {
@@ -7481,7 +7503,7 @@ function* buildListListingsSteps(raw, {
     return filter === "watched" ? overlaid
       : filter === "offline" || filter === "suspected"
         ? overlaid.filter(row => passesPriceFilter(row, settings))
-        : applyListingFilter(overlaid, settings, provider);
+        : applyListingFilter(overlaid, settings, provider, commuteCounters);
   }, 256, 'list.profile');
   markStage("profile_ms");
 
@@ -7795,9 +7817,14 @@ export function listListings({
   const raw = db.prepare(`SELECT ${LIST_CANDIDATE_COLUMNS} FROM listings ${where} ORDER BY post_id`).all(...params);
   markStage("sql_ms");
   queryDetails.candidates = raw.length;
+  // 通勤計數（同一請求快照、零額外查詢）：讓「0 筆」有原因可看（見 applyListingFilter 的註解）。
+  const commute = { excludedByCommute: 0, commutePending: 0 };
   let rows = buildListListingsRows(raw, {
     filter, kind, sources, sort, uid, voteUid, settings, districtSet, markStage, now: clock.now,
+    commuteCounters: commute,
   });
+  queryDetails.commute_excluded = commute.excludedByCommute;
+  queryDetails.commute_pending = commute.commutePending;
   return pageListListingsRows(rows, {
     sort, filter, settings, limit, offset, uid, voteUid, sameHouse, queryDetails, markStage, now: clock.now,
   });
@@ -8141,6 +8168,8 @@ export function listListingsCommuteSqlFirst({
   const districtMarks = districtNames.map(() => "?").join(",");
   const districtWhere = `p.district IN (${districtMarks})`;
   const displayFilter = sqlDisplayFilter(settings);
+  // 路線還沒算好（`rc` 缺列）＝ pending：與 Node 路徑一致，**不算符合**（Owner 裁決 2026-10-12：
+  // 「最後資料精準」，不得先顯示再由背景 job 撤掉）。原因由計數解釋，不靠放寬這一層。
   const commuteFilter = `
       AND ${clsExpr} IN (${roadClass})
       AND ${sqlTrustedGeoSource("l.geo_source")}
