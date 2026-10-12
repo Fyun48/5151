@@ -41,7 +41,23 @@ const chainB1 = Array.from({ length: 8 }, (_, i) => CHAIN + 101 + i);    // ⑦ 
 const chainB2 = Array.from({ length: 8 }, (_, i) => CHAIN + 201 + i);    // ⑦ 橋式子鏈 2
 const MARK = "FOLDCI";
 const bridgeGroupId = `foldci-bridge-${CHAIN}`;
-const all = [...chainA, ...chainB1, ...chainB2];
+// ── §6.10 的兩條軸 ＋ collation 軸（Owner 2026-10-12 最後一輪：合成種子必須擋得住）──
+// ⑫ tie-break 軸：同群、source=''／source_id・url 皆空、post_id 位數不同（10 位 vs 9 位）、
+//    租金／更新時間／last_seen_at 全平手 ⇒ 勝負只由 tie-break key 決定。
+//    Node 的 key：'591:9200000041:9200000041' < '591:920000041:920000041'（第 11 字元 '0' < '4'）。
+//    舊 SQL（raw `source || ':'`）的 key 是 ':9200000041:…' vs '591:…'，':' (0x3A) > '5' (0x35) ⇒ 選錯列。
+const CI_TB_A = BASE + 41;      // 10 位、source=''
+const CI_TB_B = 920_000_041;    // 9 位、source='591'（與 CI_TB_A 不同位數）
+// ⑬ 資格軸：source='' 且 source_id 有值、租金 10000（對端 30000）⇒ 勝負由租金決定，
+//    tie-break 永遠不會被諮詢 ⇒ 這一組只測「資格」那一條（舊 SQL 把 source='' 踢出 elig ⇒ 改選貴的）。
+const CI_EL_A = BASE + 51;
+const CI_EL_B = BASE + 52;
+// ⑭ collation 軸：租金／更新時間／last_seen_at 全平手，source_id 只差一個標點
+//    （'A-B' vs 'AB'、'x.y' vs 'xy'）——這是 localeCompare 與 DB collation 最容易分岔的形狀。
+const CI_PN_A = BASE + 61; const CI_PN_B = BASE + 62;
+const CI_PN_C = BASE + 63; const CI_PN_D = BASE + 64;
+const axisIds = [CI_TB_A, CI_TB_B, CI_EL_A, CI_EL_B, CI_PN_A, CI_PN_B, CI_PN_C, CI_PN_D];
+const all = [...chainA, ...chainB1, ...chainB2, ...axisIds];
 
 // kind 只用於「代表列隨篩選變動」那一組：鏈尾四列是整層住家，其餘是套房 ⇒ 換 kind 篩選會換代表。
 const kindName = (pid) => (chainA.indexOf(pid) === chainA.length - 2 ? "整層住家" : "套房");
@@ -102,6 +118,17 @@ const seedRows = [
     price: `${25000 - i * 100}元`,
     price_num: 25000 - i * 100,
   })),
+  // ⑫ tie-break 軸：source_id／url 皆空 ⇒ key 的 origin 段退回 post_id，勝負只看 post_id 位數。
+  seedRow(CI_TB_A, { source: "", source_id: "", url: "", match_post_id: CI_TB_B }),
+  seedRow(CI_TB_B, { source_id: "", url: "" }),
+  // ⑬ 資格軸：source='' 但 source_id 有值；租金 10000 vs 30000 ⇒ 租金先分勝負。
+  seedRow(CI_EL_A, { source: "", source_id: `foldci-el-${CI_EL_A}`, url: "", match_post_id: CI_EL_B, fold_rent_num: 10000, price: "10000元", price_num: 10000 }),
+  seedRow(CI_EL_B, { source_id: `foldci-el-${CI_EL_B}`, url: "", fold_rent_num: 30000, price: "30000元", price_num: 30000 }),
+  // ⑭ collation 軸：只差一個標點。
+  seedRow(CI_PN_A, { source_id: "A-B", url: "", match_post_id: CI_PN_B, fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
+  seedRow(CI_PN_B, { source_id: "AB", url: "", fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
+  seedRow(CI_PN_C, { source_id: "x.y", url: "", match_post_id: CI_PN_D, fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
+  seedRow(CI_PN_D, { source_id: "xy", url: "", fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
 ];
 
 let columnExisted = true;      // 「本來就有這一欄」⇒ 不還原（步驟不得改變別人的 schema）
@@ -331,6 +358,30 @@ try {
       }
     }
     check("⑪ 端點級逐群：(集合只含代表列) 且 Node＝SQL（每個 combo 逐群列出）", ok, { perGroup });
+  }
+
+  // ── 3. §6.10 兩條軸 ＋ collation 軸（合成種子；Node 代表列 id 必須＝SQL 代表列 id）──
+  {
+    const axes = [
+      { label: "⑫ tie-break 軸：source=''／source_id・url 皆空／post_id 位數不同（10 位 vs 9 位）", pair: [CI_TB_A, CI_TB_B], expect: CI_TB_A },
+      { label: "⑬ 資格軸：source='' 且 source_id 有值、租金較低（租金先分勝負，碰不到 tie-break）", pair: [CI_EL_A, CI_EL_B], expect: CI_EL_A },
+      { label: "⑭ collation 軸：key 只差一個標點（source_id 'A-B' vs 'AB'）", pair: [CI_PN_A, CI_PN_B], expect: null },
+      { label: "⑭ collation 軸：key 只差一個標點（source_id 'x.y' vs 'xy'）", pair: [CI_PN_C, CI_PN_D], expect: null },
+    ];
+    for (const a of axes) {
+      const rows2 = readBack.filter((r) => a.pair.includes(Number(r.post_id))).map((r) => ({ ...r }));
+      attachSameHouseRoles(rows2, 0, provider, provider.now);
+      const nodeRole2 = new Map(rows2.map((r) => [Number(r.post_id), r.same_house_role || null]));
+      const sqlRows2 = await exec(cte, [a.pair, enabledSources, provider.now]);
+      const sqlRole2 = new Map(sqlRows2.map((r) => [Number(r.post_id), r.role || null]));
+      const nodeRep = primariesIn(nodeRole2, a.pair);
+      const sqlRep = primariesIn(sqlRole2, a.pair);
+      check(`${a.label}：Node 代表列 id ＝ SQL 代表列 id`, nodeRep.length === 1 && sqlRep.length === 1
+        && nodeRep.join(",") === sqlRep.join(",")
+        && sameSet(memberSet(nodeRole2, a.pair), a.pair) && sameSet(memberSet(sqlRole2, a.pair), a.pair)
+        && (a.expect == null || nodeRep[0] === a.expect),
+      { pair: a.pair, nodeRep, sqlRep, expect: a.expect, nodeRole: [...nodeRole2], sqlRole: [...sqlRole2] });
+    }
   }
 
   const failed = results.filter((r) => !r.ok);

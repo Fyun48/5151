@@ -38,6 +38,10 @@ const ids = {
   // ⑨ 空字串 source 的平手判定（spec §6.10）：同群兩列、source_id／url 皆空、post_id 位數不同。
   TE: 9100000021,   // 10 位數、source=''（Node 的 String(source||'591') ⇒ '591'）
   TN: 910000021,    // 9 位數、source='591'
+  // ⑨a 資格軸（租金不同 ⇒ tie-break 不會被諮詢）：XE 的 source='' 且 source_id 有值。
+  // ⚠️ 不可用 BASE+21／BASE+22：BASE+21 = 9100000021 與 TE 的硬編 post_id 撞號（pkey 衝突）。
+  XE: BASE + 31,    // source=''、source_id 有值、租金 10000（最便宜 ⇒ 應為代表）
+  XN: BASE + 32,    // source='591'、租金 30000
 };
 // ⑥／⑦ 線狀鏈（≥15 列同群）：Owner 2026-10-12 裁決要求「線狀鏈（≥15 列同群，橋式非橋式都
 // 覆蓋）」——舊的 1-hop Node 讀取端在這種形狀會把群切開（實測 root=22075220 的 33 列同租金鏈，
@@ -51,11 +55,10 @@ const chainB2 = Array.from({ length: 8 }, (_, i) => CHAIN + 201 + i);       // �
 const chainIds = [...chainA, ...chainB1, ...chainB2];
 const all = [...Object.values(ids), ...chainIds];
 
+// 自然啟用清單（不含 ''）——⑨ 就用這一份。Node 的資格判定把空字串 source 當 '591'
+// （`String(row.source || "591")`），SQL 也必須用同一個正規化（`COALESCE(NULLIF(c.source,''),'591')`）；
+// 舊版靠在清單裡偷塞 '' 才讓兩邊對上，那個 trick 已移除（見 docs/same-house-fold-spec.md §6.10）。
 const enabledSources = ["591", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "self"];
-// ⑨ 專用：Node 的資格判定把空字串 source 當 '591'（`String(row.source || "591")`）⇒ 合格；
-// SQL 的資格判定用原始 `e.source = ANY(?)` ⇒ 要讓同一列在 SQL 也合格，啟用清單必須含 ''。
-// 只給 ⑨ 用，避免動到 ①～⑧ 的輸入（其餘合成列的 source 都不是空字串 ⇒ 加了也不會有差）。
-const enabledSourcesWithEmpty = [...enabledSources, ""];
 
 function listing(post_id, overrides = {}) {
   return {
@@ -102,15 +105,22 @@ const shapeRows = [
     match_post_id: i + 1 < chainB2.length ? chainB2[i + 1] : null,
     fold_rent_num: 25000 - i * 100, price_num: 25000 - i * 100,
   })),
-  // ⑨ 空字串 source 的平手判定：兩列同群（TN → TE）、租金／更新時間／last_seen_at 全部相同，
-  //    所以勝負只由 tie-break key 決定。source_id／url 皆空 ⇒ key 的 origin 段退回 post_id：
-  //      Node：'591:' + String(post_id) + ':' + (Number(post_id)||0)
-  //      TE（source=''）→ '591:9100000021:9100000021'、TN → '591:910000021:910000021'
-  //      第 11 個字元 '0' < '2' ⇒ Node 的代表列是 TE。
-  //    舊 SQL 寫 (e.source || ':') ⇒ TE 的 key 變成 ':9100000021:…'，而 ':'(0x3A) > '5'(0x35)
-  //      ⇒ 舊 SQL 一定選 TN（兩條路徑不一致，本 fixture 就是釘住這一條）。
+  // ⑨ 空字串 source 的平手判定（TN → TE）、資格軸與 tie-break 軸各一組：
+  //    tie-break 軸（TE／TN）：租金／更新時間／last_seen_at 全部相同，source_id／url 皆空
+  //      ⇒ 勝負只由 tie-break key 決定。
+  //        Node：'591:' + String(post_id) + ':' + (Number(post_id)||0)
+  //        TE（source=''）→ '591:9100000021:9100000021'、TN → '591:910000021:910000021'
+  //        第 11 個字元 '0' < '2' ⇒ Node 的代表列是 TE。
+  //      舊 SQL 寫 (e.source || ':') ⇒ TE 的 key 變成 ':9100000021:…'，而 ':'(0x3A) > '5'(0x35)
+  //        ⇒ 舊 SQL 一定選 TN。
+  //    資格軸（XE／XN）：XE 的 source='' 但 source_id 有值；兩列租金不同（XE 較便宜）
+  //      ⇒ 勝負由租金決定，tie-break 永遠不會被諮詢 ⇒ 這一組只測「資格」。
+  //        Node：String('' || '591') = '591' ∈ 啟用清單 ⇒ XE 合格、且最便宜 ⇒ XE 是代表。
+  //        舊 SQL：原始 ''=ANY(啟用清單) = false ⇒ XE 被踢出 elig ⇒ XN 變成代表（XE 被降成次卡）。
   listing(ids.TE, { source: "", source_id: "", url: "", match_post_id: ids.TN }),
   listing(ids.TN, { source_id: "", url: "" }),
+  listing(ids.XE, { source: "", source_id: `xe${ids.XE}`, url: "", match_post_id: ids.XN, fold_rent_num: 10000, price_num: 10000 }),
+  listing(ids.XN, { source_id: `xn${ids.XN}`, url: "", fold_rent_num: 30000, price_num: 30000 }),
 ];
 // ⑦ 的橋邊：listing_group_members 一列（群組＝橋；群內兩兩連通）
 const bridgeGroupId = `fix-bridge-${CHAIN}`;
@@ -328,39 +338,49 @@ results.push({
   });
 }
 
-// ── ⑨ 空字串 source 的 tie-break（spec §6.10）─────────────────────────────────
-// 同群兩列、source_id／url 皆空、post_id 位數不同（10 位 vs 9 位）；租金／更新時間／
-// last_seen_at 全部相同 ⇒ 勝負只由 tie-break key 決定。斷言：兩條路徑選出的代表列 id 相同
-// （且必為 source='' 的 TE：Node 的 key '591:9100000021:…' 小於 '591:910000021:…'）。
+// ── ⑨ 空字串 source：資格軸 ＋ tie-break 軸（spec §6.10）─────────────────────
+// 兩軸分開釘：⑨a 的勝負由**租金**決定（tie-break 永遠不會被諮詢）⇒ 只測資格軸；
+// ⑨b 的租金／更新時間／last_seen_at 全平手 ⇒ 只測 tie-break 軸。
+// 啟用清單用**自然的那一份**（不含 ''）——Node 的 `String(row.source || '591')` 把 '' 當 '591'，
+// SQL 的 `COALESCE(NULLIF(c.source,''),'591') = ANY(?)` 必須逐字對齊。舊版靠在清單裡偷塞 '' 才對得上。
 {
+  // ⑨a 資格軸：XE(source='', 租金 10000) vs XN(source='591', 租金 30000)，同群。
+  const comp = [ids.XE, ids.XN];
+  const rootOk = rootOf(ids.XE) != null && rootOf(ids.XE) === rootOf(ids.XN);
+  const rows = withRoots(readBack.filter((r) => comp.includes(Number(r.post_id))));
+  attachSameHouseRoles(rows, 0, provider, provider.now);
+  const role = rolesOf(rows);
+  const sql = await runSql(comp);                       // 自然啟用清單：enabledSources（不含 ''）
+  const nodeRep = primaryOf(role, comp);
+  const sqlRep = primaryOf(sql.role, comp);
+  const roleOf = (m, id) => m.get(Number(id)) ?? null;
+  results.push({
+    label: "⑨a 資格軸：source=''＋source_id 有值＋自然啟用清單（不含 ''）⇒ Node／SQL 都判合格，代表列都是最便宜的 XE（舊 SQL 會把 XE 踢出、改選 XN）",
+    node: nodeRep.join(","), sql: sqlRep.join(","),
+    ok: rootOk && nodeRep.length === 1 && sqlRep.length === 1
+      && nodeRep[0] === Number(ids.XE) && sqlRep[0] === Number(ids.XE)
+      && comp.every((id) => roleOf(role, id) != null && roleOf(sql.role, id) != null),
+    sameRoot: rootOk,
+  });
+}
+{
+  // ⑨b tie-break 軸：TE(source='', 10 位) vs TN(source='591', 9 位)，租金／更新時間／last_seen_at 全平手。
   const comp = [ids.TE, ids.TN];
   const rootOk = rootOf(ids.TE) != null && rootOf(ids.TE) === rootOf(ids.TN);
   const rows = withRoots(readBack.filter((r) => comp.includes(Number(r.post_id))));
   attachSameHouseRoles(rows, 0, provider, provider.now);
   const role = rolesOf(rows);
-  const sql = await runSql(comp, enabledSourcesWithEmpty);
+  const sql = await runSql(comp);
   const nodeRep = primaryOf(role, comp);
   const sqlRep = primaryOf(sql.role, comp);
   results.push({
-    label: "⑨ 空字串 source＋source_id/url 皆空＋post_id 位數不同：Node／SQL 選出的代表列 id 相同（且為 source='' 的 TE）",
+    label: "⑨b tie-break 軸：空字串 source＋source_id/url 皆空＋post_id 位數不同：Node／SQL 選出的代表列 id 相同（且為 source='' 的 TE）",
     node: nodeRep.join(","),
     sql: sqlRep.join(","),
     ok: rootOk && nodeRep.length === 1 && sqlRep.length === 1
       && nodeRep[0] === Number(ids.TE) && sqlRep[0] === Number(ids.TE),
     sameRoot: rootOk,
     roots: { TE: rootOf(ids.TE), TN: rootOf(ids.TN) },
-  });
-  // 殘餘軸（本輪**不修**，只記錄證據、不當失敗）：啟用清單不含 '' 時，SQL 的**資格**判定把
-  // source='' 視為不合格（Node 走 String(source||'591') ⇒ 合格）。這是資格軸、不是 tie-break 軸，
-  // 已寫進交付的「我沒做／不敢做的部分」交由升級層決定。
-  const sqlStrict = await runSql(comp);
-  const sqlStrictRep = primaryOf(sqlStrict.role, comp);
-  results.push({
-    label: "⑨ 殘餘軸（不修，只記錄）：啟用清單不含 '' ⇒ SQL 資格判定把 source='' 排除、Node 視為 '591' 合格",
-    node: nodeRep.join(","),
-    sql: sqlStrictRep.join(","),
-    residual: true,
-    ok: true,
   });
 }
 

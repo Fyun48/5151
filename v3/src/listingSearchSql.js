@@ -630,7 +630,12 @@ export function foldRoleCte(candWhere, { rootSource = null } = {}) {
     LEFT JOIN listing_prep p ON p.post_id = c.post_id
     WHERE c.fold_component_root IS NOT NULL
       AND c.offline_confirmed IS DISTINCT FROM 1
-      AND (c.source = ANY(?::text[]) AND (c.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1))
+      -- source 正規化與 match.js 的 String(row.source || '591') 逐字對齊（docs/same-house-fold-spec.md §6.10）：
+      -- 空字串／NULL 都當 '591'。舊式用原始 c.source ⇒ '' 不在啟用清單時 Node 判合格、SQL 判不合格
+      -- （Node 側排除該列會讓它顯示成 affiliate 次卡、SQL 側排除則會讓它整列從列表消失）。
+      -- 資格軸與 tie-break 軸（見下方 ranked）必須用同一個正規化，否則兩軸會各自分岔。
+      AND (COALESCE(NULLIF(c.source, ''), '591') = ANY(?::text[])
+           AND (COALESCE(NULLIF(c.source, ''), '591') <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1))
   ),
   ranked AS (
     SELECT e.post_id, e.croot, e.offline,

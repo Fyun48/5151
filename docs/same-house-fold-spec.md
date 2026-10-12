@@ -377,16 +377,44 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
 - **為什麼一定要改**：舊式寫成 `(e.source || ':' || …)`。`source = ''` 時整串變成 `':<origin>:<post_id>'`，
   而 `':'`（0x3A）大於 `'5'`（0x35）⇒ 這一列排在任何 `'591:…'` 之後，**Node 卻把它當 `'591:…'` 排在前面**。
   平手（租金／更新時間／last_seen_at 全同）時兩條路徑就會選出不同代表列 ⇒ 一群兩主。
-- **現況**：凍結基準（repro2／repro3，184,754 列）上 `source = ''` 為 **0 列** ⇒ 現況碰不到；
+- **現況**：凍結基準（repro2／repro3，184,754 列）上 `source = ''` 為 **0 列**（NULL 亦為 0 列）⇒ 現況碰不到；
   但 schema 允許空字串（寫入端也有 `UPDATE listings SET source = ?`），屬零容差該釘住的邊界。
-- **證據（可重跑）**：`v3/scripts/fold-shape-fixtures.mjs` 的 ⑨ fixture——同群兩列（TE：10 位數 post_id、
-  `source=''`、`source_id`／`url` 皆空；TN：9 位數、`source='591'`），租金／更新時間／last_seen_at 全同，
-  斷言 **Node 與 SQL 選出的代表列 id 相同、且必為 TE**。舊式表達式下這條會紅（SQL 選 TN），改完轉綠：
-  `PG_URL=… node v3/scripts/fold-shape-fixtures.mjs`。
-- **不在本節範圍的殘餘軸（已記錄、未修，供升級層裁決）**：
-  1. **資格判定的 source 預設不一致**：Node 資格（`housepriceNotDisplayReady`）同樣走
-     `String(source || "591")` ⇒ 空字串 source 算「已啟用」；SQL 端 elig 用原始 `c.source = ANY(?::text[])`
-     ⇒ 空字串 source 算「未啟用」。fixture ⑨ 因此必須把 `''` 放進啟用清單，才能把差異隔離在 tie-break
-     這一條；不放時 SQL 直接排除該列（fixture 內另有一列 `residual:true` 的診斷輸出）。
-  2. **排序 collation**：Node 用 `localeCompare`、SQL 用資料庫 collation；`source_id`／`url` 含非 ASCII 時
-     兩邊相對順序未經驗證（現況資料以 ASCII 為主）。
+- **證據（可重跑）**：`v3/scripts/fold-shape-fixtures.mjs` 的 ⑨ 兩條 fixture——
+  ⑨b tie-break 軸（TE：10 位數 post_id、`source=''`、`source_id`／`url` 皆空；TN：9 位數、`source='591'`），
+  租金／更新時間／last_seen_at 全同 ⇒ 斷言 Node 與 SQL 選出的代表列 id 相同、且必為 TE；舊式表達式下這條
+  會紅（SQL 選 TN）。指令：`PG_URL=… node v3/scripts/fold-shape-fixtures.mjs` ⇒ `allOk:true`、`rc=0`。
+- **軸一（資格判定的 source 預設）＝已修，只改 SQL 側**：Node 資格（`db.js housepriceNotDisplayReady`）走
+  `String(source || "591")` ⇒ 空字串／NULL 算「已啟用」；舊 SQL 的 elig 用原始 `c.source = ANY(?::text[])`
+  ⇒ 空字串算「未啟用」⇒ 同一列在 Node 是**次卡**、在 SQL 是**整列從列表消失**。修法
+  （`v3/src/listingSearchSql.js` foldRoleCte 的 elig；**`v3/src/match.js` 一行未動，比較式仍是權威**）：
+  `COALESCE(NULLIF(c.source,''),'591') = ANY(?::text[])`，同段的 `<> 'houseprice'` 也套同一個正規化（NULL
+  source 在 SQL 原本連 WHERE 都過不了，Node 卻當 `'591'` 合格）。資格軸與 tie-break 軸必須共用同一個正規化，
+  否則兩軸會各自分岔。**為什麼改 SQL 不改 Node**：改 Node 會動到目前正式在跑的真實路徑，而 SQL 路徑預設 off；
+  且 SQL 側排除該列會讓房子「從列表消失」，比 Node 側多列一筆更糟。**先前 D-0160 的「以 SQL 為準」初判作廢。**
+  證據：fixture 內「把 `''` 塞進啟用清單」的 trick 已移除；⑨a（XE：`source=''`＋`source_id` 有值＋租金 10000；
+  對端 `source='591'`＋租金 30000）在**自然啟用清單**下斷言 Node 代表列 id ＝ SQL 代表列 id ＝ XE
+  （租金先分勝負 ⇒ 只測資格軸）⇒ `allOk:true`、`rc=0`。**反向對照（證明斷言會擋）**：把
+  `listingSearchSql.js` 還原成修前版本再跑同一支 ⇒ `allOk:false`、`rc=1`，⑨a 選到 XN、⑨b 選到 TN。
+  **真實資料零影響（強證明）**：`repro3`（184,754 列，`source` 空字串或 NULL 共 0 列）重跑
+  `fold-endpoint-parity.mjs` ⇒ **35 個 combo 的 totalMatched 與修前逐筆相同**。
+- **軸二（`localeCompare` vs 資料庫 collation）＝已量化判定（不再寫「未經驗證」）**：`match.js:467`
+  （`last_seen_at`）與 `:469`（tie-break key）都用 `localeCompare`；`listingSearchSql.js` 的 `COLLATE`
+  命中 **0**（＝走資料庫預設 `en_US.utf8`）。在 `repro3` 上唯讀實測：
+  1. 多成員群 **27,638 群／95,322 列**；勝負由 **`last_seen_at` 字串層**決定的 **4,421 群／11,100 列**；
+     由 **tie-break key 字串層**（租金＋更新時間＋last_seen_at 全平手）決定的 **0 群／0 列**。
+  2. 這 27,638 群中，SQL 的 `ORDER BY` 改成 `COLLATE "C"` 與原本 `en_US.utf8` **選出的代表列不同者 = 0 群**；
+     Node `localeCompare` vs PG 預設 = 0；vs `C` = 0；Node `localeCompare` vs code-point = 0（分歧清單為空）。
+  3. 三方（JS 判定／PG 預設／`C`）**一致** ⇒ 字串層只在其他軸全平手時才表決，且已用全量實證一致。
+  4. `last_seen_at` 格式：184,754 列**全部是 24 octets 定寬 ISO8601**（不合此形者 0 列，沒有任何群混用不同
+     寬度）⇒ **字串序＝時間序**；這一層沒有比 collation 更嚴重的軸（若格式不齊才會有）。
+  5. 非 ASCII：全庫含非 ASCII 的 key 欄位只有 **1 列**（`source_id`，`post_id=2414061000`，char_length 8／
+     octet_length 12，`fold_component_root IS NULL` ＝孤列、不進群內排名）⇒ 不影響排序判定。
+  可重跑指令（只 SELECT）：`set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a;`
+  `PG_URL=<15435/repro> node v3/scripts/fold-tiebreak-collation-probe.mjs`
+  ⇒ `winnerDiffs` 四個數字全 0、`divergencesTotal:0`、`last_seen_at_format.notIsoFixedWidth:0`。
+  未防到的殘餘（**不是** collation）：`fold_refresh_kind=1` 的相對更新時間隨請求時間平移，但同群內一起平移、
+  不改相對序；只有 kind=1 與絕對時間列混用時才會變，那是既有的 `fold_refresh_*` 語意。
+- **這兩條軸＋collation 軸的 CI 守門**：`v3/scripts/fold-ci-parity.mjs`（`.github/workflows/test.yml:157`
+  gating）新增三組合成種子，斷言 Node 代表列 id ＝ SQL 代表列 id：⑫ tie-break 軸（`source=''` ＋
+  `source_id`／`url` 皆空 ＋ post_id 位數不同）、⑬ 資格軸（`source=''` ＋ `source_id` 有值 ＋ 租金不同）、
+  ⑭ collation 軸（key 只差一個標點：`'A-B'` vs `'AB'`、`'x.y'` vs `'xy'`）。
