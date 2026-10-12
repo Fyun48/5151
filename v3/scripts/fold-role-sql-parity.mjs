@@ -32,7 +32,7 @@ const { raw, gtRole, gtPrimaryOffline, enabledSources, now } = await withPgReadS
   const settings = publicSearchSettings({});
   const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${cols} FROM listings ORDER BY post_id`), []);
   const loader = createDecorationDataLoader({ exec, driver: "postgres" });
-  const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
+  const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, foldGroups: true, requestContext: context });
 
   attachSameHouseRoles(raw, 0, provider, context.now);
   const gtRole = new Map();

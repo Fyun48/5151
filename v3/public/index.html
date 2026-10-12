@@ -3594,7 +3594,7 @@
         <div class="toolbar">
           <input type="text" id="q" class="list-search" placeholder="搜尋標題 / 地址 / 編號 / 備註" />
           <div class="chip-row" data-chip-row="filter">
-          <button class="chip on" data-filter="all">全部</button>
+          <button class="chip on" data-filter="all">一般</button>
           <button class="chip needs-account" data-filter="viewed">已瀏覽</button>
           <button class="chip" data-filter="watched" title="一般會員最多 6 筆，贊助會員最多 15 筆">特別關注</button>
           <button class="chip guest-filter" data-filter="same_source">同屋源更新</button>
@@ -6729,7 +6729,7 @@
       if (el.closest("#notifyHubSave, #memberMailTest, #gmailPresetBtn")) return true;
       if (el.closest("#notifyHub")) return true;
       if (el.closest("#hideSelectedBtn, #settingsPanel, .header-profiles, #watchBtn")) return true;
-      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], [data-reject-match]")) return true;
+      if (el.closest("[data-watched], [data-viewed], [data-hidden], [data-watch-draft-commit], [data-watch-draft-cancel], [data-watch-note], [data-reject-match], [data-peer-flag]")) return true;
       return false;
     }
 
@@ -7373,7 +7373,7 @@
     function renderStats(st) {
       lastStats = { ...lastStats, ...(st || {}) };
       $("stats").innerHTML = [
-        ["全部", st.total],
+        ["一般", st.total],
         ["有電梯", st.elevator],
         ["未看過", st.unseen],
         ["特別關注", st.watched],
@@ -7453,8 +7453,11 @@
       if (house.cheaper_exists) label += " · 另有較便宜";
       const open = sameHouseIsOpen(item);
       const cls = confirmed || item.match_level === "high" ? "same" : "watch";
-      const count = entries.length;
-      return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}">${esc(label)}${count ? ` · 共 ${count} 則` : ""}</button>`;
+      // 「共 N 則」＝群組真實大小（peer_count 是伺服器端的真實群組大小 −1）。
+      // 舊版用 entries.length（＝伺服器只回前 2 則的截斷值 + 自己），4 則的群會顯示「共 3 則」。
+      // 截斷只准用於「列出幾則」（house.peers 仍是上限 2），不准用於「共 N 則」。
+      const count = Number(house.peer_count || 0) + 1;
+      return `<button type="button" class="tag ${cls} tag-btn" data-same-toggle="${item.post_id}" aria-expanded="${open ? "true" : "false"}" aria-controls="same-house-panel-${item.post_id}">${esc(label)}${count > 1 ? ` · 共 ${count} 則` : ""}</button>`;
     }
 
     function sameHouseWarn(item) {
@@ -7489,9 +7492,16 @@
       if (!peer?.post_id || Number(peer.post_id) === Number(item?.post_id)) return "";
       return `<button type="button" class="ghost same-split-btn" data-reject-match="${peer.post_id}" data-reject-peer="${item.post_id}">不是同一間</button>`;
     }
-    // Owner 2026-10-07：會員與贊助會員都不再顯示「物件連結失效」回報鈕（訪客本來就看不到）。
+    // Owner 2026-10-12：三個清單（含特別關注／已隱藏）都不再豁免折疊 ⇒ 逐則「取消關注／
+    // 解除隱藏」必須改由展開面板提供，否則使用者失去逐則處理的入口。
+    // 沿用既有端點 POST /api/listings/:id/flags（body {watched:false}／{hidden:false}），不新增端點。
     function sameHouseGoneBtn(peer) {
-      return "";
+      if (!peer?.post_id) return "";
+      const id = Number(peer.post_id);
+      const bits = [];
+      if (peer.watched) bits.push(`<button type="button" class="ghost same-peer-flag" data-peer-flag="unwatch" data-peer-post="${id}">取消關注</button>`);
+      if (peer.hidden) bits.push(`<button type="button" class="ghost same-peer-flag" data-peer-flag="unhide" data-peer-post="${id}">解除隱藏</button>`);
+      return bits.join("");
     }
     function sameHousePanel(item) {
       const house = sameHouseOf(item);
@@ -8063,7 +8073,7 @@
         } else if (filter === "suspected") {
           msg = "目前沒有被判成同一屋源的重刊。隱藏或已瀏覽的舊屋若再上架，會出現在這裡。";
         } else if (filter === "offline") {
-          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成已下架，並從「全部」與這個篩選的數量扣除。";
+          msg = "目前沒有正在確認中的下架物件。591 關閉或刪除的刊登會先列在這裡核對；滿設定天數仍找不到就改成已下架，並從「一般」與這個篩選的數量扣除。";
         } else if (viewDistricts.size) {
           msg = "這個行政區篩選目前沒有物件。可點「全部」或再勾其他區。";
         } else if (kinds.length || sources.length || $("excludeLowFloors")?.checked || $("excludeRooftop")?.checked || $("hasParking")?.checked) {
@@ -13492,6 +13502,38 @@
           sameHouseOpen.add(key);
         }
         renderList(listCache, lastStats);
+        return;
+      }
+      const peerFlagBtn = ev.target.closest("[data-peer-flag]");
+      if (peerFlagBtn) {
+        ev.preventDefault();
+        if (isGuest) {
+          remindGuest();
+          return;
+        }
+        const pid = Number(peerFlagBtn.dataset.peerPost) || 0;
+        const kind = peerFlagBtn.dataset.peerFlag;
+        if (!pid || (kind !== "unwatch" && kind !== "unhide")) return;
+        const body = kind === "unwatch" ? { watched: false } : { hidden: false };
+        const orig = peerFlagBtn.textContent;
+        peerFlagBtn.disabled = true;
+        peerFlagBtn.setAttribute("aria-busy", "true");
+        peerFlagBtn.textContent = kind === "unwatch" ? "取消中…" : "解除中…";
+        try {
+          const res = await fetch(`/api/listings/${pid}/flags`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!res.ok) throw new Error(kind === "unwatch" ? "取消關注失敗" : "解除隱藏失敗");
+        } catch {
+          peerFlagBtn.disabled = false;
+          peerFlagBtn.removeAttribute("aria-busy");
+          peerFlagBtn.textContent = orig;
+          flash(kind === "unwatch" ? "取消失敗，請再試一次。" : "解除失敗，請再試一次。");
+          return;
+        }
+        await loadList({ keep: true, silent: true });
         return;
       }
       const rejectBtn = ev.target.closest("[data-reject-match]");

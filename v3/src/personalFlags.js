@@ -295,8 +295,10 @@ export function migrateListingFlagsIfNeeded(conn, userId) {
   return { migrated: true, copied };
 }
 
-export function listingIsMainListAffiliate(row, filter) {
-  if (filter === "hidden" || filter === "watched") return false;
+// Owner 2026-10-12：「特別關注／已隱藏」不再豁免折疊 —— 三個清單的呈現規則完全一致，
+// 同屋源次卡在三個清單都只出一列（逐則操作改由展開面板提供，見 public/index.html 的
+// sameHousePanel）。`filter` 參數保留只為呼叫端相容，語意上已不再分支。
+export function listingIsMainListAffiliate(row) {
   if (row?.same_house_split) return false;
   if (row?.same_house_role !== "affiliate") return false;
   if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
@@ -309,15 +311,19 @@ export function listingMatchesListFilter(row, filter) {  if (listingIsMainListAf
   const viewed = Number(row?.viewed) === 1;
   const offline = Number(row?.offline) === 1;
   const confirmed = Number(row?.offline_confirmed) === 1;
+  // Owner 2026-10-12：確認下架（offline_confirmed=1）完全不顯示，三個清單都不例外，
+  // 也不再參與選主（選主的排除在 db.js／listingSearchSql.js 的折疊段）。
+  if (confirmed) return false;
   const dup = String(row?.match_verdict || "") === "yes";
   if (filter === "hidden") return hidden || dup;
   if (filter === "offline") return offline && !confirmed;
   if (filter === "suspected") return Boolean(row?.match_level) && !confirmed && !dup && !hidden;
-  // 特別關注是配額管理清單：已下架、已隱藏、同屋源次要刊登都要看得見才能取消。
+  // 特別關注是配額管理清單：已下架（未確認）與同屋源次要刊登都要看得見才能取消／逐則處理。
   if (filter === "watched") return watched;
   // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
-  if (dup || confirmed || hidden) return false;
-  // Owner 2026-10-07：「全部」= 未看過且未特別關注；看過的物件改由「已瀏覽」清單查。
+  if (dup || hidden) return false;
+  // Owner 2026-10-12：一般清單（原「全部」）不得顯示已被特別關注或已被隱藏的物件，
+  // 除非使用者先解除該狀態；Owner 2026-10-07：「全部」＝未看過且未特別關注。
   if (filter === "all") return !watched && !viewed;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;

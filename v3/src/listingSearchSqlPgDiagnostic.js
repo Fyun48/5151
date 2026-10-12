@@ -54,7 +54,7 @@ export async function searchListingsSqlPgDiagnostic(args = {}, options = {}) {
   const exec = options.exec
     || ((sql, params = []) => pgDriver.query(toPostgresSql(sql), params).then((res) => res.rows));
   const provider = options.decorationProvider
-    || (await preloadDecorationProviderAsync({ exec, pgDriver, rows, settings, userId, matchVoteUserId, sameHouse }));
+    || (await preloadDecorationProviderAsync({ exec, pgDriver, rows, settings, userId, matchVoteUserId, sameHouse, foldGroups: true }));
   const listings = decorateRowsWithProvider(rows, {
     settings,
     userId,

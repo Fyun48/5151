@@ -101,14 +101,17 @@ test("confirmed same-house duplicates leave the suspected filter", () => {
   assert.equal(listingMatchesListFilter(hiddenDup, "all"), false);
 });
 
-test("watched filter keeps confirmed-offline, hidden, and same-house affiliates", () => {
+// Owner 2026-10-12 定案（本測試原本斷言「watched 豁免折疊＋保留確認下架」，語意已被取代）：
+// ① 三個清單呈現規則一致 ⇒ watched／hidden 也折疊同一群只出一列；
+// ② 確認下架（offline_confirmed=1）完全不顯示，三個清單都不例外。
+test("watched list folds same-house affiliates and never shows confirmed-offline", () => {
   const confirmed = { watched: 1, offline: 1, offline_confirmed: 1, hidden: 0, match_verdict: "" };
   const hiddenWatch = { watched: 1, hidden: 1, offline: 0, match_verdict: "" };
   const affiliate = { watched: 1, same_house_role: "affiliate", hidden: 0, offline: 0, match_verdict: "" };
-  assert.equal(listingMatchesListFilter(confirmed, "watched"), true);
-  assert.equal(listingMatchesListFilter(hiddenWatch, "watched"), true);
-  assert.equal(listingIsMainListAffiliate(affiliate, "watched"), false);
-  assert.equal(listingMatchesListFilter(affiliate, "watched"), true);
+  assert.equal(listingMatchesListFilter(confirmed, "watched"), false, "確認下架不顯示");
+  assert.equal(listingMatchesListFilter(hiddenWatch, "watched"), true, "已隱藏但仍在特別關注清單");
+  assert.equal(listingIsMainListAffiliate(affiliate, "watched"), true, "watched 不再豁免折疊");
+  assert.equal(listingMatchesListFilter(affiliate, "watched"), false);
   assert.equal(listingMatchesListFilter({ ...confirmed, watched: 0 }, "watched"), false);
 });
 

@@ -1,20 +1,25 @@
 # 同屋源主卡／次卡（affiliate）折疊 — 讀取端現行語意完整還原規格
 
+> 最後校對：2026-10-12（對應 commit __SHA__；Owner 當日五項定案已併入，見 §6）
+>
 > 本文件是「把 same_house_role 折疊變成 SQL 可表達」的**唯一語意權威**。
 > 每條都附 `檔:行`。SQL 折疊（視窗函式／遞歸 CTE）與寫入端固化欄都必須以本文件為準，
 > 與讀取端逐位元一致（含 fallback 與處理順序）。
 
 ## 0. 結論摘要（訪客路徑 uid=0）
 
-- 訪客路徑 `splitPairs` 為空（`loadUserSplitPairSet(0)` → 空 Set，`db.js:3570-3582`）、
+- 訪客路徑 `splitPairs` 為空（`loadUserSplitPairSet(0)` → 空 Set，`db.js:3567-3579`）、
   `personalIndex` 為空（`attachSameHouseRoleSteps` 的 `hasPersonal = voteUserId && personal.size !== 0`
-  → false，`db.js:3593`）。
-- 因此訪客路徑**只跑 pair 迴圈**（`db.js:3637-3661`），不跑 personal group 迴圈（`db.js:3663-3705`）。
-- `same_house_role` 由「**第一個碰到該列的 effective pair**」決定（先到先贏），
-  處理順序＝`linked` 清單的 `post_id` 升序。
-- 這個「先到先贏」可以改寫成**等價的無順序形式**：
-  對每個列 `X`，取「與 `X` 相接、且 src.post_id 最小」的 effective edge，`X` 的 role =
-  `X` 是否為該 edge 的 `preferPrimaryListing` 贏家。此等價性是 SQL 折疊的基礎（見 §4）。
+  → false，`db.js:3641`）。
+- **2026-10-12 起改為「一群一主」**：role 不再由「第一個碰到該列的 effective pair」決定，
+  而是先對 `候選列 ∪ extras` 建無向連通分量（① match 邊 ② `listing_group_members` 群組
+  ③ `user_same_house_members` 個人併組），再對每個 |C| ≥ 2 的分量用
+  `sortGroupListings(...)[0]` 選出**恰好一個** primary（`db.js:3682-3796`）。
+  選主比較式本身沒有改（§2），改的是「誰跟誰同一群」與「一群只能有一個贏家」。
+- 單節點分量（沒有任何邊、也不是任何 ≥2 群組的成員）維持「無 role」＝留在主列表。
+- SQL 折疊只有 `buildPublicListingsFoldSql` 在用（`listingSearchSql.js:592`），
+  它目前仍是舊的 first-incident-edge 視窗函式 ⇒ **與 Node 路徑已不一致**，
+  需要用固化的分量欄（§6.3 的 (B) 方案）補齊；`fold-role-sql-parity.mjs` 是守門腳本。
 
 ## 1. 分組與鏈：有向邊、無向比較、先到先贏
 
@@ -41,26 +46,32 @@
 3. `splits.has(votePairKey(row.post_id, mid))` → 只標 `row.same_house_split = true` 並 skip；
    訪客 splits 為空，永不發生（`db.js:3644-3647`）。
 
-### 1.4 role 指派（先到先贏）
+### 1.4 role 指派（2026-10-12 起：一群一主／連通分量）
 ```
-primary = preferPrimaryListing(row, peer, now)   // db.js:3648
-primaryId = Number(primary.post_id)              // db.js:3649
-primaryOffline = Number(primary.offline) === 1   // db.js:3650
-assignRole(target):                               // db.js:3653-3658
-  if (!target || target.same_house_split || target.same_house_role) return;
-  target.same_house_role = (target.post_id === primaryId) ? "primary" : "affiliate";
-  target.same_house_primary_id = primaryId;
-  target.same_house_primary_offline = primaryOffline;
-assignRole(row); assignRole(byId.get(mid));       // db.js:3659-3660
+// db.js:3682-3796（attachSameHouseRoleSteps）
+universe = byId（候選列）∪ extras（被指到但不在此請求內的列）
+union-find:
+  ① for row of linked：三道閘（§1.3）通過後 compUnion(row.post_id, mid)          // db.js:3709-3722
+  ② 同一個 listing_group_members.group_id 的可用成員兩兩連通                      // db.js:3725-3747
+  ③ 同一個 user_same_house_members.group_key 的宇宙成員連通（personalIndex）      // db.js:3748-3770
+for 每個分量 C（|C| ≥ 2）:                                                      // db.js:3772-3796
+  eligible = C 中 offline_confirmed ≠ 1 的成員（Owner③：確認下架不參與選主）
+  primary  = sortGroupListings(eligible, now)[0]        // 唯一比較式（match.js:468）
+  role     = (post_id === primary.post_id) ? "primary" : "affiliate"
+  same_house_primary_offline = Number(primary.offline) === 1
 ```
-- `target.same_house_role` 已存在就不改（先到先贏）。
+- 只有「在候選列內」的成員會被寫回 role（`extras` 只參與比較，不輸出），與舊版一致。
+- `same_house_split` 的列**完全不進圖**（沿用 §1.3 第 3 條），因此維持無 role、留在主列表。
+- 補償條款保留：`listingIsMainListAffiliate`（`personalFlags.js:301-306`）仍讓
+  「primary 已下架（`offline=1`）而自己還在線」的 affiliate 留在列表。
 
-### 1.5 鏈（transitive closure）問題的來源
-同屋源鏈 A→B→C：`A.match_post_id=B`、`B.match_post_id=C`。列 B 同時是 edge(A,B) 的 dst
-與 edge(B,C) 的 src。B 的 role 由「兩條 edge 中 src.post_id 較小者」決定，**不是**由
-「B 自己的 match_post_id 那對」決定。naive「只看自己那對」的回填因此在鏈上與讀取端不一致。
+### 1.5 鏈（transitive closure）——已修
+舊版（first-incident-edge）在鏈 A→B→C 上會讓 B 的 role 由「兩條 edge 中 src.post_id 較小者」
+決定，同一連通群因此可以出現**多個 primary**（`docs/same-house-fold-spec.md` 舊版 §4.1 自己
+承認這個不一致）。2026-10-12 起分量是 union-find 的連通分量，一個分量只有一個贏家；
+`v3/test/same-house-fold-component.test.js` 第 1、2 條測試釘住這件事。
 
-## 2. `preferPrimaryListing(a, b, now)` 比較式（`match.js:363-378`）
+## 2. `preferPrimaryListing(a, b, now)` 比較式（`match.js:451-466`；`sortGroupListings` `match.js:468-475`）
 
 逐層比較，**第一層分出勝負即回傳**：
 
@@ -72,7 +83,7 @@ assignRole(row); assignRole(byId.get(mid));       // db.js:3659-3660
 | 4 | tie-break key | `listingTieBreakKey(a).localeCompare(listingTieBreakKey(b))`；較小贏 | `match.js:375-376` |
 | 5 | post_id | `Number(a.post_id) <= Number(b.post_id)` → a 贏 | `match.js:377` |
 
-### 2.1 `comparableRent(listing)`（`match.js:103-106`）
+### 2.1 `comparableRent(listing)`（`match.js:103-106`，行號已核對，未位移）
 - `n = listingCompareCost(listing, { includeExtras: true })`；`Number.isFinite(n) && n > 0 ? n : null`。
 - `listingCompareCost`（`listingCost.js:216-221`）：`rent = rentAmount(listing)`；
   `rent <= 0 → 0`；否則 `rent + extraMonthlyAmount(listing)`。
@@ -82,7 +93,7 @@ assignRole(row); assignRole(byId.get(mid));       // db.js:3659-3660
   `feeRowMonthlyAmount` 加總；否則 `extra_fee` 欄；再否則 `extra_fee_text`／`listingBlob`
   named 月費。結果可能為 undefined（無額外費用）→ 加總時視 0。
 
-### 2.2 `listingRefreshAt(listing, now)`（`match.js:332-351`）
+### 2.2 `listingRefreshAt(listing, now)`（`match.js:406-409`；解析器 `listingRefreshParts` `match.js:419-439`）
 解析 `refresh_time`（**相對字串**，例「16 小時內更新」），越新越大：
 - `剛剛` → `now`；`N 秒前` → `now - N*1000`；`N 分鐘前` → `now - N*60_000`；
   `N 小時(前|內)` → `now - N*3_600_000`；`今日|今天` → `now`；`昨日|昨天` → `now - 86_400_000`；
@@ -95,7 +106,7 @@ assignRole(row); assignRole(byId.get(mid));       // db.js:3659-3660
 > 讀取時用讀取當下的 `now`，兩者相減（相對 vs 絕對混比）會漂移、破壞 100% parity。
 > 必須拆成「相對 offset（ms）」＋「絕對 ms」＋「kind」三欄（見 §4.2），讀取時以 `now` 參數還原。
 
-### 2.3 `listingTieBreakKey(listing)`（`match.js:353-357`）
+### 2.3 `listingTieBreakKey(listing)`（`match.js:441-445`）
 - `` `${source}:${source_id || url || post_id}:${post_id}` ``（source_id 空則依序退 url、post_id）。
 
 ## 3. 旁路條件與過濾
@@ -125,7 +136,7 @@ return !watched && !viewed;                     // 訪客 watched/viewed 皆 0
 
 ## 4. SQL 折疊的等價形式（本包實作依據）
 
-### 4.1 role 的無順序等價
+### 4.1 role 的無順序等價（⚠️ 2026-10-12 起已過時：這是舊的 first-incident-edge 語意）
 對每個**候選列** `X`：
 1. `effective_edge(X)` ＝ 所有與 `X` 相接（`X` 是 src 或 dst）的邊中，滿足
    「src 在候選集、dst 可 resolve、兩端 verdict ≠ no、兩端 display-ready」者。
@@ -168,3 +179,35 @@ win(a,b) =
   而 `buildPublicListingSearchSql` 未傳 `searchKeys=[]` → 展開成 28 鍵（少算 2,265 筆）。
 - **hidden**：候選 `where` 補 `COALESCE(hidden,0) != 1`（`listingMatchesListFilter` 的 hidden 分支，
   `personalFlags.js:307`；實務 44 筆）。
+
+## 6. 2026-10-12 Owner 五項定案（本節優先於上面各節）
+
+| # | 定案 | 實作位置 | 驗收測試 |
+|---|---|---|---|
+| 1 | 三個清單（一般／特別關注／已隱藏）呈現規則一致：**不再豁免折疊** | `personalFlags.js:301-306`（移除 `filter === "hidden" \|\| filter === "watched"` 的豁免） | `same-house-fold-component.test.js`「watched list folds…」 |
+| 1b | 逐則「取消關注／解除隱藏」改由展開面板提供（不新增端點） | `public/index.html` `sameHouseGoneBtn()`；`POST /api/listings/:id/flags`（`server.js:5033`）body `{watched:false}`／`{hidden:false}` | 同上「same-house panel offers per-post…」（靜態斷言面板按鈕與端點契約） |
+| 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:308-331`（`filter === "all"` → `!watched && !viewed`，且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
+| 3 | 確認下架（`offline_confirmed = 1`）**三個清單都不顯示**、**不參與選主** | 顯示：`personalFlags.js:316-318`；選主：`db.js:3783-3785`；群組成員集合：`listingCompare.js:9-13` | 「offline_confirmed rows are never primary…」 |
+| 3b | 「可能空號」（`offline = 1`、`offline_confirmed = 0`）**維持現行行為**（可比價／可顯示／可參與比較） | 未改（上述三處都只排除 `offline_confirmed`） | 「compensation clause keeps the live affiliate…」 |
+| 4 | 「共 N 則」＝**群組真實大小**（截斷只准用於「列出幾則」） | 資料：`listingCompare.js:379`（`peer_count`）；前端：`public/index.html` `sameHouseTag()`（`count = peer_count + 1`） | 「bundle exposes the true group size…」「frontend renders 共 N 則…」 |
+| 5 | 篩選按鈕文案「全部」→「一般」 | `public/index.html`（`data-filter="all"` 按鈕、`renderStats` 標籤、空狀態文案）；`helpQa.js:73` | 「general filter chip is labelled 一般」 |
+
+### 6.1 「主卡被關注、次卡沒被關注」的邊界（Owner②要求出臺說明）
+判定一律以**該列自己的** `user_listing_flags` 為準，**不繼承同組其他列**：
+- 一般清單：主卡被關注 → 主卡不在一般清單（`watched` 排除），次卡沒被關注且是 affiliate
+  → 次卡也被折疊（`listingIsMainListAffiliate`），**兩則都不在一般清單**。
+- 特別關注清單：主卡在（`watched=1`）、次卡不在（`watched=0`）⇒ 只顯示主卡一列；
+  使用者仍可在展開面板對次卡按「關注」把它加進特別關注（面板逐則操作）。
+- 已隱藏清單同理（`hidden` 為準）。
+這是**刻意**的：Owner②明文要求「以該列自己的個人旗標為準」，所以不做「同組同步旗標」。
+
+### 6.2 三個清單的 `totalMatched` 語意變化
+折疊只會**減少** affiliate 的列數，減少筆數 = 被折疊的 affiliate 筆數；非群組列的
+`totalMatched` 不變（見 PR 描述的實測對照表）。
+
+### 6.3 SQL 折疊的缺口與 (B) 方案（**需 Owner 同意**，尚未落地）
+本包只改 Node 路徑與前端；`foldRoleCte`（`listingSearchSql.js:592-667`）仍是
+first-incident-edge，因此 `fold-role-sql-parity.mjs` 會紅。精確連通分量在 18.4 萬列上
+無法用純 SQL 達成時間門檻（實測：直接遞歸 70s、免剪枝 MATERIALIZED 10.2s、
+群組塌縮虛擬圖 3.3s；現行 guest p50 = 2.88s）⇒ 建議新增固化欄
+`listings.fold_component_root`，沿用既有 `fold_*` 寫入端固化路徑，讀取端兩條路徑都改讀它。

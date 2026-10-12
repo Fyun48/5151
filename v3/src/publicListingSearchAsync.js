@@ -76,7 +76,7 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
       const built = buildPublicListingsClauses({ districts, settings, q: args.q, context, districtIds }, { sqliteDb: null });
       const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${PUBLIC_LISTING_CANDIDATE_COLUMNS} FROM listings ${built.where} ORDER BY post_id`), built.params);
       const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings,
-        userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
+        userId: 0, matchVoteUserId: 0, peers: false, foldGroups: true, requestContext: context });
       const rows = await buildPublicListingsRowsAsync(raw, { settings, kind: args.kind, sources: args.sources,
         sort: args.sort, districtSet: built.districtSet, provider, now: context.now, requireProvider: true });
       const limit = Math.max(1, Math.min(Number(args.limit) || 40, 50));

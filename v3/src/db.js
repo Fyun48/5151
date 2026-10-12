@@ -36,7 +36,7 @@ import { backfillListingSearchProjectionStep, ensureListingSearchProjection, pro
 import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
-import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, refreshFoldColumnsSync } from "./match.js";
+import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, sortGroupListings, refreshFoldColumnsSync } from "./match.js";
 import { noteRefreshFailure } from "./listingRefreshHealth.js";
 import {
   ensureUserSameHouseSchema,
@@ -3342,6 +3342,9 @@ export async function preloadDecorationProviderAsync({
   // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
   loader: loaderIn = null,
   peers: loadPeers = true,
+  // 2026-10-12「一群一主」：只有真的要做 role 指派的路徑才需要 group_id（多一次批次查詢）。
+  // 預設 false ⇒ 單列裝飾（詳情頁、通勤）不付這個成本。
+  foldGroups = false,
   // Only the candidate pipeline may omit prep for known non-houseprice rows.
   // Page decoration and direct callers retain the complete provider contract.
   candidatePhase = false,
@@ -3445,8 +3448,13 @@ export async function preloadDecorationProviderAsync({
 
   const groupIds = new Map();
   const groupMembers = new Map();
-  if (loadPeers) {
+  // 2026-10-12「一群一主」：`listing_group_members`（系統同屋源群組）是折疊分量的來源之一，
+  // 所以**候選階段也必須**載入 group_id（一次批次查詢）——否則候選期的 role 只看 match 邊，
+  // 只存在於群組表、兩端都沒有邊的列會永遠留在主列表。群成員列仍只在頁面階段（loadPeers）載入。
+  if (loadPeers || foldGroups) {
     for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
+  }
+  if (loadPeers) {
     // astra §4.3：成員列改為**一次查詢**取回（原本每 group 一筆 ✗，頁面可能數十個 group）。
     const gids = [...new Set([...groupIds.values()].filter(Boolean))];
     for (const [gid, rows] of await loader.groupMemberRowsFor(gids)) groupMembers.set(gid, rows);
@@ -3678,6 +3686,31 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   }
   const resolve = (id) => byId.get(id) || extras.get(id) || null;
   const splits = source.splitPairs();
+  // ── 一群一主：連通分量（union-find）──────────────────────────────────
+  // 舊版是「first-incident-edge 成對」——每條邊各自算贏家再先到先贏，所以同一連通群
+  // 可以出現多個 primary（鏈狀 A–B–C 就是反例）。這裡改成把三種關係全部併進同一張
+  // 無向圖，一個分量只選一個 primary（比較式仍是 match.js 的 sortGroupListings）：
+  //   ① match 邊（維持既有三道跳過規則：verdict='no'／houseprice 未就緒／split）
+  //   ② listing_group_members（系統同屋源群組；群內兩兩連通）
+  //   ③ user_same_house_members（會員自己的併組，personalIndex）
+  const universe = new Map();
+  for (const [id, row] of byId) universe.set(id, row);
+  for (const [id, row] of extras) if (!universe.has(id)) universe.set(id, row);
+  const compParent = new Map();
+  const compFind = (x) => {
+    let r = x;
+    while (compParent.get(r) !== r) r = compParent.get(r);
+    let c = x;
+    while (compParent.get(c) !== c) { const next = compParent.get(c); compParent.set(c, r); c = next; }
+    return r;
+  };
+  const compEnsure = (x) => { if (!compParent.has(x)) compParent.set(x, x); };
+  const compUnion = (a, b) => {
+    compEnsure(a); compEnsure(b);
+    const ra = compFind(a); const rb = compFind(b);
+    if (ra !== rb) compParent.set(ra, rb);
+  };
+  for (const id of universe.keys()) compEnsure(id);
   visited = 0;
   for (const row of linked) {
     if (visited && visited % 256 === 0) yield {label:'relations.pairs',units:256};
@@ -3690,31 +3723,43 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
       row.same_house_split = true;
       continue;
     }
-    const primary = preferPrimaryListing(row, peer, now);
-    const primaryId = Number(primary.post_id);
-    const primaryOffline = Number(primary.offline) === 1;
-    // 疑似／確定同源都是成對關係。即使只有其中一側存 match_post_id，
-    // 也要把「非主卡」那側標成 affiliate 收進展開列，避免同一對在主列表出現兩次。
-    const assignRole = (target) => {
-      if (!target || target.same_house_split || target.same_house_role) return;
-      target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
-      target.same_house_primary_id = primaryId;
-      target.same_house_primary_offline = primaryOffline;
-    };
-    assignRole(row);
-    assignRole(byId.get(mid));
+    compUnion(Number(row.post_id), mid);
   }
   if (visited) yield {label:'relations.pairs',units:(visited - 1) % 256 + 1};
+
+  // ② 系統同屋源群組：同一 group_id 的可用成員兩兩連通（鏈式 union 即可）。
+  if (typeof source.groupId === "function") {
+    visited = 0;
+    const byGroupId = new Map();
+    for (const [id, row] of universe) {
+      if (row.same_house_split) continue;
+      if (housepriceNotDisplayReady(row, source)) continue;
+      let gid = "";
+      try { gid = String(source.groupId(id) || ""); } catch { gid = ""; }
+      if (!gid) {
+        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        continue;
+      }
+      if (!byGroupId.has(gid)) byGroupId.set(gid, []);
+      byGroupId.get(gid).push(id);
+      if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+    }
+    for (const members of byGroupId.values()) {
+      for (let i = 1; i < members.length; i++) compUnion(members[0], members[i]);
+    }
+    if (visited % 256) yield {label:'relations.groups',units:visited % 256};
+  }
+
+  // ③ 會員自己的併組（user_same_house_members）：同 group_key 的宇宙成員連通。
   if (hasPersonal) {
     visited = 0;
     for (const members of grouped.values()) {
-      const pool = [];
-      const seen = new Set();
+      const ids = [];
       const add = (item) => {
         const id = Number(item?.post_id) || 0;
-        if (!id || seen.has(id) || item.same_house_split) return;
-        seen.add(id);
-        pool.push(item);
+        if (!id || item.same_house_split || !universe.has(id)) return;
+        if (ids.includes(id)) return;
+        ids.push(id);
       };
       for (const row of members) {
         add(row);
@@ -3724,30 +3769,40 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
           if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
         }
       }
-      const visible = [];
-      for (const item of pool) {
-        if (!housepriceNotDisplayReady(item, source)) visible.push(item);
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-      }
-      if (visible.length < 2) continue;
-      let primary = visible[0];
-      for (const item of visible) {
-        primary = preferPrimaryListing(primary, item, now);
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-      }
-      const primaryId = Number(primary.post_id);
-      const primaryOffline = Number(primary.offline) === 1;
-      for (const target of visible) {
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-        if (!byId.has(Number(target.post_id))) continue;
-        target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
-        target.same_house_primary_id = primaryId;
-        target.same_house_primary_offline = primaryOffline;
-        target.same_house_personal = true;
-      }
+      for (let i = 1; i < ids.length; i++) compUnion(ids[0], ids[i]);
     }
     if (visited % 256) yield {label:'relations.groups',units:visited % 256};
   }
+
+  // 分量 → 成員（只處理 |C| ≥ 2；單節點分量維持「無 role」＝留在主列表）。
+  visited = 0;
+  const comps = new Map();
+  for (const [id, row] of universe) {
+    if (row.same_house_split) continue;
+    const root = compFind(id);
+    if (!comps.has(root)) comps.set(root, []);
+    comps.get(root).push({ id, row });
+    if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+  }
+  for (const members of comps.values()) {
+    if (members.length < 2) continue;
+    // Owner 2026-10-12 定案：確認下架（offline_confirmed=1）不參與選主。
+    const eligible = members.filter((m) => Number(m.row.offline_confirmed) !== 1);
+    if (!eligible.length) continue;
+    const primary = sortGroupListings(eligible.map((m) => m.row), now)[0];
+    if (!primary) continue;
+    const primaryId = Number(primary.post_id);
+    const primaryOffline = Number(primary.offline) === 1;
+    for (const { id: memberId, row: target } of members) {
+      if (target.same_house_split) continue;
+      if (personal.groupKey(memberId)) target.same_house_personal = true;
+      if (!byId.has(memberId)) continue;
+      target.same_house_role = memberId === primaryId ? "primary" : "affiliate";
+      target.same_house_primary_id = primaryId;
+      target.same_house_primary_offline = primaryOffline;
+    }
+  }
+  if (visited % 256) yield {label:'relations.groups',units:visited % 256};
   return list;
 }
 
