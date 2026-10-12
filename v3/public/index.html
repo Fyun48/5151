@@ -159,7 +159,8 @@
     }
     .kit-furnish.kit-dismissed + .kit-tip { display: none !important; }
     @media (hover: hover) and (pointer: fine) {
-      .kit-furnish { min-height: 0; }
+      /* WCAG 2.2 AA 2.5.8 目標尺寸：滑鼠裝置也不低於 24px（原本歸零 ⇒ 只有文字高度 20px）。 */
+      .kit-furnish { min-height: 24px; }
       .kit-furnish:hover + .kit-tip,
       .kit-furnish:focus-visible + .kit-tip,
       .kit-tip:hover { display: block; }
@@ -380,6 +381,13 @@
       margin: 14px 0 12px;
     }
     .hub-tabs button[aria-selected="true"] {
+      background: var(--accent);
+      color: var(--primary-foreground);
+      border-color: var(--accent);
+    }
+    /* 選取中的分頁 hover 時會被 .ghost:hover:not(:disabled)（0,3,0）蓋掉底色，只剩淺字淺底（實測 1.08:1）；
+       這條 specificity 0,4,1 把它蓋回來。只動這條新規則，任何 token 都沒改。 */
+    .hub-tabs button[aria-selected="true"]:hover {
       background: var(--accent);
       color: var(--primary-foreground);
       border-color: var(--accent);
@@ -2103,6 +2111,11 @@
     .filter-head .status.is-alert {
       color: var(--rose-deep);
     }
+    /* 等待中（setListBusy(true)）把狀態列加重，讓「正在更新」看得出來。 */
+    .filter-head .status.is-busy {
+      color: var(--ink);
+      font-weight: 600;
+    }
     .list-meta {
       font-size: 12px;
       color: var(--accent-deep);
@@ -2162,6 +2175,12 @@
     .district-city { margin: 8px 0 12px; }
     .district-city-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
     .district-city-toggle {
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font-family: inherit;
+      text-align: left;
       margin: 0;
       font-size: 14px;
       flex: 1;
@@ -2183,7 +2202,7 @@
     }
     .district-city.is-open .district-city-toggle .chev { transform: rotate(0deg); }
     .district-city:not(.is-open) .districts { display: none; }
-    .district-city-head button { padding: 4px 10px; font-size: 12px; }
+    .district-city-head button:not(.district-city-toggle) { padding: 4px 10px; font-size: 12px; }
     .districts { display: flex; flex-wrap: wrap; gap: 6px; }
     .districts label {
       margin: 0;
@@ -2948,7 +2967,7 @@
     }
     .list { display: grid; gap: 14px; padding: 14px 16px 16px; overflow-x: hidden; }
     .list.is-refreshing { pointer-events: none; }
-    .list.is-refreshing::before {
+    .list.is-refreshing.show-refresh-bar::before {
       content: "";
       display: block;
       height: 2px;
@@ -3870,7 +3889,7 @@
             <input type="date" id="profileBirthDate" min="1900-01-01" />
           </div>
           <div>
-            <label>性別（選填）</label>
+            <label for="profileGender">性別（選填）</label>
             <select id="profileGender">
               <option value="">不透露</option>
               <option value="男">男</option>
@@ -3879,7 +3898,7 @@
             </select>
           </div>
           <div class="span-2">
-            <label>目前居住縣市（選填）</label>
+            <label for="profileResidence">目前居住縣市（選填）</label>
             <select id="profileResidence">
               <option value="">不透露</option>
               <option>臺北市</option><option>新北市</option><option>桃園市</option><option>臺中市</option>
@@ -3986,15 +4005,15 @@
         </div>
         <div class="self-grid">
           <div>
-            <label>縣市</label>
+            <label for="selfCity">縣市</label>
             <select id="selfCity"></select>
           </div>
           <div>
-            <label>行政區</label>
+            <label for="selfDistrict">行政區</label>
             <select id="selfDistrict"></select>
           </div>
           <div>
-            <label>類型</label>
+            <label for="selfKind">類型</label>
             <select id="selfKind">
               <option value="whole">整層住家</option>
               <option value="suite">獨立套房</option>
@@ -4004,7 +4023,7 @@
             </select>
           </div>
           <div>
-            <label>身分</label>
+            <label for="selfRole">身分</label>
             <select id="selfRole">
               <option value="owner">屋主</option>
               <option value="agent">代理人</option>
@@ -4039,7 +4058,7 @@
             <input type="number" id="selfBath" min="0" max="8" value="1" />
           </div>
           <div>
-            <label>押金</label>
+            <label for="selfDeposit">押金</label>
             <select id="selfDeposit">
               <option value="">未填</option>
               <option value="one">一個月</option>
@@ -4204,12 +4223,12 @@
         <button type="button" class="ghost" id="notifyHubClose">關閉</button>
       </div>
       <div class="hub-tabs" role="tablist">
-        <button type="button" class="ghost" data-hub-tab="events" aria-selected="true">通知種類</button>
-        <button type="button" class="ghost" data-hub-tab="rental" aria-selected="false">租屋通知</button>
-        <button type="button" class="ghost" data-hub-tab="webhook" aria-selected="false">Discord Webhook</button>
-        <button type="button" class="ghost" data-hub-tab="mail" aria-selected="false">自己的郵件 SMTP</button>
+        <button type="button" class="ghost" tabindex="0" id="hubTabEvents" data-hub-tab="events" role="tab" aria-controls="hubPaneEvents" aria-selected="true">通知種類</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabRental" data-hub-tab="rental" role="tab" aria-controls="hubPaneRental" aria-selected="false">租屋通知</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabWebhook" data-hub-tab="webhook" role="tab" aria-controls="hubPaneWebhook" aria-selected="false">Discord Webhook</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabMail" data-hub-tab="mail" role="tab" aria-controls="hubPaneMail" aria-selected="false">自己的郵件 SMTP</button>
       </div>
-      <section class="hub-pane" data-hub-pane="webhook" hidden>
+      <section class="hub-pane" id="hubPaneWebhook" data-hub-pane="webhook" role="tabpanel" aria-labelledby="hubTabWebhook" hidden>
         <p class="hint">我們特別推薦 Discord：免費、不用架伺服器，把 Webhook 貼上就能收到特別關注更新。其它相容 Discord 格式的 Webhook 也可以。</p>
         <ol class="hub-steps">
           <li>申請 <a href="https://discord.com/register" target="_blank" rel="noopener noreferrer">Discord 帳號</a>，並建立一個只給自己看的伺服器。</li>
@@ -4221,7 +4240,7 @@
         <input type="url" id="discordWebhook" placeholder="https://discord.com/api/webhooks/..." />
         <p class="hint">Webhook 同房源多筆只送主物件。全新物件依搜尋設定檔；其餘種類都只有特別關注才會推。要改通道請切到「通知種類」。</p>
       </section>
-      <section class="hub-pane" data-hub-pane="mail" hidden>
+      <section class="hub-pane" id="hubPaneMail" data-hub-pane="mail" role="tabpanel" aria-labelledby="hubTabMail" hidden>
         <p class="hint">這組 SMTP <strong>只寄物件／屋源提醒</strong>到你註冊的信箱，請用你自己的帳號寄給自己。註冊歡迎、忘記密碼、變更密碼、贊助通知由站方管理員 SMTP 寄出，不會用這裡的密碼。</p>
         <p class="hint">可用代碼：<code>{{event}}</code>、<code>{{title}}</code>、<code>{{price}}</code>、<code>{{facts}}</code>、<code>{{url}}</code>、<code>{{detail}}</code>、<code>{{email}}</code>。</p>
         <div class="row" style="margin:0 0 10px">
@@ -4259,14 +4278,14 @@
         <select id="mailPreset" aria-label="罐頭訊息"></select>
         <label for="memberMailSubject">物件通知主旨</label>
         <input id="memberMailSubject" />
-        <label>物件通知本文</label>
+        <label for="memberMailText">物件通知本文</label>
         <textarea id="memberMailText"></textarea>
         <div class="row" style="margin-top:12px">
           <button type="button" class="ghost" id="memberMailTest">寄測試信到我的信箱</button>
         </div>
         <p class="msg" id="memberMailMsg"></p>
       </section>
-      <section class="hub-pane" data-hub-pane="rental" hidden>
+      <section class="hub-pane" id="hubPaneRental" data-hub-pane="rental" role="tabpanel" aria-labelledby="hubTabRental" hidden>
         <p class="hint">只控制許願房生命週期、提案與符合需求。物件抓取通知仍在「通知種類」。信箱／推播預設關閉，正式啟用後才會寄出。</p>
         <div class="rental-notify-prefs" id="rentalNotifyPrefs">
           <label><input type="checkbox" id="rentalPrefLife" checked /> 許願房到期提醒</label>
@@ -4280,7 +4299,7 @@
         <p class="hint" id="rentalNotifyHint">訂閱符合需求不會提高配對排名。</p>
         <p class="msg" id="rentalNotifyMsg" role="status" aria-live="polite"></p>
       </section>
-      <section class="hub-pane" data-hub-pane="events">
+      <section class="hub-pane" id="hubPaneEvents" data-hub-pane="events" role="tabpanel" aria-labelledby="hubTabEvents">
         <p class="hint">全新物件只通知符合目前設定檔的篩選（例如只看整層、排除 1F 及地下室、行政區、租金）。價格、費用、下架、重新上架與同屋源重刊都只有特別關注才會發。頻道勾選也存在同一個設定檔。</p>
         <div class="notify-matrix-wrap">
         <table class="notify-matrix" id="notifyMatrix">
@@ -4296,66 +4315,66 @@
           <tbody>
             <tr>
               <td class="notify-event new">全新物件</td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="dock" aria-label="全新物件 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="push" aria-label="全新物件 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="webhook" aria-label="全新物件 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="new" data-notify-ch="mail" aria-label="全新物件 郵件通知" /></td>
             </tr>
             <tr>
               <td>同屋源重刊</td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="dock" aria-label="同屋源重刊 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="push" aria-label="同屋源重刊 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="webhook" aria-label="同屋源重刊 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="same_source" data-notify-ch="mail" aria-label="同屋源重刊 郵件通知" /></td>
             </tr>
             <tr>
               <td>價格變動</td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="dock" aria-label="價格變動 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="push" aria-label="價格變動 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="webhook" aria-label="價格變動 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="price" data-notify-ch="mail" aria-label="價格變動 郵件通知" /></td>
             </tr>
             <tr>
               <td>標題變更</td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="dock" aria-label="標題變更 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="push" aria-label="標題變更 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="webhook" aria-label="標題變更 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="title" data-notify-ch="mail" aria-label="標題變更 郵件通知" /></td>
             </tr>
             <tr>
               <td>內容更新</td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="dock" aria-label="內容更新 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="push" aria-label="內容更新 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="webhook" aria-label="內容更新 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="update" data-notify-ch="mail" aria-label="內容更新 郵件通知" /></td>
             </tr>
             <tr>
               <td class="notify-event off">591 下架</td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="dock" aria-label="591 下架 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="push" aria-label="591 下架 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="webhook" aria-label="591 下架 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="offline" data-notify-ch="mail" aria-label="591 下架 郵件通知" /></td>
             </tr>
             <tr>
               <td class="notify-event relist">重新上架</td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="dock" aria-label="重新上架 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="push" aria-label="重新上架 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="webhook" aria-label="重新上架 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="relist" data-notify-ch="mail" aria-label="重新上架 郵件通知" /></td>
             </tr>
             <tr>
               <td>系統公告</td>
-              <td><input type="checkbox" data-notify-row="system" data-notify-ch="dock" checked /></td>
-              <td><input type="checkbox" data-notify-row="system" data-notify-ch="push" checked /></td>
-              <td><input type="checkbox" data-notify-row="system" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="system" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="dock" aria-label="系統公告 站內通知" checked /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="push" aria-label="系統公告 系統推播" checked /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="webhook" aria-label="系統公告 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="system" data-notify-ch="mail" aria-label="系統公告 郵件通知" /></td>
             </tr>
             <tr>
               <td>贊助內容</td>
-              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="dock" /></td>
-              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="push" /></td>
-              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="webhook" /></td>
-              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="mail" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="dock" aria-label="贊助內容 站內通知" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="push" aria-label="贊助內容 系統推播" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="webhook" aria-label="贊助內容 Webhook通知" /></td>
+              <td><input type="checkbox" data-notify-row="sponsored" data-notify-ch="mail" aria-label="贊助內容 郵件通知" /></td>
             </tr>
           </tbody>
         </table>
@@ -6316,11 +6335,17 @@
 
     function setListBusy(busy, text) {
       const box = $("list");
+      const on = Boolean(busy);
       if (box) {
-        box.classList.toggle("is-refreshing", Boolean(busy) && listRefreshBarEnabled());
-        box.setAttribute("aria-busy", busy ? "true" : "false");
+        // 等待回饋一律生效：原本綁 settings.showListRefreshBar（後台預設關），
+        // 預設情況下 is-refreshing 從不加 ⇒ pointer-events:none 也不生效，等待中舊卡片還能點。
+        box.classList.toggle("is-refreshing", on);
+        // 後台「顯示列表更新細線」只決定細線樣式，不決定有沒有等待回饋。
+        box.classList.toggle("show-refresh-bar", on && listRefreshBarEnabled());
+        box.setAttribute("aria-busy", on ? "true" : "false");
       }
-      if (busy && text && $("status")) $("status").textContent = text;
+      if (on && text && $("status")) $("status").textContent = text;
+      $("status")?.classList.toggle("is-busy", on);
     }
 
     function detachListingCard(id, patch = {}) {
@@ -6820,6 +6845,7 @@
         };
         el.onkeydown = (ev) => {
           if (ev.key !== "Enter" && ev.key !== " ") return;
+          if (el.tagName === "BUTTON") return; // 原生 button 自己會依 Enter/Space 發 click，避免切換兩次
           ev.preventDefault();
           apply(!el.closest(".district-city")?.classList.contains("is-open"));
         };
@@ -6835,7 +6861,7 @@
       return `
         <div class="district-city ${open ? "is-open" : ""}" data-city-block="${city.id}">
           <div class="district-city-head">
-            <h3 class="district-city-toggle" data-city-toggle="${city.id}" role="button" tabindex="0" aria-expanded="${open ? "true" : "false"}"><span class="chev" aria-hidden="true">▾</span>${esc(city.name)}</h3>
+            <button type="button" class="district-city-toggle" data-city-toggle="${city.id}" aria-expanded="${open ? "true" : "false"}"><span class="chev" aria-hidden="true">▾</span>${esc(city.name)}</button>
             <button type="button" class="ghost" data-city-all="${city.id}">全選</button>
             <button type="button" class="ghost" data-city-none="${city.id}">清除</button>
             <button type="button" class="ghost" data-city-hide="${city.id}" aria-label="隱藏${esc(city.name)}">隱藏</button>
@@ -7202,6 +7228,10 @@
       const tab = String(name || "events");
       document.querySelectorAll("[data-hub-tab]").forEach((el) => {
         el.setAttribute("aria-selected", el.dataset.hubTab === tab ? "true" : "false");
+        const selected = el.dataset.hubTab === tab;
+        el.setAttribute("aria-selected", selected ? "true" : "false");
+        // roving tabindex（WAI-ARIA APG tabs pattern）：只有選取中的分頁進 Tab 序。
+        el.tabIndex = selected ? 0 : -1;
       });
       document.querySelectorAll("[data-hub-pane]").forEach((el) => {
         el.hidden = el.dataset.hubPane !== tab;
@@ -8106,9 +8136,9 @@
           <div class="item-copy">
             <div class="item-main">
             <div class="tags">${tags(item)}</div>
-            <h3 class="item-title">
+            <h2 class="item-title">
               <a ${listingLinkAttrs(item)}>${esc(item.title)}</a>
-            </h3>
+            </h2>
             ${formatListingWhen(item) ? `<div class="when"><span class="when-label">更新</span>${esc(formatListingWhen(item))}</div>` : ""}
             </div>
             <div class="item-details">
@@ -8415,6 +8445,19 @@
       await loadList({ keep: true, silent: true });
     }
 
+    // 列表載入的逾時預算：路線永不回應（hang）時一定要收尾，
+    // 不能讓 .is-refreshing／pointer-events:none 永久卡住（原本 fetch 完全沒有 client 端逾時）。
+    const LIST_FETCH_TIMEOUT_MS = 15000;
+
+    // 列表載入失敗／逾時的統一文案（逾時與其他失敗要分得出來，且一定不是 busy 中的字）。
+    function listFetchFailureText(error, fallback = "更新失敗") {
+      const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+      const seconds = Math.round(LIST_FETCH_TIMEOUT_MS / 1000);
+      return timedOut
+        ? `更新逾時（${seconds} 秒），請再點一次重新載入`
+        : `${error?.message || fallback}，請再點一次重新載入`;
+    }
+
     async function loadList(options = {}) {
       if (!options.silent && !options.append) window.SupportCtaUsage?.bumpSearch?.();
       if (isGuest) {
@@ -8425,7 +8468,7 @@
         try {
           const params = guestListQuery();
           params.set("offset", String(append ? listOffset : 0));
-          const res = await fetch(`/api/public/listings?${params}`, { cache: "no-store" });
+          const res = await fetch(`/api/public/listings?${params}`, { cache: "no-store", signal: AbortSignal.timeout(LIST_FETCH_TIMEOUT_MS) });
           const data = await readApi(res);
           if (gen !== listLoadGen) return;
           if (!res.ok) throw new Error(data.error || "訪客搜尋失敗");
@@ -8445,7 +8488,7 @@
             $("status").textContent = "訪客搜尋（不需登入）。登入／註冊後可儲存設定與特別關注。";
           }
         } catch (error) {
-          $("status").textContent = error.message || "訪客搜尋失敗";
+          $("status").textContent = listFetchFailureText(error, "訪客搜尋失敗");
         } finally {
           if (gen === listLoadGen) setListBusy(false);
         }
@@ -8483,6 +8526,7 @@
       try {
         const res = await fetch(
           `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}${cursorParam}&districts=${districts}`,
+          { signal: AbortSignal.timeout(LIST_FETCH_TIMEOUT_MS) },
         );
         const data = await readApi(res);
         if (gen !== listLoadGen) return;
@@ -8543,6 +8587,10 @@
         syncCommutePoll();
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();
+      } catch (error) {
+        // 逾時／失敗都要收尾：狀態列換成明確的失敗文案，busy 交給 finally（同一個世代守衛）。
+        if (gen === listLoadGen && $("status")) $("status").textContent = listFetchFailureText(error, "更新失敗");
+        throw error;
       } finally {
         if (gen === listLoadGen) {
           setListBusy(false);
@@ -12451,6 +12499,20 @@
     document.querySelector("[data-close-hub]")?.addEventListener("click", closeNotifyHub);
     document.querySelectorAll("[data-hub-tab]").forEach((el) => {
       el.addEventListener("click", () => setHubTab(el.dataset.hubTab));
+      // APG：方向鍵在分頁間移動「並選取」，Home／End 到頭尾；仍只走 setHubTab，不新增狀態路徑。
+      el.addEventListener("keydown", (ev) => {
+        const tabs = [...document.querySelectorAll("[data-hub-tab]")];
+        const at = tabs.indexOf(el);
+        const to = ev.key === "ArrowRight" ? tabs[(at + 1) % tabs.length]
+          : ev.key === "ArrowLeft" ? tabs[(at - 1 + tabs.length) % tabs.length]
+            : ev.key === "Home" ? tabs[0]
+              : ev.key === "End" ? tabs[tabs.length - 1]
+                : null;
+        if (!to) return;
+        ev.preventDefault();
+        setHubTab(to.dataset.hubTab);
+        to.focus();
+      });
     });
     $("notifyHubSave")?.addEventListener("click", () => saveNotifyHub());
     function openPasswordDialog() {

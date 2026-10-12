@@ -35,11 +35,11 @@ test("Q: notify tab hides alertDock on mobile; setAppView does not force-open on
 
 // R — 通知設定預設「通知種類」
 test("R: default notification-settings tab is 通知種類 (events)", () => {
-  assert.match(html, /data-hub-tab="events" aria-selected="true">通知種類/);
-  assert.match(html, /data-hub-tab="webhook" aria-selected="false">Discord Webhook/);
-  assert.match(html, /data-hub-tab="mail" aria-selected="false">/);
-  assert.match(html, /<section class="hub-pane" data-hub-pane="webhook" hidden>/);
-  assert.match(html, /<section class="hub-pane" data-hub-pane="events">/); // events 預設可見
+  assert.match(html, /data-hub-tab="events" role="tab" aria-controls="hubPaneEvents" aria-selected="true">通知種類/);
+  assert.match(html, /data-hub-tab="webhook" role="tab" aria-controls="hubPaneWebhook" aria-selected="false">Discord Webhook/);
+  assert.match(html, /data-hub-tab="mail" role="tab" aria-controls="hubPaneMail" aria-selected="false">/);
+  assert.match(html, /<section class="hub-pane" id="hubPaneWebhook" data-hub-pane="webhook" role="tabpanel" aria-labelledby="hubTabWebhook" hidden>/);
+  assert.match(html, /<section class="hub-pane" id="hubPaneEvents" data-hub-pane="events" role="tabpanel" aria-labelledby="hubTabEvents">/); // events 預設可見
   assert.match(html, /const tab = String\(name \|\| "events"\);/);
   // 不強制每次 rerender 切回：進 notify 時保留目前選取
   assert.match(html, /setHubTab\(document\.querySelector\("\[data-hub-tab\]\[aria-selected='true'\]"\)\?\.dataset\.hubTab \|\| "events"\)/);
