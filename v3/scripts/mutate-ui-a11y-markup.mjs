@@ -62,6 +62,27 @@ const MUTATIONS = [
     expect: "本期色票",
   },
   {
+    name: "A 拿掉空狀態的底部留白（CTA 又會掉進固定層）",
+    file: "v3/public/index.html",
+    from: "      .list:has(.empty-explain) { padding-bottom: 60px; }\n",
+    to: "",
+    expect: "A 主 CTA 在手機不被浮動層吃掉",
+  },
+  {
+    name: "A 拿掉手機促銷卡縮圖（CTA 又被 640×640 促銷卡蓋住）",
+    file: "v3/public/index.html",
+    from: "      .jibby-mascot-card,\n      .jibby-mascot-media,\n      .jibby-mascot-media img,\n      .jibby-mascot-media video { width: min(160px, 42vw); max-width: min(160px, 42vw); }\n",
+    to: "",
+    expect: "A 主 CTA 在手機不被浮動層吃掉",
+  },
+  {
+    name: "A 拿掉 0 筆時把 sticky 篩選列放回文件流的覆蓋",
+    file: "v3/public/index.html",
+    from: "    body.panel-collapsed:has(.empty-explain) .list-head-sticky,\n    body.panel-collapsed:has(.empty-explain) .list-head-sticky.filter-compact,\n    body.panel-collapsed:has(.empty-explain) .list-head-sticky:not(.filter-compact) {\n",
+    to: "    .ui-explained-removed-for-mutation {\n",
+    expect: "A 主 CTA 在手機不被浮動層吃掉",
+  },
+  {
     name: "R3-2 拿掉 roving tabindex 的同步",
     file: "v3/public/index.html",
     from: "        el.tabIndex = selected ? 0 : -1;",

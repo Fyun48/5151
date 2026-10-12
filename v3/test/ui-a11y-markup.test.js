@@ -476,6 +476,25 @@ test("A 空狀態是 live region，兩個動作都有名詞（不是「點這裡
   assert.match(html, /input\.scrollIntoView\(\{ block: "center", behavior: "smooth" \}\);/);
 });
 
+test("A 主 CTA 在手機不被浮動層吃掉：底部留白＋促銷卡縮圖＋0 筆時 sticky 篩選列回文件流", () => {
+  // 實測（Playwright，375×812／414×896，原文見 PR）：
+  //   ① position:fixed 的 #bottomNav（755..812）與外挂 /mascot.js 的促銷卡（375 原本 270×240、
+  //      卡片 93..363 × 414..728）把列表底部蓋住 ⇒ 兩顆 CTA 的 hit-area 被打到；
+  //   ② 真正攔到 CTA 的還有**很高**的 sticky 篩選列（375 佔 6..591＝72% 視高），
+  //      「把目標捲到中央」會放進它底下（scrollY=470 時 CTA 411..455 被 .chip 攔下）。
+  // 這條把三件修正釘住（都只在 index.html 的 <style>；沒有動 mascot.js、沒有動 kit 快照）。
+  assert.match(html, /@media \(max-width: 480px\) \{\s*\n\s*\.jibby-mascot-card,\s*\n\s*\.jibby-mascot-media,/);
+  assert.match(html, /\.jibby-mascot-media video \{ width: min\(160px, 42vw\); max-width: min\(160px, 42vw\); \}/);
+  assert.match(html, /\.list:has\(\.empty-explain\) \{ padding-bottom: 60px; \}/);
+  // 覆蓋 ≤880px 的 media 規則：同特異度、必須放在樣式表最後（最後一條 base sticky 之後）
+  const overrideAt = html.indexOf("body.panel-collapsed:has(.empty-explain) .list-head-sticky,");
+  assert.ok(overrideAt > html.lastIndexOf("body.panel-collapsed .list-head-sticky:not(.filter-compact) {"), "覆蓋規則必須排在 base 的 sticky 規則之後");
+  assert.match(html.slice(overrideAt), /^body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky,\s*\n\s*body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky\.filter-compact,\s*\n\s*body\.panel-collapsed:has\(\.empty-explain\) \.list-head-sticky:not\(\.filter-compact\) \{\s*\n\s*position: static;/);
+  // base 規則不能被改掉（panel 收合本來就是 static；sticky 由 filter-compact／非 compact 兩條決定）
+  assert.match(html, /body\.panel-collapsed \.list-head-sticky \{\s*\n\s*position: static;/);
+  assert.match(html, /body\.panel-collapsed \.list-head-sticky\.filter-compact \{\s*\n\s*position: sticky;/);
+});
+
 test("R3-1 後台細線開關仍只決定樣式：等待中一樣加 is-refreshing", async () => {
   for (const [showListRefreshBar, expectedBar] of [[true, true], [false, false]]) {
     const s = loadListSandbox({ settings: { showListRefreshBar }, fetchImpl: () => new Promise(() => {}) });

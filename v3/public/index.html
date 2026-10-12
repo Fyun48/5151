@@ -2934,6 +2934,24 @@
     .empty-explain-hint,
     .empty-explain-note { margin: 0; color: var(--muted); }
     .empty-explain-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    /* 手機上的浮動層會蓋住列表底部：#bottomNav（57px）、#mobileHelpDock、#scrollTopBtn，
+       以及外挂 /mascot.js 的促銷卡（#jibbyMascot；640×640 的 webp 在 375 會渲染成 270×240，
+       卡片落在 x 93..363、y 414..728）。空狀態那兩顆 CTA 是這包的主 CTA：實測 375 的指標點擊
+       會被 #jibbyMascot 的 <img> 攔下（Playwright 原文見 PR）。幾何上 375 沒有任何 y 能同時
+       避開促銷卡（上緣 414）與底部導覽列（755 起），而 CTA 只能落在 x 43..279 ⇒ 只能動促銷卡
+       本身的尺寸：① ≤480px 讓促銷卡縮到 min(160px,42vw)（**沒有藏掉吉祥物、沒有改 mascot.js
+       的行為**，只是不讓 640×640 的促銷圖佔掉小螢幕 72% 寬）⇒ 卡片上緣 496 高於 CTA 下緣；
+       ② 空狀態存在時列表底部多留 60px，讓「瀏覽器自動置中／使用者捲到定位」都能把 CTA 停在
+       固定層上方（整條 hit-area 不與任何 fixed 元素重疊）。 */
+    @media (max-width: 480px) {
+      .jibby-mascot-card,
+      .jibby-mascot-media,
+      .jibby-mascot-media img,
+      .jibby-mascot-media video { width: min(160px, 42vw); max-width: min(160px, 42vw); }
+    }
+    @media (max-width: 880px) {
+      .list:has(.empty-explain) { padding-bottom: 60px; }
+    }
     #bootFail {
       display: none;
       position: sticky;
@@ -3321,6 +3339,20 @@
         flex: 0 0 auto;
         min-height: var(--chip-height);
       }
+    }
+    /* 「0 筆」時把 sticky 篩選列放回文件流（對應上方 .empty-explain 的說明）。
+       第二個攔截者不是 fixed，是**很高**的 sticky 列：375 實測佔 6..591px＝72% 視高，
+       把視窗中央整條蓋住 ⇒ 瀏覽器「把目標捲到中央」與手指點擊都會落在它底下
+       （實測 scrollY=470 時 CTA 411..455 被 .chip 攔下、Playwright 原文見 PR）。
+       列表 0 筆時 sticky 已無意義（下方沒有東西要對齊），改 static 讓說明與 CTA 都能捲進可點區。
+       這兩條覆蓋 ≤880px 的 media 規則，所以放在樣式表最後（同特異度、後者勝）。 */
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky,
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky.filter-compact,
+    body.panel-collapsed:has(.empty-explain) .list-head-sticky:not(.filter-compact) {
+      position: static;
+      top: auto;
+      max-height: none;
+      overflow-y: visible;
     }
   </style>
   <script>
