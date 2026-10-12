@@ -82,18 +82,25 @@ test("scan_ms 缺席時不得輸出 scan;dur（未知／缺少的階段一律略
   assert.doesNotMatch(buildListingServerTimingHeader({ stats_stages: { scan_ms: "" } }), /scan/);
 });
 
-test("來源護欄：共趟掃描只以新增鍵掃進 stats_stages，stats_ms 的算式與數字不得動", async () => {
+test("來源護欄：掃描與 list 側前置只以新增鍵落地；stats_ms 的算式看得出來不含掃描、也不含 list 側前置", async () => {
   const { readFileSync } = await import("node:fs");
   const page = readFileSync(new URL("../src/listingSearchPage.js", import.meta.url), "utf8");
   // 新增：只把 runScopeScan 的耗時寫進**新鍵** scan_ms。
   assert.match(page, /statsArgs\.diagnostics\.scan_ms = Math\.round\(performance\.now\(\) - scanStarted\)/);
-  // 既有語意與數字不變：stats_ms 仍是 `statsPrepareMs + (now - statsStarted)`，
-  // 而且 scan_ms 不得出現在這個算式裡（不得從 stats;dur 扣除掃描）。
+  // 2026-10-12 拆歸因（口徑變更，教訓 L-0731／L-0745）：stats_ms 由 `attributeListingTiming()`
+  // 產生，它顯式扣掉 list 側前置（`prepareListScope`）——舊的
+  // `stats_ms:statsPrepareMs+performance.now()-statsStarted` 算式**已經不成立**（那段窗含 list 側前置）。
+  // 守護的目的不變：stats_ms 不得引用 scan_ms、query_ms（list;dur）也不得引用 scan_ms。
   const statsMsLine = page.split("\n").find((line) => line.includes("stats_ms:"));
-  assert.match(statsMsLine, /stats_ms:statsPrepareMs\+performance\.now\(\)-statsStarted/);
+  assert.match(statsMsLine, /stats_ms:attributed\.statsMs/, "stats_ms 必須來自 attributeListingTiming()");
   assert.equal(statsMsLine.includes("scan"), false, "stats_ms 的算式不得引用 scan_ms");
   const queryMsLine = page.split("\n").find((line) => line.includes("query_ms:"));
   assert.equal(queryMsLine.includes("scan"), false, "query_ms（list;dur）的算式不得引用 scan_ms");
+  // 歸因函式本身：stats 減掉 list 側前置、list 收下它 ⇒ 沒有任何時間消失。
+  const helper = page.slice(page.indexOf("export function attributeListingTiming"));
+  const helperBody = helper.slice(0, helper.indexOf("\n}") + 2);
+  assert.match(helperBody, /numOr\(statsPrepareMs\) - listPrepare/, "stats_ms 必須顯式扣掉 list 側前置");
+  assert.match(helperBody, /numOr\(listElapsedMs\) \+ listPrepare/, "query_ms 必須把 list 側前置收進去");
 });
 
 test("缺欄位／非數值一律略過，不得輸出 NaN", () => {
