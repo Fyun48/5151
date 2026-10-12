@@ -4549,7 +4549,28 @@ export function expandSearchKeysAgainst(storedKeys, keys) {
   return [...out];
 }
 
+// ---- SQLite 退場 P7：這條同步 DISTINCT scan 在 PG 模式的明確失敗（2026-10-12） ---------------
+//
+// `storedSearchKeys()` 是 listings 的同步 `SELECT DISTINCT search_key`（8 秒 memo），唯一消費端是
+// `expandSearchKeys()`；它以前被 `listingCountForSearch()` 這條**同步**簽名（watcher 落地階段逐批
+// 判斷 baseline）直接呼叫，所以開閘（PG_NO_SQLITE_OPEN=1）後每輪都在這一點以通用的
+// `business SQLite is closed … reached at storedSearchKeys` 失敗（實跑 3 輪 fetched:0／jobs:0，
+// 見 evidence/sqlite-exit/next-package.md:9-16）。
+//
+// PG 的等價讀點是 async 的 `storedSearchKeysFromPg()`（data_revision 版本化快取），它的呼叫端是
+// `crawlerReads.listingCountForSearchAsync()`（watcher.js 落地階段已接）——這裡**不**做
+// 「同步包 async」的假 async，也不回退讀本機 SQLite。這一支從此只在「真的有可用的業務 SQLite
+// handle」時才走（SQLite 模式、以及閘未開的 PG 模式行為逐字不變）；PG 島（開閘，handle 是拋錯
+// proxy）時 fail-closed 並點名 PG 對應版本，訊息看得出是哪一條**業務路徑**
+// （同 `listUserIdsSyncPath()` 的 P1 手法）。
 function storedSearchKeys() {
+  if (resolveDbDriver() === "postgres" && !sqliteHandleIsUsable(sqliteHandle())) {
+    throw new Error(
+      "stored-search-keys-unavailable: storedSearchKeys() needs the local SQLite handle, but this is PG mode " +
+        "without one (PG_NO_SQLITE_OPEN=1); use storedSearchKeysFromPg() (async) / " +
+        "crawlerReads.listingCountForSearchAsync()",
+    );
+  }
   const now = Date.now();
   if (searchKeyMemo.stored && now - searchKeyMemo.at <= 8000) return searchKeyMemo.stored;
   const stored = db
