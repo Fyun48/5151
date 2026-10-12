@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertRuntimeDbGuard, DB_RUNTIME_GUARD_ENV, pgConnectionKeys, CRAWL_SANDBOX_REPORT_ENV } from "../src/runtimeGuards.js";
+import { assertRuntimeDbGuard, DB_RUNTIME_GUARD_ENV, pgConnectionKeys } from "../src/runtimeGuards.js";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (rel) => readFileSync(path.join(ROOT, rel), "utf8");
@@ -60,40 +60,67 @@ test("postgres + PG_NO_SQLITE_OPEN 未設／非 1 ⇒ 拒絕（訊息要讀出�
   }
 });
 
-// ④ 的**唯一**沙盒例外：既存標記 CRAWL_SANDBOX_REPORT 有值（docker-compose.crawl-sandbox.yml:48 設定、
-// v3/scripts/crawl-sandbox.mjs:184 讀取；全 repo 只有這兩處，不新增變數名）。
-// 為什麼沙盒現在還不能開閘：爬蟲落地路徑 db.js `storedSearchKeys()` 仍是同步 `db.prepare`，
-// 開閘跑 3 輪全在該點以「business SQLite is closed」失敗、`fetched:0`（實跑紀錄
-// evidence/sqlite-exit/next-package.md:9-16）。P6 把那個同步讀點遷完後，
-// 這個例外與沙盒 compose 的 `:-0` 預設一起移除。
-test("沙盒例外：CRAWL_SANDBOX_REPORT 有值 ⇒ 閘未設／為 0 都放行", () => {
-  const sandbox = { [CRAWL_SANDBOX_REPORT_ENV]: "/data/crawl-sandbox.jsonl" };
-  for (const gate of [undefined, "", "0"]) {
+// ④ 沙盒也**不再有例外**（2026-10-12，sqlite-exit P7）。
+//
+// 原本沙盒（`CRAWL_SANDBOX_REPORT` 有值）是全 repo 唯一一個放行分支，理由是爬蟲落地路徑的
+// db.js `storedSearchKeys()` 還是同步 `db.prepare`，開閘跑 3 輪全在該點以「business SQLite
+// is closed」失敗、`fetched:0`（實跑紀錄 evidence/sqlite-exit/next-package.md:9-16）。
+// 那個同步讀點已於 #676（`d007176`）遷到 PG 原生（`crawlerReads.listingCountForSearchAsync()`
+// ＋ `storedSearchKeysFromPg()`），沙盒 compose 的 `:-0` 也一起翻成 `:-1`，所以例外拆除：
+// **有 PG 連線就必須開閘，不分沙盒**；第⑤刀（fallback 必須 strict）照舊對沙盒生效。
+test("沙盒也不再例外：CRAWL_SANDBOX_REPORT 有值且閘未開 ⇒ 一樣拒絕", () => {
+  for (const gate of [undefined, "", "0", "true"]) {
     const env = {
       DB_DRIVER: "postgres",
       PG_URL,
       PG_SQLITE_FALLBACK: "strict",
+      CRAWL_SANDBOX_REPORT: "/data/crawl-sandbox.jsonl",
       ...(gate === undefined ? {} : { PG_NO_SQLITE_OPEN: gate }),
-      ...sandbox,
     };
-    assert.doesNotThrow(() => assertRuntimeDbGuard(env), `沙盒 env 應放行：${JSON.stringify(env)}`);
+    assert.throws(() => assertRuntimeDbGuard(env), /PG_NO_SQLITE_OPEN=1/, `沙盒 env 也應拒：${JSON.stringify(env)}`);
   }
 });
 
-// 例外必須窄：沒有標記／標記是空白的正式 env 一律照 ④ 拒絕；而且例外只放行第④刀，
-// 第⑤刀（fallback 必須 strict）照樣對沙盒生效。
-test("沙盒例外是唯一且窄的：無標記仍拒；沙盒也不豁免第⑤刀", () => {
-  for (const extra of [{}, { [CRAWL_SANDBOX_REPORT_ENV]: "" }, { [CRAWL_SANDBOX_REPORT_ENV]: "   " }]) {
-    for (const gate of [{}, { PG_NO_SQLITE_OPEN: "0" }]) {
-      const env = { DB_DRIVER: "postgres", PG_URL, PG_SQLITE_FALLBACK: "strict", ...gate, ...extra };
-      assert.throws(() => assertRuntimeDbGuard(env), /PG_NO_SQLITE_OPEN=1/, `正式 env 應拒：${JSON.stringify(env)}`);
-    }
-  }
-  const sandbox = { DB_DRIVER: "postgres", PG_URL, [CRAWL_SANDBOX_REPORT_ENV]: "/data/crawl-sandbox.jsonl" };
-  // 沙盒（閘未設⇒實務上是 0）＋ fallback=closed／未設 ⇒ 第⑤刀拒絕。
-  assert.throws(() => assertRuntimeDbGuard({ ...sandbox, PG_SQLITE_FALLBACK: "closed" }), /PG_SQLITE_FALLBACK=strict/);
-  assert.throws(() => assertRuntimeDbGuard(sandbox), /PG_SQLITE_FALLBACK=strict/);
-  // 沙盒 ＋ 閘開 1 ＋ fallback=closed ⇒ 仍被第⑤刀拒絕（例外不能當逃生門）。
+// 沙盒本身要走的是「閘開 1 ＋ strict」的完整規格（compose 已翻成 `:-1`）。
+test("沙盒規格（閘開 1 ＋ strict ＋ CRAWL_SANDBOX_REPORT）⇒ 放行", () => {
+  assert.doesNotThrow(() =>
+    assertRuntimeDbGuard({
+      DB_DRIVER: "postgres",
+      PG_URL,
+      PG_NO_SQLITE_OPEN: "1",
+      PG_SQLITE_FALLBACK: "strict",
+      CRAWL_SANDBOX_REPORT: "/data/crawl-sandbox.jsonl",
+    }),
+  );
+});
+
+// 例外是**整條**拆掉，不是只改判定式：runtimeGuards.js 不得再出現那個變數名。
+// （環境變數本身沒被移除——沙盒仍用它指定 jsonl 報告路徑，只是它不再能放行啟動檢查。）
+test("runtimeGuards.js 不得再讀 CRAWL_SANDBOX_REPORT（例外已整條拆除）", () => {
+  const src = read("v3/src/runtimeGuards.js");
+  // 註解可以（也應該）留下「這個變數已經不能再放行」的來由；判定只看程式碼本身。
+  const code = src
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("//"))
+    .join("\n");
+  assert.doesNotMatch(code, /CRAWL_SANDBOX_REPORT/);
+  assert.doesNotMatch(code, /sandboxReport/);
+  assert.doesNotMatch(code, /export const CRAWL_SANDBOX_REPORT_ENV/, "舊的放行常數不得再匯出");
+});
+
+test("compose：沙盒的開閘預設是 1（與正式站同一條規則）", () => {
+  const sandbox = serviceBlock(read("docker-compose.crawl-sandbox.yml"), "5151-crawl-sandbox");
+  assert.ok(sandbox.includes("PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-1}"), "沙盒 compose 的閘預設必須是 1");
+});
+
+// 沙盒舊例外留下來的兩個「窄度」斷言仍然有效：沒有標記的正式 env 一律照 ④ 拒絕；
+// 而且沙盒不豁免第⑤刀（fallback 必須 strict）。
+test("閘規則對沙盒同樣窄：無標記仍拒；沙盒也不豁免第⑤刀", () => {
+  const sandbox = { DB_DRIVER: "postgres", PG_URL, CRAWL_SANDBOX_REPORT: "/data/crawl-sandbox.jsonl" };
+  // 沙盒（閘未設⇒實務上是 0）＋ fallback=closed／未設 ⇒ 第⑤刀之前的第④刀就會先拒絕。
+  assert.throws(() => assertRuntimeDbGuard({ ...sandbox, PG_SQLITE_FALLBACK: "closed" }), /PG_NO_SQLITE_OPEN=1/);
+  assert.throws(() => assertRuntimeDbGuard(sandbox), /PG_NO_SQLITE_OPEN=1/);
+  // 沙盒 ＋ 閘開 1 ＋ fallback=closed ⇒ 仍被第⑤刀拒絕（閘開不能當逃生門）。
   assert.throws(
     () => assertRuntimeDbGuard({ ...sandbox, PG_NO_SQLITE_OPEN: "1", PG_SQLITE_FALLBACK: "closed" }),
     /PG_SQLITE_FALLBACK=strict/,

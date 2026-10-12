@@ -356,3 +356,39 @@ PG 走 `pgSchema.ensurePgSchema()` 的**鏡射**，再各自用模組內的 lazy
 > 這一節對 §二 對照表的更新：第 1、2 列（讀寫回退、無條件開庫）與第 4 列（啟動檢查）**已結案**；
 > 第 3 列（`/data` 保留、改為不開啟＋歸檔移除）**做法不變**；第 5 列（步驟 4 對帳 → 步驟 7 刪除）
 > 的順序不變，只是「補遷」被第 6 條的裁決縮小成「零資料、不補」。
+
+---
+
+## 收尾（2026-10-12，sqlite-exit P7）：沙盒開閘例外拆除
+
+前面 §三 那條「爬蟲沙盒刻意還不能開閘」的例外（`runtimeGuards.js` 第④刀唯一的放行分支，
+靠既存標記 `CRAWL_SANDBOX_REPORT` 放行）**已在本批拆除**，理由與證據：
+
+1. **例外原本要遮的同步讀點早就搬走了**：沙盒實跑 3 輪 `fetched:0` 的失敗點
+   `db.js storedSearchKeys()`（同步 `SELECT DISTINCT search_key FROM listings`）已於
+   #676（`d007176`，2026-10-09）改成 PG 原生——`crawlerReads.listingCountForSearchAsync()`
+   ＋ `db.js storedSearchKeysFromPg()`，watcher 落地階段（`watcher.js:1166`）接的是 async 入口。
+   尺規可證：#676 前 `PG-REACHABLE-SYNC-SQLITE: 100`（含 `watcher.js: listingCountForSearch`），
+   之後 99，`origin/master=0acb1f4` 時是 95；#706（`e578d75`）再把 baseline 判定改走
+   PG 存在性查詢（`listingExistsAsync`）。
+2. **本批做的事**：
+   - `runtimeGuards.js`：第④刀**不分沙盒**（`CRAWL_SANDBOX_REPORT` 不再放行啟動檢查；
+     那個環境變數本身留著，沙盒仍用它指定 jsonl 報告路徑）；逃生只有 `DB_RUNTIME_GUARD=off`。
+   - `db.js storedSearchKeys()`：PG 島（開閘、handle 是拋錯 proxy）時 fail-closed，
+     訊息帶 `stored-search-keys-unavailable` 並點名 `storedSearchKeysFromPg()`／
+     `listingCountForSearchAsync()`（同 `listUserIdsSyncPath()` 的 P1 手法）；閘未開的 PG 模式
+     與 SQLite 模式行為逐字不變。
+   - `docker-compose.crawl-sandbox.yml`：`PG_NO_SQLITE_OPEN` 預設由 `:-0` 翻成 `:-1`
+     （`crawl-sandbox-sync.sh` 會把這份 compose 一起帶到沙盒）。
+   - 測試：`v3/test/runtime-guards.test.js` 改成「沙盒也一樣被拒」＋新增
+     `v3/test/sqlite-exit-p7-sandbox-gate.test.js`（PG 島模式下落地讀路徑只走 PG、
+     同步入口的失敗訊息要點名 PG 對應版本、閘未開時行為不變、watcher 接線錨點，
+     另有一條 `PG_LIVE_REPRO_URL` 的真 PG 靶）。
+3. **尺規口徑（誠實回報）**：`node v3/scripts/pg-island-inventory.mjs`
+   `PG-REACHABLE-SYNC-SQLITE: 95 → 95`（**不變**；那條同步點已不在這 95 條口徑內），
+   但 `db.js「只走 SQLite」的函式：275 → 273`（`storedSearchKeys` 轉 driver-aware、
+   `expandSearchKeys` 離開島集合）。做過的實驗：把 `storedSearchKeys()` 的同步 SQLite 讀
+   整條拿掉，error 行仍是 95 ⇒ 沒有任何 error 項是它造成的，數字下降必須靠其他模組的另一包。
+4. **還沒做（留給沙盒實跑）**：NAS 沙盒容器 `5151-crawl-sandbox` 的實跑由 Owner 執行
+   （`SANDBOX_ROUNDS=1 bash v3/scripts/crawl-sandbox-sync.sh`），驗收條件是
+   `fetched>0`、`jobs>0`、無 `business SQLite is closed`。

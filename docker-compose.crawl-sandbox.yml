@@ -38,8 +38,10 @@ services:
       DB_DRIVER: postgres
       # 沙盒與正式站同一條政策：讀寫都不回退本機 SQLite。
       PG_SQLITE_FALLBACK: strict
-      # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）；預設 0＝不影響現行行為。
-      PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-0}
+      # 節點 SQLite 停用閘：設 1＝節點 SQLite 停用（孤島退場）。
+      # 2026-10-12（sqlite-exit P7）：沙盒的預設由 0 翻成 1——爬蟲落地路徑最後一條同步 SQLite 讀
+      # 已遷 PG，runtimeGuards 的沙盒例外也拆了，所以這裡維持 0 會被啟動檢查直接拒絕。
+      PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-1}
       CRAWL_TICK_BUDGET_MINUTES: ${CRAWL_TICK_BUDGET_MINUTES:-40}
       CRAWL_SANDBOX_INTERVAL_MINUTES: ${CRAWL_SANDBOX_INTERVAL_MINUTES:-30}
       # 排程器開關：0 = 常駐模式只待命、不自動跑輪（手動跑輪時停用，避免與

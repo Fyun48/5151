@@ -8,9 +8,16 @@
 
 - `PG_NO_SQLITE_OPEN=1` 且 `DB_DRIVER=postgres` ⇒ 節點在啟動時**根本不開啟**業務 SQLite
   （不建 `v3.db`、不跑 PRAGMA/DDL/migration，`sqliteHandle()` 回傳一個「碰了就拋錯」的 proxy）。
-- 未設／`0` ⇒ 行為與現在**完全相同**（向後相容）。
+- 未設／`0` 在 `db.js` 層次仍與舊行為相同（向後相容）；**但自 P5b 起啟動檢查會拒絕**這種節點：
+  `runtimeGuards.js` 只要偵測到 PG 連線 env 就要求 `PG_NO_SQLITE_OPEN=1` ＋ `PG_SQLITE_FALLBACK=strict`
+  （第④⑤刀），所以「有 PG 連線卻沒開閘」在實務上已經跑不起來。逃生只有 `DB_RUNTIME_GUARD=off`
+  （故障應變，不准寫進正式 compose）。
 - 閘的程式端在 `v3/src/db.js:505-560`；開閘語意與守衛見 `v3/test/pg-no-sqlite-open.test.js`。
-- **default 一律 0**：compose 直通寫 `${PG_NO_SQLITE_OPEN:-0}`，這包合併＋發版後**行為不變**。
+- **default 已經是 1**（2026-10-12 收尾）：五份 compose 直通全部寫 `${PG_NO_SQLITE_OPEN:-1}`
+  （逐檔見 §6）。最後一個例外（爬蟲沙盒）在同日拆除——沙盒不再能「不開閘就跑」。
+- **live 實測值（2026-10-12，`bash v3/scripts/sqlite-gate.sh status`，唯讀）**：
+  `591-tracker-v3`／`5151-web-A`／`5151-web-B` 三台的 `PG_NO_SQLITE_OPEN` **都是 1**，
+  `v3.db-wal` 的 `wal_mtime` 三台都是 **`none`**（連 WAL 檔都不存在了 ⇒ 業務 SQLite 真的沒在寫）。
 
 ## 1. 前提（哪些 SHA 必須已在正式站）
 
@@ -152,16 +159,20 @@ bash v3/scripts/sqlite-gate.sh rollback    # ＝ off 三台，並印出下一步
 
 ## 6. compose 直通怎麼落地（誰、用什麼指令）
 
-`PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-0}` 已加在 5 份 compose 定義（見 PR body 的逐檔行號）。
-但**只有其中一部分會被發版自動帶到 NAS**，其餘要手動落地：
+`PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-1}` 已加在 5 份 compose 定義（**2026-10-12 收尾後預設全部是 1**；
+逐檔行號見下表）。但**只有其中一部分會被發版自動帶到 NAS**，其餘要手動落地：
 
-| 檔 | 服務 | 誰落地 | 指令 |
-|---|---|---|---|
-| `docker-compose.yml` | 591-tracker-v3 | **deploy-v3.yml 自動**（"Copy" 步驟帶到 `/mnt/Storage1/apps/5151`） | 不用手動 |
-| `casaos-compose.yml` | 591-tracker-v3 | **deploy-v3.yml 自動** | 不用手動 |
-| `docker-compose.crawl-sandbox.yml` | 5151-crawl-sandbox | **crawl-sandbox-sync.sh 自動**（scp 到 casa-nas） | 不用手動 |
-| `deploy/shadow-ha/web/web-a/docker-compose.yml`（**去識別化模板**）→ 正本 `/opt/5151-shadow/web-a/docker-compose.yml` | 5151-web-A | **人**（Owner／agent，經 `bash v3/scripts/sqlite-gate-compose-land.sh`） | 手動落地 |
-| `deploy/shadow-ha/web/web-b/docker-compose.yml`（**去識別化模板**）→ 正本 `~/5151-shadow/web-b/docker-compose.yml` | 5151-web-B | **人**（同上） | 手動落地 |
+| 檔 | 服務 | 閘直通預設 | 誰落地 | 指令 |
+|---|---|---|---|---|
+| `docker-compose.yml:43` | 591-tracker-v3 | `${PG_NO_SQLITE_OPEN:-1}` | **deploy-v3.yml 自動**（"Copy" 步驟帶到 `/mnt/Storage1/apps/5151`） | 不用手動 |
+| `casaos-compose.yml:34` | 591-tracker-v3 | `${PG_NO_SQLITE_OPEN:-1}` | **deploy-v3.yml 自動** | 不用手動 |
+| `docker-compose.crawl-sandbox.yml:44` | 5151-crawl-sandbox | `${PG_NO_SQLITE_OPEN:-1}`（**2026-10-12 由 `:-0` 翻成 `:-1`**） | **crawl-sandbox-sync.sh 自動**（scp 到 casa-nas） | 不用手動 |
+| `deploy/shadow-ha/web/web-a/docker-compose.yml:39`（**去識別化模板**）→ 正本 `/opt/5151-shadow/web-a/docker-compose.yml` | 5151-web-A | `${PG_NO_SQLITE_OPEN:-1}` | **人**（Owner／agent，經 `bash v3/scripts/sqlite-gate-compose-land.sh`） | 手動落地（**已於 2026-10-12 落地**） |
+| `deploy/shadow-ha/web/web-b/docker-compose.yml:39/:87`（**去識別化模板**）→ 正本 `~/5151-shadow/web-b/docker-compose.yml` | 5151-web-B | `${PG_NO_SQLITE_OPEN:-1}` | **人**（同上） | 手動落地（**已於 2026-10-12 落地**） |
+
+> web-a/web-b 的**兩份 NAS 主機正本已在 2026-10-12 由 Owner 翻成 `:-1`**，備份為同目錄的
+> `docker-compose.yml.bak-20261012-gate`。落地腳本仍可重跑（它偵測到已存在同名鍵就跳過，是冪等的），
+> 但它內建的插入字面值還是 `:-0`；正本已經有鍵，所以重跑不會被改回 0。
 
 **落地指令（可重跑、冪等、不印檔內容）**：
 ```bash
@@ -174,16 +185,24 @@ DRY_RUN=1 bash v3/scripts/sqlite-gate-compose-land.sh  # 只印將執行的指�
 > 落地腳本用 `sed` 在 `PG_SQLITE_FALLBACK` 之後插入同一行直通，`cp -p` 備份＋`chmod` 還原 mode，
 > 不印檔內容（避免把正本裡的憑證帶進終端）。
 
-### ⚠️ web-a/web-b 的閘旗標會在下一次發版被「靜默洗掉」
+### ✅ web-a/web-b 的閘旗標被「靜默洗掉」的問題：已處理（2026-10-12 複驗）
 
-deploy-v3.yml 的 A/B 組步驟是 `printf 'V3_IMAGE=…\n' > .env`（**整份覆寫**）。所以：
-- 對 web-a/web-b 執行 `sqlite-gate.sh on` 之後，**下一次發版會把 `.env` 的
-  `PG_NO_SQLITE_OPEN=1` 洗掉，閘會靜默回到 0**（容器重建後 SQLite 重新開啟）。
-- `591-tracker-v3` 不受影響：deploy-v3.yml 對它用 `sed`/append **只動 `V3_IMAGE_PIN` 一行**，
-  不覆寫整份 `.env`。
-- **因此**：每次發版後，都要重跑 `bash v3/scripts/sqlite-gate.sh status` 確認三台閘值；
-  web-a/web-b 若被洗掉，再 `bash v3/scripts/sqlite-gate.sh on 5151-web-A 5151-web-B` 重設。
-  （長期解法是讓 deploy-v3.yml 改用「只動 V3_IMAGE 一行」的寫法，另開 PR，不在此包範圍。）
+原本 deploy-v3.yml 的 A/B 組步驟是 `printf 'V3_IMAGE=…\n' > .env`（**整份覆寫**），
+所以 `sqlite-gate.sh on` 之後的下一次發版會把 `.env` 的 `PG_NO_SQLITE_OPEN=1` 洗掉、閘靜默回到 0。
+**批 D 已把 A/B 組改成「單鍵寫入」**（只 sed/append `V3_IMAGE` 一行），
+一般 `591-tracker-v3` 本來就只動 `V3_IMAGE_PIN` 一行 ⇒ **發版不再洗掉這一鍵**。
+
+live 實測（2026-10-12，`bash v3/scripts/sqlite-gate.sh status`，唯讀）：
+
+| 容器 | `PG_NO_SQLITE_OPEN` | `v3.db-wal` mtime |
+|---|---|---|
+| `591-tracker-v3` | `1` | `none`（WAL 檔不存在） |
+| `5151-web-A` | `1` | `none` |
+| `5151-web-B` | `1` | `none` |
+
+- 仍然**建議**每次發版後跑一次 `bash v3/scripts/sqlite-gate.sh status` 當收尾檢查（30 秒、唯讀）；
+  值若是 `unset` 就 `bash v3/scripts/sqlite-gate.sh on <target…>` 補回來。
+- 舊的「另開 PR 把整份覆寫改掉」待辦**已在此結案**，不再是風險項。
 
 ## 7. 寫入面複驗（批 D）
 
@@ -191,7 +210,8 @@ deploy-v3.yml 的 A/B 組步驟是 `printf 'V3_IMAGE=…\n' > .env`（**整份�
 > `addDemandReplyAsync` 與 `getDemandPostAsync` 的同步 fallback，全部用
 > `sqliteHandleIsUsable()` 包起來（開閘 ⇒ 不鏡射、不回退；未開閘 ⇒ 行為逐字不變）。
 > 同時把 `deploy-v3.yml` 對 web-a／web-b 的 `.env` 從整份覆寫改成「單鍵寫入」，
-> 讓開閘後再發版不會把 `PG_NO_SQLITE_OPEN=1` 靜默洗掉（§6 那條警示在此包修掉）。
+> 讓開閘後再發版不會把 `PG_NO_SQLITE_OPEN=1` 靜默洗掉（§6 那條警示在此包修掉；
+> 2026-10-12 以 `sqlite-gate.sh status` 複驗三台都是 `1`、`wal_mtime=none`，見 §6）。
 
 ### 7.1 單測（離線，原數字）
 
