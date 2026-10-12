@@ -228,54 +228,6 @@
       letter-spacing: -0.03em;
       margin: 4px 0 2px;
     }
-    .guest-tour {
-      position: fixed;
-      inset: 0;
-      z-index: 80;
-      pointer-events: none;
-    }
-    .guest-tour-dim {
-      position: absolute;
-      inset: 0;
-      background: rgba(16, 28, 34, 0.38);
-      animation: guestTourFade 0.35s ease;
-    }
-    .guest-tour-spot {
-      position: absolute;
-      border: 2px solid var(--accent);
-      border-radius: 18px;
-      box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 8px rgba(13, 165, 160, 0.22);
-      transition: top 0.45s ease, left 0.45s ease, width 0.45s ease, height 0.45s ease;
-      animation: guestTourPulse 1.6s ease-in-out infinite;
-    }
-    .guest-tour-card {
-      position: absolute;
-      width: min(360px, calc(100vw - 32px));
-      padding: 14px 16px;
-      background: var(--paper);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      box-shadow: 0 16px 40px rgba(26, 43, 51, 0.16);
-      pointer-events: auto;
-      transition: top 0.45s ease, left 0.45s ease;
-    }
-    .guest-tour-card p { margin: 0; font-size: 14px; line-height: 1.55; }
-    .guest-tour-step {
-      color: var(--accent-deep);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      margin-bottom: 6px !important;
-    }
-    .guest-tour-card .row { margin-top: 12px; }
-    @keyframes guestTourFade {
-      from { opacity: 0; }
-      to { opacity: 1; }
-    }
-    @keyframes guestTourPulse {
-      0%, 100% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 6px rgba(13, 165, 160, 0.16); }
-      50% { box-shadow: 0 0 0 9999px rgba(16, 28, 34, 0.45), 0 0 0 12px rgba(13, 165, 160, 0.28); }
-    }
     .notify-shortcuts {
       margin: 10px 0 4px;
       padding: 10px 12px;
@@ -3477,18 +3429,6 @@
     <p><strong id="announceBannerTitle"></strong> <span id="announceBannerText"></span> <a id="announceBannerLink" hidden></a></p>
     <button type="button" class="ghost" id="announceBannerClose" aria-label="關閉系統公告">×</button>
   </aside>
-  <div id="guestTour" class="guest-tour" hidden>
-    <div class="guest-tour-dim"></div>
-    <div class="guest-tour-spot" id="guestTourSpot"></div>
-    <div class="guest-tour-card" id="guestTourCard">
-      <p class="guest-tour-step" id="guestTourStep"></p>
-      <p id="guestTourText"></p>
-      <div class="row">
-        <button type="button" class="ghost" id="guestTourSkip">略過</button>
-        <button type="button" class="primary" id="guestTourNext">下一步</button>
-      </div>
-    </div>
-  </div>
   <div id="guestToast" class="guest-toast" hidden role="status" aria-live="polite">
     <p>登入／註冊後可使用這項功能。</p>
     <div class="row">
@@ -4934,10 +4874,6 @@
     let guestLockClicks = 0;
     let guestToastTimer = 0;
     const GUEST_LOCK_TOAST_AFTER = 1;
-    const GUEST_TOUR_SKIP = "591_v3_guest_tour_skip";
-    try {
-      if (new URLSearchParams(location.search).has("skipTour")) localStorage.setItem(GUEST_TOUR_SKIP, "1");
-    } catch { /* 略過 */ }
     const DEFAULT_COMMUTE_KM = 25;
     let settings = {};
     let selected = new Set();
@@ -6698,94 +6634,9 @@
       syncSourceFilterAccess();
     }
 
-    const GUEST_TOUR_STEPS = [
-      { target: "[data-tour=guestWho]", title: "第 1／7 步", text: "右上角顯示你目前是訪客。你可以先搜尋已抓進資料庫的房源；登入／註冊後才能儲存設定與特別關注。" },
-      { target: "[data-tour=districts]", title: "第 2／7 步", text: "行政區可勾選，最多同時 4 個。租金也可以先篩。條件只留在這次瀏覽，不會寫進會員設定。登入後仍用你自己的設定檔。" },
-      { target: "[data-tour=commute]", title: "第 3／7 步", text: "可填上班地址與距離上限。訪客用直線距離估算，不是會員的機車／汽車路線。找不到地址時會提示，不會默默略過。" },
-      { target: "[data-tour=mrt]", title: "第 4／7 步", text: "步行未滿 1.5 公里的最近捷運站會顯示在列表。這個開關由站方後台統一決定。" },
-      { target: "[data-tour=notify]", title: "第 5／7 步", text: "系統推播與站內待看是預設通知。郵件與 Webhook 是選用，在「我的 → 通知設定」。示範模式不能改。" },
-      { target: "[data-tour=profiles]", title: "第 6／7 步", text: "設定檔的儲存與刪除也鎖定中。註冊後最多可存 3 組自己的條件；同名儲存會覆蓋。" },
-      { target: "#listHeadSticky", title: "第 7／7 步", text: "特別關注與隱藏要登入才寫得進去。點進物件會自動記成已瀏覽。按「前往註冊」就能開始用這些功能。" },
-    ];
-    let guestTourIndex = 0;
-    let guestTourTimer = 0;
-
-    function guestTourSkipped() {
-      try { return localStorage.getItem(GUEST_TOUR_SKIP) === "1"; } catch { return false; }
-    }
-    function stopGuestTour(persist) {
-      if (guestTourTimer) window.clearTimeout(guestTourTimer);
-      guestTourTimer = 0;
-      const box = $("guestTour");
-      if (box) box.hidden = true;
-      if (persist) {
-        try { localStorage.setItem(GUEST_TOUR_SKIP, "1"); } catch { /* 略過 */ }
-      }
-    }
-    function placeGuestTour(step) {
-      const spot = $("guestTourSpot");
-      const card = $("guestTourCard");
-      if (!spot || !card) return;
-      const el = document.querySelector(step.target);
-      const pad = 8;
-      let rect = el?.getBoundingClientRect();
-      if (!rect || !el || rect.width < 8 || rect.height < 8) {
-        rect = { top: 80, left: 32, width: 320, height: 72 };
-      }
-      const maxH = Math.min(window.innerHeight - 24, 240);
-      const maxW = window.innerWidth - 16;
-      spot.style.top = `${Math.max(8, rect.top - pad)}px`;
-      spot.style.left = `${Math.max(8, rect.left - pad)}px`;
-      spot.style.width = `${Math.min(maxW, rect.width + pad * 2)}px`;
-      spot.style.height = `${Math.min(maxH, rect.height + pad * 2)}px`;
-      const cardW = Math.min(360, window.innerWidth - 32);
-      const below = rect.bottom + 16 + 180 < window.innerHeight;
-      const top = below ? Math.min(rect.bottom + 12, window.innerHeight - 190) : Math.max(12, rect.top - 170);
-      const left = Math.min(Math.max(16, rect.left), window.innerWidth - cardW - 16);
-      card.style.top = `${Math.max(12, top)}px`;
-      card.style.left = `${left}px`;
-    }
-    function showGuestTourStep(index) {
-      const steps = GUEST_TOUR_STEPS;
-      guestTourIndex = Math.max(0, Math.min(index, steps.length - 1));
-      const step = steps[guestTourIndex];
-      const last = guestTourIndex === steps.length - 1;
-      $("guestTourStep").textContent = step.title;
-      $("guestTourText").textContent = step.text;
-      $("guestTourNext").textContent = last ? "前往註冊" : "下一步";
-      document.querySelector(step.target)?.scrollIntoView({ block: "center", behavior: "instant" });
-      placeGuestTour(step);
-      window.requestAnimationFrame(() => placeGuestTour(step));
-      window.setTimeout(() => placeGuestTour(step), 280);
-      if (guestTourTimer) window.clearTimeout(guestTourTimer);
-      guestTourTimer = window.setTimeout(() => {
-        if (last) return;
-        showGuestTourStep(guestTourIndex + 1);
-      }, 5200);
-    }
-    function maybeStartGuestTour() {
-      const box = $("guestTour");
-      if (!box || !isGuest || guestTourSkipped()) return;
-      if (!window.matchMedia("(max-width: 880px)").matches) {
-        document.body.classList.remove("panel-collapsed");
-        syncPanelFab();
-      }
-      box.hidden = false;
-      showGuestTourStep(0);
-    }
-    $("guestTourSkip")?.addEventListener("click", () => stopGuestTour(true));
-    $("guestTourNext")?.addEventListener("click", () => {
-      if (guestTourIndex >= GUEST_TOUR_STEPS.length - 1) {
-        stopGuestTour(true);
-        goRegister();
-        return;
-      }
-      showGuestTourStep(guestTourIndex + 1);
-    });
-
     function isGuestLockedTarget(el) {
       if (!el || !isGuest) return false;
-      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #guestTour, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
+      if (el.closest("#collapsePanelBtn, #expandPanelBtn, #reloadBtn, #loginBtn, #registerBtn, #helpQaBtn, #qaView, #guestToast, #listHeadSticky .chip, #q, [data-view-district], [data-open-hub], #notifyHubClose, [data-close-hub], [data-hub-tab]")) return false;
       if (el.closest("#districtPicker") && !el.closest("[data-city-hide]")) return false;
       if (el.closest("#workAddress, #commuteKm, label[data-tour=commute]")) return false;
       if (el.closest(".guest-cheap")) return false;
@@ -8707,7 +8558,6 @@
         renderDistrictPicker({ watchDistricts: watchKeys });
         setSettingsReady(false, "訪客可搜尋已抓進資料庫的房源。登入／註冊後可儲存設定檔與通知。");
         await loadList({ busyText: "正在載入公開房源…" });
-        maybeStartGuestTour();
         return;
       }
       if (window.GuestSearchState) {

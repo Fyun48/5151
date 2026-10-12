@@ -35,8 +35,10 @@ test("Quiet Luxury tokens exist and pages do not use classifieds candy", () => {
   assert.match(index, /\.item-title a \{/);
   assert.match(index, /@media \(max-width: 767px\)/);
   assert.match(index, /min-height: var\(--touch\)/);
-  assert.match(index, /skipTour/);
+  // `skipTour` 那條原本是「訪客導覽還在」的哨兵；2026-10-12 第二期把導覽整組移除，改看既有的
+  // 篩選還原鈕（同一頁、同樣是這一包不動的結構標記）。
   assert.match(index, /expandFilters/);
+  assert.match(index, /filterRestoreBtn/);
   assert.doesNotMatch(index, /background:\s*#fff\b/);
   assert.doesNotMatch(index, /#dcfce7/);
   assert.doesNotMatch(index, /#e8f1ff/);
