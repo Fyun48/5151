@@ -16,7 +16,11 @@ async function readApi(res) {
 
 test('member search failure preserves the visible results, counters, filters and pagination', async()=>{
   const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
-  const code=html.slice(html.indexOf('async function loadList(options = {})'),html.indexOf('async function loadState()'));
+  // ui-p1-a11y-w2：loadList() 的失敗路徑改走 listFetchFailureText()（逾時／失敗都要收尾），
+  // 這支測試是把 loadList 原文抽出來跑，所以要把同一個逾時常數與文案函式一起帶進沙箱。
+  const code=`const LIST_FETCH_TIMEOUT_MS = ${(html.match(/const LIST_FETCH_TIMEOUT_MS = (\d+);/)||[])[1]};\n`
+    +html.slice(html.indexOf('function listFetchFailureText'),html.indexOf('async function loadList'))
+    +html.slice(html.indexOf('async function loadList(options = {})'),html.indexOf('async function loadState()'));
   let paints=0;
   const context=createContext({
     window:{},isGuest:false,listLoadGen:0,listRefreshQueued:false,
@@ -24,6 +28,8 @@ test('member search failure preserves the visible results, counters, filters and
     listCache:[{post_id:42}],lastStats:{matched:9},listHasMore:true,listOffset:50,listCursor:{id:42},
     settings:{priceMax:18000},filter:'all',kinds:[],sources:[],sort:'newest',viewDistricts:new Set(['中山區']),
     LIST_PAGE_SIZE:50,listPageSize:()=>50,performance,$:()=>({value:'保留查詢'}),
+    // loadList() 的 fetch 現在帶 AbortSignal.timeout()：bare vm context 沒有這個全域，要顯式給。
+    AbortSignal,
     renderStats:()=>paints++,renderDistrictChips:()=>paints++,renderList:()=>paints++,
     // 第八十九批：`loadList()` 改走 `readApi()`（非 JSON 要換成看得懂的訊息，而不是
     // `Unexpected token '<'`）⇒ 夾具要提供同一份 readApi 與 `text()`。
@@ -43,7 +49,11 @@ test('member search failure preserves the visible results, counters, filters and
 
 test('member search 遇到 HTML 回應（proxy／HTML 500）顯示看得懂的訊息，不是 JSON 天書', async()=>{
   const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
-  const code=html.slice(html.indexOf('async function loadList(options = {})'),html.indexOf('async function loadState()'));
+  // ui-p1-a11y-w2：loadList() 的失敗路徑改走 listFetchFailureText()（逾時／失敗都要收尾），
+  // 這支測試是把 loadList 原文抽出來跑，所以要把同一個逾時常數與文案函式一起帶進沙箱。
+  const code=`const LIST_FETCH_TIMEOUT_MS = ${(html.match(/const LIST_FETCH_TIMEOUT_MS = (\d+);/)||[])[1]};\n`
+    +html.slice(html.indexOf('function listFetchFailureText'),html.indexOf('async function loadList'))
+    +html.slice(html.indexOf('async function loadList(options = {})'),html.indexOf('async function loadState()'));
   let paints=0;
   const context=createContext({
     window:{},isGuest:false,listLoadGen:0,listRefreshQueued:false,
@@ -51,6 +61,8 @@ test('member search 遇到 HTML 回應（proxy／HTML 500）顯示看得懂的�
     listCache:[{post_id:42}],lastStats:{matched:9},listHasMore:true,listOffset:50,listCursor:{id:42},
     settings:{priceMax:18000},filter:'all',kinds:[],sources:[],sort:'newest',viewDistricts:new Set(['中山區']),
     LIST_PAGE_SIZE:50,listPageSize:()=>50,performance,$:()=>({value:'保留查詢'}),
+    // loadList() 的 fetch 現在帶 AbortSignal.timeout()：bare vm context 沒有這個全域，要顯式給。
+    AbortSignal,
     renderStats:()=>paints++,renderDistrictChips:()=>paints++,renderList:()=>paints++,
     readApi,
     fetch:async()=>({ok:false,status:500,text:async()=>'<!DOCTYPE html><html><body>Internal Server Error</body></html>'}),
