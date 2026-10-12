@@ -220,9 +220,18 @@ let foldRootReady = null;
 export async function foldRootRefreshReady(exec) {
   if (foldRootReady !== null) return foldRootReady;
   try {
-    await exec("SELECT 1 FROM pg_catalog.pg_class LIMIT 1", []);
-    await exec("SELECT fold_component_root FROM listings LIMIT 1", []);
-    foldRootReady = true;
+    // ⚠️ 一定要用「不會失敗的查詢」探測：`SELECT fold_component_root FROM listings LIMIT 1`
+    // 在欄位不存在時會拋 42703，而**在呼叫端的 PG 交易裡一句失敗的 SELECT 會讓整個交易進
+    // aborted（25P02）**⇒ 後續同交易的寫入全部回滾（CI 的 listing-state-writes 就是這樣紅的）。
+    // `information_schema.columns` 查詢在 PG 上欄位不存在時只是回 0 列（不拋錯）；
+    // 在 SQLite 上 `information_schema` 不存在會拋錯，但 SQLite 的交易不會因此作廢
+    // ⇒ 兩種 driver 都安全，也同時當作「這條 exec 是不是 PG」的判別。
+    const rows = await exec(
+      "SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1",
+      ["listings", "fold_component_root"],
+    );
+    const list = Array.isArray(rows) ? rows : rows?.rows;
+    foldRootReady = Array.isArray(list) && list.length > 0;
   } catch {
     foldRootReady = false;
   }
