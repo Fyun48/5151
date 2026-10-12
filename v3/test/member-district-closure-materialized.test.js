@@ -109,11 +109,25 @@ function materializedExec(fx, { state: stateOverrides = {}, delta = null, verify
         covers_table: true, revision_table: true,
       }];
     }
-    if (/FROM listing_match_component_state/.test(sql)) return [state];
-    if (/FROM data_revision/.test(sql)) return delta || [];
-    if (/FROM pg_stat_user_tables/.test(sql)) return [{ fingerprint: state.stat_fingerprint }];
-    if (/SELECT EXISTS\(SELECT 1 FROM listing_match_component\)/.test(sql)) return [{ present: emptyTable ? false : components.size > 0 }];
-    if (/AS cur_match/.test(sql)) return verifyRows || [];
+    // **一句**拿齊的探測（狀態列＋delta＋逐列證明＋刪除計數＋表有沒有資料）。
+    if (/WITH st AS/.test(sql)) {
+      return [{
+        built_at: state.built_at,
+        round_marker: state.round_marker,
+        revision_watermark: state.revision_watermark,
+        stat_fingerprint: state.stat_fingerprint,
+        node_count: state.node_count,
+        covering: state.covering ?? null,
+        system_covering: state.system_covering ?? null,
+        covers_max: state.covers_max ?? null,
+        revision: state.revision,
+        delta_count: (delta || []).length,
+        delta_json: delta || [],
+        verify_json: verifyRows || [],
+        stat_fingerprint_live: state.stat_fingerprint,
+        table_has_rows: emptyTable ? false : components.size > 0,
+      }];
+    }
     if (/SELECT DISTINCT s\.component_id/.test(sql)) {
       const [allow, all] = params;
       const out = new Set();
@@ -300,32 +314,73 @@ test("逐列證明：被指名的列圖相關狀態沒變 ⇒ 仍然新鮮；變
   const okIds = await loadMaterializedDistrictClosure(same, { allowed, allKeys, userId: 1, relatedOnly: true });
   assert.ok(Array.isArray(okIds), "圖相關狀態相同時應該可以採用材料化");
 
+  // 換目標（11 → 99）＝「有減」（舊邊消失）⇒ 退回即時算，並只排「受影響分量重建」。
   const scheduled = [];
+  const absorbed = [];
   const changed = materializedExec(fx, {
     state: { revision_watermark: 100, revision: 105 },
-    delta: [{ id: 101, entity_id: 10 }],
+    delta: [{ id: 101, entity_id: 10, event_type: "same_house_match" }],
     verifyRows: [
       { post_id: 10, cur_match: 99, cur_prefix: ALLOWED_PREFIX, in_table: true, stored_match: 11, stored_prefix: ALLOWED_PREFIX },
     ],
   });
   assert.equal(await loadMaterializedDistrictClosure(changed, {
-    allowed, allKeys, userId: 1, relatedOnly: true, scheduleRebuild: (reason) => { scheduled.push(reason); },
+    allowed, allKeys, userId: 1, relatedOnly: true,
+    scheduleRebuild: (reason) => { scheduled.push(reason); },
+    absorbState: (payload) => { absorbed.push(payload); },
   }), null);
-  assert.deepEqual(scheduled, ["graph_changed"]);
+  assert.deepEqual(scheduled, [], "圖有減是局部事件，不該排全量重算");
+  assert.equal(absorbed.length, 1);
+  assert.equal(absorbed[0].kind, "affected");
+  assert.equal(absorbed[0].reason, "graph_shrunk");
+  for (const id of [10, 11, 99]) assert.ok(absorbed[0].nodes.includes(id), `受影響節點要含 ${id}`);
 
-  // 改名（source_key 換行政區）也會換掉種子資格 ⇒ 必須過期。
-  const scheduled2 = [];
+  // 改名（種子 → 不是種子）也是「有減」⇒ 退回即時算 ＋ 受影響分量重建。
+  const absorbed2 = [];
   const renamed = materializedExec(fx, {
     state: { revision_watermark: 100, revision: 105 },
-    delta: [{ id: 101, entity_id: 10 }],
+    delta: [{ id: 101, entity_id: 10, event_type: "listing_updated" }],
     verifyRows: [
       { post_id: 10, cur_match: 11, cur_prefix: OTHER_PREFIX, in_table: true, stored_match: 11, stored_prefix: ALLOWED_PREFIX },
     ],
   });
   assert.equal(await loadMaterializedDistrictClosure(renamed, {
-    allowed, allKeys, userId: 1, relatedOnly: true, scheduleRebuild: (reason) => { scheduled2.push(reason); },
+    allowed, allKeys, userId: 1, relatedOnly: true, absorbState: (payload) => { absorbed2.push(payload); },
   }), null);
-  assert.deepEqual(scheduled2, ["graph_changed"]);
+  assert.equal(absorbed2[0].kind, "affected");
+});
+
+test("新增邊（只增不減）⇒ 用 overlay 就地算完就回答（命中），並排一次背景吸收", async () => {
+  const fx = fixture();
+  const absorbed = [];
+  // 新增 40→50 這條邊：40 在表內、50 是**全新**的 listings 列（allowed 行政區）且不在分量表裡。
+  fx.prefixOf.set(50, ALLOWED_PREFIX);
+  const withAddition = materializedExec(fx, {
+    state: { revision_watermark: 100, revision: 105 },
+    delta: [{ id: 101, entity_id: 40, event_type: "same_house_match" }],
+    verifyRows: [
+      { post_id: 40, cur_match: 50, cur_prefix: OTHER_PREFIX, in_table: true, stored_match: 0, stored_prefix: OTHER_PREFIX },
+    ],
+  });
+  const ids = await loadMaterializedDistrictClosure(withAddition, {
+    allowed, allKeys, userId: 1, relatedOnly: true,
+    absorbState: (payload) => { absorbed.push(payload); },
+  });
+  assert.ok(Array.isArray(ids), "只增不減時應該照樣走材料化（命中），不是退回即時算");
+  assert.ok(ids.includes(40), "被指名的列要在集合裡");
+  assert.ok(ids.includes(50), "新增邊的另一端（新節點）要一起被帶進來");
+  assert.equal(absorbed.length, 1);
+  assert.equal(absorbed[0].kind, "added");
+  for (const id of [40, 50]) assert.ok(absorbed[0].nodes.includes(id));
+
+  // 對照組：同一組輸入（`listings` 多一條 40→50 的邊）用即時算算一次，必須逐筆相同。
+  const live = await districtClosureIdsLive(async (sql) => {
+    if (/FROM listings WHERE match_post_id/.test(sql)) return [...fx.edgeRows, { post_id: 40, match_post_id: 50 }];
+    if (/FROM user_same_house_members/.test(sql)) return fx.members;
+    if (/SELECT post_id FROM listings WHERE/.test(sql)) return seedRows(fx.prefixOf);
+    throw new Error(`liveExec 不認得的 SQL：${sql}`);
+  }, { districtNames: [DISTRICT], userId: 1, relatedOnly: true });
+  assert.deepEqual(sorted(ids), sorted(live));
 });
 
 test("graphRowDiffers：只在「圖相關狀態」真的不同時才算過期", () => {

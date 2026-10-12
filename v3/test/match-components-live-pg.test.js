@@ -77,6 +77,26 @@ test("live PG：材料化分量的 DDL 冪等、重算是真 SQL、且與即時�
       [MATCH_COMPONENT_TABLE, MATCH_COMPONENT_STATE_TABLE].sort(),
     );
 
+    // 1b) 語意等價的**邊界列**（現況碰不到 ≠ 契約等價）：故意造出
+    //     `match_post_id = 0`、`source_key = ''`（前綴 = '|'）、以及「被指向但沒有 listings 列」的端點，
+    //     讓兩條路徑在這些列上逐筆比對（`district_prefix IS NULL` 的節點不可能當種子）。
+    const boundaryIds = [POST_BASE + 20, POST_BASE + 21, POST_BASE + 22];
+    await insertRequired(query, "listings", {
+      post_id: boundaryIds[0], match_post_id: 0, source: "591",
+      source_key: `${allowed[0]}|boundary`, title: `dc1 boundary ${boundaryIds[0]}`,
+    });
+    await insertRequired(query, "listings", {
+      post_id: boundaryIds[1], match_post_id: 0, source: "591",
+      source_key: "", title: `dc1 boundary ${boundaryIds[1]}`,
+    });
+    // 指向一個**不存在**的 post_id（端點沒有 listings 列 ⇒ 表內 district_prefix 必須是 NULL）；
+    // 這一列自己的 `source_key = ''` ⇒ 前綴是 `'|'`（不屬於任何已知行政區鍵）⇒ 舊契約把它當種子。
+    await insertRequired(query, "listings", {
+      post_id: boundaryIds[2], match_post_id: POST_BASE + 99, source: "591",
+      source_key: "", title: `dc1 boundary ${boundaryIds[2]}`,
+    });
+    seeded.push(...boundaryIds);
+
     // 2) 自己種一族配對圖：分量 {0,1,2}、{3,4}、{5,6}；
     //    +0／+5 是 allowed 行政區、+4 是 unknown 前綴（舊契約把它當種子）、+2／+3 是別的行政區。
     const listingsFixture = [
@@ -127,6 +147,31 @@ test("live PG：材料化分量的 DDL 冪等、重算是真 SQL、且與即時�
     // 同屋源跨分量：+3 那一組必須被 +6 那一組拉進來（同一群）。
     const memberIds = await districtClosureIds(exec, { districtNames: [district], userId: TEST_UID, relatedOnly: true });
     for (const id of ids) assert.ok(memberIds.includes(id), `member 閉包少了 ${id}`);
+
+    // 5b) 邊界列也要逐筆相同（`match_post_id = 0`、`source_key = ''`、指向不存在 post_id 的端點）。
+    for (const item of cases) {
+      const keys = districtKeyLists(item.names);
+      const liveBoundary = await districtClosureIdsLive(exec, { districtNames: item.names, userId: item.userId, relatedOnly: item.relatedOnly });
+      const matBoundary = await loadMaterializedDistrictClosure(exec, {
+        allowed: keys.allowed, allKeys: keys.allKeys, userId: item.userId, relatedOnly: item.relatedOnly,
+      });
+      assert.deepEqual(sorted(matBoundary), sorted(liveBoundary), `${item.name}（含邊界列）：材料化與即時算不同`);
+    }
+    // 指向不存在 post_id 的那個端點：表內必須有一列、而且 `district_prefix` 是 NULL
+    // （沒有 listings 列 ⇒ 不可能是行政區列；少了這一層就會被當成 `'|'` 的未知前綴而多算）。
+    const ghost = await exec(
+      `SELECT district_prefix, component_id FROM ${MATCH_COMPONENT_TABLE} WHERE post_id = ?`, [POST_BASE + 99],
+    );
+    assert.equal(ghost.length, 1, "被別條邊指到的端點要有列");
+    assert.equal(ghost[0].district_prefix, null, "被指向但沒有 listings 列的節點，前綴必須是 NULL（不能當種子）");
+    // `source_key = ''` 且**自己有關聯邊**的節點：前綴是 `'|'`，與即時算的「未知前綴＝種子」一致。
+    const emptyPrefix = await exec(`SELECT district_prefix FROM ${MATCH_COMPONENT_TABLE} WHERE post_id = ?`, [boundaryIds[2]]);
+    assert.equal(emptyPrefix[0].district_prefix, "|", "source_key 空 ⇒ 前綴 '|'");
+    // `match_post_id = 0` 又沒有人指向它的列**不是**圖節點 ⇒ 不准進分量表。
+    const notANode = await exec(
+      `SELECT post_id FROM ${MATCH_COMPONENT_TABLE} WHERE post_id = ANY(?::bigint[])`, [[boundaryIds[0], boundaryIds[1]]],
+    );
+    assert.equal(notANode.length, 0, "match_post_id = 0 且無人指向的列不是節點");
 
     // 6) 表缺資料 ⇒ 一定退回即時算（不得把空表當成「空集合」回答）。
     await exec(`DELETE FROM ${MATCH_COMPONENT_TABLE}`, []);

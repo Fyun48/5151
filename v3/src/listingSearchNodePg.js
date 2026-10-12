@@ -184,6 +184,7 @@ export async function districtClosureIds(exec, {
     const materialized = await loadMaterializedDistrictClosure(exec, {
       allowed, allKeys, userId, relatedOnly,
       scheduleRebuild: maintenance?.scheduleRebuild ?? null,
+      absorbState: maintenance?.absorbState ?? null,
       advanceState: maintenance?.advanceState ?? null,
     });
     if (Array.isArray(materialized)) return materialized;
