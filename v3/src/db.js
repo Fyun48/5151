@@ -3158,21 +3158,31 @@ function sqliteDecorationProvider(userId) {
     extras: sqliteListingExtras,
   };
 }
-// Same statements the decorators used before (column lists unchanged on purpose).
+// Same statements the decorators used before.
+// ⚠️ 欄位清單必須與 `repository/decorationData.js` 的 `PEER_COLUMNS` 逐欄相同：
+// 兩邊是同一份「同戶 peer 列」的 SQLite／PG 雙胞胎，`listing-detail-parity` 會逐值比對
+// （2026-10-12 加 source_published_at 時漏了這一邊，PG CI 就紅在 peer 物件多一個欄位）。
 function sqlitePeerRows(ids) {
   const list = [...new Set((ids || []).map((n) => Number(n) || 0).filter(Boolean))];
   if (!list.length) return [];
   const placeholders = list.map(() => "?").join(",");
-  try {
-    return db.prepare(
-      `SELECT post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
+  const columns = `post_id, source_id, title, url, price, price_num, extra_fee, extra_fees, extra_fee_text,
               price_contain_text, floor_name, area_name, layout, source, offline, offline_confirmed,
               hidden, match_post_id, match_level, match_verdict, match_detail,
-              cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time
+              cost_changed_at, cost_change_detail, cost_change_type, last_seen_at, refresh_time`;
+  const select = (cols) => db.prepare(
+    `SELECT ${cols}
        FROM listings
        WHERE post_id IN (${placeholders}) OR match_post_id IN (${placeholders})
        LIMIT 8`,
-    ).all(...list, ...list);
+  ).all(...list, ...list);
+  try {
+    try {
+      return select(`${columns}, source_published_at`);
+    } catch {
+      // 更舊的隔離 fixture 沒有這個欄位：退回舊欄清單。
+      return select(columns);
+    }
   } catch {
     return [];
   }
@@ -3196,17 +3206,27 @@ function sqliteGroupMemberRows(groupId) {
   }
 }
 
+// ⚠️ 欄位清單必須與 `repository/decorationData.js` 的 `EXTRAS_COLUMNS` 逐欄相同：
+// 兩邊是同一份「同戶 peer 的 extras」的 SQLite／PG 雙胞胎，`listing-detail-parity` 會逐值比對
+// （2026-10-12 加 source_published_at 時漏了這一邊，PG CI 就紅在 `+ source_published_at: ''`）。
 function sqliteListingExtras(ids) {
   const map = new Map();
   const list = [...new Set((ids || []).map((n) => Number(n) || 0).filter(Boolean))];
   if (!list.length) return map;
   const placeholders = list.map(() => "?").join(",");
+  const columns = `post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
+              refresh_time, last_seen_at, hidden, offline, match_verdict, match_level`;
+  const select = (cols) => db.prepare(
+    `SELECT ${cols} FROM listings WHERE post_id IN (${placeholders})`,
+  ).all(...list);
   try {
-    const rows = db.prepare(
-      `SELECT post_id, source, source_id, url, price, price_num, extra_fee, extra_fees, extra_fee_text, price_contain_text,
-              refresh_time, last_seen_at, hidden, offline, match_verdict, match_level
-       FROM listings WHERE post_id IN (${placeholders})`,
-    ).all(...list);
+    let rows;
+    try {
+      rows = select(`${columns}, source_published_at`);
+    } catch {
+      // 更舊的隔離 fixture 沒有這個欄位：退回舊欄清單，至少不要把整包 extras 丟掉。
+      rows = select(columns);
+    }
     for (const row of rows) map.set(Number(row.post_id), row);
   } catch {
     // older isolated fixtures may not have every column
