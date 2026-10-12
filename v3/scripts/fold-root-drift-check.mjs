@@ -89,14 +89,27 @@ const summary = {
   ok: mismatches.length === 0,
   stamped: false,
 };
+// 戳記綁定的**資料版本指紋**（升級層 2026-10-12 21:24：「僅有 stamp 不足」）：線上開閘前檢
+// （foldComponentRoot.js foldSqlGateReady）每一請求（成功結果有 TTL）比對 rows／maxPostId；
+// rootsMd5 是全表聚合，留給 runbook §1 步驟 3c 的離線複核（同一條 SQL）。
+async function dataVersionFingerprint() {
+  const v = (await drv.pool.query(
+    "SELECT count(*) AS n, max(post_id) AS max_post_id, "
+    + "md5(string_agg(post_id::text || '|' || COALESCE(fold_component_root::text, '-'), '' ORDER BY post_id)) AS roots_md5 "
+    + "FROM listings",
+  )).rows[0];
+  return { rows: Number(v.n), maxPostId: Number(v.max_post_id), rootsMd5: v.roots_md5 };
+}
 if (stamp) {
   if (mismatches.length === 0) {
+    const dataVersion = await dataVersionFingerprint();
     await drv.pool.query(
       toPostgresSql("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"),
-      [FOLD_DRIFT_STAMP_KEY, JSON.stringify({ at, rows: rows.length, components, mismatches: 0 })],
+      [FOLD_DRIFT_STAMP_KEY, JSON.stringify({ at, rows: rows.length, components, mismatches: 0, dataVersion })],
     );
     resetFoldSqlGate();
     summary.stamped = true;
+    summary.dataVersion = dataVersion;
   } else {
     summary.stamped = false;
     summary.stampSkippedBecause = "mismatch_nonzero";

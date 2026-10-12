@@ -35,6 +35,9 @@ const ids = {
   P: BASE + 11,     // 鏈狀 P → Q → R（Q 與 R 都比 P 便宜 ⇒ 舊演算法會出兩個 primary）
   Q: BASE + 12,
   R: BASE + 13,
+  // ⑨ 空字串 source 的平手判定（spec §6.10）：同群兩列、source_id／url 皆空、post_id 位數不同。
+  TE: 9100000021,   // 10 位數、source=''（Node 的 String(source||'591') ⇒ '591'）
+  TN: 910000021,    // 9 位數、source='591'
 };
 // ⑥／⑦ 線狀鏈（≥15 列同群）：Owner 2026-10-12 裁決要求「線狀鏈（≥15 列同群，橋式非橋式都
 // 覆蓋）」——舊的 1-hop Node 讀取端在這種形狀會把群切開（實測 root=22075220 的 33 列同租金鏈，
@@ -49,6 +52,10 @@ const chainIds = [...chainA, ...chainB1, ...chainB2];
 const all = [...Object.values(ids), ...chainIds];
 
 const enabledSources = ["591", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "self"];
+// ⑨ 專用：Node 的資格判定把空字串 source 當 '591'（`String(row.source || "591")`）⇒ 合格；
+// SQL 的資格判定用原始 `e.source = ANY(?)` ⇒ 要讓同一列在 SQL 也合格，啟用清單必須含 ''。
+// 只給 ⑨ 用，避免動到 ①～⑧ 的輸入（其餘合成列的 source 都不是空字串 ⇒ 加了也不會有差）。
+const enabledSourcesWithEmpty = [...enabledSources, ""];
 
 function listing(post_id, overrides = {}) {
   return {
@@ -95,6 +102,15 @@ const shapeRows = [
     match_post_id: i + 1 < chainB2.length ? chainB2[i + 1] : null,
     fold_rent_num: 25000 - i * 100, price_num: 25000 - i * 100,
   })),
+  // ⑨ 空字串 source 的平手判定：兩列同群（TN → TE）、租金／更新時間／last_seen_at 全部相同，
+  //    所以勝負只由 tie-break key 決定。source_id／url 皆空 ⇒ key 的 origin 段退回 post_id：
+  //      Node：'591:' + String(post_id) + ':' + (Number(post_id)||0)
+  //      TE（source=''）→ '591:9100000021:9100000021'、TN → '591:910000021:910000021'
+  //      第 11 個字元 '0' < '2' ⇒ Node 的代表列是 TE。
+  //    舊 SQL 寫 (e.source || ':') ⇒ TE 的 key 變成 ':9100000021:…'，而 ':'(0x3A) > '5'(0x35)
+  //      ⇒ 舊 SQL 一定選 TN（兩條路徑不一致，本 fixture 就是釘住這一條）。
+  listing(ids.TE, { source: "", source_id: "", url: "", match_post_id: ids.TN }),
+  listing(ids.TN, { source_id: "", url: "" }),
 ];
 // ⑦ 的橋邊：listing_group_members 一列（群組＝橋；群內兩兩連通）
 const bridgeGroupId = `fix-bridge-${CHAIN}`;
@@ -230,10 +246,10 @@ foldRootRows = await readFoldRoots();
 }
 
 // ── Node 讀取端（固化欄分組）vs SQL（同一支 foldRoleCte，讀實體欄）──
-const runSql = async (subset) => {
+const runSql = async (subset, sources = enabledSources) => {
   const cte = foldRoleCte("WHERE post_id = ANY(?::bigint[])")
     + "\nSELECT post_id, role, primary_offline, primary_id FROM fold_role";
-  const rows = (await drv.pool.query(toPostgresSql(cte), [subset, enabledSources, provider.now])).rows;
+  const rows = (await drv.pool.query(toPostgresSql(cte), [subset, sources, provider.now])).rows;
   return { rows, role: new Map(rows.map((r) => [Number(r.post_id), r.role || null])) };
 };
 
@@ -312,8 +328,44 @@ results.push({
   });
 }
 
+// ── ⑨ 空字串 source 的 tie-break（spec §6.10）─────────────────────────────────
+// 同群兩列、source_id／url 皆空、post_id 位數不同（10 位 vs 9 位）；租金／更新時間／
+// last_seen_at 全部相同 ⇒ 勝負只由 tie-break key 決定。斷言：兩條路徑選出的代表列 id 相同
+// （且必為 source='' 的 TE：Node 的 key '591:9100000021:…' 小於 '591:910000021:…'）。
+{
+  const comp = [ids.TE, ids.TN];
+  const rootOk = rootOf(ids.TE) != null && rootOf(ids.TE) === rootOf(ids.TN);
+  const rows = withRoots(readBack.filter((r) => comp.includes(Number(r.post_id))));
+  attachSameHouseRoles(rows, 0, provider, provider.now);
+  const role = rolesOf(rows);
+  const sql = await runSql(comp, enabledSourcesWithEmpty);
+  const nodeRep = primaryOf(role, comp);
+  const sqlRep = primaryOf(sql.role, comp);
+  results.push({
+    label: "⑨ 空字串 source＋source_id/url 皆空＋post_id 位數不同：Node／SQL 選出的代表列 id 相同（且為 source='' 的 TE）",
+    node: nodeRep.join(","),
+    sql: sqlRep.join(","),
+    ok: rootOk && nodeRep.length === 1 && sqlRep.length === 1
+      && nodeRep[0] === Number(ids.TE) && sqlRep[0] === Number(ids.TE),
+    sameRoot: rootOk,
+    roots: { TE: rootOf(ids.TE), TN: rootOf(ids.TN) },
+  });
+  // 殘餘軸（本輪**不修**，只記錄證據、不當失敗）：啟用清單不含 '' 時，SQL 的**資格**判定把
+  // source='' 視為不合格（Node 走 String(source||'591') ⇒ 合格）。這是資格軸、不是 tie-break 軸，
+  // 已寫進交付的「我沒做／不敢做的部分」交由升級層決定。
+  const sqlStrict = await runSql(comp);
+  const sqlStrictRep = primaryOf(sqlStrict.role, comp);
+  results.push({
+    label: "⑨ 殘餘軸（不修，只記錄）：啟用清單不含 '' ⇒ SQL 資格判定把 source='' 排除、Node 視為 '591' 合格",
+    node: nodeRep.join(","),
+    sql: sqlStrictRep.join(","),
+    residual: true,
+    ok: true,
+  });
+}
+
 for (const r of results) console.log(JSON.stringify(r));
-const allOk = results.every((r) => r.ok);
+const allOk = results.filter((r) => !r.residual).every((r) => r.ok);
 
 // 清理合成列 + split 投票 + 橋邊
 await drv.pool.query("DELETE FROM user_match_votes WHERE post_id = ANY($1::bigint[]) OR peer_id = ANY($1::bigint[])", [all]);
@@ -321,5 +373,5 @@ await drv.pool.query("DELETE FROM listing_group_members WHERE post_id = ANY($1::
 await drv.pool.query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [all]);
 
 await drv.pool.end();
-console.log(JSON.stringify({ allOk, total: results.length, roots: Object.fromEntries(all.map((id) => [id, rootOf(id)])) }));
+console.log(JSON.stringify({ allOk, total: results.length, residualRows: results.filter((r) => r.residual).length, roots: Object.fromEntries(all.map((id) => [id, rootOf(id)])) }));
 process.exit(allOk ? 0 : 1);

@@ -26,23 +26,58 @@ node v3/scripts/fold-root-backfill.mjs
 
 # 3) 全量 drift 零差（**必要步驟，不是抽樣**，R2）：整表重算 vs 固化欄逐列比對
 node v3/scripts/fold-root-drift-check.mjs --stamp
-#    期望：{"mismatch":0,"ok":true,"stamped":true}
+#    期望：{"mismatch":0,"ok":true,"stamped":true,"dataVersion":{...}}
 #    非零 ⇒ **停**：把 mismatchIds 歸因後重跑 2)，不要往下。
 
 # 3b) 抽樣面（輔助，不能代替 3）
 node v3/scripts/projection-freshness-check.mjs   # foldRoot.mismatch = 0
 node v3/scripts/fold-freshness-check.mjs         # fold_* 四欄
 
+# 3c) 戳記的離線複核（升級層 2026-10-12 21:24：「僅有 stamp 不足」）：把 3) 寫進戳記的
+#     dataVersion 與資料重算一次逐項比對（rows／maxPostId／rootsMd5 三者都要相同）。
+node v3/scripts/fold-gate-stamp-verify.mjs
+
 # 4) 部署程式（讀取端開始讀 fold_component_root）
 # 5) Owner 開閘：PUBLIC_LISTINGS_SQL_FIRST=1（**只有 Owner 做**）
 ```
 
 - 3) 沒有 `mismatch = 0` 就**不要**進 4)：讀取端會用「舊／空 root」分組。
-- **開閘前檢（fail-closed）**：`PUBLIC_LISTINGS_SQL_FIRST=1` 時，每個請求會先驗「欄位存在 ＋
-  `settings.foldRootDriftStamp` 零差」；任一不成立 ⇒ **HTTP 503 ＋ `[fold-gate]` 告警，不降級**
-  （語意見 spec §6.9）。3) 的 `--stamp` 就是那個依賴戳記。
+- **開閘前檢（fail-closed）**：`PUBLIC_LISTINGS_SQL_FIRST=1` 時，每個請求會先驗三項
+  ——①欄位存在 ②`settings.foldRootDriftStamp` 零差 ③**戳記綁的資料版本＝線上實測值**；
+  任一不成立 ⇒ **HTTP 503 ＋ `[fold-gate]` 告警，不降級**（語意見 spec §6.9／§6.10）。
 - 回填／戳記只跑隔離庫（`assertPgTargetAllowed` 白名單）或由 Owner 對正式庫執行；
   正式庫的其他查詢一律唯讀。
+
+### 1.1 開閘前必須全部成立的清單（逐條都有可跑指令）
+
+| # | 條件 | 可跑指令 | 期望 |
+|---|---|---|---|
+| 1 | `fold_component_root` 欄位存在（**跟著 search_path**） | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs`（用 `pg_attribute` ＋ `to_regclass('listings')`；**不用 `information_schema`**，跨 schema 會誤判，L-0869） | `checks.column_present=true` |
+| 2 | 全量 drift＝0（**不寫戳記**的唯讀版） | `PG_URL=… node v3/scripts/fold-root-drift-check.mjs` | `{"mismatch":0,"ok":true,"stamped":false}`、rc=0 |
+| 3 | 戳記存在且 `mismatches=0` | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs` | `stamp.mismatches=0` |
+| 4 | **戳記綁當前資料版本**（`rows`／`maxPostId`／`rootsMd5` 三者都比對） | 同上（`fold-gate-stamp-verify.mjs`） | `dataVersion_match=true`（三者逐項相同） |
+| 5 | 線上開閘前檢會放行（同一條判定的真實呼叫） | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs`（它用**真 PG exec** 呼叫 `foldSqlGateReady`） | `{ok:true, detail:{rows,maxPostId,rootsMd5}}` |
+| 6 | 告警管道可見（`[fold-gate]` 行） | `docker logs --since 15m <v3 容器> 2>&1 \| grep -c "\[fold-gate\]"`（正式站容器 `591-tracker-v3`；隔離站用該站的容器名） | 開閘後有 503 時看得到那行；平常 0 |
+| 7 | 關閘程序就緒（誰按、怎麼退、退後驗什麼） | 見 §5.1 | — |
+
+> 怪異行為一律 fail-closed：上面任一條拿不到「期望」值 ⇒ **不開閘**（維持
+> `PUBLIC_LISTINGS_SQL_FIRST` 未設＝off）。
+
+### 1.2 戳記如何綁定資料版本（已實裝 / 未實裝，逐項講清楚）
+
+- **已實裝**：`fold-root-drift-check.mjs --stamp` 在零差時寫入
+  `dataVersion = { rows, maxPostId, rootsMd5 }`（`rootsMd5 = md5(string_agg(post_id||'|'||coalesce(fold_component_root::text,'-'),'' ORDER BY post_id))`）。
+  線上 `foldSqlGateReady()` 每一請求（成功的判定有 **60 秒 TTL**，失敗永久記憶）比對
+  `SELECT count(*) AS n, max(post_id) AS max_post_id FROM listings` 與戳記的 `rows`／`maxPostId`
+  ——不符 ⇒ `reason=fold_root_drift_stamp_stale`（503）。
+- **未實裝（明文列為開閘前待辦）**：
+  1. **原地更新抓不到**：只改 `fold_component_root`、卻沒改列數也沒改 `max(post_id)` 的更新
+     （刷新鏈的原地 UPDATE），線上那兩個值不會變 ⇒ 這條靠「髒事件後重跑 `--stamp`」（§2）與
+     離線 `rootsMd5` 複核，不是靠線上檢查。**待辦**：刷新鏈寫入 root 時 bump 一個世代鍵
+     （`settings.foldRootWriteGen`），線上再比對該世代。
+  2. `rootsMd5` 沒有進線上檢查（全表聚合太貴）；它只在 §1.1 第 4 條的離線指令裡比對。
+  3. 沒有排程（Owner 2026-10-12 裁示：**先人工**、排程另行提案）⇒ 資料一變，閘門會關到
+     有人重跑 `--stamp` 為止；這是已被接受的取捨（fail-closed 優先）。
 
 ## 2. 髒事件 ⇒ 必須重跑回填（`fold-root-backfill.mjs`）＋重跑 drift（`fold-root-drift-check.mjs --stamp`）
 
@@ -90,10 +125,32 @@ node v3/scripts/fold-endpoint-parity.mjs          # 35/35 totalMatched ＋ 前 2
 node v3/scripts/fold-endpoint-symmetric-diff.mjs  # 逐列對稱差（只有 Node／只有 SQL）皆為空集合
 node v3/scripts/fold-endpoint-pagination.mjs      # 有條件的分頁穩定性（語意見 spec §6.7）
 node v3/scripts/fold-root-drift-check.mjs         # 全量 drift（唯讀版，目標 0）
-node v3/scripts/fold-shape-fixtures.mjs           # ⑥⑦⑧⑩ 合成列 fixture（可寫隔離庫）
+node v3/scripts/fold-shape-fixtures.mjs           # ⑨ 等合成列 fixture（可寫隔離庫）
+node v3/scripts/fold-gate-stamp-verify.mjs        # 開閘前檢四項（§1.1 第 1/3/4/5 條）
 ```
+
+> `repro2` 是**凍結基準**（不得覆寫）；要在「drift=0 的乾淨資料」上量測就用第二顆
+> `prb-repro3-pg`（`/home/cline/lab/5151-fold-parity-20261012/repro3-gen.sh` 可重建，指紋見
+> `…/results/repro3/fingerprint.txt`）。
 
 ## 5. 回復（rollback）
 
 - 程式回滾即可：欄位留著無害（舊程式不讀它）。
 - 讀取端換回 Node 路徑時，`fold_component_root` 不必清空（只是不再被讀）。
+
+### 5.1 關閘程序（誰按、怎麼退、退後驗什麼）
+
+1. **誰按**：只有 Owner（`PUBLIC_LISTINGS_SQL_FIRST` 是部署層環境變數；代理人不碰）。
+2. **怎麼退**：把該容器的 `PUBLIC_LISTINGS_SQL_FIRST` 移除或設成非 `1`，重啟／重佈該容器
+   ——`tryPublicListingsSqlFirst()` 第一行 `!== "1"` 就 return null，舊（Node）路徑完全不受影響
+   （`v3/test/fold-sql-gate.test.js` 用原始碼位置釘住這個順序）。
+   指令（正式站 `591-tracker-v3`；隔離站換容器名）：
+   `ssh casa-nas "docker inspect 591-tracker-v3 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep PUBLIC_LISTINGS_SQL_FIRST"` 先看現值，
+   再由 Owner 依發版流程改 env 並重建（**不要**用 `docker exec` 改環境，行程環境改不了）。
+3. **退後驗什麼**（三條，缺一不可）：
+   - `curl -s -o /dev/null -w '%{http_code}' https://<站台>/api/listings`（或站內對應的公開列表端點）
+     回 200，且**與關閘前**的 `totalMatched` 同一個值（`node v3/scripts/fold-lists-totalmatched.mjs`
+     在隔離庫上對照，或直接比對回應的 total）。
+   - `docker logs --since 5m 591-tracker-v3 2>&1 | grep -c "\[fold-gate\]"` 必須是 **0**
+     （關閘後不該再有閘門告警；還有就代表還有人在走 SQL 路徑）。
+   - `docker logs --since 5m 591-tracker-v3 2>&1 | grep -c "42703"` 必須是 **0**（缺欄錯誤不該出現）。

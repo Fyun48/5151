@@ -639,7 +639,13 @@ export function foldRoleCte(candWhere, { rootSource = null } = {}) {
         ORDER BY (e.fold_rent_num IS NULL) ASC, e.fold_rent_num ASC,
                  COALESCE(CASE WHEN e.fold_refresh_kind = 1 THEN ?::bigint - e.fold_refresh_rel_ms ELSE e.fold_refresh_abs_ms END, 0) DESC,
                  COALESCE(e.last_seen_at, '') DESC,
-                 (e.source || ':' || COALESCE(NULLIF(e.source_id, ''), NULLIF(e.url, ''), NULLIF(e.post_id, 0)::text, '') || ':' || e.post_id::text) ASC,
+                 -- 與 match.js 的 listingTieBreakKey 逐字對齊（見 docs/same-house-fold-spec.md §6.10）：
+                 --   source：Node 是 String(listing.source || '591') ⇒ 空字串／NULL 都當 '591'；
+                 --   origin：Node 是 String(source_id || url || post_id || '')；
+                 --   尾段：Node 是 Number(post_id) || 0。
+                 -- 舊式寫 (e.source || ':' || …) 在 source='' 時會生出 ':…'，而 ':'（0x3A）排在任何
+                 -- '591:…' 之後 ⇒ 空字串 source 的列在平手時被 SQL 判成較後、Node 判成較前。
+                 (COALESCE(NULLIF(e.source, ''), '591') || ':' || COALESCE(NULLIF(e.source_id, ''), NULLIF(e.url, ''), NULLIF(e.post_id, 0)::text, '') || ':' || COALESCE(e.post_id, 0)::text) ASC,
                  e.post_id ASC
       ) AS rn
     FROM elig e

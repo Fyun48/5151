@@ -253,12 +253,36 @@ export const FOLD_SQL_GATE_REASON = Object.freeze({
   NO_COLUMN: "fold_component_root_missing",
   NO_DRIFT_STAMP: "fold_root_drift_stamp_missing",
   DRIFT_STAMP_DIRTY: "fold_root_drift_stamp_mismatch",
+  // 戳記存在且零差，但**對不上當前資料版本**（升級層 2026-10-12 21:24 加嚴：「僅有 stamp 不足」）。
+  DRIFT_STAMP_STALE: "fold_root_drift_stamp_stale",
 });
 
 // `fold-root-drift-check.mjs --stamp` 在「全量重算 vs 固化欄」逐列零差時寫入的 settings 鍵。
 // 為什麼用戳記而不是即時抽樣：NULL 是**合法值**（單節點分量／被三道閘否決的邊），
 // 所以「有邊卻沒有 root」不能當不完整；而全量重算不可能每請求做一次（見 runbook §1／§5）。
 export const FOLD_DRIFT_STAMP_KEY = "foldRootDriftStamp";
+
+/**
+ * 戳記綁定的資料版本：**線上**（每請求走這條）只比對列數與 `max(post_id)`——兩者都吃 PK 索引，
+ * 成本固定且小。任一個變了（爬蟲新增／刪除／批次重寫）⇒ 戳記立即失效（fail-closed）。
+ *
+ * 離線複核（runbook §1 步驟 3c，人工）另比對 **root 聚合 md5**（全表聚合，太貴、不進每請求路徑）：
+ *   SELECT count(*) AS n, max(post_id) AS max_post_id,
+ *          md5(string_agg(post_id::text || '|' || COALESCE(fold_component_root::text, '-'), '' ORDER BY post_id)) AS roots_md5
+ *     FROM listings;
+ *
+ * 已知限制（明文，不得含糊）：只改 `fold_component_root` 值、卻既沒改列數也沒改 `max(post_id)` 的
+ * 原地更新（刷新鏈），線上這兩個值抓不到 ⇒ 刷新／回填**之後必須重跑 `--stamp`**（runbook §2 的
+ * 髒事件清單），`roots_md5` 是離線複核那一條。
+ */
+export const FOLD_DATA_VERSION_SQL = "SELECT count(*) AS n, max(post_id) AS max_post_id FROM listings";
+
+// 成功判定可快取多久（毫秒；0＝每請求都重驗）。失敗**永遠**記憶（fail-closed 快路徑：修好依賴後
+// 要重啟行程，這是刻意的）；成功只記這麼久，讓「資料一變就失效」在 TTL 內生效。
+const FOLD_SQL_GATE_OK_TTL_MS = (() => {
+  const raw = Number(process.env.FOLD_SQL_GATE_OK_TTL_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
+})();
 
 let foldSqlGateCache = null;
 
@@ -273,17 +297,25 @@ export function resetFoldSqlGate() { foldSqlGateCache = null; }
  * 之前呼叫。用的是**這一個請求自己的連線／交易**（`withPgReadSnapshot` 的 snapshot client），
  * 不另開連線、不碰寫入路徑的交易。
  *
- * 依賴（兩項都必須成立）：
- *   1. 欄位存在：`information_schema.columns`（與 `foldRootRefreshReady` 同一條探測；缺欄時
- *      回 0 列、**不拋錯** ⇒ 不會讓交易進 aborted（25P02））。
+ * 依賴（三項都必須成立）：
+ *   1. 欄位存在：`pg_attribute` ＋ `to_regclass('listings')`（與 `foldRootRefreshReady` 同一條探測；
+ *      缺欄時回 0 列、**不拋錯** ⇒ 不會讓交易進 aborted（25P02））。**不用** `information_schema`：
+ *      它是跨 schema 的（同庫別的 schema 有同名表就會誤判，L-0869）。
  *   2. 回填已驗證零差：`settings.foldRootDriftStamp`（由 `fold-root-drift-check.mjs --stamp`
  *      在全量重算逐列零差時寫入）存在且 `mismatches === 0`。
+ *   3. **戳記綁定當前資料版本**：戳記內的 `dataVersion {rows, maxPostId}` 必須等於線上
+ *      `FOLD_DATA_VERSION_SQL` 的實測值；不符（或缺欄位）⇒ 拒開閘，reason=`DRIFT_STAMP_STALE`。
+ *      升級層 2026-10-12 21:24：「僅有 stamp 不足」。資料變了就要重跑 `--stamp`（runbook §1）。
  *
- * 回傳 `{ ok, reason, detail }`（每個行程記憶一次；失敗也記憶 ⇒ 修好依賴後需重啟行程，
- * 這是刻意的 fail-closed，不是吞錯）。呼叫端**不得**在 `ok:false` 時退回 Node 路徑。
+ * 回傳 `{ ok, reason, detail }`。快取：**失敗永遠記**（修好依賴後需重啟行程，刻意的 fail-closed）；
+ * **成功只記 `FOLD_SQL_GATE_OK_TTL_MS`**（預設 60s，可用環境變數調；0＝每請求重驗），
+ * 否則「資料一變就失效」會被行程內快取永久蓋住。呼叫端**不得**在 `ok:false` 時退回 Node 路徑。
  */
 export async function foldSqlGateReady(exec) {
-  if (foldSqlGateCache) return foldSqlGateCache;
+  if (foldSqlGateCache) {
+    const age = Date.now() - foldSqlGateCache.at;
+    if (!foldSqlGateCache.result.ok || age < FOLD_SQL_GATE_OK_TTL_MS) return foldSqlGateCache.result;
+  }
   let result;
   try {
     if (!(await foldRootRefreshReady(exec))) {
@@ -298,15 +330,41 @@ export async function foldSqlGateReady(exec) {
         result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_DRIFT_STAMP, detail: null };
       } else if (Number(stamp.mismatches) !== 0) {
         result = { ok: false, reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_DIRTY, detail: { mismatches: Number(stamp.mismatches), at: stamp.at || null } };
+      } else if (!Number.isFinite(Number(stamp?.dataVersion?.rows)) || !Number.isFinite(Number(stamp?.dataVersion?.maxPostId))) {
+        // 舊式戳記（沒有 dataVersion）＝身分不明 ⇒ 拒開閘，重跑 --stamp 即可修好。
+        result = {
+          ok: false,
+          reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_STALE,
+          detail: { missing: "dataVersion", at: stamp.at || null, fix: "node v3/scripts/fold-root-drift-check.mjs --stamp" },
+        };
       } else {
-        result = { ok: true, reason: null, detail: { at: stamp.at || null, rows: Number(stamp.rows) || null } };
+        const liveRowsRaw = await exec(FOLD_DATA_VERSION_SQL, []);
+        const liveList = Array.isArray(liveRowsRaw) ? liveRowsRaw : liveRowsRaw?.rows;
+        const live = liveList?.[0] || {};
+        const liveRows = Number(live.n);
+        const liveMax = Number(live.max_post_id);
+        const stampedRows = Number(stamp.dataVersion.rows);
+        const stampedMax = Number(stamp.dataVersion.maxPostId);
+        if (!Number.isFinite(liveRows) || !Number.isFinite(liveMax) || liveRows !== stampedRows || liveMax !== stampedMax) {
+          result = {
+            ok: false,
+            reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_STALE,
+            detail: { stamped: { rows: stampedRows, maxPostId: stampedMax }, live: { rows: liveRows, maxPostId: liveMax }, at: stamp.at || null },
+          };
+        } else {
+          result = {
+            ok: true,
+            reason: null,
+            detail: { at: stamp.at || null, rows: liveRows, maxPostId: liveMax, rootsMd5: stamp.dataVersion.rootsMd5 || null },
+          };
+        }
       }
     }
   } catch (error) {
     // 讀不到戳記（表不存在／連線壞）⇒ 一樣拒開閘。
     result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_DRIFT_STAMP, detail: { error: String(error?.message || error).slice(0, 160) } };
   }
-  foldSqlGateCache = result;
+  foldSqlGateCache = { result, at: Date.now() };
   return result;
 }
 

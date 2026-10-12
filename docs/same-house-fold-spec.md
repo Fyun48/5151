@@ -343,15 +343,50 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
   `PUBLIC_LISTINGS_SQL_FIRST === "1"` **之後**、任何折疊 SQL **之前**呼叫。
 - **用哪條連線／交易**：呼叫端傳進來的 `exec` 就是**這個請求自己的 read snapshot client**
   （`withPgReadSnapshot` 開的那條）；不另開連線、不碰寫入路徑的交易。
-- **探什麼**：(1) `information_schema.columns` 的 `listings.fold_component_root`（與寫入端
-  `foldRootRefreshReady` 同一條「不會失敗的查詢」）；(2) `settings.foldRootDriftStamp` 存在且
-  `mismatches === 0`（由 `fold-root-drift-check.mjs --stamp` 在全量零差後寫入）。
+- **探什麼**：(1) `pg_attribute` ＋ `to_regclass('listings')` 的 `listings.fold_component_root`
+  （與寫入端 `foldRootRefreshReady` 同一條「不會失敗的查詢」；**不用** `information_schema`——它是跨
+  schema 的，同庫別的 schema 有同名表就誤判，L-0869）；(2) `settings.foldRootDriftStamp` 存在且
+  `mismatches === 0`（由 `fold-root-drift-check.mjs --stamp` 在全量零差後寫入）；
+  (3) **戳記綁的資料版本＝當前資料**（`dataVersion {rows, maxPostId}` 對線上
+  `SELECT count(*) , max(post_id) FROM listings`；不符／缺欄 ⇒ reason=`fold_root_drift_stamp_stale`）。
+  升級層 2026-10-12 21:24：「僅有 stamp 不足」。離線複核（`rootsMd5` 全表聚合）見 runbook §1.1／§1.2。
 - **缺欄時的回傳形狀**：`foldSqlGateReady` 回 `{ok:false, reason:"fold_component_root_missing",
   detail:null}`；呼叫端**丟 `ListingSearchUnavailableError`**（`code=SEARCH_UNAVAILABLE`，
   `listingSearchHttp.js` 映射成 **HTTP 503**）並 `console.error("[fold-gate] …")` 告警——
   **不退回 Node 路徑**（降級會讓「清單看到的資料」與固化欄的真相無聲分裂）。
-- **交易隔離**：探測全部用不會拋錯的查詢（`information_schema`）⇒ 不會把交易打成 aborted（25P02）。
+- **快取語意**：**失敗永久記**（同一行程修好依賴後要重啟才放行，刻意的 fail-closed）；
+  **成功只記 60 秒 TTL**（`FOLD_SQL_GATE_OK_TTL_MS`，0＝每請求重驗）——否則「資料一變就失效」
+  會被行程內快取永久蓋住。
+- **交易隔離**：探測全部用不會拋錯的查詢（`pg_attribute`／`settings`；資料版本那條是普通 SELECT）
+  ⇒ 不會把交易打成 aborted（25P02）。
   可重跑證據：`v3/test/fold-gate-transaction-live-pg.test.js`（BEGIN → 探測 → 同交易 CREATE TEMP
   TABLE ＋ INSERT → ROLLBACK；任何一步失敗就 25P02 紅），CI 的拋棄式 PG（沒有這一欄）走缺欄分支。
+- **人工作業腳本**：`v3/scripts/fold-gate-stamp-verify.mjs`（唯讀）一次驗 runbook §1.1 的四項並
+  用真 PG exec 呼叫 `foldSqlGateReady()`，全過才 rc=0。
 - **關閘隔離**：`PUBLIC_LISTINGS_SQL_FIRST !== "1"` 時函式**第一行就 return null**（不碰折疊程式碼、
   不呼叫開閘前檢）⇒ 新路徑的任何損壞都傳染不到舊路徑；`v3/test/fold-sql-gate.test.js` 靜態釘住順序。
+
+### 6.10 tie-break 邊界：空字串 source（零容差加固，2026-10-12）
+- **規則**：SQL 端（`listingSearchSql.js foldRoleCte` 內 ranked 的 ORDER BY 第 5 鍵）必須與
+  `match.js listingTieBreakKey(listing)` **逐字等價**：
+  1. 來源段：Node 是 `String(listing.source || "591")` ⇒ `source` 為空字串或 NULL 一律當 `591`。
+  2. origin 段：Node 是 `String(source_id || url || post_id || "")`（三者都 falsy 才退到空字串）。
+  3. 尾段：Node 是 `Number(post_id) || 0`（NULL／0 都寫成 `"0"`）。
+  SQL 端因此寫成
+  `COALESCE(NULLIF(e.source, ''), '591') || ':' || COALESCE(NULLIF(e.source_id, ''), NULLIF(e.url, ''), NULLIF(e.post_id, 0)::text, '') || ':' || COALESCE(e.post_id, 0)::text`。
+- **為什麼一定要改**：舊式寫成 `(e.source || ':' || …)`。`source = ''` 時整串變成 `':<origin>:<post_id>'`，
+  而 `':'`（0x3A）大於 `'5'`（0x35）⇒ 這一列排在任何 `'591:…'` 之後，**Node 卻把它當 `'591:…'` 排在前面**。
+  平手（租金／更新時間／last_seen_at 全同）時兩條路徑就會選出不同代表列 ⇒ 一群兩主。
+- **現況**：凍結基準（repro2／repro3，184,754 列）上 `source = ''` 為 **0 列** ⇒ 現況碰不到；
+  但 schema 允許空字串（寫入端也有 `UPDATE listings SET source = ?`），屬零容差該釘住的邊界。
+- **證據（可重跑）**：`v3/scripts/fold-shape-fixtures.mjs` 的 ⑨ fixture——同群兩列（TE：10 位數 post_id、
+  `source=''`、`source_id`／`url` 皆空；TN：9 位數、`source='591'`），租金／更新時間／last_seen_at 全同，
+  斷言 **Node 與 SQL 選出的代表列 id 相同、且必為 TE**。舊式表達式下這條會紅（SQL 選 TN），改完轉綠：
+  `PG_URL=… node v3/scripts/fold-shape-fixtures.mjs`。
+- **不在本節範圍的殘餘軸（已記錄、未修，供升級層裁決）**：
+  1. **資格判定的 source 預設不一致**：Node 資格（`housepriceNotDisplayReady`）同樣走
+     `String(source || "591")` ⇒ 空字串 source 算「已啟用」；SQL 端 elig 用原始 `c.source = ANY(?::text[])`
+     ⇒ 空字串 source 算「未啟用」。fixture ⑨ 因此必須把 `''` 放進啟用清單，才能把差異隔離在 tie-break
+     這一條；不放時 SQL 直接排除該列（fixture 內另有一列 `residual:true` 的診斷輸出）。
+  2. **排序 collation**：Node 用 `localeCompare`、SQL 用資料庫 collation；`source_id`／`url` 含非 ASCII 時
+     兩邊相對順序未經驗證（現況資料以 ASCII 為主）。
