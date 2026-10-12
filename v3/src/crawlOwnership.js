@@ -14,7 +14,33 @@ export const CRAWL_HEARTBEAT_MS = (() => {
 })();
 export const currentCrawlOwner = () => ownership.getStore();
 
-export async function withPgCrawlOwner(driver, work, { signal } = {}) {
+// 解鎖前等待「已送出的語句」收尾的上限（毫秒）。
+//
+// 為什麼需要上限：舊寫法在 finally 裡無上限地 `await owner.tail`，只要那筆語句永遠
+// 不回來，解鎖就永遠送不出去（2026-10-12 正式站 advisory lock 洩漏事故）。超過這個
+// 上限就放棄等待，直接銷毀該 session——session 級 advisory lock 只在 session 結束時
+// 才保證釋放（那是唯一的保證）。
+export const CRAWL_UNLOCK_WAIT_MS = 5000;
+
+// 「離開時無法確認 advisory lock 已釋放」的累計次數。正常永遠是 0；
+// 接到 `/api/health` 的 `crawl_owner_unlock_failures`，每一筆同時寫一行容器日誌。
+let releaseUnconfirmed = 0;
+export const crawlOwnerReleaseStats = () => ({ unlock_unconfirmed: releaseUnconfirmed });
+
+/** 等 `tail` 收尾，最多等 `timeoutMs`；回傳是否已收尾（沒收尾就不能再對這條連線送查詢）。 */
+async function waitForTail(tail, timeoutMs) {
+  const ms = Math.max(0, Number(timeoutMs) || 0);
+  let timer;
+  const expired = new Promise(resolve => { timer = setTimeout(() => resolve(false), ms); });
+  try {
+    // `owner.tail` 一律是接過錯的鏈，所以只會 resolve。
+    return (await Promise.race([tail.then(() => true), expired])) === true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function withPgCrawlOwner(driver, work, { signal, unlockWaitMs = CRAWL_UNLOCK_WAIT_MS } = {}) {
   signal?.throwIfAborted();
   const client = await driver.pool.connect();
   const controller = new AbortController();
@@ -77,14 +103,38 @@ export async function withPgCrawlOwner(driver, work, { signal } = {}) {
     if(heartbeatTimer) clearInterval(heartbeatTimer);
     controller.abort(new Error('Crawler ownership has ended'));
     if(onAbort) combined.removeEventListener('abort',onAbort);
-    // Wait for an in-flight statement to roll back before unlocking or returning
-    // this connection to the pool. Late callbacks fail assertActive, not enqueue.
-    await owner.tail;
-    if(acquired && !broken) {
-      try { await client.query('SELECT pg_advisory_unlock($1,$2)',CRAWL_LOCK_KEYS); }
-      catch { broken=true; }
+    // 2026-10-12（正式站 owner advisory lock 洩漏）：釋放必須是 guarantee，不能只是「盡量」。
+    //
+    // 舊寫法是無上限的 `await owner.tail`（等一筆已送出的語句收尾）之後才送
+    // `pg_advisory_unlock`，而且從不檢查解鎖結果；只要那筆語句永遠不回來，這個 finally
+    // 就永遠停在這裡 ⇒ 解鎖永遠沒送出 ⇒ session 級鎖被留到容器重啟為止，另一節點每
+    // 60 秒只能回 `owner_busy`（正式站實查：持有者 `state=idle in transaction`、
+    // 最後一句 `SAVEPOINT revision_bump`）。
+    //
+    // 新契約：**只有在同一條連線上拿到 `pg_advisory_unlock = true`，才可以把這條連線
+    // 放回池**。等不到收尾、解鎖丟錯、或回 false，都算「無法確認」，直接銷毀該 session
+    // ——session 級鎖只在 session 結束時保證釋放，連線銷毀就是那個保證。
+    const settled=await waitForTail(owner.tail,unlockWaitMs);
+    let released=false,reason=null;
+    if(!settled) reason=`已送出的語句在 ${unlockWaitMs}ms 內沒有收尾`;
+    else if(acquired && broken) reason='連線已標記為中斷';
+    else if(acquired) {
+      try {
+        // 同一條連線（`client`）解鎖；換條連線會回 false 且鎖會留在原 session。
+        const result=await client.query('SELECT pg_advisory_unlock($1,$2) AS released',CRAWL_LOCK_KEYS);
+        released=result.rows[0]?.released===true;
+        if(!released) reason='pg_advisory_unlock 回報 false（這條連線沒有這把鎖）';
+      } catch (error) { reason=`pg_advisory_unlock 失敗：${error?.message||error}`; }
+    }
+    const destroy=!settled||(Boolean(acquired)&&!released);
+    if(Boolean(acquired)&&!released) {
+      releaseUnconfirmed+=1;
+      console.error(`[crawl-owner] 無法確認 advisory lock 已釋放（${reason}）；銷毀該 PG session 以保證釋放（(5151,20260926)），累計 ${releaseUnconfirmed} 次`);
+    } else if(!settled) {
+      // 沒有拿到鎖（owner_busy）但語句沒收尾：連線的乾淨程度無法確認，一樣銷毀，不放回池。
+      console.error(`[crawl-owner] ${reason}；銷毀該 PG session（沒有拿到鎖，但不把沒收尾的連線放回池）`);
     }
     client.removeListener('error',onError);
-    client.release(broken);
+    client.release(destroy||broken);
   }
 }
