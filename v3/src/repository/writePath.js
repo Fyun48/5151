@@ -22,6 +22,12 @@ import {
 import { bindFoldColumnValues, computeFoldColumns, foldColumnsUpdateSql } from "../match.js";
 import { applyListingTotalsDelta, listingUpsertDelta, listingsUpsertRowImpactSql } from "../listingTotalsPgWrite.js";
 import { DEFAULT_LISTING_TOTALS_BUCKET } from "../listingTotalsPgSchema.js";
+import { districtKeyPrefixExpression } from "../listDistrictSql.js";
+import {
+  MATCH_COMPONENT_LOCK_KEY,
+  MATCH_GRAPH_STATE_KEY,
+  componentLabels,
+} from "../listingMatchComponents.js";
 
 // 同屋源折疊的比較輸入固化欄（讀取端 SQL 折疊用，見 docs/same-house-fold-spec.md §4.2）。
 // nullable、無 default ⇒ 加欄為 metadata-only；值由 computeFoldColumns 以既有解析函式算。
@@ -63,6 +69,209 @@ export function ensureFoldColumnsSqlite(sqliteDb) {
   if (!cols.has("fold_refresh_abs_ms")) ddl.push("ALTER TABLE listings ADD COLUMN fold_refresh_abs_ms INTEGER");
   for (const sql of ddl) sqliteDb.exec(sql);
   return ddl.length;
+}
+
+// ── 行政區關係閉包的「配對圖連通分量」材料化（2026-10-12）──────────────────────────
+//
+// 為什麼放在**寫入端**：這一包是「把每請求重算 869–927ms 的 union-find 事先算好」，所以
+// 產生它的東西（DDL、重算、寫入批次）全部屬於寫入路徑；讀取端（`listingMatchComponents.js`）
+// 只負責用便宜的讀證明「這一份沒有過期」，並在過期時**排一次背景重算**。
+//
+// 邊界（Owner 定）：不准每寫一列就重算 ⇒ 重算由「爬蟲輪次結束／圖真的變了」觸發，一次一批。
+// 待機不寫：第一句就是 `pg_is_in_recovery()`。表是本模組新建的衍生表，
+// **沒有**在 `listings` 上加欄（`listings` 的 fold_* 欄由 #739 那條線在動）。
+export function matchComponentDdlStatements() {
+  return [
+    `CREATE TABLE IF NOT EXISTS listing_match_component (
+       post_id bigint PRIMARY KEY,
+       component_id bigint NOT NULL,
+       district_prefix text,
+       match_post_id bigint
+     )`,
+    "CREATE INDEX IF NOT EXISTS idx_listing_match_component_component ON listing_match_component (component_id)",
+    "CREATE INDEX IF NOT EXISTS idx_listing_match_component_prefix ON listing_match_component (district_prefix)",
+    `CREATE TABLE IF NOT EXISTS listing_match_component_state (
+       state_key text PRIMARY KEY,
+       built_at bigint NOT NULL,
+       round_marker text,
+       revision_watermark bigint NOT NULL,
+       listings_stat_fingerprint bigint NOT NULL,
+       node_count bigint NOT NULL,
+       edge_count bigint NOT NULL,
+       component_count bigint NOT NULL,
+       built_db text
+     )`,
+  ];
+}
+
+const matchComponentReady = new WeakSet();
+
+/** 冪等 DDL 入口（WeakSet 記在 driver 上 ⇒ 同一行程只跑一輪），形狀同 `ensureSourcePublishedAtOnce`。 */
+export async function ensureMatchComponentsOnce(pgDriver) {
+  if (!pgDriver || typeof pgDriver.query !== "function") throw new Error("ensureMatchComponentsOnce requires a PG driver");
+  if (matchComponentReady.has(pgDriver)) return;
+  for (const statement of matchComponentDdlStatements()) await pgDriver.query(statement);
+  matchComponentReady.add(pgDriver);
+}
+
+// ⚠️ 佔位符是 `$n`，不是 `?`：這一支走的是 `pgDriver.query()`（`dbDriverPostgres` 的原生介面），
+// 它**不做** SQLite→PG 翻譯；翻譯只發生在注入式 `exec`（呼叫端自己呼叫 `toPostgresSql()`）身上。
+const MATCH_COMPONENT_STATE_SQL = `
+INSERT INTO listing_match_component_state
+  (state_key, built_at, round_marker, revision_watermark, listings_stat_fingerprint,
+   node_count, edge_count, component_count, built_db)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (state_key) DO UPDATE SET
+  built_at = excluded.built_at,
+  round_marker = excluded.round_marker,
+  revision_watermark = excluded.revision_watermark,
+  listings_stat_fingerprint = excluded.listings_stat_fingerprint,
+  node_count = excluded.node_count,
+  edge_count = excluded.edge_count,
+  component_count = excluded.component_count,
+  built_db = excluded.built_db`;
+
+/** 「這一輪算出來的分量與表內逐列相同嗎」——全部在 PG 端比，不必把 7 萬列搬回 Node。 */
+function matchComponentDiffSql(prefixExpression) {
+  return `
+SELECT (SELECT count(*) FROM listing_match_component) AS existing_count,
+       (SELECT count(*) FROM unnest($1::bigint[], $2::bigint[]) AS u(post_id, component_id)) AS incoming_count,
+       (SELECT count(*)
+          FROM unnest($1::bigint[], $2::bigint[]) AS u(post_id, component_id)
+          LEFT JOIN listings l ON l.post_id = u.post_id
+          LEFT JOIN listing_match_component c ON c.post_id = u.post_id
+         WHERE c.post_id IS NULL
+            OR c.component_id IS DISTINCT FROM u.component_id
+            OR c.match_post_id IS DISTINCT FROM l.match_post_id
+            OR c.district_prefix IS DISTINCT FROM ${prefixExpression}) AS diff_count`;
+}
+
+const matchComponentInsertSql = (prefixExpression) => `
+INSERT INTO listing_match_component (post_id, component_id, district_prefix, match_post_id)
+SELECT u.post_id, u.component_id, ${prefixExpression}, l.match_post_id
+  FROM unnest($1::bigint[], $2::bigint[]) AS u(post_id, component_id)
+  LEFT JOIN listings l ON l.post_id = u.post_id`;
+
+/**
+ * 把「配對圖（`listings.match_post_id` 的無向連通分量）」重算成材料化表。
+ *
+ * 一次呼叫＝**一批寫入**（一個交易：清表 ＋ 一句 `INSERT … SELECT unnest(...)`）＋一句狀態 upsert；
+ * 分量／前綴／邊值逐列比對完全相同時**連那一批都不寫**（只更新狀態列的建置時間與水位）。
+ *
+ * 呼叫端：`listingMatchComponents.scheduleMatchComponentRebuild()`（背景、去抖；
+ * 失敗只代表下一個請求仍然走即時算）。
+ */
+export async function rebuildMatchComponents(pgDriver, { now = Date.now(), reason = "scheduled", force = false } = {}) {
+  if (!pgDriver || typeof pgDriver.query !== "function") throw new Error("rebuildMatchComponents requires a PG driver");
+  const recovery = (await pgDriver.query("SELECT pg_is_in_recovery() AS in_recovery")).rows?.[0];
+  if (recovery?.in_recovery === true) return { skipped: "in_recovery" };
+  const locked = (await pgDriver.query("SELECT pg_try_advisory_lock($1) AS ok", [MATCH_COMPONENT_LOCK_KEY])).rows?.[0]?.ok === true;
+  if (!locked) return { skipped: "locked" };
+  try {
+    await ensureMatchComponentsOnce(pgDriver);
+    const prefixExpression = districtKeyPrefixExpression("pg");
+    // 水位／輪次標記／統計指紋一律在**讀邊之前**取：晚一點的變更會被下一次逐列證明再驗一次
+    // （多驗一次只是慢；少驗一次才會少算）。
+    const before = (await pgDriver.query(
+      `SELECT (SELECT COALESCE(MAX(id), 0) FROM data_revision) AS revision,
+              (SELECT value FROM settings WHERE key = 'lastCoveringAt') AS covering,
+              (SELECT value FROM settings WHERE key = 'lastSystemCoveringAt') AS system_covering,
+              CAST((SELECT MAX(last_run_at) FROM crawl_covers) AS text) AS covers_max,
+              COALESCE((SELECT SUM(n_tup_del) FROM pg_stat_user_tables WHERE relname = 'listings'), 0) AS stat_fingerprint,
+              current_database() AS built_db`,
+    )).rows?.[0] || {};
+
+    const edgeRows = (await pgDriver.query(
+      "SELECT post_id, match_post_id FROM listings WHERE match_post_id > 0 OR match_post_id < 0",
+    )).rows || [];
+    const pairs = [];
+    for (const row of edgeRows) {
+      const a = Number(row.post_id) || 0;
+      const b = Number(row.match_post_id) || 0;
+      if (a && b) pairs.push([a, b]);
+    }
+    // 與讀取端的即時算**共用同一份**標記演算法（`componentLabels`）：兩邊各寫一份就會漂移。
+    const labels = componentLabels(pairs).allLabels();
+    const postIds = [...labels.keys()];
+    const componentIds = postIds.map((id) => labels.get(id));
+
+    let changed = force;
+    let diff = null;
+    if (!changed) {
+      diff = (await pgDriver.query(matchComponentDiffSql(prefixExpression), [postIds, componentIds])).rows?.[0] || {};
+      changed = Number(diff.existing_count) !== Number(diff.incoming_count) || Number(diff.diff_count) > 0;
+    }
+
+    const roundMarker = `${before.covering == null ? "" : String(before.covering)}|${before.covers_max == null ? "" : String(before.covers_max)}`;
+    const stateParams = [
+      MATCH_GRAPH_STATE_KEY,
+      now,
+      roundMarker,
+      Number(before.revision) || 0,
+      Number(before.stat_fingerprint) || 0,
+      postIds.length,
+      pairs.length,
+      new Set(componentIds).size,
+      before.built_db == null ? null : String(before.built_db),
+    ];
+    if (changed) {
+      await pgDriver.withTransaction(async (client) => {
+        await client.query("DELETE FROM listing_match_component");
+        await client.query(matchComponentInsertSql(prefixExpression), [postIds, componentIds]);
+        await client.query(MATCH_COMPONENT_STATE_SQL, stateParams);
+      });
+    } else {
+      await pgDriver.query(MATCH_COMPONENT_STATE_SQL, stateParams);
+    }
+    return {
+      changed,
+      reason,
+      nodes: postIds.length,
+      edges: pairs.length,
+      components: new Set(componentIds).size,
+      diff_count: diff == null ? null : Number(diff.diff_count),
+    };
+  } finally {
+    try {
+      await pgDriver.query("SELECT pg_advisory_unlock($1)", [MATCH_COMPONENT_LOCK_KEY]);
+    } catch {
+      // 解鎖失敗＝連線要收了；session 級 advisory lock 會跟著連線結束，不必讓重算失敗。
+    }
+  }
+}
+
+/**
+ * 只把「逐列證明」的水位往前推（材料化表**不動**）——常態路徑用。
+ *
+ * 為什麼需要它：爬蟲每輪結束都換 `lastCoveringAt`／`crawl_covers.last_run_at`，而配對圖幾乎不動；
+ * 若每次換標記就重算（7 萬條邊 ＋ 10 萬節點 union-find ＋ 10 萬列 diff），每一輪要多付好幾秒。
+ * 逐列證明已經通過時，材料化的那一份**就是現在的圖**，只需要把水位／標記／統計指紋記下來。
+ *
+ * CAS（`WHERE revision_watermark = $5`）：跨行程／跨節點同時推的時候只有一個贏家，
+ * 不會把水位寫回去（也就不會出現「用水位掩蓋沒驗證過的區間」）。
+ * 待機不寫；`rowCount !== 1` 一律回 false（呼叫端只是下一個請求重驗一次，不影響正確性）。
+ */
+export async function advanceMatchComponentState(pgDriver, {
+  expectedRevision, revision, roundMarker, statFingerprint, reason = "verified",
+} = {}) {
+  if (!pgDriver || typeof pgDriver.query !== "function") return false;
+  if (!Number.isFinite(Number(revision)) || !Number.isFinite(Number(expectedRevision))) return false;
+  const recovery = (await pgDriver.query("SELECT pg_is_in_recovery() AS in_recovery")).rows?.[0];
+  if (recovery?.in_recovery === true) return false;
+  const res = await pgDriver.query(
+    `UPDATE listing_match_component_state
+        SET revision_watermark = $1, round_marker = $2, listings_stat_fingerprint = $3
+      WHERE state_key = $4 AND revision_watermark = $5`,
+    [
+      Number(revision) || 0,
+      roundMarker == null ? "" : String(roundMarker),
+      Number(statFingerprint) || 0,
+      MATCH_GRAPH_STATE_KEY,
+      Number(expectedRevision) || 0,
+    ],
+  );
+  void reason;
+  return Number(res?.rowCount ?? 0) === 1;
 }
 
 export const WRITE_PATH_SQL = {
