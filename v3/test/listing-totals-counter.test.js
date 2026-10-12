@@ -347,3 +347,81 @@ test("來源①只要有一絲不確定就退回（usable=0／述詞不符）", 
   assert.equal((await repo(mismatch.exec).loadInputs({ userId: 0, requestContext: REQUEST_CONTEXT })).dbTotal, 77);
   assert.equal(mismatch.countCalls(), 1, "述詞不符時必須真的去讀真 COUNT");
 });
+
+// ── #734 的指紋缺陷（2026-10-12 正式站實測）────────────────────────────────
+//
+// 症狀：正式庫 `listing_totals_counter` 只有一列、`predicate_sql` 是**空字串**（寫入端的
+// delta UPSERT 建出來的），於是讀取端的述詞比對永遠不合 ⇒ `db_total_source=unusable` ⇒
+// **每個請求都退回一次全表 COUNT**（單請求窗口 Δcalls=1／Δms=173–465）。
+// 值本身是準的（對帳會覆蓋 total），壞掉的只有指紋。
+test("指紋缺陷：空 predicate_sql 的列在修復前不可用、修復後可用（值不變）", async () => {
+  const {
+    listingTotalsFastState,
+    listingTotalsPredicateNeedsRepair,
+    listingTotalsPredicateRepairSql,
+  } = await import("../src/listingTotalsPgCounter.js");
+  const row = (predicateSql) => async () => [{ predicate_sql: predicateSql, total: 193_418, usable: 1, last_reconcile_at: 1 }];
+  // ① 修復前：列存在、usable=1、指紋是空字串 ⇒ fast-path 必須判定**不可用**（不得沿用）。
+  const before = await listingTotalsFastState({
+    exec: row(""), bucketKey: DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: DEFAULT_LISTING_TOTALS_PREDICATE,
+  });
+  assert.equal(before.exists, true);
+  assert.equal(before.usable, false, "空指紋不得被當成可用（正式庫 predicate_sql='' 的實測形狀）");
+  assert.equal(before.predicateSql, "");
+  assert.equal(
+    listingTotalsPredicateNeedsRepair({ storedPredicateSql: before.predicateSql, expectedPredicateSql: DEFAULT_LISTING_TOTALS_PREDICATE }),
+    true,
+  );
+  // ② 修復後：同一列換成正確指紋 ⇒ 可用，數字照舊。
+  const after = await listingTotalsFastState({
+    exec: row(DEFAULT_LISTING_TOTALS_PREDICATE), bucketKey: DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: DEFAULT_LISTING_TOTALS_PREDICATE,
+  });
+  assert.equal(after.usable, true);
+  assert.equal(after.total, 193_418);
+  assert.equal(
+    listingTotalsPredicateNeedsRepair({ storedPredicateSql: after.predicateSql, expectedPredicateSql: DEFAULT_LISTING_TOTALS_PREDICATE }),
+    false,
+  );
+  // ③ 只有「空指紋」才修：有指紋但不合（例如 fixture 桶）不得被就地改寫。
+  assert.equal(
+    listingTotalsPredicateNeedsRepair({ storedPredicateSql: "fixture_namespace = $1", expectedPredicateSql: DEFAULT_LISTING_TOTALS_PREDICATE }),
+    false,
+  );
+  // ④ 修復語句必須冪等：只碰空指紋、且已經是正確值時不寫（第二次執行 rowCount=0）。
+  const sql = listingTotalsPredicateRepairSql();
+  assert.match(sql, /UPDATE listing_totals_counter/);
+  assert.match(sql, /btrim\(COALESCE\(predicate_sql, ''\)/);
+  assert.match(sql, /IS DISTINCT FROM \$2/);
+});
+
+test("指紋修復：待機（pg_is_in_recovery=true）不得寫任何東西，且失敗只 warn", async () => {
+  const { repairListingTotalsPredicateNow } = await import("../src/listingTotalsPgCounter.js");
+  const seen = [];
+  const standby = { query: async (sql) => { seen.push(sql); return { rows: [{ in_recovery: true }], rowCount: 0 }; } };
+  const result = await repairListingTotalsPredicateNow({ pgDriver: standby, log: { warn() {} } });
+  assert.equal(result.repaired, false);
+  assert.equal(result.reason, "standby");
+  assert.equal(seen.length, 1, "待機只准問一次 pg_is_in_recovery()，不准發 UPDATE");
+  assert.match(seen[0], /pg_is_in_recovery/);
+  assert.ok(!seen.some((sql) => /UPDATE/i.test(sql)), "待機上不得出現任何 UPDATE");
+  // 沒有 driver ⇒ fail-soft，不丟例外。
+  assert.equal((await repairListingTotalsPredicateNow({ pgDriver: null })).repaired, false);
+});
+
+test("寫入端：#734 的 delta UPSERT 不得再用空字串當 predicate_sql", async () => {
+  const { listingTotalsDeltaSql } = await import("../src/listingTotalsPgWrite.js");
+  const sql = listingTotalsDeltaSql();
+  assert.ok(!/VALUES \(\$3, '', /.test(sql), "空字串會讓讀取端永遠 unusable（每個請求一次全表 COUNT）");
+  assert.match(sql, /VALUES \(\$3, \$4, /, "predicate_sql 要走參數，值由 DEFAULT_LISTING_TOTALS_PREDICATE 提供");
+});
+
+test("指紋修復只改指紋：不得把 usable 設成 1（那會抹掉「上一次對帳失敗」的訊號）", async () => {
+  const { listingTotalsPredicateRepairSql } = await import("../src/listingTotalsPgCounter.js");
+  const sql = listingTotalsPredicateRepairSql();
+  assert.match(sql, /SET predicate_sql = \$2/);
+  assert.ok(
+    !/\busable\s*=/.test(sql),
+    "修復語句不得碰 usable：usable=0 的語意是「上一次真 COUNT 對帳失敗」（同檔的對帳合約），"
+    + "順手設回 1 等於宣告對帳成功、讓讀取端吃一個可能過期的 total",
+  );
+});

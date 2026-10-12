@@ -44,28 +44,67 @@ const POST = 9_910_001;
 const BULK = 10;
 const ISOLATION = { sql: schema.DEFAULT_LISTING_TOTALS_PREDICATE, params: [] };
 
+// ── 自我隔離（2026-10-12 修正）──────────────────────────────────────────────
+// 這一支原本在**共用靶**（`repro`／`tracker_test`）上 `DROP TABLE listing_totals_counter`：
+// 跑一次測試就會把別人的靶打掉（而且跑完還留一張被 DROP 掉的表）。
+// 現在跑在**自己建的資料庫**（`sw1_lt_<pid>`，收尾 `DROP DATABASE … WITH (FORCE)`）。
+//
+// 為什麼是獨立「資料庫」而不是獨立 schema（兩個都試過，第二個會壞）：
+//   schema 版必須把 `public` 留在 `search_path` 才看得到 `listings`，於是「測到一半 DROP 掉自己的
+//   計數器表」時，`SELECT … FROM listing_totals_counter` 會**靜默落回 `public` 的那張表**
+//   （讀到共用靶的 184,746）⇒ 測試紅，而且 `DROP TABLE` 在同名表不存在時也會打到 `public`。
+//   獨立資料庫裡只有一張 `listings`、一張 `listing_totals_counter`，沒有落回問題，
+//   `listingTotalsScanDue()` 的 `pg_stat_user_tables WHERE relname='listings'` 也只會看到一張。
+// **不對共用庫的任何既有物件做 DROP／TRUNCATE／ALTER。**
+//
+// ⚠️ 自癒路徑（`defaultPrimaryDriver()`）走 `PG_URL` ⇒ 這裡也把它指到自建庫，
+// 否則測試會去打共用庫的 `public`（那正是要避免的事）。
+const DB_NAME = `sw1_lt_${process.pid}`;
+const withDatabase = (url, name) => {
+  const u = new URL(url);
+  u.pathname = `/${name}`;
+  return u.toString();
+};
+if (RAW && !REFUSED) process.env.PG_URL = withDatabase(RAW, DB_NAME);
+
 let pgDriver = null;
+let adminDriver = null;
 
 after(async () => {
-  if (pgDriver) {
-    try {
-      await pgDriver.query("DELETE FROM listings WHERE post_id >= $1 AND post_id < $2", [POST, POST + BULK + 1]);
-      await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
-    } catch { /* 已經收掉 */ }
-    await pgDriver.close();
+  if (pgDriver) await pgDriver.close().catch(() => {});
+  // 自癒路徑用的是行程共用的 primary pool ⇒ 收尾前要關掉，否則 DROP DATABASE 會被連線擋住。
+  try {
+    const { closeSharedPgDriver } = await import("../src/pgSharedDriver.js");
+    await closeSharedPgDriver();
+  } catch { /* 沒建過就沒事 */ }
+  if (adminDriver) {
+    try { await adminDriver.query(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`); } catch { /* 已經收掉 */ }
+    await adminDriver.close().catch(() => {});
   }
   rmSync(dataDir, { recursive: true, force: true });
 });
 
 async function connect() {
+  if (pgDriver) return pgDriver;
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
-  pgDriver = await createPostgresDriver({ connectionString: RAW });
-  const who = (await pgDriver.query("SELECT current_database() AS db")).rows[0];
+  const { ensurePgSchema } = await import("../src/pgSchema.js");
+  const { sqliteHandle } = await import("../src/db.js");
+  adminDriver = await createPostgresDriver({ connectionString: RAW });
+  const who = (await adminDriver.query("SELECT current_database() AS db")).rows[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
+  await adminDriver.query(`DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE)`);
+  await adminDriver.query(`CREATE DATABASE ${DB_NAME}`);
+  pgDriver = await createPostgresDriver({ connectionString: withDatabase(RAW, DB_NAME) });
+  const mine = (await pgDriver.query("SELECT current_database() AS db")).rows[0];
+  assert.equal(mine.db, DB_NAME, "這一支必須跑在自己的資料庫（不動共用靶）");
+  // `listings` 由 SQLite schema 鏡射（含 `post_id` 主鍵，收口點的 ON CONFLICT 需要它）；
+  // 計數器是 PG 專屬表（SQLite 沒有），用模組自己的 DDL 建。
+  await ensurePgSchema(pgDriver, sqliteHandle(), { schema: "", tables: ["listings"], indexes: false });
+  for (const statement of schema.listingTotalsDdlStatements()) await pgDriver.exec(statement);
   const columns = (await pgDriver.query(
     "SELECT 1 AS present FROM information_schema.columns WHERE table_name = 'listings' AND column_name = 'fixture_namespace' LIMIT 1",
   )).rows;
-  assert.equal(columns.length, 1, "隔離庫的 listings 必須有 fixture_namespace（否則桶的定義不成立）");
+  assert.equal(columns.length, 1, "listings 必須有 fixture_namespace（否則桶的定義不成立）");
   return pgDriver;
 }
 
@@ -290,4 +329,129 @@ test("live PG：計數器讀取失敗不得毒化呼叫端的交易（頁面不�
   assert.ok(Number.isFinite(healed.value) && healed.value >= 0);
   const snap = await snapshotPair();
   assert.equal(snap.counter, snap.truth);
+});
+
+/**
+ * **#734 指紋缺陷的自癒（live PG）**：正式庫實測的形狀是「列存在、`usable=1`、`total` 正確、
+ * 但 `predicate_sql` 是空字串」⇒ 讀取端述詞比對永遠不合 ⇒ 每個請求退回一次全表 COUNT
+ * （單請求窗口 Δcalls=1／Δms=173–465）。這裡造出同一個形狀，走**讀取路徑**（
+ * `readListingTotalsForStats`，也就是 `loadInputs` 呼叫的那一支）讓它自癒，並驗證：
+ *   ① 修復前：`db_total_source=unusable`、回 `null`（呼叫端退回真 COUNT，數字正確只是慢）；
+ *   ② 讀取路徑觸發修復後：列上的指紋變成正式述詞；
+ *   ③ 之後的同一個讀取：`db_total_source=counter`、值＝同一個快照裡的真 COUNT；
+ *   ④ 冪等：再修一次 rowCount=0（不重複寫）。
+ *
+ * ⚠️ 這一支只認 `PG_LIVE_REPRO_URL`（不吃 `PG_TEST_URL`；本機那個可能指向正式庫），
+ * 允許清單與上面那一支共用。`PG_TEST_URL` 這個字串是給 `run-pg-integration.sh` 的收檔用的。
+ */
+test("live PG：空指紋自癒（讀取路徑觸發）⇒ 之後不再退回全表 COUNT", { skip }, async () => {
+  await connect();
+  await pgDriver.query("DELETE FROM listings WHERE post_id >= $1 AND post_id < $2", [POST, POST + BULK + 1]);
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
+  counter.resetListingTotalsForTests();
+  counter.forgetListingTotalsEnsured(pgDriver);
+  counter.resetListingTotalsPresenceForTests();
+
+  // 造出正式庫的形狀：`predicate_sql=''`（寫入端的 delta UPSERT 就是這樣建列的）。
+  await counter.ensureListingTotalsReady(pgDriver, { bucketKey: schema.DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: "" });
+  await pgDriver.query(
+    `UPDATE ${schema.LISTING_TOTALS_TABLE} SET usable = 1, total = (SELECT COUNT(*) FROM listings WHERE ${ISOLATION.sql})
+      WHERE bucket_key = $1`,
+    [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  );
+  const seeded = (await pgDriver.query(
+    `SELECT predicate_sql, usable FROM ${schema.LISTING_TOTALS_TABLE} WHERE bucket_key = $1`, [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  )).rows[0];
+  assert.equal(seeded.predicate_sql, "", "前置條件：列的指紋必須是空字串（#734 的形狀）");
+
+  // ① 修復前的讀取：不可用、退回真 COUNT。診斷欄位要誠實說出「unusable」。
+  const beforeDiag = {};
+  const beforeValue = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: beforeDiag });
+  assert.equal(beforeValue, null, "空指紋不得被當成可用值");
+  assert.equal(beforeDiag.db_total_source, "unusable");
+
+  // ② 讀取路徑已經把修復排進 primary（fire-and-forget）；等它落地。
+  await counter.awaitListingTotalsPredicateRepair();
+  const repaired = (await pgDriver.query(
+    `SELECT predicate_sql FROM ${schema.LISTING_TOTALS_TABLE} WHERE bucket_key = $1`, [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  )).rows[0];
+  assert.equal(
+    schema.normalizeListingTotalsPredicate(repaired.predicate_sql),
+    schema.normalizeListingTotalsPredicate(schema.DEFAULT_LISTING_TOTALS_PREDICATE),
+    "指紋必須被就地改寫成正式述詞",
+  );
+
+  // ③ 修復後：同一個讀取來源變成計數器，且值＝同一個快照裡的真 COUNT。
+  await counter.reconcileListingTotalsOnce({ pgDriver, force: true });
+  const afterDiag = {};
+  const afterValue = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: afterDiag });
+  const snap = await snapshotPair();
+  assert.equal(afterDiag.db_total_source, "counter", "修復後不得再退回真 COUNT");
+  assert.equal(afterValue, snap.counter, "計數器值必須是同一個快照裡的桶值");
+  assert.equal(snap.counter, snap.truth, "同一個快照內，計數器必須逐位等於真 COUNT");
+
+  // ④ 冪等：第二次修復不寫任何一列。
+  const again = await counter.repairListingTotalsPredicateNow({ pgDriver });
+  assert.equal(again.repaired, false);
+  assert.equal(again.rows, 0);
+
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
+});
+
+/**
+ * **修復只補指紋，不宣告對帳成功（live PG）**。
+ *
+ * `usable=0` 的語意是「上一次真 COUNT 對帳失敗」（見同檔的對帳合約）：指紋修復只該讓列
+ * 「認得出是哪一條述詞」，**不可以**順手把 `usable` 設回 1 —— 那會抹掉失敗訊號、讓讀取端吃
+ * 一個可能過期的 `total`（違反「資料精準優先」）。所以這裡造一列 `usable=0 ∧ predicate_sql=''`：
+ *   ① 修一次 ⇒ `predicate_sql` 變成正式述詞，但 `usable` **仍是 0**；
+ *   ② 讀取端照樣不可用（快路徑關著，等下一次成功對帳才開）；
+ *   ③ 再修一次 ⇒ `rowCount=0`（冪等）。
+ */
+test("live PG：usable=0 ∧ 空指紋 ⇒ 只補指紋、usable 仍為 0（不宣告對帳成功）", { skip }, async () => {
+  await connect();
+  await pgDriver.query("DELETE FROM listings WHERE post_id >= $1 AND post_id < $2", [POST, POST + BULK + 1]);
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
+  counter.resetListingTotalsForTests();
+  counter.forgetListingTotalsEnsured(pgDriver);
+  counter.resetListingTotalsPresenceForTests();
+
+  await counter.ensureListingTotalsReady(pgDriver, { bucketKey: schema.DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: "" });
+  await pgDriver.query(
+    `UPDATE ${schema.LISTING_TOTALS_TABLE} SET usable = 0, total = 0 WHERE bucket_key = $1`,
+    [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  );
+
+  const first = await counter.repairListingTotalsPredicateNow({ pgDriver });
+  assert.equal(first.repaired, true, "指紋必須被修好");
+  assert.equal(first.rows, 1);
+  const row = (await pgDriver.query(
+    `SELECT predicate_sql, usable FROM ${schema.LISTING_TOTALS_TABLE} WHERE bucket_key = $1`, [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  )).rows[0];
+  assert.equal(
+    schema.normalizeListingTotalsPredicate(row.predicate_sql),
+    schema.normalizeListingTotalsPredicate(schema.DEFAULT_LISTING_TOTALS_PREDICATE),
+    "predicate_sql 必須被改寫成正式述詞",
+  );
+  assert.equal(Number(row.usable), 0, "修指紋不得宣告對帳成功（usable 必須仍是 0）");
+
+  // ② 讀取端仍然不可用：快路徑關著，等下一次成功對帳。
+  const diag = {};
+  const value = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: diag });
+  assert.equal(value, null);
+  assert.equal(diag.db_total_source, "unusable");
+
+  // ③ 冪等：第二次不寫任何一列。
+  const again = await counter.repairListingTotalsPredicateNow({ pgDriver });
+  assert.equal(again.repaired, false);
+  assert.equal(again.rows, 0);
+
+  // ④ 成功對帳之後才由對帳把 usable 打開。
+  await counter.reconcileListingTotalsOnce({ pgDriver, force: true });
+  const usableDiag = {};
+  const usableValue = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: usableDiag });
+  assert.equal(usableDiag.db_total_source, "counter");
+  assert.equal(usableValue, await trueCount());
+
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
 });
