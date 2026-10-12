@@ -77,7 +77,8 @@ async function runCombo(combo) {
     const built = buildPublicListingsClauses({ districts: args.districts, settings, q, context, districtIds: closure ?? null }, { sqliteDb: null });
     const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${cols} FROM listings ${built.where} ORDER BY post_id`), built.params);
     const loader = createDecorationDataLoader({ exec, driver: "postgres" });
-    const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
+    // foldGroups: true ⇒ 讀取端才拿得到固化欄 fold_component_root（群內代表的分組鍵）。
+    const provider = await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, foldGroups: true, requestContext: context });
     const survivors = await buildPublicListingsRowsAsync(raw, { settings, kind: args.kind, sources: args.sources || "", sort: args.sort, districtSet: built.districtSet, provider, now: context.now, requireProvider: true });
     const nodeOrder = survivors.map(r => Number(r.post_id));
 

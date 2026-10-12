@@ -9,6 +9,12 @@ import {
   computeFoldColumns,
 } from "../src/match.js";
 import { buildPublicListingsFoldSql, foldRoleCte } from "../src/listingSearchSql.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const readRepo = (rel) => readFileSync(path.join(REPO, rel), "utf8");
 
 // 相對時間字串解析：listingRefreshParts 必須與 listingRefreshAt 逐位元一致。
 test("listingRefreshParts round-trips listingRefreshAt for every relative/absolute format", () => {
@@ -120,4 +126,51 @@ test("foldRoleCte groups by fold_component_root and ranks the representative ins
   assert.ok(/fold_role AS/.test(cte));
   // 參數順序（文字順序）：候選參數 → elig 的 enabledSources → ranked 的 now。
   assert.ok(cte.indexOf("ANY(?::text[])") < cte.indexOf("?::bigint - e.fold_refresh_rel_ms"), "param order: enabledSources before now");
+});
+
+// 接線防護（L-0503 精神：不准有「靜默換語意」的門）：
+// 讀取端只有在 provider 帶 `foldRoot()` 時才用固化欄分組，而 `foldRoot()` 只在
+// `preloadDecorationProviderAsync({ foldGroups: true })` 且欄位已部署時才掛上。
+// 會指派 role 的路徑若忘了 `foldGroups: true`，就會**靜默**退回 legacy union-find
+// （＝另一套語意，正是「跨候選集邊界主卡不同」的老問題）。這裡把每一條路徑釘住。
+test("會指派 role 的路徑都必須 foldGroups: true（否則靜默退回 legacy 語意）", () => {
+  const files = [
+    "v3/src/listingSearchNodePg.js",
+    "v3/src/publicListingSearchAsync.js",
+    "v3/src/listingSearchSqlPgDiagnostic.js",
+    "v3/scripts/fold-endpoint-parity.mjs",
+    "v3/scripts/fold-endpoint-symmetric-diff.mjs",
+    "v3/scripts/fold-role-parity.mjs",
+    "v3/scripts/fold-role-sql-parity.mjs",
+    "v3/scripts/fold-role-sql-explain.mjs",
+    "v3/scripts/fold-ci-parity.mjs",
+  ];
+  for (const rel of files) {
+    const src = readRepo(rel);
+    assert.match(
+      src,
+      /preloadDecorationProviderAsync\(\{[\s\S]{0,600}?foldGroups:\s*true/,
+      `${rel} 必須在 preloadDecorationProviderAsync 帶 foldGroups: true`,
+    );
+  }
+});
+
+test("SQLite 讀取端沒有 foldRoot ⇒ 必須走 legacy union-find（不靜默用空的分組）", async () => {
+  const { attachSameHouseRoles } = await import("../src/db.js");
+  const provider = {
+    driver: "sqlite",
+    now: 1,
+    sourceEnabled: () => true,
+    prep: () => null,
+    personalIndex: () => ({ size: 0, peers: () => [], groupKey: () => "" }),
+    splitPairs: () => new Set(),
+    extras: () => new Map(),
+  };
+  const rows = [
+    { post_id: 1, source: "591", price: "30000元", price_num: 30000, extra_fees: "[]", match_post_id: 2, match_verdict: null, refresh_time: "", last_seen_at: "2026-10-01T00:00:00.000Z" },
+    { post_id: 2, source: "591", price: "20000元", price_num: 20000, extra_fees: "[]", match_post_id: null, match_verdict: null, refresh_time: "", last_seen_at: "2026-10-01T00:00:00.000Z" },
+  ];
+  attachSameHouseRoles(rows, 0, provider, provider.now);
+  assert.equal(rows[0].same_house_role, "affiliate");
+  assert.equal(rows[1].same_house_role, "primary");
 });
