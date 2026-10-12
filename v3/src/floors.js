@@ -10,6 +10,10 @@ import {
   listingHasStreetAddress,
   resolveLocationClass,
 } from "./geoPrecision.js";
+// 「路線還沒算好（pending）」與「永遠算不出」的語意住在 listingPrep（D-0046 ①）。
+// 這是 module 層的循環（listingPrep → houseprice → floors），但這裡只在函式內呼叫，
+// ESM 的 live binding 不會在評估期取用它。
+import { commuteIncompleteShouldExclude } from "./listingPrep.js";
 import {
   HOUSING_KINDS,
   LEGACY_RENTAL_KINDS,
@@ -516,7 +520,13 @@ export function decideNotifyDecision(listing, settings = {}) {
   return decision;
 }
 
-export function passesGeoFilters(listing, settings = {}, { strict = true } = {}) {
+/**
+ * @param {object} [options]
+ * @param {boolean} [options.strict] 嚴格模式（通知／爬蟲語意）：座標基底不可用的列一律排除。
+ * @param {(reason: string) => void} [options.onExclude] 排除原因回報（可選、不改變回傳值）。
+ *   呼叫端據此統計「這一層擋掉幾筆」，讓使用者看得懂空列表（`stats.excludedByCommute`／`commutePending`）。
+ */
+export function passesGeoFilters(listing, settings = {}, { strict = true, onExclude = null } = {}) {
   const km = Number(settings.commuteKm);
   const commuteOn = Number.isFinite(km) && km > 0 && hasWorkPoint(settings);
   const boxesOn = hasActiveBoxes(settings.excludeBoxes);
@@ -524,14 +534,29 @@ export function passesGeoFilters(listing, settings = {}, { strict = true } = {})
   const cls = resolveLocationClass(listing);
   const usableRoad = canUseForRoadDistance(cls) && hasTrustedCoords(listing);
   if (usableRoad && isExcludedByBox(listing.lat, listing.lng, settings.excludeBoxes)) {
+    onExclude?.("exclude_box");
     return false;
   }
-  if (strict && boxesOn && !usableRoad) return false;
+  if (strict && boxesOn && !usableRoad) {
+    onExclude?.("box_unknown_coords");
+    return false;
+  }
   if (commuteOn) {
-    if (strict && !usableRoad) return false;
+    if (strict && !usableRoad) {
+      onExclude?.("commute_no_usable_coords");
+      return false;
+    }
     const meters = listingNotifyMeters(listing);
-    if (strict && meters == null) return false;
-    if (meters != null && !commuteMetersWithinLimit(meters, km)) return false;
+    // Owner 裁決（2026-10-12）：「**最後資料精準**」⇒ 路線還沒算好（pending）的列**不算符合**，
+    // 不得先顯示再由背景 route job 撤掉（那是假陽性）。單一來源＝commuteIncompleteShouldExclude()。
+    if (strict && commuteIncompleteShouldExclude(settings, meters)) {
+      onExclude?.("commute_pending");
+      return false;
+    }
+    if (meters != null && !commuteMetersWithinLimit(meters, km)) {
+      onExclude?.("commute_over_limit");
+      return false;
+    }
   }
   return true;
 }

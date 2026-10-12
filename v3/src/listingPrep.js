@@ -385,6 +385,21 @@ export function hpDisplayReadySql(alias = "listings") {
   ))`;
 }
 
+/**
+ * 通勤 strict 的單一來源：**路線還沒算好（pending）＝不算符合。**
+ *
+ * 這裡以前是死碼（全 repo 零呼叫點），害人把它當成斷點查了一小時；現在 `passesGeoFilters()`
+ * 的 strict 分支真的呼叫它，語意只有這一份。
+ *
+ * **Owner 裁決（2026-10-12）**：產品要求是「最後資料精準」——不得把 pending 的列先顯示、
+ * 等背景 route job 算完再撤掉（那是假陽性），所以 pending 一律排除；使用者看到 0 筆時，
+ * 由 `stats.excludedByCommute`／`commutePending` 這兩個計數解釋原因，而不是靠放寬過濾。
+ *
+ * 「永遠算不出」（沒有可信座標／路段類別不可用）由呼叫端擋在更前面
+ * （`passesGeoFilters()` 的 `strict && !usableRoad`），不靠 `null`／`undefined` 的隱含區別。
+ *
+ * 回傳 `true` ＝ 應該排除。
+ */
 export function commuteIncompleteShouldExclude(settings, listingMeters) {
   const km = Number(settings?.commuteKm);
   const commuteOn = Number.isFinite(km) && km > 0 && Number(settings?.workLat) && Number(settings?.workLng);

@@ -355,12 +355,17 @@ async function searchListingsNodePgInner(args = {}, { pgDriver, deps = {}, decor
   ]);
   markStage("preload_ms");
 
+  // 通勤計數（同一請求快照、零額外查詢）：讓「0 筆」有原因可看，見 `applyListingFilter()`。
+  const commuteCounters = { excludedByCommute: 0, commutePending: 0 };
   const rows = await buildListListingsRowsAsync(raw, {
     filter, kind, sources, sort, uid, voteUid, settings,
     districtSet: built.districtSet, provider, flagMap, markStage,
     now: context.now, requireProvider: true,
     candidateShape: candidateColumns === LIST_CANDIDATE_COLUMNS,
+    commuteCounters,
   });
+  queryDetails.commute_excluded = commuteCounters.excludedByCommute;
+  queryDetails.commute_pending = commuteCounters.commutePending;
 
   const paged = await paginateListListingsRowsAsync(rows, { sort, filter, settings, limit: args.limit, offset: args.offset, now: context.now });
   markStage("sort_ms");
