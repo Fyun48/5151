@@ -30,6 +30,7 @@ function fakeDriver() {
       calls.push(text);
       if (text === "SELECT 1" && inTransaction) overlaps.push(text);
       if (text.startsWith("SELECT pg_try_advisory_lock")) return { rows: [{ acquired: true }] };
+      if (text.startsWith("SELECT pg_advisory_unlock")) return { rows: [{ released: true }] };
       return { rows: [] };
     },
     on() {}, removeListener() {}, release() {},

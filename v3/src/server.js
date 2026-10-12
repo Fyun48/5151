@@ -787,6 +787,10 @@ app.get("/api/health", (_req, res) => {
     // 所以這是唯一可靠的失敗訊號，正常為 0）。
     projection_refresh_failures: refreshFailureStats().projection.failures,
     fold_refresh_failures: refreshFailureStats().fold.failures,
+    // crawl_owner_unlock_failures：離開抓取時「無法確認 owner advisory lock 已釋放」的
+    // 累計次數（2026-10-12 洩漏事故）。正常為 0；不是 0 代表當次已銷毀那條 PG session
+    // 來保證釋放（session 級鎖只在 session 結束時保證釋放），監控要看得出來。
+    crawl_owner_unlock_failures: crawlOwnerReleaseStats().unlock_unconfirmed,
   });
 });
 
@@ -4604,7 +4608,7 @@ async function queueGeoBackfill(settings = null) {
 }
 
 import { isSystemCoveringDueAsync } from "./coveringBookkeepingAsync.js";
-import { withPgCrawlOwner } from "./crawlOwnership.js";
+import { withPgCrawlOwner, crawlOwnerReleaseStats } from "./crawlOwnership.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { coveringPlanAsync, reserveCoveringPlan } from "./crawlScheduleAsync.js";
 
