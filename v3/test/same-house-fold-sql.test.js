@@ -104,14 +104,20 @@ test("buildPublicListingsFoldSql uses searchWhere([]) and hidden/affiliate claus
   assert.match(built.pageQuery({ limit: 5 }).sql, /LIMIT \? OFFSET \?/);
 });
 
-// foldRoleCte：Owner 2026-10-12 准 (B) ⇒ SQL 端**不再算連通分量**，改讀固化欄
-// `listings.fold_component_root`，只在分量內排名取 rn=1 當主卡（可終止、不遞歸）。
-test("foldRoleCte reads fold_component_root and ranks inside the component", () => {
+// foldRoleCte：Owner 2026-10-12 裁決（群內代表，零容差）⇒ SQL 端**不再算連通分量**，
+// 固化欄 `listings.fold_component_root` 只當分組鍵；**代表列在本次候選列（cand）之內**排名
+// 取 rn=1（不再掃整個分量），所以「全域主卡不符本次篩選」不會讓整群消失。
+test("foldRoleCte groups by fold_component_root and ranks the representative inside cand", () => {
   const cte = foldRoleCte("");
   assert.ok(!/RECURSIVE/i.test(cte), "must not use recursive CTE");
-  assert.ok(/JOIN roots r ON r\.croot = l\.fold_component_root/.test(cte), "same-component rows come from one indexed lookup");
-  assert.ok(/PARTITION BY c\.croot/.test(cte) && /\(c\.fold_rent_num IS NULL\) ASC, c\.fold_rent_num ASC/.test(cte), "component-internal ranking");
-  assert.ok(/WHERE c\.offline_confirmed IS DISTINCT FROM 1 AND c\.display_ready/.test(cte), "eligible filter mirrors db.js");
+  assert.ok(/PARTITION BY e\.croot/.test(cte) && /\(e\.fold_rent_num IS NULL\) ASC, e\.fold_rent_num ASC/.test(cte), "representative ranking");
+  // 代表列的來源必須是 cand（本次候選列），不是整個分量（roots/comp 全分量掃描已移除）。
+  assert.ok(!/JOIN roots r ON r\.croot/.test(cte), "whole-component scan must be gone");
+  assert.ok(/FROM cand c\b/.test(cte) && /FROM elig e\b/.test(cte), "ranking input is the candidate set");
+  assert.ok(/c\.offline_confirmed IS DISTINCT FROM 1/.test(cte) && /p\.display_ready, 0\) = 1/.test(cte), "eligible filter mirrors db.js");
+  assert.ok(/JOIN listing_prep p ON p\.post_id = c\.post_id/.test(cte), "prep join for the display-ready mirror");
   assert.ok(!/inc AS|\(SELECT src AS x, src AS ord/.test(cte), "first-incident-edge pairing must be gone");
   assert.ok(/fold_role AS/.test(cte));
+  // 參數順序（文字順序）：候選參數 → elig 的 enabledSources → ranked 的 now。
+  assert.ok(cte.indexOf("ANY(?::text[])") < cte.indexOf("?::bigint - e.fold_refresh_rel_ms"), "param order: enabledSources before now");
 });
