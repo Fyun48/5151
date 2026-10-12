@@ -63,7 +63,10 @@ const withSearchPath = (url, name) => {
   u.searchParams.set("options", `-c search_path=${name},public`);
   return u.toString();
 };
-process.env.PG_URL = withSearchPath(RAW, SCHEMA);
+// ⚠️ 只有「真的連得到隔離庫」時才動 `PG_URL`：沒有 `PG_LIVE_REPRO_URL`（離線 `npm test`）
+// 或資料庫不在允許清單時，這一支整支 skip，**不得**在 import 期就把 `new URL("")` 拋出去
+// （CI 的 `Run Tests` job 就是這樣紅的：檔案層級 'test failed'）。
+if (RAW && !REFUSED) process.env.PG_URL = withSearchPath(RAW, SCHEMA);
 
 let pgDriver = null;
 let adminDriver = null;
