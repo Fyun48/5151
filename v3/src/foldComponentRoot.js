@@ -241,6 +241,72 @@ export async function foldRootRefreshReady(exec) {
 /** 測試用：清掉探測記憶（同一行程先後接不同 driver 時才需要）。 */
 export function resetFoldRootRefreshProbe() { foldRootReady = null; }
 
+// ---------------------------------------------------------------------------
+// 開閘前檢（訪客 SQL-first；Owner 2026-10-12 R3：fail-closed，禁止自動降級）
+// ---------------------------------------------------------------------------
+
+/** 開閘前檢的穩定原因碼（拒開閘 ⇒ 呼叫端必須回 503 並告警，不得退回舊路徑）。 */
+export const FOLD_SQL_GATE_REASON = Object.freeze({
+  NO_COLUMN: "fold_component_root_missing",
+  NO_DRIFT_STAMP: "fold_root_drift_stamp_missing",
+  DRIFT_STAMP_DIRTY: "fold_root_drift_stamp_mismatch",
+});
+
+// `fold-root-drift-check.mjs --stamp` 在「全量重算 vs 固化欄」逐列零差時寫入的 settings 鍵。
+// 為什麼用戳記而不是即時抽樣：NULL 是**合法值**（單節點分量／被三道閘否決的邊），
+// 所以「有邊卻沒有 root」不能當不完整；而全量重算不可能每請求做一次（見 runbook §1／§5）。
+export const FOLD_DRIFT_STAMP_KEY = "foldRootDriftStamp";
+
+let foldSqlGateCache = null;
+
+/** 測試用：清掉開閘前檢的記憶（同一行程先後接不同 driver／不同戳記時才需要）。 */
+export function resetFoldSqlGate() { foldSqlGateCache = null; }
+
+/**
+ * 訪客 SQL-first 折疊的**開閘前檢**（fail-closed）。
+ *
+ * 在哪裡做：`preloadDecorationProviderAsync` 之外的**讀取入口**——`publicListingSearchAsync.js`
+ * 的 `searchPublicListingsAsync()`，在 `PUBLIC_LISTINGS_SQL_FIRST === "1"` 之後、任何折疊 SQL
+ * 之前呼叫。用的是**這一個請求自己的連線／交易**（`withPgReadSnapshot` 的 snapshot client），
+ * 不另開連線、不碰寫入路徑的交易。
+ *
+ * 依賴（兩項都必須成立）：
+ *   1. 欄位存在：`information_schema.columns`（與 `foldRootRefreshReady` 同一條探測；缺欄時
+ *      回 0 列、**不拋錯** ⇒ 不會讓交易進 aborted（25P02））。
+ *   2. 回填已驗證零差：`settings.foldRootDriftStamp`（由 `fold-root-drift-check.mjs --stamp`
+ *      在全量重算逐列零差時寫入）存在且 `mismatches === 0`。
+ *
+ * 回傳 `{ ok, reason, detail }`（每個行程記憶一次；失敗也記憶 ⇒ 修好依賴後需重啟行程，
+ * 這是刻意的 fail-closed，不是吞錯）。呼叫端**不得**在 `ok:false` 時退回 Node 路徑。
+ */
+export async function foldSqlGateReady(exec) {
+  if (foldSqlGateCache) return foldSqlGateCache;
+  let result;
+  try {
+    if (!(await foldRootRefreshReady(exec))) {
+      result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_COLUMN, detail: null };
+    } else {
+      const rows = await exec("SELECT value FROM settings WHERE key = ?", [FOLD_DRIFT_STAMP_KEY]);
+      const list = Array.isArray(rows) ? rows : rows?.rows;
+      const raw = list?.[0]?.value;
+      let stamp = null;
+      try { stamp = raw == null ? null : (typeof raw === "string" ? JSON.parse(raw) : raw); } catch { stamp = null; }
+      if (!stamp || Number.isFinite(Number(stamp.mismatches)) === false) {
+        result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_DRIFT_STAMP, detail: null };
+      } else if (Number(stamp.mismatches) !== 0) {
+        result = { ok: false, reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_DIRTY, detail: { mismatches: Number(stamp.mismatches), at: stamp.at || null } };
+      } else {
+        result = { ok: true, reason: null, detail: { at: stamp.at || null, rows: Number(stamp.rows) || null } };
+      }
+    }
+  } catch (error) {
+    // 讀不到戳記（表不存在／連線壞）⇒ 一樣拒開閘。
+    result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_DRIFT_STAMP, detail: { error: String(error?.message || error).slice(0, 160) } };
+  }
+  foldSqlGateCache = result;
+  return result;
+}
+
 /** 從 PG 讀「哪些來源是開啟的」（`settings` 的 `crawlSources` 鍵；與請求期同一個來源）。 */
 export async function enabledSourcesFromPg(exec) {
   const rows = await exec("SELECT value FROM settings WHERE key = ?", ["crawlSources"]);

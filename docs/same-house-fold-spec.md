@@ -308,16 +308,50 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_listings_fold_component_root
   「群內任一候選列被關注／被隱藏 ⇒ 該群出現」，但出現的那一列是本次篩選選出的代表列）。
   「一般」由代表列自己的旗標決定（次卡本來就被折疊，不參與判斷）。
 
-### 6.7 分頁穩定性結論（群內代表帶來的**新增**風險，已實測）
-代表列會隨篩選而變 ⇒ 必須證明「同一篩選下分頁是同一份有序集合的切段」。實測方法與結果見
-`v3/scripts/fold-endpoint-pagination.mjs`（offset `limit∈{7,40,500}` ＋ cursor `limit∈{7,500}`，
-合併各頁比對 `fullQuery` 的完整有序序列）：`duplicate=0`、`missing=0`、`extra=0`、順序逐筆相同、
-每頁 `total_count` 相同。**結論：分頁穩定**（原因：role 與排序都在同一個快照上的同一支 CTE 內算完，
-再用 `LIMIT/OFFSET`／cursor tuple 切段；代表列的選擇不依賴「先前翻了幾頁」）。
+### 6.7 分頁穩定性的**有條件**結論（Owner 2026-10-12 R1；不得寫成無條件保證）
+代表列會隨篩選而變 ⇒ 分頁與結果集必須是「同一份有序集合的切段」。**可宣稱的條件**（四者同時成立）：
 
-### 6.8 兩層防線：CI 合成種子（會紅）＋ merge 前人工全量快照 parity
-1. **CI（自動、每次 PR）**：用**合成種子資料**（含線狀鏈、橋式／非橋式、代表列隨篩選變動）
-   跑 `fold-role-sql-parity.mjs` 與端點級 parity。合成資料足以讓「兩條路徑語意分歧」在 CI 就紅，
-   且**不使用任何正式資料**（`.github/workflows/pg-integration.yml` 的 service container）。
-2. **人工（merge 前，不進 CI）**：對全量凍結快照跑 35/35 端點 parity ＋ 逐列對稱差 ＋ 分頁穩定性
-   （`repro2`，指令見 runbook）。全量 18.4 萬列不可能進 CI（時間與資料主權），所以留作人工關卡。
+1. **同一個 read snapshot**：一次請求一條連線（`withPgReadSnapshot`），比對時兩邊都在同一顆快照上；
+2. **同一組篩選**（`kind`／`q`／`districts`／`sort`／`settings` 逐字相同）；
+3. **固定的 `now`**（`context.now`／`asOf` 一次決定，`fold_refresh_kind=1` 的相對時間因此不漂移）；
+4. **唯一排序鍵**：`ORDER BY` 以 `post_id` 收尾 ⇒ 全域嚴格遞增，不存在同鍵並列（`newest`／
+   `price_asc`／`price_desc` 三種都一樣，見 §4.3 的 `tie_key ASC, post_id ASC`）。
+
+在四者成立的條件下，實測（`v3/scripts/fold-endpoint-pagination.mjs`）：
+offset 翻頁與 cursor 翻頁各自的合併結果與同一支查詢的完整有序序列**逐筆相同**，
+`duplicate=0`、`missing=0`、`extra=0`、每頁 `total_count` 相同；覆蓋三種排序鍵
+（newest／price_asc／price_desc）與候選層篩選（`q=101`、`q=15000+kind=whole`、`district=西屯區`），
+頁面大小 500（小集合另加 40／7，cursor 另加 500）。
+
+**明確不在保證範圍**：**翻頁中途改篩選**（改篩選＝重開分頁；此時代表列本來就可能換人，舊頁的
+offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）、以及在**非唯一排序鍵**上的分頁
+（本語意不使用）。因此本節的結論一律寫成「在上述四條件下」，不寫「分頁穩定」。
+
+### 6.8 三層防線：CI 合成種子（會紅）＋ 全量 drift（部署前必要）＋ 全量快照 parity（merge 前人工）
+1. **CI（自動、每次 PR）**：`v3/scripts/fold-ci-parity.mjs`（`test.yml` 的 test-postgres job，
+   gating）用**合成種子資料**跑角色級＋端點級比對，斷言**群成員集合**與**代表列 id**（不是只有筆數）：
+   線狀鏈 ≥15 列同群、橋式／非橋式、以及「篩掉原代表」後重新選代表。**不使用任何正式資料**。
+2. **全量 drift（部署前必要，不是抽樣）**：`v3/scripts/fold-root-drift-check.mjs` 在部署當下的資料上
+   把分量**整表重算**與固化欄逐列比對，輸出 mismatch 筆數與 `post_id`，目標 0；零差時才以 `--stamp`
+   寫下 `settings.foldRootDriftStamp`（＝開閘前檢的依賴）。
+3. **全量快照 parity（merge 前人工）**：對凍結快照跑 35/35 端點 parity ＋ 逐列對稱差（兩方向都必須
+   是空集合，L-0845）＋ 有條件的分頁穩定性（§6.7）。18.4 萬列不可能進 CI（時間與資料主權）。
+
+### 6.9 開閘前檢（fail-closed）與交易隔離（Owner 2026-10-12 R3）
+- **探測在哪裡做**：`foldComponentRoot.js foldSqlGateReady(exec)`，由
+  `publicListingSearchAsync.js tryPublicListingsSqlFirst()` 在
+  `PUBLIC_LISTINGS_SQL_FIRST === "1"` **之後**、任何折疊 SQL **之前**呼叫。
+- **用哪條連線／交易**：呼叫端傳進來的 `exec` 就是**這個請求自己的 read snapshot client**
+  （`withPgReadSnapshot` 開的那條）；不另開連線、不碰寫入路徑的交易。
+- **探什麼**：(1) `information_schema.columns` 的 `listings.fold_component_root`（與寫入端
+  `foldRootRefreshReady` 同一條「不會失敗的查詢」）；(2) `settings.foldRootDriftStamp` 存在且
+  `mismatches === 0`（由 `fold-root-drift-check.mjs --stamp` 在全量零差後寫入）。
+- **缺欄時的回傳形狀**：`foldSqlGateReady` 回 `{ok:false, reason:"fold_component_root_missing",
+  detail:null}`；呼叫端**丟 `ListingSearchUnavailableError`**（`code=SEARCH_UNAVAILABLE`，
+  `listingSearchHttp.js` 映射成 **HTTP 503**）並 `console.error("[fold-gate] …")` 告警——
+  **不退回 Node 路徑**（降級會讓「清單看到的資料」與固化欄的真相無聲分裂）。
+- **交易隔離**：探測全部用不會拋錯的查詢（`information_schema`）⇒ 不會把交易打成 aborted（25P02）。
+  可重跑證據：`v3/test/fold-gate-transaction-live-pg.test.js`（BEGIN → 探測 → 同交易 CREATE TEMP
+  TABLE ＋ INSERT → ROLLBACK；任何一步失敗就 25P02 紅），CI 的拋棄式 PG（沒有這一欄）走缺欄分支。
+- **關閘隔離**：`PUBLIC_LISTINGS_SQL_FIRST !== "1"` 時函式**第一行就 return null**（不碰折疊程式碼、
+  不呼叫開閘前檢）⇒ 新路徑的任何損壞都傳染不到舊路徑；`v3/test/fold-sql-gate.test.js` 靜態釘住順序。

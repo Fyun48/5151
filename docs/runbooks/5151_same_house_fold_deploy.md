@@ -15,24 +15,36 @@
 ## 1. 部署順序（L-0595／L-0571，**不可跳步、不可換序**）
 
 ```bash
-# 1) ALTER（CONCURRENTLY ⇒ 不接 SCHEMA_MIGRATIONS）
+Owner 2026-10-12 R5 裁定的順序（**不可跳步、不可換序**）：
+
+```bash
+# 1) 007 DDL（CONCURRENTLY ⇒ 不接 SCHEMA_MIGRATIONS）
 psql "$PG_URL" -v ON_ERROR_STOP=1 -f v3/migrations/007_listings_fold_component_root.sql
 
-# 2) 回填（冪等；分批 2,000／批、每批一個交易；中斷直接重跑）
-node v3/scripts/fold-root-backfill.mjs --label=<日期>-prod
+# 2) 全表回填（冪等；分批 2,000／批、每批一個交易；中斷直接重跑）
+node v3/scripts/fold-root-backfill.mjs
 
-# 3) 逐欄抽樣 diff＝0 才能往下（L-0571）
-node v3/scripts/projection-freshness-check.mjs          # 輸出含 foldRoot.sampled / foldRoot.mismatch
-#    期望：foldRoot.mismatch = 0（逐欄抽樣，預設 200 列、決定性抽樣）
-node v3/scripts/fold-freshness-check.mjs                # fold_* 四欄的獨立過時檢查
+# 3) 全量 drift 零差（**必要步驟，不是抽樣**，R2）：整表重算 vs 固化欄逐列比對
+node v3/scripts/fold-root-drift-check.mjs --stamp
+#    期望：{"mismatch":0,"ok":true,"stamped":true}
+#    非零 ⇒ **停**：把 mismatchIds 歸因後重跑 2)，不要往下。
 
-# 4) 才切讀取（部署含本 PR 的程式）
+# 3b) 抽樣面（輔助，不能代替 3）
+node v3/scripts/projection-freshness-check.mjs   # foldRoot.mismatch = 0
+node v3/scripts/fold-freshness-check.mjs         # fold_* 四欄
+
+# 4) 部署程式（讀取端開始讀 fold_component_root）
+# 5) Owner 開閘：PUBLIC_LISTINGS_SQL_FIRST=1（**只有 Owner 做**）
 ```
 
-- 3) 沒有 `columnMismatch = 0` 就**不要**進 4)：讀取端會用「舊／空 root」分組。
-- 回填只跑隔離庫（`assertPgTargetAllowed` 白名單）或由 Owner 對正式庫執行；正式庫的查詢一律唯讀。
+- 3) 沒有 `mismatch = 0` 就**不要**進 4)：讀取端會用「舊／空 root」分組。
+- **開閘前檢（fail-closed）**：`PUBLIC_LISTINGS_SQL_FIRST=1` 時，每個請求會先驗「欄位存在 ＋
+  `settings.foldRootDriftStamp` 零差」；任一不成立 ⇒ **HTTP 503 ＋ `[fold-gate]` 告警，不降級**
+  （語意見 spec §6.9）。3) 的 `--stamp` 就是那個依賴戳記。
+- 回填／戳記只跑隔離庫（`assertPgTargetAllowed` 白名單）或由 Owner 對正式庫執行；
+  正式庫的其他查詢一律唯讀。
 
-## 2. 髒事件 ⇒ 必須重跑回填（`fold-root-backfill.mjs`）
+## 2. 髒事件 ⇒ 必須重跑回填（`fold-root-backfill.mjs`）＋重跑 drift（`fold-root-drift-check.mjs --stamp`）
 
 下列任一變更都會讓**已固化的 root 過期**，必須重跑回填（可先跑 §3 的檢查確認）：
 
@@ -46,6 +58,15 @@ node v3/scripts/fold-freshness-check.mjs                # fold_* 四欄的獨立
 
 > 註：`user_same_house_members`／`user_match_votes(split)` 是**個人輸入、不固化**（§6.5），
 > 不需要重跑回填。
+
+### 2.1 實測過的漂移（為什麼這一步是必要的）
+- 凍結快照 `repro2`（2026-10-12T08:21Z，184,754 列）：全量 drift 檢查 **mismatch = 15**
+  （`21841020, 21876102, 21959307, 22033898, 22059465, 22139928, 22159871, 22160355, 22160479,
+  22162147, 22162154, 22162414, 22162432, 22163272, 22164313`）——全部是**回填之後才加入
+  `listing_group_members`／match 邊**的列（固化欄仍是 NULL，但重算後屬於 ≥2 的分量）。
+- 同一時間的 live 隔離庫 `repro`：mismatch = **34**（快照後又累積 19 列）。
+- 跑過 2) 回填後再驗：`differ=34 → written=34`，drift **mismatch = 0**，戳記已寫入。
+- 結論：**抽樣抓不到這種列**（15/184,754 ≈ 0.008%），所以部署前必須跑全量，而不是抽樣。
 
 ## 3. 回填後的自檢（唯讀）
 
@@ -61,13 +82,15 @@ node v3/scripts/fold-role-sql-parity.mjs --roots=column
 
 1. **CI（自動）**：合成種子（含線狀鏈、橋式／非橋式、代表列隨篩選變動）跑
    `fold-role-sql-parity`／端點 parity ⇒ 語意分歧在 PR 就紅。**不使用正式資料**。
-2. **人工（merge 前）**：全量凍結快照（`repro2`）跑
+2. **部署前（必要，R5 第 3 步）**：`fold-root-drift-check.mjs --stamp` 全量零差（§2.1）。
+3. **人工（merge 前）**：全量凍結快照（`repro2`）跑
 
 ```bash
 node v3/scripts/fold-endpoint-parity.mjs          # 35/35 totalMatched ＋ 前 20 筆順序
-node v3/scripts/fold-endpoint-symmetric-diff.mjs  # 逐列對稱差（只有 Node／只有 SQL）皆為空
-node v3/scripts/fold-endpoint-pagination.mjs      # 分頁合併＝完整有序集合，無重複無遺漏
-node v3/scripts/fold-shape-fixtures.mjs           # ⑥⑦⑧ 合成列 fixture（可寫隔離庫）
+node v3/scripts/fold-endpoint-symmetric-diff.mjs  # 逐列對稱差（只有 Node／只有 SQL）皆為空集合
+node v3/scripts/fold-endpoint-pagination.mjs      # 有條件的分頁穩定性（語意見 spec §6.7）
+node v3/scripts/fold-root-drift-check.mjs         # 全量 drift（唯讀版，目標 0）
+node v3/scripts/fold-shape-fixtures.mjs           # ⑥⑦⑧⑩ 合成列 fixture（可寫隔離庫）
 ```
 
 ## 5. 回復（rollback）

@@ -14,10 +14,25 @@ import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { buildPublicListingsFoldSql } from "./listingSearchSql.js";
 import { normalizeCrawlSources } from "./crawlSources.js";
 import { ListingSearchUnavailableError, isListingSearchUnavailable } from "./listingSearchAsync.js";
+import { foldSqlGateReady } from "./foldComponentRoot.js";
 
 // 訪客 SQL-first 折疊（PUBLIC_LISTINGS_SQL_FIRST=1 才啟用，預設 off）。回傳完整結果或 null（外框外）。
+//
+// 閘門語意（Owner 2026-10-12 R3，fail-closed）：
+//   • 關閘（預設）＝這裡第一行就 return null，**不碰任何折疊程式碼** ⇒ 新路徑壞掉不影響舊路徑。
+//   • 開閘（`PUBLIC_LISTINGS_SQL_FIRST=1`）＝先做開閘前檢（`foldSqlGateReady`，跑在**本請求自己的
+//     snapshot 連線**上）：欄位不存在或回填未驗證零差 ⇒ **丟 `ListingSearchUnavailableError`
+//     （HTTP 503，code=SEARCH_UNAVAILABLE）並告警，絕不退回 Node 路徑**。
+//   • 只有「外框外」（kind／sort／settings 表達不了）才是合法的 null ⇒ 走 Node 路徑。
 async function tryPublicListingsSqlFirst({ exec, args, settings, districts, districtIds, context, loader }) {
   if (process.env.PUBLIC_LISTINGS_SQL_FIRST !== "1") return null;
+  const gate = await foldSqlGateReady(exec);
+  if (!gate.ok) {
+    // 告警（結構化一行，便於日誌檢索）＋ 503。不是降級：降級會讓「清單看到的資料」與
+    // 「固化欄的真相」無聲分裂，且讓依賴缺失永遠不會被發現（F2 的同一條原則）。
+    console.error(`[fold-gate] PUBLIC_LISTINGS_SQL_FIRST=1 但依賴未就緒 ⇒ 503（不降級）: reason=${gate.reason} detail=${JSON.stringify(gate.detail)}`);
+    throw new ListingSearchUnavailableError(`fold sql-first gate closed: ${gate.reason}`);
+  }
   const enabledSources = normalizeCrawlSources(context.crawlSources.items).filter(x => x.enabled).map(x => x.id);
   const deps = { ...listingSearchBuildContext({ asOf: args.asOf }), resolveUserId: () => 0, visibilityContext: context };
   const built = buildPublicListingsFoldSql(

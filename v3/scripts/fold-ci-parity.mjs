@@ -202,16 +202,26 @@ try {
   const sqlRole = new Map(sqlRows.map((r) => [Number(r.post_id), r.role || null]));
   const roleDiffs = all.filter((id) => (nodeRole.get(id) ?? null) !== (sqlRole.get(id) ?? null));
   check("角色級：合成種子逐列 role 一致", roleDiffs.length === 0, { roleDiffs });
-  const primaries = (m) => all.filter((id) => m.get(id) === "primary");
   const primariesIn = (m, ids) => ids.filter((id) => m.get(id) === "primary");
-  check("⑥ 純線狀鏈（16 列同群）只有一個代表，且是最便宜那列",
-    primariesIn(nodeRole, chainA).length === 1 && primariesIn(nodeRole, chainA)[0] === chainA[chainA.length - 1],
-    { node: primariesIn(nodeRole, chainA), sql: primariesIn(sqlRole, chainA) });
-  const bridged = [...chainB1, ...chainB2];
-  check("⑦ 橋式鏈（16 列同群、單一 group 橋邊）只有一個代表",
-    bridged.filter((id) => nodeRole.get(id) === "primary").length === 1
-    && bridged.filter((id) => nodeRole.get(id) === "primary")[0] === chainB2[chainB2.length - 1],
-    { node: bridged.filter((id) => nodeRole.get(id) === "primary"), sql: bridged.filter((id) => sqlRole.get(id) === "primary") });
+  // R2：除了代表列 id，還要斷言**群成員集合**（role ∈ {primary, affiliate} 的候選列集合）。
+  const memberSet = (m, ids) => ids.filter((id) => m.get(id) != null);
+  const sameSet = (a, b) => a.length === b.length && [...a].sort((x, y) => x - y).every((v, i) => v === [...b].sort((x, y) => x - y)[i]);
+  const bridgedIds = [...chainB1, ...chainB2];
+  check("⑥ 純線狀鏈（16 列同群）：群成員集合＝鏈上 16 列、代表列＝最便宜那列",
+    sameSet(memberSet(nodeRole, chainA), chainA) && sameSet(memberSet(sqlRole, chainA), chainA)
+    && primariesIn(nodeRole, chainA).join(",") === String(chainA[chainA.length - 1])
+    && primariesIn(sqlRole, chainA).join(",") === String(chainA[chainA.length - 1]),
+    { nodeMembers: memberSet(nodeRole, chainA), sqlMembers: memberSet(sqlRole, chainA),
+      nodeRep: primariesIn(nodeRole, chainA), sqlRep: primariesIn(sqlRole, chainA) });
+  check("⑥ 非橋式的鏈上每一列都是同一個成員集合（16 列，逐一列出）",
+    memberSet(nodeRole, chainA).length === 16 && chainA.every((id) => nodeRole.get(id) != null),
+    { chainA });
+  check("⑦ 橋式鏈（16 列同群、單一 group 橋邊）：群成員集合＝兩個子鏈、代表列＝最便宜那列",
+    sameSet(memberSet(nodeRole, bridgedIds), bridgedIds) && sameSet(memberSet(sqlRole, bridgedIds), bridgedIds)
+    && primariesIn(nodeRole, bridgedIds).join(",") === String(chainB2[chainB2.length - 1])
+    && primariesIn(sqlRole, bridgedIds).join(",") === String(chainB2[chainB2.length - 1]),
+    { nodeMembers: memberSet(nodeRole, bridgedIds), sqlMembers: memberSet(sqlRole, bridgedIds),
+      nodeRep: primariesIn(nodeRole, bridgedIds), sqlRep: primariesIn(sqlRole, bridgedIds) });
 
   // ── 2. 端點級：完整管線（totalMatched ＋ 有序序列 ＋ 逐列對稱差）──
   const combos = [
@@ -282,6 +292,39 @@ try {
     repAll.length === 1 && repAll[0] === chainA[chainA.length - 1]
     && repFiltered.length === 1 && repFiltered[0] === chainA[chainA.length - 2],
     { repAll, repFiltered });
+  // R2「篩掉原代表」也要同時斷言**群成員集合**（候選層篩選後剩下的成員）與**代表列 id**。
+  {
+    const subset = chainA.filter((_, i) => 30000 - i * 100 >= 28600);   // priceMin=28600 之後的候選列
+    const subsetRows = readBack.filter((r) => subset.includes(Number(r.post_id)));
+    const subsetNodeRows = subsetRows.map((r) => ({ ...r }));
+    attachSameHouseRoles(subsetNodeRows, 0, provider, provider.now);
+    const subsetNodeRole = new Map(subsetNodeRows.map((r) => [Number(r.post_id), r.same_house_role || null]));
+    const subsetCte = foldRoleCte("WHERE post_id = ANY(?::bigint[])") + "\nSELECT post_id, role FROM fold_role";
+    const subsetSqlRows = await exec(subsetCte, [subset, enabledSources, provider.now]);
+    const subsetSqlRole = new Map(subsetSqlRows.map((r) => [Number(r.post_id), r.role || null]));
+    check("⑩ 篩掉原代表：群成員集合＝篩選後的候選列、代表列＝下一個最便宜列（Node＝SQL）",
+      sameSet(memberSet(subsetNodeRole, subset), subset) && sameSet(memberSet(subsetSqlRole, subset), subset)
+      && primariesIn(subsetNodeRole, subset).join(",") === String(chainA[chainA.length - 2])
+      && primariesIn(subsetSqlRole, subset).join(",") === String(chainA[chainA.length - 2]),
+      { subset, nodeMembers: memberSet(subsetNodeRole, subset), sqlMembers: memberSet(subsetSqlRole, subset),
+        nodeRep: primariesIn(subsetNodeRole, subset), sqlRep: primariesIn(subsetSqlRole, subset) });
+  }
+  // 端點級：每個 combo 的結果裡，每一群的成員集合（＝只出代表那一列）與代表列 id 必須逐群一致。
+  {
+    const groups = [{ name: "⑥chainA", ids: chainA }, { name: "⑦bridged", ids: bridgedIds }];
+    const perGroup = [];
+    let ok = true;
+    for (const g of groups) {
+      for (const e of endpoint) {
+        const nodeHit = (e.nodeOrder || []).filter((id) => g.ids.includes(id));
+        const sqlHit = (e.sqlOrder || []).filter((id) => g.ids.includes(id));
+        const same = nodeHit.join(",") === sqlHit.join(",");
+        if (!same) ok = false;
+        perGroup.push({ group: g.name, combo: e.name, node: nodeHit, sql: sqlHit, same });
+      }
+    }
+    check("⑪ 端點級逐群：(集合只含代表列) 且 Node＝SQL（每個 combo 逐群列出）", ok, { perGroup });
+  }
 
   const failed = results.filter((r) => !r.ok);
   for (const r of results) console.log(JSON.stringify(r));

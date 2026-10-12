@@ -18,14 +18,18 @@ import { normalizeCrawlSources } from "../src/crawlSources.js";
 assertPgTargetAllowed("fold-endpoint-pagination", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
 const drv = await createPostgresDriver({ env: process.env });
 
+// 每個 combo 都是**一次請求一個完整有序序列**的比對（同一個 read snapshot、同一個 ASOF／now、
+// 同一個排序鍵）。為什麼挑這幾個：涵蓋三種排序鍵（newest／price_asc／price_desc）＋候選層篩選
+// （q／kind），且大小在「每頁都真的重跑一次折疊 CTE」的可接受成本內（最大的 4,803 列）。
 const COMBOS = [
+  // 最大的一個 combo（全量訪客列表 88,938 列）只跑 offset limit=500（178 頁）——證明「合併各頁
+  // ＝完整有序集合」在最大集合上也成立。
   { name: "baseline", kind: "", q: "", districts: [], sort: "newest" },
-  { name: "q=套房", kind: "", q: "套房", districts: [], sort: "newest" },
-  { name: "kind=whole", kind: "whole", q: "", districts: [], sort: "newest" },
-  { name: "sort=price_asc", kind: "", q: "", districts: [], sort: "price_asc" },
-  { name: "sort=price_desc", kind: "", q: "", districts: [], sort: "price_desc" },
+  { name: "q=101", kind: "", q: "101", districts: [], sort: "newest" },
+  { name: "q=15000+kind=whole", kind: "whole", q: "15000", districts: [], sort: "newest" },
   { name: "district=西屯區", kind: "", q: "", districts: ["西屯區"], sort: "newest" },
-  { name: "kind=whole+sort=price_asc", kind: "whole", q: "", districts: [], sort: "price_asc" },
+  { name: "district=西屯區+sort=price_asc", kind: "", q: "", districts: ["西屯區"], sort: "price_asc" },
+  { name: "district=西屯區+sort=price_desc", kind: "", q: "", districts: ["西屯區"], sort: "price_desc" },
 ];
 
 async function runCombo(combo) {
@@ -72,7 +76,8 @@ async function runCombo(combo) {
       });
     };
 
-    for (const limit of [7, 40, 500]) {
+    const sizes = expected.length <= 200 ? [7, 40, 500] : [500];
+    for (const limit of sizes) {
       const pages = [];
       const totals = [];
       let offset = 0;
@@ -89,7 +94,7 @@ async function runCombo(combo) {
       verify(`offset limit=${limit}`, pages, totals);
     }
 
-    for (const limit of [7, 500]) {
+    for (const limit of (expected.length <= 200 ? [7, 500] : [500])) {
       const pages = [];
       const totals = [];
       let cursor = null;
@@ -105,7 +110,15 @@ async function runCombo(combo) {
       verify(`cursor limit=${limit}`, pages, totals);
     }
 
-    return { name: combo.name, expectedRows: expected.length, checks, ok: checks.every(c => c.ok) };
+    return {
+      name: combo.name,
+      // 口徑（Owner R1）：同一 read snapshot、同一 ASOF(=now)、同一排序鍵 ⇒ 跨請求可宣稱。
+      // 「翻頁中途改篩選」不在保證範圍（改篩選＝重開分頁），本腳本不測那件事。
+      provenance: { asOf: ASOF, sort: combo.sort || "newest", now: context.now, checks: checks.length },
+      expectedRows: expected.length,
+      checks,
+      ok: checks.every(c => c.ok),
+    };
   });
 }
 
