@@ -18,6 +18,7 @@ import { toPostgresSql } from "../sqlDialect.js";
 import { buildListRequestContextFromPg } from "../db.js";
 import { appendDistrictProjectedCandidates } from "../listDistrictSql.js";
 import { loadDistrictPrefilterIds } from "../listingDistrictPrefilter.js";
+import { listingTotalsOrNull } from "../listingTotalsPgCounter.js";
 import { WATCHED_COUNT_SQL } from "../watchLimits.js";
 import { loadPersonalFlagMap } from "./decorationData.js";
 import { LIST_CANDIDATE_COLUMNS } from "../listingCandidateRow.js";
@@ -119,16 +120,46 @@ async function currentDataRevision(runOne) {
   }
 }
 
-async function countProductListings(runOne, requestContext) {
+/**
+ * `dbTotal` 的來源（三層，依序）：
+ *
+ *   ① **同交易維護的精準計數器**（`listing_totals_counter`，寫入端在入庫的同一個交易維護；
+ *      見 `listingTotalsPgCounter.js`／`listingTotalsPgWrite.js`）——正式站單請求窗口實測
+ *      這條 COUNT 每個請求 1 次／99.6–215.2ms，而`data_revision` 被爬蟲推著每秒換代，
+ *      版本化快取從未命中，所以計數器才是這條熱路徑的解。
+ *   ② 舊的 `data_revision` 版本化快取（計數器不可用時的**第一層**退化，行為逐字不變）。
+ *   ③ 每次現讀的真 `COUNT(*)`（最終 fail-safe）。
+ *
+ * 任一層回不出「可信的精準值」就往下退——**讀取路徑永遠要能回正確數字**。
+ * 計數器只可能因為「可用旗標為 0／列不存在／查詢失敗／述詞不支援」而不可用；
+ * 這些情形一律當成「不可信」，不會拿殘值湊答案。
+ */
+async function countProductListings(runOne, requestContext, { runRows = null, diagnostics = null } = {}) {
   const isolation = requestContext?.isolation;
   if (!isolation) throw new Error("PG stats require isolation context");
+  const started = performance.now();
+  const markTotal = () => {
+    if (diagnostics) diagnostics.db_total_ms = Math.round(performance.now() - started);
+  };
+  // ① 同交易維護的精準計數器（讀在**同一條快照**上；對帳由行程背景負責，不在這裡）。
+  const counted = await listingTotalsOrNull({ exec: runRows || runOne, isolation, onDiagnostics: diagnostics });
+  if (counted != null) {
+    markTotal();
+    return counted;
+  }
+  // ② 舊的 data_revision 版本化快取（計數器不可用時的第一層退化，行為逐字不變）。
   const revision = await currentDataRevision(runOne);
   if (revision != null && pgProductCountCache.revision === revision && pgProductCountCache.isolation === isolation.sql) {
+    if (diagnostics && diagnostics.db_total_source == null) diagnostics.db_total_source = "revision-cache";
+    markTotal();
     return pgProductCountCache.count;
   }
+  // ③ 最終 fail-safe：每次現讀的真 COUNT。
+  if (diagnostics && diagnostics.db_total_source == null) diagnostics.db_total_source = "count";
   const row = await runOne(`SELECT COUNT(*) AS n FROM listings WHERE ${isolation.sql}`, isolation.params);
   const count = Number(row?.n) || 0;
   if (revision != null) pgProductCountCache = { revision, isolation: isolation.sql, count };
+  markTotal();
   return count;
 }
 
@@ -187,6 +218,12 @@ export function createListingStatsRepository({
     const res = await run(sql, params, { one: true });
     return Array.isArray(res) ? res[0] ?? null : res ?? null;
   };
+  // 同一支執行器（＝同一條快照連線／同一組參數轉譯）的「回列陣列」版本：`dbTotal` 的計數器
+  // 要跟候選列來自**同一個 snapshot**，所以它讀的是這一個，而不是另外開一條連線。
+  const runRows = async (sql, params = []) => {
+    const res = await run(sql, params);
+    return Array.isArray(res) ? res : (res?.rows || []);
+  };
 
   return {
     driver,
@@ -233,7 +270,7 @@ export function createListingStatsRepository({
       // 逐字走原本的 `loadPersonalFlagMap`。
       const flagMap = loader ? await loader.personalFlagMap(uid) : await loadPersonalFlagMap(run, uid);
       const watchedTotal = await countWatchedListings(runOne, uid);
-      const dbTotal = await countProductListings(runOne, requestContext);
+      const dbTotal = await countProductListings(runOne, requestContext, { runRows, diagnostics });
       const failedRouteJobs = new Set(
         (await run("SELECT job_key FROM route_jobs WHERE job_state = 'failed'")).map((row) => row.job_key),
       );

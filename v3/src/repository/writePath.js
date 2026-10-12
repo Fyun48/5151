@@ -20,6 +20,8 @@ import {
   listingProjectionUpsertSql,
 } from "../listingSearchProjection.js";
 import { bindFoldColumnValues, computeFoldColumns, foldColumnsUpdateSql } from "../match.js";
+import { applyListingTotalsDelta, listingUpsertDelta, listingsUpsertRowImpactSql } from "../listingTotalsPgWrite.js";
+import { DEFAULT_LISTING_TOTALS_BUCKET } from "../listingTotalsPgSchema.js";
 
 // 同屋源折疊的比較輸入固化欄（讀取端 SQL 折疊用，見 docs/same-house-fold-spec.md §4.2）。
 // nullable、無 default ⇒ 加欄為 metadata-only；值由 computeFoldColumns 以既有解析函式算。
@@ -228,6 +230,17 @@ export function listingsUpsertParams(listing, existing = null) {
   ];
 }
 
+// 與 `listingsUpsertSql()` **同一句話**，只在尾端接上 `RETURNING`：讓 PostgreSQL 直接回答
+// 「這一列是新增（`xmax = 0`）還是 `ON CONFLICT DO UPDATE`」以及它落在哪一個 fixture 桶。
+//
+// 為什麼不用既有的前置 SELECT（`existing`）：那個讀取與 upsert 之間有競態，且 `existing`
+// 是**舊**的狀態；`xmax = 0` 是 upsert 這一句自己在同一個交易裡給的答案。
+// `COALESCE(...)` 之後再把 `''`（＝非 fixture）也正規化一次的判斷留在 JS 端
+//（`listingUpsertDelta()`），SQL 只負責回報事實。
+export function listingsUpsertWithImpactSql() {
+  return `${listingsUpsertSql()}\n    RETURNING (xmax = 0) AS inserted, COALESCE(fixture_namespace, '') AS fixture_namespace`;
+}
+
 function createExecutor({ driver, sqliteDb, pgDriver }) {
   if (driver === "postgres") {
     if (!pgDriver) throw new Error("createWritePath(postgres) requires pgDriver");
@@ -350,7 +363,22 @@ export function createWritePath({ driver = "sqlite", sqliteDb = null, pgDriver =
           existing = null;
         }
       }
-      await exec(listingsUpsertSql(), listingsUpsertParams(listing, existing));
+      const params = listingsUpsertParams(listing, existing);
+      if (driver !== "postgres") {
+        await exec(listingsUpsertSql(), params);
+        // The pre-read row is handed back so the caller can mirror db.js upsertListing()'s
+        // "listing_added" vs "listing_updated" change-log entry and the kit-column merge.
+        return existing;
+      }
+      // PostgreSQL：同一句 upsert 直接回報「這列是新增還是命中既有列」（`xmax = 0`）。
+      // `dbTotal` 的同交易精準計數器就靠這個答案決定 +1／0，不需要多一次往返，
+      // 而且是**同一個 statement** 在同一個交易內回答的（不是先 SELECT 再 INSERT 的競態）。
+      const applied = await exec(listingsUpsertWithImpactSql(), params);
+      await applyListingTotalsDelta(pgDriver, {
+        bucketKey: DEFAULT_LISTING_TOTALS_BUCKET,
+        delta: listingUpsertDelta(applied?.rows?.[0] ?? null),
+        now: Date.now(),
+      });
       // The pre-read row is handed back so the caller can mirror db.js upsertListing()'s
       // "listing_added" vs "listing_updated" change-log entry and the kit-column merge.
       return existing;
@@ -399,6 +427,25 @@ export function createWritePath({ driver = "sqlite", sqliteDb = null, pgDriver =
         "INSERT INTO data_revision (entity_type, entity_id, event_type, created_at) VALUES (?, ?, ?, ?)",
         [String(entityType), entityId == null ? null : Number(entityId), String(eventType), Number(now) || Date.now()],
       );
+    },
+    /**
+     * 刪除一列 `listings` 並在同交易維護 `dbTotal` 計數器（`–1`／fixture 列 `0`）。
+     *
+     * 目前**沒有任何產品路徑**呼叫它：站上的「清除物件紀錄／清除全部資料」
+     * （`RESET_LISTINGS_SQLS`／`RESET_ALL_SQLS`）走的是 `siteResetAsync.js` 的整批 DELETE。
+     * 那條路徑不經過這裡，所以它造成的偏差由**對帳**覆蓋（見 `listingTotalsPgCounter.js`），
+     * 這是刻意的取捨：批刪本來就會有大量資料變動，一次真 COUNT 是最省的修復方式。
+     */
+    async deleteListingRow(postId, { bucketKey = DEFAULT_LISTING_TOTALS_BUCKET } = {}) {
+      const id = Number(postId) || 0;
+      if (!id) throw new Error("deleteListingRow requires postId");
+      const res = await exec(
+        "DELETE FROM listings WHERE post_id = ? AND (fixture_namespace IS NULL OR fixture_namespace = '') RETURNING post_id",
+        [id],
+      );
+      const removed = Number(res?.rowCount ?? res?.changes ?? 0) || 0;
+      await applyListingTotalsDelta(pgDriver, { bucketKey, delta: -removed, now: Date.now() });
+      return removed;
     },
   };
 }

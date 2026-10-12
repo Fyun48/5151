@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { guardCrawlSqlite } from "./crawlExecution.js";
 import { LIST_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
+import { startListingTotalsReconciler } from "./listingTotalsPgCounter.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { runStepsSync, runStepsAsync, transformChunks, stableSortSteps } from "./cooperative.js";
 import { createAttributeFilter, passesGeoFilters, passesAttributeFilters, passesDisplayFilters, listingHasElevator, matchesHousingKind, matchesListingSources, normalizeListQuery, housingTypeLabel, formatFloorDisplay, sanitizeFloorName } from "./floors.js";
@@ -4998,6 +4999,12 @@ export async function persistListing(listing, { driver = resolveDbDriver(), pgDr
   const pool = pgDriver || (await sharedPgDriver());
   await ensureChangeLogStoreOnce(pool);
   await ensureFoldColumnsOnce(pool);
+  // `dbTotal` 精準計數器的**背景對帳器**（有界：啟動後一次、之後每
+  // `LISTING_TOTALS_RECONCILE_MS`＝預設 5 分鐘）。刻意從寫入收口點啟動而不是讀取端：
+  // 寫入端一定是 primary（待機是 read-only，對帳器自己也會用 `pg_is_in_recovery()` 再確認），
+  // 而且讀取端可能跑在唯讀快照／待機上，不該在那裡製造計時器副作用。
+  // 失敗只 warn（計數器不可用時 `countProductListings()` 會退回真 COUNT）。
+  startListingTotalsReconciler();
   // PR-B（F7／G9）：主列 upsert／backfill／投影／變更紀錄必須在同一個 PG 交易內完成；
   // 投影要用「交易中回讀後的最終列」計算，而不是傳入的 listing（backfill 會改欄位）。
   // 中間任一失敗就整筆回滾 → 不會再出現「主列寫入成功、搜尋投影永久缺席」的半套狀態。
