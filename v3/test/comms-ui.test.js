@@ -34,7 +34,8 @@ test("user-facing labels keep announcements, ads, and support distinct", () => {
   assert.match(html, /id="supportFooterLink"/);
   assert.match(html, /insertFeedExtras/);
   assert.match(html, /sponsored-card/);
-  assert.match(html, /data-notify-row="sponsored" data-notify-ch="dock" \/>/);
+  // ui-p1-a11y-w2：checkbox 補了 aria-label，這個字串斷言跟著更新（語意不變：sponsored/dock 未勾選）
+  assert.match(html, /data-notify-row="sponsored" data-notify-ch="dock" aria-label="贊助內容 站內通知" \/>/);
 });
 
 test("listing insertion does not rewrite organic listing APIs", () => {

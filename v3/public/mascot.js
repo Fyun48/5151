@@ -20,6 +20,8 @@
     wrap.className = "jibby-mascot";
     wrap.hidden = true;
     wrap.setAttribute("role", "dialog");
+    // aria-dialog-name：role="dialog" 需要可存取名稱（內容含關閉鈕與文案，不能改成 role="img"／aria-hidden）。
+    wrap.setAttribute("aria-label", "吉比");
     wrap.innerHTML = `
       <div class="jibby-mascot-card">
         <button type="button" class="ghost jibby-mascot-close" id="jibbyMascotClose" aria-label="關閉">×</button>
