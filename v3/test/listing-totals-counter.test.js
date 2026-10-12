@@ -414,3 +414,14 @@ test("寫入端：#734 的 delta UPSERT 不得再用空字串當 predicate_sql",
   assert.ok(!/VALUES \(\$3, '', /.test(sql), "空字串會讓讀取端永遠 unusable（每個請求一次全表 COUNT）");
   assert.match(sql, /VALUES \(\$3, \$4, /, "predicate_sql 要走參數，值由 DEFAULT_LISTING_TOTALS_PREDICATE 提供");
 });
+
+test("指紋修復只改指紋：不得把 usable 設成 1（那會抹掉「上一次對帳失敗」的訊號）", async () => {
+  const { listingTotalsPredicateRepairSql } = await import("../src/listingTotalsPgCounter.js");
+  const sql = listingTotalsPredicateRepairSql();
+  assert.match(sql, /SET predicate_sql = \$2/);
+  assert.ok(
+    !/\busable\s*=/.test(sql),
+    "修復語句不得碰 usable：usable=0 的語意是「上一次真 COUNT 對帳失敗」（同檔的對帳合約），"
+    + "順手設回 1 等於宣告對帳成功、讓讀取端吃一個可能過期的 total",
+  );
+});

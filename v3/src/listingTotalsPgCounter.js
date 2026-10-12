@@ -211,11 +211,16 @@ export function listingTotalsPredicateNeedsRepair({ storedPredicateSql = null, e
 
 /**
  * 指紋修復語句（冪等）：只碰「空指紋」的那一列，而且值已經對時**不寫**（`IS DISTINCT FROM`）
- * ⇒ 第二次執行 `rowCount=0`。不改 `total`，也不動 `usable` 以外的任何欄位。
+ * ⇒ 第二次執行 `rowCount=0`。
+ *
+ * ⚠️ **只改 `predicate_sql`，不碰 `usable`**：`usable=0` 的語意是「**上一次真 COUNT 對帳失敗**」
+ * （見 `reconcileListingTotalsBucket()` 的合約），順手把 `usable` 設回 1 等於替對帳宣告成功、
+ * 讓讀取端吃一個可能過期的 `total`——正好違反「資料精準優先」。完好的列（正式庫現況
+ * `usable=1`）修完指紋本來就立刻可用；`usable=0` 的列要等**下一次成功對帳**才開快路徑。
  */
 export function listingTotalsPredicateRepairSql() {
   return `UPDATE ${LISTING_TOTALS_TABLE}
-     SET predicate_sql = $2, usable = 1
+     SET predicate_sql = $2
    WHERE bucket_key = $1
      AND btrim(COALESCE(predicate_sql, ''), E' \\t\\r\\n') = ''
      AND predicate_sql IS DISTINCT FROM $2`;

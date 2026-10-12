@@ -44,28 +44,56 @@ const POST = 9_910_001;
 const BULK = 10;
 const ISOLATION = { sql: schema.DEFAULT_LISTING_TOTALS_PREDICATE, params: [] };
 
+// ── 自我隔離（2026-10-12 修正）──────────────────────────────────────────────
+// 這一支原本在**共用靶**（`repro`／`tracker_test`）上 `DROP TABLE listing_totals_counter`：
+// 跑一次測試就會把別人的靶打掉（而且跑完還留一張被 DROP 掉的表）。
+// 現在照抄 `v3/test/write-path-parity.test.js` 的既有形狀：**自建 schema** ＋
+// `poolOptions.options = -c search_path=<schema>,public`，收尾 `DROP SCHEMA … CASCADE`。
+//   • 計數器表（`listing_totals_counter`）完全落在自己的 schema ⇒ DROP 掉的是自己的東西；
+//   • `listings` 沿用 `public`（**不鏡射、不重建**）：一來不必複製 18 萬列，二來
+//     `listingTotalsScanDue()` 的偵測器是 `pg_stat_user_tables WHERE relname='listings'`
+//     （沒有 schema 條件）——多一張同名表就會讓它讀到另一張、把「繞過收口點的寫入」判成沒發生。
+// **不對共用庫的任何既有物件做 DROP／TRUNCATE／ALTER。**
+//
+// ⚠️ 自癒路徑（`defaultPrimaryDriver()`）走 `PG_URL` ⇒ 這裡也把它指到同一個 search_path，
+// 否則測試會去打共用庫的 `public`（那正是要避免的事）。
+const SCHEMA = `sw1_listing_totals_${process.pid}`;
+const withSearchPath = (url, name) => {
+  const u = new URL(url);
+  u.searchParams.set("options", `-c search_path=${name},public`);
+  return u.toString();
+};
+process.env.PG_URL = withSearchPath(RAW, SCHEMA);
+
 let pgDriver = null;
+let adminDriver = null;
 
 after(async () => {
-  if (pgDriver) {
-    try {
-      await pgDriver.query("DELETE FROM listings WHERE post_id >= $1 AND post_id < $2", [POST, POST + BULK + 1]);
-      await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
-    } catch { /* 已經收掉 */ }
-    await pgDriver.close();
+  if (pgDriver) await pgDriver.close().catch(() => {});
+  if (adminDriver) {
+    try { await adminDriver.exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`); } catch { /* 已經收掉 */ }
+    await adminDriver.close().catch(() => {});
   }
   rmSync(dataDir, { recursive: true, force: true });
 });
 
 async function connect() {
+  if (pgDriver) return pgDriver;
   const { createPostgresDriver } = await import("../src/dbDriverPostgres.js");
-  pgDriver = await createPostgresDriver({ connectionString: RAW });
-  const who = (await pgDriver.query("SELECT current_database() AS db")).rows[0];
+  adminDriver = await createPostgresDriver({ connectionString: RAW });
+  const who = (await adminDriver.query("SELECT current_database() AS db, current_schema() AS schema")).rows[0];
   assert.equal(who.db, DB, "連到的資料庫必須與 URL 一致");
+  await adminDriver.exec(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+  await adminDriver.exec(`CREATE SCHEMA ${SCHEMA}`);
+  pgDriver = await createPostgresDriver({ connectionString: RAW, poolOptions: { options: `-c search_path=${SCHEMA},public` } });
+  const where = (await pgDriver.query("SELECT current_schema() AS schema")).rows[0];
+  assert.equal(where.schema, SCHEMA, "這一支的所有連線都必須落在自己的 schema（不動共用物件）");
+  // 計數器表由模組自己的 DDL 建（`search_path` 讓它落在本 schema）。
+  for (const statement of schema.listingTotalsDdlStatements()) await pgDriver.exec(statement);
   const columns = (await pgDriver.query(
     "SELECT 1 AS present FROM information_schema.columns WHERE table_name = 'listings' AND column_name = 'fixture_namespace' LIMIT 1",
   )).rows;
-  assert.equal(columns.length, 1, "隔離庫的 listings 必須有 fixture_namespace（否則桶的定義不成立）");
+  assert.equal(columns.length, 1, "listings 必須有 fixture_namespace（否則桶的定義不成立）");
   return pgDriver;
 }
 
@@ -355,6 +383,64 @@ test("live PG：空指紋自癒（讀取路徑觸發）⇒ 之後不再退回全
   const again = await counter.repairListingTotalsPredicateNow({ pgDriver });
   assert.equal(again.repaired, false);
   assert.equal(again.rows, 0);
+
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
+});
+
+/**
+ * **修復只補指紋，不宣告對帳成功（live PG）**。
+ *
+ * `usable=0` 的語意是「上一次真 COUNT 對帳失敗」（見同檔的對帳合約）：指紋修復只該讓列
+ * 「認得出是哪一條述詞」，**不可以**順手把 `usable` 設回 1 —— 那會抹掉失敗訊號、讓讀取端吃
+ * 一個可能過期的 `total`（違反「資料精準優先」）。所以這裡造一列 `usable=0 ∧ predicate_sql=''`：
+ *   ① 修一次 ⇒ `predicate_sql` 變成正式述詞，但 `usable` **仍是 0**；
+ *   ② 讀取端照樣不可用（快路徑關著，等下一次成功對帳才開）；
+ *   ③ 再修一次 ⇒ `rowCount=0`（冪等）。
+ */
+test("live PG：usable=0 ∧ 空指紋 ⇒ 只補指紋、usable 仍為 0（不宣告對帳成功）", { skip }, async () => {
+  await connect();
+  await pgDriver.query("DELETE FROM listings WHERE post_id >= $1 AND post_id < $2", [POST, POST + BULK + 1]);
+  await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
+  counter.resetListingTotalsForTests();
+  counter.forgetListingTotalsEnsured(pgDriver);
+  counter.resetListingTotalsPresenceForTests();
+
+  await counter.ensureListingTotalsReady(pgDriver, { bucketKey: schema.DEFAULT_LISTING_TOTALS_BUCKET, predicateSql: "" });
+  await pgDriver.query(
+    `UPDATE ${schema.LISTING_TOTALS_TABLE} SET usable = 0, total = 0 WHERE bucket_key = $1`,
+    [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  );
+
+  const first = await counter.repairListingTotalsPredicateNow({ pgDriver });
+  assert.equal(first.repaired, true, "指紋必須被修好");
+  assert.equal(first.rows, 1);
+  const row = (await pgDriver.query(
+    `SELECT predicate_sql, usable FROM ${schema.LISTING_TOTALS_TABLE} WHERE bucket_key = $1`, [schema.DEFAULT_LISTING_TOTALS_BUCKET],
+  )).rows[0];
+  assert.equal(
+    schema.normalizeListingTotalsPredicate(row.predicate_sql),
+    schema.normalizeListingTotalsPredicate(schema.DEFAULT_LISTING_TOTALS_PREDICATE),
+    "predicate_sql 必須被改寫成正式述詞",
+  );
+  assert.equal(Number(row.usable), 0, "修指紋不得宣告對帳成功（usable 必須仍是 0）");
+
+  // ② 讀取端仍然不可用：快路徑關著，等下一次成功對帳。
+  const diag = {};
+  const value = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: diag });
+  assert.equal(value, null);
+  assert.equal(diag.db_total_source, "unusable");
+
+  // ③ 冪等：第二次不寫任何一列。
+  const again = await counter.repairListingTotalsPredicateNow({ pgDriver });
+  assert.equal(again.repaired, false);
+  assert.equal(again.rows, 0);
+
+  // ④ 成功對帳之後才由對帳把 usable 打開。
+  await counter.reconcileListingTotalsOnce({ pgDriver, force: true });
+  const usableDiag = {};
+  const usableValue = await counter.readListingTotalsForStats({ exec: execRows, isolation: ISOLATION, onDiagnostics: usableDiag });
+  assert.equal(usableDiag.db_total_source, "counter");
+  assert.equal(usableValue, await trueCount());
 
   await pgDriver.query(`DROP TABLE IF EXISTS ${schema.LISTING_TOTALS_TABLE}`);
 });
