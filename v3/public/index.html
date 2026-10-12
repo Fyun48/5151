@@ -385,6 +385,13 @@
       color: var(--primary-foreground);
       border-color: var(--accent);
     }
+    /* 選取中的分頁 hover 時會被 .ghost:hover:not(:disabled)（0,3,0）蓋掉底色，只剩淺字淺底（實測 1.08:1）；
+       這條 specificity 0,4,1 把它蓋回來。只動這條新規則，任何 token 都沒改。 */
+    .hub-tabs button[aria-selected="true"]:hover {
+      background: var(--accent);
+      color: var(--primary-foreground);
+      border-color: var(--accent);
+    }
     .hub-pane[hidden] { display: none; }
     .hub-steps {
       margin: 0 0 12px;
@@ -4216,10 +4223,10 @@
         <button type="button" class="ghost" id="notifyHubClose">關閉</button>
       </div>
       <div class="hub-tabs" role="tablist">
-        <button type="button" class="ghost" id="hubTabEvents" data-hub-tab="events" role="tab" aria-controls="hubPaneEvents" aria-selected="true">通知種類</button>
-        <button type="button" class="ghost" id="hubTabRental" data-hub-tab="rental" role="tab" aria-controls="hubPaneRental" aria-selected="false">租屋通知</button>
-        <button type="button" class="ghost" id="hubTabWebhook" data-hub-tab="webhook" role="tab" aria-controls="hubPaneWebhook" aria-selected="false">Discord Webhook</button>
-        <button type="button" class="ghost" id="hubTabMail" data-hub-tab="mail" role="tab" aria-controls="hubPaneMail" aria-selected="false">自己的郵件 SMTP</button>
+        <button type="button" class="ghost" tabindex="0" id="hubTabEvents" data-hub-tab="events" role="tab" aria-controls="hubPaneEvents" aria-selected="true">通知種類</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabRental" data-hub-tab="rental" role="tab" aria-controls="hubPaneRental" aria-selected="false">租屋通知</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabWebhook" data-hub-tab="webhook" role="tab" aria-controls="hubPaneWebhook" aria-selected="false">Discord Webhook</button>
+        <button type="button" class="ghost" tabindex="-1" id="hubTabMail" data-hub-tab="mail" role="tab" aria-controls="hubPaneMail" aria-selected="false">自己的郵件 SMTP</button>
       </div>
       <section class="hub-pane" id="hubPaneWebhook" data-hub-pane="webhook" role="tabpanel" aria-labelledby="hubTabWebhook" hidden>
         <p class="hint">我們特別推薦 Discord：免費、不用架伺服器，把 Webhook 貼上就能收到特別關注更新。其它相容 Discord 格式的 Webhook 也可以。</p>
@@ -4271,7 +4278,7 @@
         <select id="mailPreset" aria-label="罐頭訊息"></select>
         <label for="memberMailSubject">物件通知主旨</label>
         <input id="memberMailSubject" />
-        <label>物件通知本文</label>
+        <label for="memberMailText">物件通知本文</label>
         <textarea id="memberMailText"></textarea>
         <div class="row" style="margin-top:12px">
           <button type="button" class="ghost" id="memberMailTest">寄測試信到我的信箱</button>
@@ -7221,6 +7228,10 @@
       const tab = String(name || "events");
       document.querySelectorAll("[data-hub-tab]").forEach((el) => {
         el.setAttribute("aria-selected", el.dataset.hubTab === tab ? "true" : "false");
+        const selected = el.dataset.hubTab === tab;
+        el.setAttribute("aria-selected", selected ? "true" : "false");
+        // roving tabindex（WAI-ARIA APG tabs pattern）：只有選取中的分頁進 Tab 序。
+        el.tabIndex = selected ? 0 : -1;
       });
       document.querySelectorAll("[data-hub-pane]").forEach((el) => {
         el.hidden = el.dataset.hubPane !== tab;
@@ -8434,6 +8445,19 @@
       await loadList({ keep: true, silent: true });
     }
 
+    // 列表載入的逾時預算：路線永不回應（hang）時一定要收尾，
+    // 不能讓 .is-refreshing／pointer-events:none 永久卡住（原本 fetch 完全沒有 client 端逾時）。
+    const LIST_FETCH_TIMEOUT_MS = 15000;
+
+    // 列表載入失敗／逾時的統一文案（逾時與其他失敗要分得出來，且一定不是 busy 中的字）。
+    function listFetchFailureText(error, fallback = "更新失敗") {
+      const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+      const seconds = Math.round(LIST_FETCH_TIMEOUT_MS / 1000);
+      return timedOut
+        ? `更新逾時（${seconds} 秒），請再點一次重新載入`
+        : `${error?.message || fallback}，請再點一次重新載入`;
+    }
+
     async function loadList(options = {}) {
       if (!options.silent && !options.append) window.SupportCtaUsage?.bumpSearch?.();
       if (isGuest) {
@@ -8444,7 +8468,7 @@
         try {
           const params = guestListQuery();
           params.set("offset", String(append ? listOffset : 0));
-          const res = await fetch(`/api/public/listings?${params}`, { cache: "no-store" });
+          const res = await fetch(`/api/public/listings?${params}`, { cache: "no-store", signal: AbortSignal.timeout(LIST_FETCH_TIMEOUT_MS) });
           const data = await readApi(res);
           if (gen !== listLoadGen) return;
           if (!res.ok) throw new Error(data.error || "訪客搜尋失敗");
@@ -8464,7 +8488,7 @@
             $("status").textContent = "訪客搜尋（不需登入）。登入／註冊後可儲存設定與特別關注。";
           }
         } catch (error) {
-          $("status").textContent = error.message || "訪客搜尋失敗";
+          $("status").textContent = listFetchFailureText(error, "訪客搜尋失敗");
         } finally {
           if (gen === listLoadGen) setListBusy(false);
         }
@@ -8502,6 +8526,7 @@
       try {
         const res = await fetch(
           `/api/listings?filter=${encodeURIComponent(filter)}&kind=${encodeURIComponent(kinds.join(","))}&sources=${encodeURIComponent(canFilterSources() ? sources.join(",") : "")}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}&limit=${fetchLimit}${cursorParam}&districts=${districts}`,
+          { signal: AbortSignal.timeout(LIST_FETCH_TIMEOUT_MS) },
         );
         const data = await readApi(res);
         if (gen !== listLoadGen) return;
@@ -8562,6 +8587,10 @@
         syncCommutePoll();
         reportCommuteFocus();
         if (pendingCommuteWork()) refreshCommuteSnapshot();
+      } catch (error) {
+        // 逾時／失敗都要收尾：狀態列換成明確的失敗文案，busy 交給 finally（同一個世代守衛）。
+        if (gen === listLoadGen && $("status")) $("status").textContent = listFetchFailureText(error, "更新失敗");
+        throw error;
       } finally {
         if (gen === listLoadGen) {
           setListBusy(false);
@@ -12470,6 +12499,20 @@
     document.querySelector("[data-close-hub]")?.addEventListener("click", closeNotifyHub);
     document.querySelectorAll("[data-hub-tab]").forEach((el) => {
       el.addEventListener("click", () => setHubTab(el.dataset.hubTab));
+      // APG：方向鍵在分頁間移動「並選取」，Home／End 到頭尾；仍只走 setHubTab，不新增狀態路徑。
+      el.addEventListener("keydown", (ev) => {
+        const tabs = [...document.querySelectorAll("[data-hub-tab]")];
+        const at = tabs.indexOf(el);
+        const to = ev.key === "ArrowRight" ? tabs[(at + 1) % tabs.length]
+          : ev.key === "ArrowLeft" ? tabs[(at - 1 + tabs.length) % tabs.length]
+            : ev.key === "Home" ? tabs[0]
+              : ev.key === "End" ? tabs[tabs.length - 1]
+                : null;
+        if (!to) return;
+        ev.preventDefault();
+        setHubTab(to.dataset.hubTab);
+        to.focus();
+      });
     });
     $("notifyHubSave")?.addEventListener("click", () => saveNotifyHub());
     function openPasswordDialog() {
