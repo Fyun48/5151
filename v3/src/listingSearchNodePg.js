@@ -20,12 +20,6 @@ import {
   resolveListDistrictNames,
 } from "./db.js";
 import { districtKeyLists, districtKeyPrefixExpression } from "./listDistrictSql.js";
-import {
-  componentLabels,
-  districtClosureMaterializedEnabled,
-  loadMaterializedDistrictClosure,
-  matchComponentMaintenance,
-} from "./listingMatchComponents.js";
 import { loadDistrictPrefilterIds } from "./listingDistrictPrefilter.js";
 import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
@@ -45,18 +39,12 @@ export function canRunNodePg({ pgDriver, deps } = {}) {
 /**
  * B3b：在 PG 端算出行政區候選的「關係 closure」，回傳 id 陣列（或 null＝不需要過濾）。
  *
- * **即時算（live）**：每一次呼叫都把整張配對圖搬進 Node 再跑 union-find（正式站單獨實測
- * 869–927ms）。2026-10-12 之後它退居**備援**：預設走材料化分量
- * （`districtClosureIds()` → `listingMatchComponents.js`），這一支在
- * `MEMBER_DISTRICT_CLOSURE_MATERIALIZED=0`、或材料化任一道證明不成立時接手。
- * **原路徑不刪**（fail-safe 方向＝回到正確但慢的路徑）。
- *
  * 為什麼不用 CTE：Node 路徑原本的 recursive CTE 有**多個 recursive 分支**，PostgreSQL 只允許一個
  * （`recursive reference to query "district_related" must not appear within its non-recursive term`）。
  * 這裡改成在 Node 端做 BFS 展開：每步用 PG 原生查詢取「配對雙向鄰居＋個人同屋源群組」，
  * 直到沒有新 id。集合語意與原本的 `UNION` 遞移閉包相同，且完全沒有 dialect 風險。
  */
-export async function districtClosureIdsLive(exec, { districtNames = [], userId = 0, relatedOnly = false } = {}) {
+export async function districtClosureIds(exec, { districtNames = [], userId = 0, relatedOnly = false } = {}) {
   const { allowed, allKeys } = districtKeyLists(districtNames);
   if (!allowed.length || allowed.length === allKeys.length) return null;
   const prefix = districtKeyPrefixExpression("pg");
@@ -135,13 +123,45 @@ export async function districtClosureIdsLive(exec, { districtNames = [], userId 
   // 改成「邊壓成 Float64Array ＋ 節點用緊湊索引 ＋ parent/size 用 Int32Array」，
   // 語意（連通分量 ∪ 種子所在的那些分量）逐字不變 —— 見
   // `v3/test/member-district-closure-parity.test.js` 對舊版實作的逐筆比對。
-  //
-  // 2026-10-12：這一段抽成 `componentLabels()`（`listingMatchComponents.js`），
-  // 讓**材料化重算**與這一支即時算共用同一份演算法（兩份實作一定會漂移）。
-  // 語意逐字不變：`seedRoots` 由「根索引」改成「分量代表 id（分量內最小 post_id）」，
-  // 兩邊用同一個正規化 ⇒ 判斷結果相同。
-  const labeler = componentLabels(edges);
-  const { edgeCount, nodeIndex } = labeler;
+  const edgeCount = edges.length;
+  // ⚠️ 邊表**不可以**用 Int32Array：repro 實測 `post_id` 已經超過 2^31-1（例：2,507,462,476），
+  // Int32Array 會靜默截斷成負數，閉包結果就會多出一堆不存在的 id（實測 onlyNew=6,362）。
+  // 用 Float64Array：post_id 是安全整數（< 2^53），可精確表示。
+  // （`parent`／`size` 用的是 0..n-1 的緊湊索引，仍在 Int32 範圍內。）
+  const ea = new Float64Array(edgeCount);
+  const eb = new Float64Array(edgeCount);
+  const nodeIndex = new Map();
+  // 先配節點索引：0..n-1 為「有邊的節點」；沒有邊的節點不可能被邊走到，不佔索引。
+  for (let i = 0; i < edgeCount; i += 1) {
+    const a = edges[i][0];
+    const b = edges[i][1];
+    if (!nodeIndex.has(a)) nodeIndex.set(a, nodeIndex.size);
+    if (!nodeIndex.has(b)) nodeIndex.set(b, nodeIndex.size);
+    ea[i] = a;
+    eb[i] = b;
+  }
+  const n = nodeIndex.size;
+  const parent = new Int32Array(n);
+  const size = new Int32Array(n);
+  for (let i = 0; i < n; i += 1) { parent[i] = i; size[i] = 1; }
+  const find = (x) => {
+    let root = x;
+    while (parent[root] !== root) root = parent[root];
+    // path compression：把路徑上所有節點直接接到 root
+    let cur = x;
+    while (parent[cur] !== root) { const next = parent[cur]; parent[cur] = root; cur = next; }
+    return root;
+  };
+  const union = (a, b) => {
+    let ra = find(a);
+    let rb = find(b);
+    if (ra === rb) return;
+    // union-by-size：小的接到大的，避免鏈化
+    if (size[ra] < size[rb]) { const t = ra; ra = rb; rb = t; }
+    parent[rb] = ra;
+    size[ra] += size[rb];
+  };
+  for (let i = 0; i < edgeCount; i += 1) union(nodeIndex.get(ea[i]), nodeIndex.get(eb[i]));
   const seedRoots = new Set();
   const ids = new Set();
   await runStepsAsync((function* () {
@@ -149,7 +169,7 @@ export async function districtClosureIdsLive(exec, { districtNames = [], userId 
     for (const id of seeds) {
       const idx = nodeIndex.get(id);
       // 沒有索引＝沒有邊＝不屬於任何分量，只可能是種子本身（不會再被邊走到）。
-      if (idx !== undefined) seedRoots.add(labeler.repOfIndex(labeler.find(idx)));
+      if (idx !== undefined) seedRoots.add(find(idx));
       ids.add(id);
       if (++visited % 256 === 0) yield;
     }
@@ -157,39 +177,9 @@ export async function districtClosureIdsLive(exec, { districtNames = [], userId 
   // 舊版對每條邊跑兩次 `find(a)`／`find(b)`，結果是同一組；邊是無向的，掃一次即可。
   // （74k 次整數運算，不需要讓出事件迴圈；先前版本也沒有在這一段 yield。）
   for (let i = 0; i < edgeCount; i += 1) {
-    const rep = labeler.repOfIndex(labeler.find(nodeIndex.get(labeler.ea[i])));
-    if (seedRoots.has(rep)) { ids.add(labeler.ea[i]); ids.add(labeler.eb[i]); }
+    if (seedRoots.has(find(nodeIndex.get(ea[i])))) { ids.add(ea[i]); ids.add(eb[i]); }
   }
   return [...ids];
-}
-
-/**
- * 行政區關係閉包（對外入口）。
- *
- * 兩條路徑，語意必須逐列相同（`v3/scripts/district-closure-parity.mjs` 在真資料上比對）：
- *   • **材料化**（預設）：`listing_match_component` 已經把配對圖的連通分量算好，
- *     這裡只讀一句 SQL（`listingMatchComponents.loadMaterializedDistrictClosure`）。
- *   • **即時算**（`districtClosureIdsLive`）：`MEMBER_DISTRICT_CLOSURE_MATERIALIZED=0`，
- *     或材料化任一道證明不成立（缺表／缺狀態列／指紋過期／讀不到）時走它。
- *
- * fail-safe 方向固定是「回到正確但慢的路徑」：材料化只可能讓結果**一樣**或**不採用**，
- * 不會讓結果少算。
- */
-export async function districtClosureIds(exec, {
-  districtNames = [], userId = 0, relatedOnly = false, maintenance = null,
-} = {}) {
-  const { allowed, allKeys } = districtKeyLists(districtNames);
-  if (!allowed.length || allowed.length === allKeys.length) return null;
-  if (districtClosureMaterializedEnabled()) {
-    const materialized = await loadMaterializedDistrictClosure(exec, {
-      allowed, allKeys, userId, relatedOnly,
-      scheduleRebuild: maintenance?.scheduleRebuild ?? null,
-      absorbState: maintenance?.absorbState ?? null,
-      advanceState: maintenance?.advanceState ?? null,
-    });
-    if (Array.isArray(materialized)) return materialized;
-  }
-  return districtClosureIdsLive(exec, { districtNames, userId, relatedOnly });
 }
 
 export async function searchListingsNodePg(args = {}, opts = {}) {
@@ -286,9 +276,6 @@ export async function prepareListScope(exec, args = {}, { settings = null, conte
       districtNames,
       userId: vote,
       relatedOnly: true,
-      // 過期時**只排一次背景重算**（去抖＋advisory lock）；證明通過時只把水位往前推一句 CAS。
-      // 兩者都不在請求路徑上等（見 `listingMatchComponents.js` 的維護時機）。
-      maintenance: matchComponentMaintenance,
     }),
     // astra 2026-09-25 §2.1：明確表示「這裡沒有 SQLite 可讀」——隔離子句必須來自 context，
     // 缺 context.isolation 時 builder 會直接拋錯，不得靜默降級或偷讀 SQLite。
