@@ -133,11 +133,17 @@ docker exec 5151-haproxy kill -s USR2 1
 >    `PG_SQLITE_FALLBACK=open`（寫入也回退），用完立刻關掉。
 >
 > 4. **`haproxy.cfg` 有兩個 backend 都列 `pg-a`／`pg-b`，別用整檔字串比對判斷「是否已對調」**：
->    `backend pg_primary`（pg-rw 用）與 `backend pg_standby_first`（pg-ro 用，本來就 pg-a 優先）
+>    `backend pg_primary`（pg-rw 用）與 `backend pg_standby_first`（pg-ro 用）
 >    都列出兩台。2026-10-09 cutover 第一次核對時，就因為在 `pg_standby_first`
->    命中「pg-a 在前」而誤以為已對調、跳過。**改動／核對要限定在 `pg_primary` 這個 block 內**
->    （2026-10-12 起該 block 靠 agent-check 判角色、`pg-b` 不帶 `backup`；`pg_standby_first` 仍保留
->    `pg-b backup` 當讀取備援）。
+>    命中「pg-a 在前」而誤以為已對調、跳過。**改動／核對要限定在你要改的那個 block 內**。
+>    現在的狀態（2026-10-12 起兩個池都不再靠排序）：
+>    * `pg_primary`：`balance first` ＋ 兩條 `agent-check agent-port 25436`、`pg-b` **不帶 `backup`**
+>      ⇒ 角色由 responder 判定（**這個 block 是寫入路由核心，一個字都不准亂動**）。
+>    * `pg_standby_first`：**2026-10-12 起也吃 agent-check，埠是 25437（up-if-standby）**，
+>      兩條都**不帶 `backup`** ⇒ 只有自報待機的那台 UP，promote 後讀取自動跟隨；
+>      兩池的 agent 埠**不可相同**（25436 給寫入、25437 給讀取）。看到讀取池兩台都 UP
+>      ＝ 有人把 25436 抄過來、或把 agent-check 拿掉了，要當異常。
+>      就地改寫／reload／驗收程序見 `docs/runbooks/haproxy-web-weight.md` §2.4。
 >
 > 另外（2026-10-09 對調後）：**compose 目錄名稱與角色已一致**——
 > primary 的 compose 在 casa-nas `/root/5151-shadow-ha/shadow-ha/postgres-primary/`（容器 `5151-postgres-A`）、

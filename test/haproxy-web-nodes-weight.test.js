@@ -140,9 +140,121 @@ test("haproxy.cfg PG 路由：pg_rw→pg_primary、pg_ro→pg_standby_first；pg
   // pg_primary 內不准出現 `backup`：靜態備援標記會在「沒有任何節點自稱 primary」時讓待命庫接到寫入。
   const primaryEffective = primary.split("\n").filter((l) => !isComment(l)).join("\n");
   assert.doesNotMatch(primaryEffective, /(?:^|\s)backup(?:\s|$)/);
-  // 讀取端點仍保留 pg-b 為 backup（pg_ro 的讀取備援）。
+  // 讀取池（pg_standby_first）自 2026-10-12 起也是角色感知：兩條 server 都吃 25437（up-if-standby）。
+  // 這兩行只能「有」不能被「沒有」——整段被刪掉時要紅。
   const standby = backendBlock(cfg, "pg_standby_first");
-  assert.match(standby, /^\s*server pg-b \S+ check inter 3s fall 3 rise 2 backup$/m);
+  const standbyServers = standby.split("\n").filter((l) => /^\s*server\s/.test(l));
+  assert.equal(standbyServers.length, 2, `backend pg_standby_first: expected 2 server lines, found ${standbyServers.length}`);
+  for (const s of standbyServers) {
+    const name = (s.match(/^\s*server\s+(\S+)/) || [])[1];
+    assert.match(s, /^\s*server pg-[ab] \S+ check inter 3s fall 3 rise 2 agent-check agent-port \d+ agent-inter 2s$/m,
+      `server ${name} 必須是「agent-check agent-port 25437 agent-inter 2s」結尾，實際：${s}`);
+  }
+  assert.match(standby, /^\s*server pg-a \S+ check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s$/m);
+  assert.match(standby, /^\s*server pg-b \S+ check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s$/m);
+  // 讀取池只准吃 25437，且**不准**出現 `backup`（`backup` 會讓 primary 在自報 down 時照樣接到讀取）。
+  assert.doesNotMatch(standby, /(?:^|\s)backup(?:\s|$)/);
+  // 寫入池必須留著 `balance first`（讀取池刻意不加，見 cfg 內註解）。
+  assert.match(primary, /^\s*balance first$/m);
+});
+
+// ── 角色感知讀取池的「有牙齒」檢查器（可獨立餵突變字串，不依賴 repo 檔現況）────
+// 回傳 { ok, problems, ports }：ports = { pg_primary: [...], pg_standby_first: [...] }（找不到 agent-port 記 null）。
+export function checkPgAgentRouting(cfg) {
+  const problems = [];
+  const portsOf = (name) =>
+    backendBlock(cfg, name)
+      .split("\n")
+      .filter((l) => /^\s*server\s/.test(l))
+      .map((l) => {
+        const m = l.match(/agent-port\s+(\d+)/);
+        return m ? m[1] : null;
+      });
+
+  const primaryPorts = portsOf("pg_primary");
+  const standbyPorts = portsOf("pg_standby_first");
+  const ports = { pg_primary: primaryPorts, pg_standby_first: standbyPorts };
+
+  // 寫入池：兩條都要 agent-check，且都是 25436（寫入路由核心）。
+  if (!(primaryPorts.length === 2 && primaryPorts.every((p) => p === "25436"))) {
+    problems.push(`backend pg_primary 的兩條 server 都必須是 agent-port 25436，實際 ${JSON.stringify(primaryPorts)}`);
+  }
+  // 讀取池：兩條都要 agent-check，且都是 25437（up-if-standby）。
+  if (!(standbyPorts.length === 2 && standbyPorts.every((p) => p === "25437"))) {
+    problems.push(`backend pg_standby_first 的兩條 server 都必須是 agent-port 25437，實際 ${JSON.stringify(standbyPorts)}`);
+  }
+  // 本包的關鍵不變式：兩池的 agent 埠不可相同。「把 25436 複製到讀取池」＝讀取又會打到 primary。
+  if (primaryPorts.length && standbyPorts.length && primaryPorts.every((p) => standbyPorts.includes(p))) {
+    problems.push(`pg_primary(${JSON.stringify(primaryPorts)}) 與 pg_standby_first(${JSON.stringify(standbyPorts)}) 的 agent 埠不可相同`);
+  }
+  // 讀取池不准帶 `backup`：靜態標記會讓「自報 down 的那台」在沒有 UP 成員時接到讀取。
+  const standbyEffective = backendBlock(cfg, "pg_standby_first")
+    .split("\n")
+    .filter((l) => !isComment(l))
+    .join("\n");
+  if (/(?:^|\s)backup(?:\s|$)/.test(standbyEffective)) {
+    problems.push("backend pg_standby_first 不准帶 backup（會在自報 down 時仍被當讀取備援）");
+  }
+  // 兩池都不准用不存在的關鍵字（#722 已被 CI 打過）。
+  const effective = cfg.split("\n").filter((l) => l.trim() && !isComment(l)).join("\n");
+  for (const kw of ["agent-fall", "agent-rise"]) {
+    if (new RegExp(kw).test(effective)) problems.push(`不得使用 ${kw}（haproxy 2.9.15 unknown keyword）`);
+  }
+  return { ok: problems.length === 0, problems, ports };
+}
+
+test("haproxy.cfg PG 兩池：agent 埠必須不同（寫入 25436／讀取 25437）", () => {
+  const cfg = readFileSync(cfgPath, "utf8");
+  const r = checkPgAgentRouting(cfg);
+  assert.deepEqual(r.problems, [], r.problems.join("\n"));
+  assert.deepEqual(r.ports, { pg_primary: ["25436", "25436"], pg_standby_first: ["25437", "25437"] });
+});
+
+test("haproxy.cfg 不得使用不存在的 agent 關鍵字（agent-fall／agent-rise）", () => {
+  // #722 的教訓：`agent-fall`／`agent-rise` 在 haproxy 2.9.15 是 unknown keyword，
+  // CI 的 `haproxy -c` 會紅（`[ALERT] … unknown keyword 'agent-fall'`）。這條在離線階段就先擋。
+  const cfg = readFileSync(cfgPath, "utf8");
+  const effective = cfg.split("\n").filter((l) => l.trim() && !isComment(l)).join("\n");
+  assert.doesNotMatch(effective, /agent-fall/, "agent-fall 在 haproxy 2.9.15 是 unknown keyword");
+  assert.doesNotMatch(effective, /agent-rise/, "agent-rise 在 haproxy 2.9.15 是 unknown keyword");
+});
+
+test("守護測試有牙齒（PG 角色感知）：拿掉 agent-check／埠抄錯／加回 backup 都要判紅", () => {
+  // fixture 與 repo 檔獨立：這裡驗「檢查器本身有沒有牙齒」。
+  const GOOD = [
+    "backend pg_primary",
+    "    balance first",
+    "    option pgsql-check user postgres",
+    "    server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    "    server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    "backend pg_standby_first",
+    "    option pgsql-check user postgres",
+    "    server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    "    server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    "",
+  ].join("\n");
+  assert.equal(checkPgAgentRouting(GOOD).ok, true, "fixture must pass before mutation");
+
+  const mutants = {
+    "讀取池的 agent-check 整段拿掉": GOOD.replaceAll(" agent-check agent-port 25437 agent-inter 2s", ""),
+    "讀取池抄成 primary 埠 25436": GOOD.replaceAll("agent-port 25437", "agent-port 25436"),
+    "只讀取池的 pg-a 抄成 25436": GOOD.replace(
+      "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437",
+      "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436",
+    ),
+    "讀取池加回 backup": GOOD.replace(
+      "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+      "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s backup",
+    ),
+    "寫入池被改成讀取埠 25437": GOOD.replaceAll("agent-port 25436", "agent-port 25437"),
+    "用了不存在的 agent-fall": GOOD.replace("agent-inter 2s", "agent-inter 2s agent-fall 2"),
+  };
+
+  for (const [label, mutated] of Object.entries(mutants)) {
+    assert.notEqual(mutated, GOOD, `mutant "${label}" did not change the fixture (test itself is stale)`);
+    const r = checkPgAgentRouting(mutated);
+    assert.equal(r.ok, false, `mutant "${label}" should FAIL the check but passed`);
+  }
 });
 
 test("haproxy.cfg 有 listen internal_stats（容器內 bind :8404、唯讀）", () => {
