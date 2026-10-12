@@ -1,0 +1,80 @@
+TAP version 13
+# SRC_MANIFEST_BUILT files=324 tree=sha256:da7f01031284b15130dc01511e6ec3cc591d90d81e3e5c896774df7471d61b4d
+# SRC_MANIFEST_BUILT files=324 tree=sha256:da7f01031284b15130dc01511e6ec3cc591d90d81e3e5c896774df7471d61b4d
+# SRC_MANIFEST_BUILT files=324 tree=sha256:2361620f5b3b26fc3eedd2adfedbe12d037db82046f5cb91582a1ab06ddc7ff2
+# v3/src manifest mismatch: {"actual_tree": "sha256:2361620f5b3b26fc3eedd2adfedbe12d037db82046f5cb91582a1ab06ddc7ff2", "changed": ["db.js"], "expected_tree": "sha256:da7f01031284b15130dc01511e6ec3cc591d90d81e3e5c896774df7471d61b4d", "extra": [], "missing": []}
+# Subtest: PR A activation remains workflow_dispatch only
+ok 1 - PR A activation remains workflow_dispatch only
+  ---
+  duration_ms: 5.828576
+  type: 'test'
+  ...
+# Subtest: PR A activation requires exact confirmation, source SHA, digest, backup path and hash
+ok 2 - PR A activation requires exact confirmation, source SHA, digest, backup path and hash
+  ---
+  duration_ms: 2.06974
+  type: 'test'
+  ...
+# Subtest: PR A activation accepts a predeploy backup under the Storage1 root (Issue \#355)
+ok 3 - PR A activation accepts a predeploy backup under the Storage1 root (Issue \#355)
+  ---
+  duration_ms: 30.220636
+  type: 'test'
+  ...
+# Subtest: PR A activation keeps master, actor, triggering_actor and SHA ancestry guards
+ok 4 - PR A activation keeps master, actor, triggering_actor and SHA ancestry guards
+  ---
+  duration_ms: 0.858233
+  type: 'test'
+  ...
+# Subtest: PR A activation authorize script fail-closes bad confirmation, SHA, digest and backup path
+ok 5 - PR A activation authorize script fail-closes bad confirmation, SHA, digest and backup path
+  ---
+  duration_ms: 77.850218
+  type: 'test'
+  ...
+# Subtest: PR A activation pins workflow-definition SHA and does not checkout the candidate onto NAS
+ok 6 - PR A activation pins workflow-definition SHA and does not checkout the candidate onto NAS
+  ---
+  duration_ms: 0.69692
+  type: 'test'
+  ...
+# Subtest: PR A activation uses domain getters/savers and forbids raw SQL flag writes
+ok 7 - PR A activation uses domain getters/savers and forbids raw SQL flag writes
+  ---
+  duration_ms: 1.427911
+  type: 'test'
+  ...
+# Subtest: PR A activation remote guards running digest, OCI revision, backup hash and never mutates deploy state
+ok 8 - PR A activation remote guards running digest, OCI revision, backup hash and never mutates deploy state
+  ---
+  duration_ms: 1.40121
+  type: 'test'
+  ...
+# Subtest: PR A activation compensates post-save failures, re-hydrates runtime off, and uses durable receipt recovery
+ok 9 - PR A activation compensates post-save failures, re-hydrates runtime off, and uses durable receipt recovery
+  ---
+  duration_ms: 1.002344
+  type: 'test'
+  ...
+# Subtest: PR A src manifest matches git tree and fails closed when mounted db.js is tampered
+ok 10 - PR A src manifest matches git tree and fails closed when mounted db.js is tampered
+  ---
+  duration_ms: 1510.275383
+  type: 'test'
+  ...
+# Subtest: PR A activation does not change build, predeploy or deploy workflows
+ok 11 - PR A activation does not change build, predeploy or deploy workflows
+  ---
+  duration_ms: 4.864482
+  type: 'test'
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1776.576451

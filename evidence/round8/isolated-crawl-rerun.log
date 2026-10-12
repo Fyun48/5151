@@ -1,0 +1,92 @@
+TAP version 13
+# 輪次開始：mv5dywan-1
+# 下架掃描開始：待確認 0 筆／預算 12 筆
+# 本批探測 0 筆、耗時 0ms
+# 本批複查 0 筆、耗時 0ms
+# 來源 住商：開始
+# 來源 住商：結束（15ms，行政區 1/1，頁 6）
+# (node:5344) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# 輪次結束：mv5dywan-1（4568ms，fetched 5，covered 1，jobs 1，skipped ）
+# 輪次開始：mv5dz02b-2
+# 下架掃描開始：待確認 0 筆／預算 12 筆
+# 本批探測 0 筆、耗時 0ms
+# 本批複查 0 筆、耗時 0ms
+# 來源 住商：開始
+# 來源 住商：結束（5ms，行政區 0/1，頁 6）
+# Subtest: runWatch 真的跑完一輪：來源狀態要記進排程狀態、房源要落地（第九十六批的 RReferenceError 回歸鎖）
+ok 1 - runWatch 真的跑完一輪：來源狀態要記進排程狀態、房源要落地（第九十六批的 RReferenceError 回歸鎖）
+  ---
+  duration_ms: 4923.695973
+  type: 'test'
+  ...
+# 輪次結束：mv5dz02b-2（4028ms，fetched 5，covered 0，jobs 1，skipped ）
+# 輪次開始：mv5dz3g4-3
+# 下架掃描開始：待確認 0 筆／預算 12 筆
+# 本批探測 0 筆、耗時 0ms
+# 本批複查 0 筆、耗時 0ms
+# 來源 住商：開始
+# Subtest: runWatch：來源被擋到停工時，輪次要標記 blocked 並記下冷卻期（第九十六批 B）
+ok 2 - runWatch：來源被擋到停工時，輪次要標記 blocked 並記下冷卻期（第九十六批 B）
+  ---
+  duration_ms: 4342.180793
+  type: 'test'
+  ...
+# 來源 住商：結束（402ms，行政區 0/1，頁 6）
+# 輪次結束：mv5dz3g4-3（464ms，fetched 0，covered 0，jobs 1，skipped portals）
+# 輪次開始：mv5dz3z8-4
+# 下架掃描開始：待確認 0 筆／預算 12 筆
+# 本批探測 0 筆、耗時 0ms
+# 本批複查 0 筆、耗時 0ms
+# 來源 591：開始
+# Subtest: 階段預算用盡：這家算 partial（不算失敗）、要蓋 lastAttemptAt、整輪照樣收尾
+ok 3 - 階段預算用盡：這家算 partial（不算失敗）、要蓋 lastAttemptAt、整輪照樣收尾
+  ---
+  duration_ms: 820.574807
+  type: 'test'
+  ...
+# 來源 591：結束（245ms，行政區 2/3，頁 12）
+# 輪次結束：mv5dz3z8-4（545ms，fetched 0，covered 2，jobs 3，skipped ）
+# Subtest: 591 覆蓋階段到點停手：未跑完的縣市不算失敗、不記完成，整輪照樣收尾
+ok 4 - 591 覆蓋階段到點停手：未跑完的縣市不算失敗、不記完成，整輪照樣收尾
+  ---
+  duration_ms: 769.490322
+  type: 'test'
+  ...
+# (node:5345) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: 儀表板單元：fake logger 收到「到點停手」鍵、phase 標記、輪次 id 唯一
+ok 5 - 儀表板單元：fake logger 收到「到點停手」鍵、phase 標記、輪次 id 唯一
+  ---
+  duration_ms: 2.462756
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+# Subtest: 到點停手：withBudget 預算用盡時，先寫一行（含 phase）再取消
+ok 6 - 到點停手：withBudget 預算用盡時，先寫一行（含 phase）再取消
+  ---
+  duration_ms: 43.463382
+  type: 'test'
+  ...
+# Subtest: 加 log 不改變行為：同一輪跑兩次，行為欄位一致，且儀表板鍵都存在
+ok 7 - 加 log 不改變行為：同一輪跑兩次，行為欄位一致，且儀表板鍵都存在
+  ---
+  duration_ms: 9587.708666
+  type: 'test'
+  ...
+# Subtest: 下架掃描小預算：到點就停手、留一行「到點停手」（停在〈下架掃描〉），且不影響抓取落地
+ok 8 - 下架掃描小預算：到點就停手、留一行「到點停手」（停在〈下架掃描〉），且不影響抓取落地
+  ---
+  duration_ms: 4407.490828
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 26143.329984

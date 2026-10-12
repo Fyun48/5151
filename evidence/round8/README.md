@@ -79,3 +79,36 @@ cd /tmp/5151-fold-078ed6c3 && node --test v3/test/fold-sql-gate.test.js v3/test/
 - drift：`rc=0`、`{"listings":184754,"nonNullStored":97171,"components":27951,"mismatch":0,"ok":true,"stamped":false}`
   （→ `fold-root-drift-check.log`）。
 - 三支測試：`rc=0`、`tests 20 / pass 20 / fail 0`（→ `unit-three.log`）。
+
+## 6. npm test（開閘門檻，load < 6 才跑）
+
+第一次跑（`npm-test-r8.log`）是**無效的**：我在同一個 shell 先 `export PG_URL` 再 `npm test`，
+`v3/src/runtimeGuards.js` 的 `assertRuntimeDbGuard` 看到 `PG_URL` 但 `DB_DRIVER` 預設 sqlite ⇒
+任何呼叫 `runWatch` 的測試在啟動就 throw（6 條假紅，錯誤字串都是
+`[runtime-guard] 啟動拒絕：偵測到 PG 連線環境變數（PG_URL）…`）；
+另有 1 條 `PR A src manifest matches git tree`，那是 `v3/src` 的 manifest 閘門
+（`.github/scripts/pra-src-manifest.py` 比對工作樹 vs git HEAD）在**尚未 commit** 時必然紅。
+
+乾淨重跑（`load_before=4.53` < 6、`unset PG_URL`、已 commit `e7d0e96`）：
+
+```bash
+cd /tmp/5151-fold-078ed6c3 && unset PG_URL; export DATA_DIR=$(mktemp -d); npm test
+```
+
+- `rc=0`、`# tests 4114 / # pass 3992 / # fail 0 / # cancelled 0 / # skipped 122`、
+  `duration_ms 1281014`（→ `npm-test-r8-clean.log`）。
+- 兩條假紅的逐條歸因與單檔重跑：
+  | 檔名 | test 名 | 第一次實測 | 低負載單獨重跑 |
+  |---|---|---|---|
+  | `v3/test/crawl-round-integration.test.js` | runWatch 真的跑完一輪／來源被擋到停工／階段預算用盡／591 覆蓋階段到點停手（4 條） | runtime-guard（PG_URL 污染） | `rc=0`、8/8 pass |
+  | `v3/test/crawl-round-telemetry.test.js` | 加 log 不改變行為／下架掃描小預算（2 條） | runtime-guard（PG_URL 污染） | `rc=0`、8/8 pass（與上列同一次） |
+  | `v3/test/activate-rental-marketplace-pra-workflow.test.js` | PR A src manifest matches git tree and fails closed… | `v3/src manifest mismatch: changed ["listingSearchSql.js"]`（未 commit） | commit 後 `rc=0`、11/11 pass |
+
+## 7. CI（commit `e7d0e96`）
+
+- `gh run view 38268026634`：workflow「Tests」**conclusion=success**（headSha `e7d0e96…`）。
+- gating step：`Run Tests (PostgreSQL integration) → 8. Same-house fold parity (synthetic seeds, gating)
+  → success`；該步 log 內 `{"script":"fold-ci-parity","total":16,"failed":[],"allOk":true}`，
+  且 ⑫⑬⑭ 三組新種子逐條 `ok:true`。
+- 另一支 workflow「Code review (advisory)」（run `38268026657`）亦 success。
+
