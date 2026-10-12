@@ -6385,6 +6385,62 @@ const FIXTUREPHONE_MUTATIONS = [
   },
 ];
 
+// HAProxy 權威設定（`test/haproxy-web-nodes-weight.test.js`）的變異集（2026-10-12：讀取池角色感知）。
+// 這個檔不是程式碼而是**設定**，所以變異直接改 `deploy/shadow-ha/haproxy/haproxy.cfg` 的 server 行，
+// 看靜態守護測試會不會紅。三種失敗模式都是**靜默**的（語法照樣合法、`haproxy -c` 照樣過），
+// 只有測試或「人去看 stats」才會發現，所以每一條都要有專屬斷言擋住。
+const HAPROXY_MUTATIONS = [
+  {
+    name: "讀取池的 pg-a agent-check 拿掉（該台永遠 UP ⇒ 回到分不出角色）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    to: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2",
+    expect: "agent 埠必須不同",
+  },
+  {
+    name: "讀取池抄成 primary 埠 25436（讀取永遠落 primary，就是這個 PR 要修的病）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    to: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    expect: "agent 埠必須不同",
+  },
+  {
+    name: "把 25436 也複製到讀取池的 pg-b（只改一條的漏改情境）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    to: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    expect: "agent 埠必須不同",
+  },
+  {
+    name: "讀取池加回 backup（自報 down 的那台仍被當讀取備援）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s\n",
+    to: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s backup\n",
+    expect: "PG 路由",
+  },
+  {
+    name: "寫入池被改成讀取埠 25437（把「寫入只能到 primary」打掉）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    to: "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    expect: "agent 埠必須不同",
+  },
+  {
+    name: "用不存在的 agent-fall（#722 已被 CI 打過的 unknown keyword）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s",
+    to: "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25437 agent-inter 2s agent-fall 2",
+    expect: "不存在的 agent 關鍵字",
+  },
+  {
+    name: "web_nodes 的 weight 30／70 被動到（寫入路由以外的紅線）",
+    file: "deploy/shadow-ha/haproxy/haproxy.cfg",
+    from: "server web-a 192.168.0.140:15153 check inter 3s fall 3 rise 2 weight 30",
+    to: "server web-a 192.168.0.140:15153 check inter 3s fall 3 rise 2 weight 50",
+    expect: "weight",
+  },
+];
+
 // 會員列表「唯讀快照 → 待機節點」（2026-10-12 會員讀待機路由包）。
 // 每一條都對應 `v3/test/member-read-replica-routing.test.js` 裡的一個測試：這一包的失敗模式都很安靜
 // （沒開閘卻照走、fail-safe 變成半套、寫入守門失效、剛寫完看到舊的自己），所以逐條拿掉看測試會不會紅。
@@ -6516,6 +6572,7 @@ const LISTINGSTAGETIMING_MUTATIONS = [
 ];
 
 const MUTATIONS = /listing-search-parity/.test(testFile) ? SEARCHPARITY_MUTATIONS
+  : /haproxy-web-nodes-weight/.test(testFile) ? HAPROXY_MUTATIONS
   : /member-read-replica/.test(testFile) ? MEMBERREADREPLICA_MUTATIONS
   : /listing-server-timing/.test(testFile) ? LISTINGSTAGETIMING_MUTATIONS
   : /stage1-fixture-readiness/.test(testFile) ? FIXTUREPHONE_MUTATIONS

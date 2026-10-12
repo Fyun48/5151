@@ -30,8 +30,12 @@
   （給宿主路徑會 `Cannot open configuration file`）；⚠️ **通過時官方映像完全不吐字（只 exit 0）**，
   所以要自己 `&& echo "HAPROXY-C CHECK OK"` 才不會誤判成沒跑。
 - 改設定後零中斷 reload：`kill -s USR2 1`（master/worker 換設定；只有**加／改埠映射**才需要重建容器）。
-  正常的判讀：`pg_primary/pg-b = DOWN (agent)` 是**預期**（待命庫被踢出寫入池），
-  同一台在 `pg_standby_first` 是 `UP bck=1`；`pg_primary/pg-a` 應為 `UP`。
+  正常的判讀（**2026-10-12 起兩池都是角色感知**）：`pg_primary/pg-a = UP`、
+  `pg_primary/pg-b = DOWN (agent)`（待命庫被踢出寫入池，這是**預期**）；
+  **`pg_standby_first` 只有自報待機的那一台 UP、另一台也要是 `DOWN (agent)`**。
+  ⚠️ 舊版 runbook 寫的「同一台在 `pg_standby_first` 是 `UP bck=1`」是**改動前的症狀**：那代表這個 backend
+  只問得到「PG 有沒有在答」、分不出角色（兩台都會答 ⇒ 讀取永遠落在 primary）。**看到讀取池兩台都 UP 要當異常**，
+  不是正常。（`bck` 只是 stats 頁的欄位名，不代表現在還掛著 `backup`；以 `cfg` 為準。）
 
 ### 0.1 套用前必做：先確認「repo 檔」與「現行檔」沒有別的差異
 
@@ -46,13 +50,17 @@ diff <(ssh casa-nas "grep -avE '^\s*#|^\s*$' /opt/5151-shadow/haproxy/haproxy.cf
 
 - ✅ 預期：三個都**沒有輸出**（差異 0）。有輸出差異就先停下來查，不要直接覆蓋。
   **2026-10-12 planner 已實跑過這三條：casa vs repo＝0、syn vs repo＝0、casa vs syn＝0（各 45 行）。**
+  ⏱️ **時效（2026-10-12 更新）**：那是 #722 收斂當下的狀態。**#722 之後 repo 檔與 live 已逐字一致**
+  （含註解與空行），所以現在跑上面三條仍應為 0 —— 但**這個 0 只說明「當下沒有漂移」**，
+  不改變下一條的鐵則：套用一律「只改你要改的那幾行」，**永遠不要整份覆蓋**。
   同一組「有效行」的規則也適用於 compose：兩份 haproxy compose 的有效行必須逐字一致
   （只有 `-b` 後綴不同）且都不含 `command:`。
-- ⛔ **PG 段絕不能被 repo 檔整份覆蓋**：`backend pg_primary`（`balance first` ＋ 兩條
-  `agent-check agent-port 25436 agent-inter 2s`、**pg-b 不帶 `backup`**）、`backend pg_standby_first`
+- ⛔ **PG 段絕不能被 repo 檔整份覆蓋**（含 2026-10-12 起改好的讀取池）：`backend pg_primary`
+  （`balance first` ＋ 兩條 `agent-check agent-port 25436 agent-inter 2s`、**pg-b 不帶 `backup`**）、
+  `backend pg_standby_first`（兩條 `agent-check agent-port 25437 agent-inter 2s`、**不帶 `backup`**）
   與 `listen internal_stats` 是**寫入路由與角色判定**的核心。正式機上可能還有尚未同步回 repo 的
   Owner 核准設定，**整份複製 repo 檔上去等於把它們無聲退回舊版**（語法合法、不報錯，只是行為變了）。
-  一律「只改你要改的那幾行」，改完把變更逐字同步回 repo 檔（本檔就是為此存在的鏡像）。
+  一律「只改你要改的那幾行」，改完把變更逐字同步回 repo 檔（本檔的 §2.4 就是照這個寫的）。
   `frontend pg_rw → backend pg_primary`、`frontend pg_ro → backend pg_standby_first` **不准改**。
 
 ## 1. 為什麼要加權（決策依據，2026-10-12 02:26–02:28 實測）
@@ -85,9 +93,14 @@ diff <(ssh casa-nas "grep -avE '^\s*#|^\s*$' /opt/5151-shadow/haproxy/haproxy.cf
 ```bash
 cd /opt/5151-shadow/haproxy
 
-# (1) 改動前先備份「正本」，並驗備份自己的內容是乾淨的（兩個期望值都要對才往下走）
+# (1) 改動前先備份「正本」，並驗備份自己的內容是乾淨的（三個期望值都要對才往下走）
 cp -a haproxy.cfg haproxy.cfg.bak-weight-$(date +%Y%m%d)
-grep -c "agent-check" haproxy.cfg.bak-weight-*                 # 期望 2
+grep -c "agent-check" haproxy.cfg.bak-weight-*                 # 期望 14（含註解行；有效行只有 4 條，見下一條）
+grep -avE '^\s*#|^\s*$' haproxy.cfg.bak-weight-* | grep -c agent-check   # 期望 4（寫入池 2 ＋ 讀取池 2，2026-10-12 起）
+grep -c "^    server pg-" haproxy.cfg.bak-weight-*             # 期望 4
+if grep -avE '^\s*#|^\s*$' haproxy.cfg.bak-weight-* | grep -q backup; then
+  echo "✗ 有效行內不該有 backup（pg_primary pg-b 與讀取池都不准有）"; exit 1
+else echo "OK 有效行內沒有 backup"; fi
 grep -avE '^\s*#|^\s*$' haproxy.cfg.bak-weight-* | wc -l       # 期望 45（＝live 的有效行數）
 
 # (2) 只改要改的兩行，原地覆寫同一個 inode；任何不變式沒過就「不寫檔」直接退出
@@ -144,7 +157,9 @@ shell 的 PATH）、檔案在 `/var/services/homes/tori/5151-shadow/haproxy/hapr
 export PATH=/usr/local/bin:$PATH
 cd /var/services/homes/tori/5151-shadow/haproxy
 cp -a haproxy.cfg haproxy.cfg.bak-weight-$(date +%Y%m%d)
-grep -c "agent-check" haproxy.cfg.bak-weight-*                 # 期望 2
+grep -c "agent-check" haproxy.cfg.bak-weight-*                 # 期望 14（含註解行）
+grep -avE '^\s*#|^\s*$' haproxy.cfg.bak-weight-* | grep -c agent-check   # 期望 4
+grep -c "^    server pg-" haproxy.cfg.bak-weight-*             # 期望 4
 grep -avE '^\s*#|^\s*$' haproxy.cfg.bak-weight-* | wc -l       # 期望 45
 
 python3 - <<'PY'
@@ -186,6 +201,130 @@ cd ~/5151-shadow/haproxy    && docker compose up -d --force-recreate      # syn
 > 另外：兩份 compose 的**有效行必須逐字一致**（只有 `-b` 後綴不同）、且**都不含 `command:`**（live 兩台都
 > 用 `haproxy:2.9-alpine` 的映像預設命令）；`test/haproxy-compose-parity.test.js` 會擋「只在一邊加東西」。
 
+### 2.4 讀取池改成角色感知（2026-10-12；決策 D-0040）— 可直接照抄的「先驗證 → 改 → reload → 後驗證」
+
+要改的只有 `backend pg_standby_first` 那三行（`option pgsql-check` 不動；兩條 server 各加
+`agent-check agent-port 25437 agent-inter 2s`、並**移除 `backup`**）。`backend pg_primary`、
+`frontend pg_rw`／`pg_ro`、`web_nodes`、`listen internal_stats` **一個字都不准動**（§0.1 的鐵則）。
+
+> ⚠️ 前提：兩台的 **25437 responder 必須已經在跑**（照 `deploy/shadow-ha/pg-agent/README.md` 的
+> 「部署順序」先驗 responder，再改 HAProxy）。否則新設定一 reload，讀取池就沒有 UP server
+> ⇒ 新連線全被拒（fail-closed，程式會退回 primary，但你不會想要在沒驗過 responder 的情況下撞上它）。
+> ⚠️ 兩台的 cfg 路徑不同：casa `/opt/5151-shadow/haproxy/haproxy.cfg`、
+> syn `/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg`（容器 `5151-haproxy`／`5151-haproxy-B`）。
+
+**步驟 ①：先驗證（改之前；兩個鏡像都要）**
+
+```bash
+# (0) repo 檔（＝本檔的來源）必須已經是「讀取池吃 25437／兩池都不帶 backup」
+grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg | grep -c "agent-port 25437"   # 期望 2
+grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg | grep -n "backup"             # 期望：無輸出
+
+# (1) 驗 responder：standby 那台 25437 回 up；primary 那台 25437 回 down
+printf '' | nc -q1 192.168.0.220 25437    # 期望 up   （syn 現在＝待機）
+printf '' | nc -q1 192.168.0.140 25437    # 期望 down （casa 現在＝primary）
+printf '' | nc -q1 192.168.0.140 25436    # 期望 up   （primary 埠對照）
+
+# (2) 驗現況（改之前）：讀取池還是「兩台都 UP」＝分不出角色（就是本節要修的）
+curl -s http://127.0.0.1:25154/stats;csv | awk -F, '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  $1=="pg_standby_first" { printf "%s status=%s weight=%s scur=%s\n",$2,$h["status"],$h["weight"],$h["scur"] }'
+# 期望（改之前）：pg-a status=UP、pg-b status=UP（且 bck 欄為 1）← 舊狀態
+
+# (3) 三個 diff 必須為 0（見 §0.1）：casa vs repo、syn vs repo、casa vs syn
+diff <(ssh casa-nas "grep -avE '^\s*#|^\s*$' /opt/5151-shadow/haproxy/haproxy.cfg") \
+     <(grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg)
+diff <(ssh syn-nas  "grep -avE '^\s*#|^\s*$' /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg") \
+     <(grep -avE '^\s*#|^\s*$' deploy/shadow-ha/haproxy/haproxy.cfg)
+# 期望：三條都無輸出
+```
+
+**步驟 ②：改（先 casa 再 syn；就地改寫同一個 inode）**
+
+```bash
+# casa
+cp -a /opt/5151-shadow/haproxy/haproxy.cfg /opt/5151-shadow/haproxy/haproxy.cfg.bak-pgro-$(date +%Y%m%d-%H%M)
+python3 - <<'PY'
+import io
+p = "/opt/5151-shadow/haproxy/haproxy.cfg"          # syn：/var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg
+orig = io.open(p, encoding="utf-8").read()
+
+# (a) 不可被碰到的行先抓出來；少一條就不寫檔
+must = [
+    "server pg-a 192.168.0.140:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    "server pg-b 192.168.0.220:15432 check inter 3s fall 3 rise 2 agent-check agent-port 25436 agent-inter 2s",
+    "balance first",
+]
+missing = [x for x in must if x not in orig]
+assert not missing, f"寫入池核心行不在檔案裡（或已被改動）→ 不寫檔：{missing}"
+
+# (b) 只改讀取池那兩行（含 `backup` 的舊版與已改過的版本都吃）
+SUFFIX = " check inter 3s fall 3 rise 2"
+for addr, name in (("192.168.0.140", "pg-a"), ("192.168.0.220", "pg-b")):
+    old = f"server {name} {addr}:15432{SUFFIX} backup"
+    new2 = new.replace(old, f"server {name} {addr}:15432{SUFFIX} agent-check agent-port 25437 agent-inter 2s")
+    assert new2 != new, f"{addr}: 找不到「⋯{SUFFIX} backup」那一行（可能已經改過）→ 不寫檔"
+    new = new2
+
+# (c) 寫回前驗：25437 恰好 2 條、25436 恰好 2 條、有效行內沒有 backup
+eff = [l for l in new.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+assert sum("agent-port 25437" in l for l in eff) == 2, "25437 不是 2 條 → 不寫檔"
+assert sum("agent-port 25436" in l for l in eff) == 2, "25436 不是 2 條（寫入池被動到了）→ 不寫檔"
+assert not [l for l in eff if "backup" in l], "有效行內還有 backup → 不寫檔"
+
+# (d) 原地覆寫（同一個 inode；絕對不要 mv／os.replace）
+with io.open(p, "r+", encoding="utf-8") as f:
+    f.write(new); f.truncate()
+print("WROTE", p, len(new), "bytes")
+PY
+# syn：同一支程式，只把 p 改成 /var/services/homes/tori/5151-shadow/haproxy/haproxy.cfg
+```
+
+**步驟 ③：reload（容器的 `haproxy -c` 先過再 reload）**
+
+```bash
+# ⚠️ 通過時官方映像不吐字（只 exit 0），所以自己印一條 OK，否則會誤判成「沒跑」
+docker exec 5151-haproxy   haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && echo "HAPROXY-C CHECK OK (casa)"
+before_ts=$(date +%s)
+docker exec 5151-haproxy   kill -s USR2 1 && sleep 1
+docker logs 5151-haproxy --since "@$before_ts" 2>&1 | grep -E "New worker forked|Loading success"
+# 期望：兩條都出現（New worker forked ＋ Loading success）
+# syn：容器名換 5151-haproxy-B（同一套步驟）
+```
+
+**步驟 ④：後驗證（兩台都要做；這是「有沒有真的生效」的判準）**
+
+```bash
+# (1) 語法（兩台；容器內路徑）
+docker exec 5151-haproxy   haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && echo "HAPROXY-C CHECK OK (casa)"
+docker exec 5151-haproxy-B haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && echo "HAPROXY-C CHECK OK (syn)"
+
+# (2) 讀取池只剩「自報待機」那台 UP；另一台必須是 DOWN (agent)
+curl -s http://127.0.0.1:25154/stats;csv | awk -F, '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  $1=="pg_standby_first" { printf "%s status=%s weight=%s scur=%s\n",$2,$h["status"],$h["weight"],$h["scur"] }'
+# 期望（2026-10-12，syn 是待機）：pg-a status=DOWN（reason=Layer7 via agent : down）、pg-b status=UP
+# 寫入池不准被影響：pg_primary/pg-a=UP、pg_primary/pg-b=DOWN(agent)
+curl -s http://127.0.0.1:25154/stats;csv | awk -F, '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  $1=="pg_primary" { printf "%s status=%s\n",$2,$h["status"] }'
+
+# (3) 經 HA 連線：讀取池必須落在**待機**（沒有 psql client 也能驗；用 node ＋ 佔位字串）
+set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a   # 只為拿帳密，不印出值
+PG_URL='postgres://user:password@127.0.0.1:25434/5151_shadow' \
+  node -e 'const u=process.env.PG_URL;const {Client}=require("pg");(async()=>{const c=new Client({connectionString:u});await c.connect();const r=await c.query("SELECT pg_is_in_recovery() AS standby");console.log("25434 → pg_is_in_recovery()=",r.rows[0].standby);await c.end()})().catch(e=>{console.error("ERR",e.message);process.exit(1)})'
+# 期望：25434 → pg_is_in_recovery()= true        （改之前是 false ＝ 打到 primary）
+PG_URL='postgres://user:password@127.0.0.1:25433/5151_shadow' node -e '…同上…'
+# 期望：25433 → pg_is_in_recovery()= false
+
+# (4) 角色互換情境（在下次 promote 後跑同一組）：syn 變 primary、casa 待機時
+#     pg_standby_first 應該變成 pg-a=UP／pg-b=DOWN，且經 25434 連線仍回 true（＝當時的待機）
+```
+
+**回滾**：把 §3 的指令換成這次的備份（`haproxy.cfg.bak-pgro-<日期>-<時間>`）整份覆蓋回去，
+`haproxy -c` ＋ `kill -s USR2 1` 即可（回到「兩台都可能 UP」的舊行為）。
+⚠️ **不要把 `backup` 加回去**，也不要用「手動對調 server 順序」當解法。
+
 ## 3. 回滾
 
 ```bash
@@ -217,12 +356,14 @@ PY
 # 之後各自 haproxy -c ＋ kill -s USR2 1（同 §2）
 ```
 
-回滾後立刻做 §4 的驗證（重點：兩台仍 UP、`hrsp_5xx` 沒有增加、weight 回到 1／1）。
+回滾後立刻做 §4 的驗證（重點：兩台仍 UP、`hrsp_5xx` 沒有增加、weight 回到 1／1；
+**讀取池回退後會變回「兩台都可能 UP」**——那是舊行為，不是故障，但別忘了把 repo 檔同步回去）。
 
 > ⚠️ **回滾時不要刪 `stick-table`／`stick on`**（Owner 2026-10-10 核准的訪客黏滯），
 > 也不要把 `option redispatch`／`retry-on` 一起拿掉——那兩條是 2026-09-23 演練的成果。
 > 也**不要**把 `backend pg_primary` 的 `balance first`／`agent-check` 拿掉（角色判定會失效），
-> 更不要把 `backup` 加回 `pg-b`。
+> 更不要把 `backup` 加回 `pg-b`；**讀取池（`pg_standby_first`）也一樣不准加回 `backup`**——
+> 它只會讓「自報 down（＝現任 primary）」的那台在沒有 UP 成員時接到讀取，等於把 2026-10-12 修掉的病種回去。
 
 ## 4. 驗收（套用與回滾都要跑同一套）
 
@@ -238,7 +379,11 @@ curl -s 'http://127.0.0.1:25154/stats;csv' | awk -F, '
   $1=="web_nodes" && ($2=="web-a" || $2=="web-b") {
     printf "%s status=%s weight=%s hrsp_2xx=%s hrsp_5xx=%s\n",
            $2, $h["status"], $h["weight"], $h["hrsp_2xx"], $h["hrsp_5xx"] }'
-# 寫入路由也要看：pg_primary/pg-a=UP、pg_primary/pg-b=DOWN(agent)、pg_standby_first/pg-b=UP(bck=1)
+# 寫入路由也要看：pg_primary/pg-a=UP、pg_primary/pg-b=DOWN(agent)
+# 讀取路由（2026-10-12 起）：pg_standby_first **只有自報待機的那台 UP**、另一台 DOWN(agent)
+curl -s 'http://127.0.0.1:25154/stats;csv' | awk -F, '
+  NR==1 { for (i=1;i<=NF;i++) h[$i]=i; next }
+  $1=="pg_standby_first" { printf "%s status=%s\n", $2, $h["status"] }'
 
 # (3) 端到端：狀態碼要**逐字列**，不要把「非 200」一律當故障
 for i in $(seq 1 20); do printf "%s " "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:25153/api/health)"; done; echo
@@ -285,13 +430,23 @@ curl -s 'http://127.0.0.1:25154/stats;csv' | awk -F, '
    - 檔內不得殘留 `${...}`（本檔已是實體 IP，會殘留就代表有人把 template 版的檔案放回來）；
      `pg-a`／`pg-b` 不得出現 `weight`；
    - PG 路由：`frontend pg_rw → backend pg_primary`、`frontend pg_ro → backend pg_standby_first`，
-     `pg_primary` 有 `balance first` ＋ 兩條 `agent-check`、**且不含 `backup`**；
+     `pg_primary` 有 `balance first` ＋ 兩條 `agent-check agent-port 25436`、**且不含 `backup`**；
+   - **讀取池角色感知**（2026-10-12）：`pg_standby_first` 的**兩條** server 都必須是
+     `agent-check agent-port 25437 agent-inter 2s`、**且不含 `backup`**；兩池的 agent 埠**不可相同**
+     （`pg_primary` 25436／`pg_standby_first` 25437）；檔內不得出現 `agent-fall`／`agent-rise`；
    - `listen internal_stats` 存在、容器內 `bind :8404`、`stats admin if FALSE`；
-   - 最後一個 test 用突變（拿掉 weight／50-50／歸零／刪 server／對調）證明這個檢查**真的會紅**。
+   - 最後兩個 test 用突變（拿掉 weight／50-50／歸零／刪 server／對調；以及拿掉 agent-check／
+     埠抄錯／加回 `backup`）證明這些檢查**真的會紅**。
 
    改壞 50/50 的驗證方式：把兩條 server 行的 weight 拿掉後跑
    `node --test test/haproxy-web-nodes-weight.test.js`，第一個 test 會以
    `no explicit "weight <n>"` 失敗。
+
+   這支檔案也接了變異測試（2026-10-12 新增；`HAPROXY_MUTATIONS` 直接改 `haproxy.cfg` 的 server 行）：
+
+   ```bash
+   node v3/scripts/mutation-check.mjs test/haproxy-web-nodes-weight.test.js   # 期望 SURVIVED 0
+   ```
 3. **兩份 compose 的一致性** `test/haproxy-compose-parity.test.js`（2026-10-12 新增）：
 
    - 兩份 haproxy compose（casa／syn）的**有效行數必須相同、逐條逐字相同**（只允許 `-b` 後綴差異）；

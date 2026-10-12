@@ -75,7 +75,9 @@ down」不是可有可無的修飾，而是唯一的抗抖機制。別把 `PG_AG
 
 ## 部署順序（responder 先、HAProxy 後）
 
-**先別動 HAProxy**，等兩台 responder 都驗證過角色再改，否則 agent-check 會先把節點判 DOWN。
+**先別動 HAProxy**，等兩台 responder 都驗證過角色再改（2026-10-12 起讀取池也吃 agent-check，
+所以這一條同時適用寫入池與讀取池）：agent-check 是**唯一**的角色來源，兩台 responder 沒起來就
+等於「兩池都沒有 UP server」——寫入與讀取會一起停（fail-closed，不是 bug，但你不會想要）。
 
 1. 在兩台節點建立 `.env`（`PG_AGENT_IMAGE`＋`PG_AGENT_DIRECT_URL`）。
 2. 安裝 responder（會先備份 `.bak-$(date +%Y%m%d-%H%M)` 再覆寫，`docker compose config -q`
@@ -85,8 +87,9 @@ down」不是可有可無的修飾，而是唯一的抗抖機制。別把 `PG_AG
    bash v3/scripts/pg-agent-install.sh syn    # syn-nas  → /var/services/homes/tori/5151-shadow/pg-agent/
    ```
 3. 驗收（下節）：兩台各回報「自己是 primary 的那個埠＝up」。
-4. 改 HAProxy（下一節那幾行）並 reload。
-5. 驗證經 `25433` 的寫入只到 primary。
+4. 改 HAProxy（下一節那幾行）並 reload。**讀取池**那一樣（`pg_standby_first` 兩條 server 用 25437）
+   的就地改寫／reload／驗收程序在 `docs/runbooks/haproxy-web-weight.md` §2.4。
+5. 驗證經 `25433` 的寫入只到 primary；讀取池則看 stats 上 `pg_standby_first` **只有自報待機的那台 UP**。
 
 ## HAProxy 的 `backend pg_primary`（2026-10-12 起：已在權威檔內，不再是「要加」的片段）
 
@@ -107,7 +110,12 @@ backend pg_primary
   （CI 的 `haproxy -c` 也會擋）。
 - `pg-b` **不帶** `backup`：角色由 agent 判定，`backup` 是靜態標記，會在沒有任何節點自稱 primary
   時把寫入放到待命庫（違反「寫入只能到 primary」）。`balance first` ＋ agent 全 down ＝ fail-closed。
-- `pg_ro`（25434）的 `backend pg_standby_first` **本包不動**（見下方已知限制）。
+- **`pg_ro`（25434）的 `backend pg_standby_first` 也在 2026-10-12 改用 agent-check**（決策 D-0040）：
+  兩條 server 都吃 **25437（standby 埠）**＋`option pgsql-check` 雙重檢查、**移除 `backup`**，
+  所以「自報待機」的那台才會 UP，角色互換時讀取會自動跟隨。
+  寫入池與讀取池的 agent 埠**不可相同**（25436 給寫入、25437 給讀取）；`test/haproxy-web-nodes-weight.test.js`
+  會擋「把 25436 複製到讀取池」與「加回 `backup`」。
+  開閘（加 `PG_RO_URL`）與判讀見 `docs/runbooks/member-read-replica-routing.md`。
 - 檔內一律實體 IP（`192.168.0.140`=casa-nas、`192.168.0.220`=syn-nas）：這份 cfg **不是 template**，
   沒有 `${CASAOS_HOST}` 佔位符、容器啟動時也沒有展開步驟。
 
@@ -138,7 +146,9 @@ node -e "const s=require('net').connect({host:'127.0.0.1',port:25436},()=>{});s.
 
 ## 已知限制
 
-- **`pg_ro`（25434）本包不動**：`backend pg_standby_first` 的 standby 優先路由維持原樣。
-  未來若要用 agent-check 做讀取路由，standby 埠（25437）已備好，但那不是本包的範圍。
+- **讀取池（`pg_ro`／25434）自 2026-10-12 起也吃 agent-check（25437）**：`backend pg_standby_first`
+  兩條 server 都是 `agent-check agent-port 25437 agent-inter 2s`、**不帶 `backup`**，所以只有自報待機的
+  那台 UP；兩台都不自報待機時讀取池沒有 UP server，程式端退回 primary（見
+  `docs/runbooks/member-read-replica-routing.md`）。這一項已不再是「本包不動」。
 - 本包只提供「角色判定」的資料源（responder）＋安裝入口＋規格；**實際改 HAProxy、reload 與
   演練由人執行**，本包不代為執行、不碰 NAS、不碰正式 DB、不觸發任何發版 workflow。

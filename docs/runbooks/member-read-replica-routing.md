@@ -15,7 +15,11 @@
   （`application_name = <PG_APPLICATION_NAME>-ro`）。
 * **程式不假設 `25434` 今天會送到待機，也不需要 HA 先改好**：未設／連不上／冷卻中 ⇒ 整趟走 `PG_URL`，行為與以前相同。
   開閘後若 `scan;dur` 沒降，那是**流量還沒真的到待機**（用 §3 第 2 個指標確認），不是這一包的缺陷。
-* HAProxy 的 `pg_ro` 後端排序由 Owner 處理；這份文件與 PR **不包含**任何 HA 設定變更步驟。
+* **HA 排序這一關已於 2026-10-12 完成（決策 D-0040 的三道順序：代碼 → HA 排序 → 才開閘）**：
+  `backend pg_standby_first`（`25434`）兩條 server 都改用 `agent-check agent-port 25437`（up-if-standby）
+  並移除 `backup` ⇒ 只有自報待機的那台 UP、promote 後自動跟隨。就地改寫／reload／驗收程序見
+  `docs/runbooks/haproxy-web-weight.md` §2.4。**這份文件仍然不含 HA 變更步驟**（那在 HAProxy runbook），
+  這裡只管「開閘（加 `PG_RO_URL`）」與「判讀」。
 
 ## 1. 為什麼（正式機實測）
 
@@ -33,6 +37,8 @@ Owner 2026-10-12 07:10 的路由實讀：`25433 → in_recovery=false`、**`2543
 同一條分面 25433＝418/414/393 ms、25434＝414/482/403 ms（同速 ⇒ 真的還沒去待機），HA stats 顯示 `pg_standby_first`
 只有 1 條連線且落在 `pg-a`。**直連 `192.168.0.220:15432` 才看到 `in_recovery=true`**，同一份 `listings` 189,506 列
 （待機確實能服務讀取、資料一致）。⇒ **HA 的後端排序未改之前，開這個閘不會有任何效能變化。**
+（**2026-10-12 起已改**：`pg_standby_first` 吃 25437 agent-check，上面那組數字是「改之前」的基線，
+留著當對照；現在的驗法是 §2／HAProxy runbook §2.4 的「經 25434 連線回 `pg_is_in_recovery()=true`」。）
 待機複製延遲（Owner 06:01 量測）**0.88 秒**。
 
 ## 2. 開閘（一個環境變數）
@@ -72,7 +78,8 @@ repo 的模板（`deploy/shadow-ha/web/web-a|web-b/docker-compose.yml`）、產�
      FROM pg_stat_activity WHERE application_name LIKE '5151-v3%' GROUP BY 1, 3, 4;
    ```
 
-   預期：`5151-v3-ro` 出現在**待機（syn）**；若它仍在 primary，代表 HA 的 `pg_ro` 還沒把待機排到前面（§0）。
+   預期：`5151-v3-ro` 出現在**待機（syn）**；若它仍在 primary，先確認 HA 的 `pg_ro`（`pg_standby_first`，
+   25437 agent-check）有沒有生效（HAProxy runbook §2.4 的後驗證；§0 的舊排序已於 2026-10-12 換掉）。
 3. **端對端 `Server-Timing`**：`list;dur`／`stats;dur` 不變、`scan;dur` 下降（§8 的區間）。
 4. **log**（容器日誌，可直接 grep）：
    * `[pg-read] 會員列表唯讀快照改走 PG_RO_URL 待機節點`（每個行程一次，正向訊號）
@@ -189,8 +196,10 @@ const run = async () => {
 
 ## 8. 預期效果（`scan;dur` 與總耗時）
 
-**前提**：§1 的「待機比 primary 快」只有在 HA 的 `pg_ro` 真的把待機排到前面之後才成立（今天 25434 仍落 primary）。
-下面的數字是**HA 排序改好之後**的預期；程式不假設它已改。
+**前提**：§1 的「待機比 primary 快」只有在 HA 的 `pg_ro` 真的把待機排到前面之後才成立。
+（2026-10-12 之前 25434 落 primary；**當天已把 `pg_standby_first` 改成角色感知（25437 agent-check）**，
+所以這個前提在 repo＋live 兩邊都成立；程式仍然不假設它已改。）
+下面的數字是**HA 排序已改之後**（＝現在）的預期。
 
 推導：42 欄取 11k 列掃描是 `scan;dur` 的主體（共趟掃描 ＋ 旗標預讀），primary 220 ms → standby 65 ms。
 
