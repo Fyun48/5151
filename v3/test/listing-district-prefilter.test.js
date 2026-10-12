@@ -27,22 +27,41 @@ function withEnv(value, run) {
   }
 }
 
-/** 假的 executor：只認得本模組會送出的三種查詢。 */
-function fakeExec({ revision = 7, missing = 0, mismatched = 0, ids = [{ post_id: 1 }, { post_id: 2 }], hasProjection = true, hasListings = true } = {}) {
+/**
+ * 假的 executor：只認得本模組會送出的查詢。
+ *
+ * se-p7 起守門多了三種查詢：結構指紋（`pg_stat_user_tables`）、`data_revision` 的增量
+ * （`WHERE id > $1 AND id <= $2`）、以及**限制在變更過的 post_id 上**的同一組兩項證明
+ * （含 `post_id = ANY`）。`state` 讓測試在中途改指紋／版本／delta。
+ */
+function fakeExec({
+  revision = 7, missing = 0, mismatched = 0, ids = [{ post_id: 1 }, { post_id: 2 }],
+  hasProjection = true, hasListings = true, sentinel = "5", sentinelTables = 2, delta = [],
+  scopedMissing = 0, scopedMismatched = 0,
+} = {}) {
+  const state = { revision, sentinel, delta, scopedMissing, scopedMismatched, missing, mismatched };
   const calls = [];
-  const exec = async (sql) => {
+  const exec = async (sql, params = []) => {
     calls.push(sql);
-    if (/to_regclass\('data_revision'\)/.test(sql)) return [{ has_table: revision != null }];
-    if (/MAX\(id\) AS n FROM data_revision/.test(sql)) return [{ n: revision }];
-    if (/to_regclass\('listings'\) IS NOT NULL/.test(sql)) return [{ ok: hasProjection && hasListings }];
-    if (/to_regclass\('listing_search_projection'\)/.test(sql)) return [{ has_table: hasProjection }];
-    if (/COUNT\(\*\) AS n FROM listings l WHERE NOT EXISTS/.test(sql)) return [{ n: missing }];
-    if (/AS missing,/.test(sql) || /AS mismatched/.test(sql)) return [{ missing, mismatched }];
-    if (/SELECT post_id FROM listing_search_projection WHERE district/.test(sql)) return ids;
-    throw new Error(`unexpected SQL: ${sql}`);
+    const text = String(sql);
+    if (/to_regclass\('data_revision'\)/.test(text)) return [{ has_table: state.revision != null }];
+    if (/MAX\(id\) AS n FROM data_revision/.test(text)) return [{ n: state.revision }];
+    if (/pg_stat_user_tables/.test(text)) return sentinelTables == null ? [] : [{ churn: state.sentinel, tables: sentinelTables }];
+    if (/FROM data_revision\s+WHERE id >/.test(text)) return state.delta;
+    if (/to_regclass\('listings'\) IS NOT NULL/.test(text)) return [{ ok: hasProjection && hasListings }];
+    if (/to_regclass\('listing_search_projection'\)/.test(text)) return [{ has_table: hasProjection }];
+    if (/COUNT\(\*\) AS n FROM listings l WHERE NOT EXISTS/.test(text)) return [{ n: state.missing }];
+    if (/post_id = ANY/.test(text)) return [{ missing: state.scopedMissing, mismatched: state.scopedMismatched }];
+    if (/AS missing,/.test(text) || /AS mismatched/.test(text)) return [{ missing: state.missing, mismatched: state.mismatched }];
+    if (/SELECT post_id FROM listing_search_projection WHERE district/.test(text)) return ids;
+    throw new Error(`unexpected SQL: ${text}`);
   };
-  return { exec, calls };
+  return { exec, calls, state };
 }
+
+const VERIFY = { districtNames: NAMES, allowedKeys: districtKeyLists(NAMES).allowed };
+const fullScans = (calls) => calls.filter((sql) => /AS missing,/.test(sql) && !/post_id = ANY/.test(sql)).length;
+const scopedScans = (calls) => calls.filter((sql) => /AS missing,/.test(sql) && /post_id = ANY/.test(sql)).length;
 
 after(() => resetDistrictProjectionCompletenessCache());
 
@@ -83,11 +102,107 @@ test("驗證探針依 data_revision 版本快取：同版本只付一次", async
   const { exec, calls } = fakeExec({ revision: 42 });
   const opts = { districtNames: NAMES, allowedKeys: districtKeyLists(NAMES).allowed };
   await districtProjectionVerified(exec, opts);
-  const after1 = calls.filter((sql) => /AS mismatched/.test(sql)).length;
-  assert.equal(after1, 1);
+  assert.equal(fullScans(calls), 1, "第一次要全掃");
   await districtProjectionVerified(exec, opts);
   await districtProjectionVerified(exec, opts);
-  assert.equal(calls.filter((sql) => /AS mismatched/.test(sql)).length, 1, "同一個 revision 不應重探");
+  assert.equal(fullScans(calls), 1, "同一個 revision（且指紋沒動）不應重探");
+});
+
+// ── se-p7：增量驗證的四條邊界（每一條都必須「退回全掃」而不是「沿用舊快取」）──────────────
+test("版本前進但只有別的 post_id 變更：只驗證那一段（增量），不再付全表證明", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls, state } = fakeExec({ revision: 42, delta: [{ entity_type: "listing", entity_id: 777 }] });
+  await districtProjectionVerified(exec, VERIFY);
+  assert.equal(fullScans(calls), 1, "第一次全掃");
+  state.revision = 43; // 版本前進，但 delta 指名的是 777
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 1, "增量驗證通過就不該再全掃");
+  assert.equal(scopedScans(calls), 1, "要對變更過的 post_id 跑一次同一組判定式");
+  // delta 空（例如 revision 只有 crawl_source 的變更）也一樣：不重付全表證明。
+  state.revision = 44;
+  state.delta = [];
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 1);
+});
+
+test("增量驗證抓到漂移：不推進 watermark、不快取（下一次請求仍判 false）", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls, state } = fakeExec({ revision: 50, delta: [{ entity_type: "listing", entity_id: 888 }] });
+  await districtProjectionVerified(exec, VERIFY);
+  state.revision = 51;
+  state.scopedMissing = 1; // 那個 post_id 少了投影列 ⇒ 漂移
+  assert.equal(await districtProjectionVerified(exec, VERIFY), false, "增量命中漂移要回 false");
+  const fulls = fullScans(calls);
+  // 版本沒有再前進：下一次請求必須再驗一次同一段，而且仍然 false（不得被任何快取掩蓋）。
+  state.scopedMissing = 1;
+  assert.equal(await districtProjectionVerified(exec, VERIFY), false, "同一段仍要判 false");
+  assert.equal(fullScans(calls), fulls, "不得因為抓到漂移就改判全掃結果");
+  assert.equal(scopedScans(calls) >= 2, true, "漂移未被修好前，每次請求都要重新驗證");
+});
+
+test("delta 無法逐一列舉（entity_id IS NULL／非 listing）就退回全掃", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const nullId = fakeExec({ revision: 60, delta: [{ entity_type: "listing", entity_id: null }] });
+  await districtProjectionVerified(nullId.exec, VERIFY);
+  nullId.state.revision = 61;
+  assert.equal(await districtProjectionVerified(nullId.exec, VERIFY), true);
+  assert.equal(fullScans(nullId.calls), 2, "entity_id IS NULL ⇒ 第二次也要全掃");
+
+  resetDistrictProjectionCompletenessCache();
+  const other = fakeExec({ revision: 70, delta: [{ entity_type: "crawl_source", entity_id: 3 }] });
+  await districtProjectionVerified(other.exec, VERIFY);
+  other.state.revision = 71;
+  assert.equal(await districtProjectionVerified(other.exec, VERIFY), true);
+  assert.equal(fullScans(other.calls), 2, "非 listing 的變更無法逐一列舉 ⇒ 全掃");
+
+  resetDistrictProjectionCompletenessCache();
+  const tooMany = fakeExec({ revision: 80 });
+  tooMany.state.delta = Array.from({ length: 4001 }, () => ({ entity_type: "listing", entity_id: 1 }));
+  await districtProjectionVerified(tooMany.exec, VERIFY);
+  tooMany.state.revision = 81;
+  assert.equal(await districtProjectionVerified(tooMany.exec, VERIFY), true);
+  assert.equal(fullScans(tooMany.calls), 2, "變更列超過上限 ⇒ 全掃");
+});
+
+test("結構指紋改變（版本沒動）⇒ 立刻全掃：快取不得掩蓋沒有 data_revision 紀錄的列增減", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls, state } = fakeExec({ revision: 90, missing: 0 });
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 1);
+  // 有人直接 INSERT 一列 listings（沒有 bump revision）⇒ 指紋改變、全掃看到缺列
+  state.sentinel = "6";
+  state.missing = 1;
+  assert.equal(await districtProjectionVerified(exec, VERIFY), false, "指紋變了就要重新全掃，且這次全掃抓到缺列");
+  assert.equal(fullScans(calls), 2);
+  // 修好投影（指紋再次改變）⇒ 下一個請求要全掃並回 true
+  state.sentinel = "7";
+  state.missing = 0;
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 3);
+});
+
+test("讀不到結構指紋（統計檢視不可用）⇒ 不可跨請求快取，每次全掃", async () => {
+  resetDistrictProjectionCompletenessCache();
+  const { exec, calls } = fakeExec({ revision: 100, sentinelTables: null });
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(await districtProjectionVerified(exec, VERIFY), true);
+  assert.equal(fullScans(calls), 2, "沒有指紋 ⇒ fail-safe：每個請求都全掃（＝舊版強度）");
+});
+
+test("週期全掃到期：即使版本與指紋都沒動，也會重新全掃一次", async () => {
+  process.env.MEMBER_DISTRICT_GUARD_FULL_SCAN_MS = "1";
+  try {
+    // 常數在模組載入時讀環境變數 ⇒ 用帶 query 的動態 import 取一份新實例。
+    const fresh = await import(`../src/listingDistrictPrefilter.js?fullscan=${Date.now()}`);
+    const { exec, calls } = fakeExec({ revision: 110 });
+    fresh.resetDistrictProjectionCompletenessCache();
+    assert.equal(await fresh.districtProjectionVerified(exec, VERIFY), true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(await fresh.districtProjectionVerified(exec, VERIFY), true);
+    assert.equal(fullScans(calls) >= 2, true, "窗口到期要重掃");
+  } finally {
+    delete process.env.MEMBER_DISTRICT_GUARD_FULL_SCAN_MS;
+  }
 });
 
 test("前綴與投影不一致（投影過期）時必須退回完整掃描", async () => {

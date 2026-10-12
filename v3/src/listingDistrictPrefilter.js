@@ -25,10 +25,39 @@ export function districtPrefilterEnabled() {
   return !["0", "false", "off", "no"].includes(String(raw).trim().toLowerCase());
 }
 
-// 驗證結果的版本化快取。key = `<revision>|<districts>`；revision 改變或行政區組合不同就重驗。
-// 用有上限的 `Map`，避免 district 組合無上限成長。
+// ── 守門的驗證狀態（se-p7：從「整份答案快取」改成「已驗證範圍（watermark）」）──────────────
+// 舊版 key = `<revision>|<districts>`：寫入活躍時 `data_revision.MAX(id)` 幾乎每秒換代
+// （正式庫 2026-10-12 實測：`listing_updated` 1.25 筆/秒、`listing_added` 0.16 筆/秒）
+// ⇒ 快取一路未命中，等於每個請求都要付兩項全表證明（正式庫 333ms/次）。
+//
+// 新版只把「**已經被證明為 0 的範圍**」記下來：
+//   1. 起點是全掃一次（`missing`／`mismatched` 的判定式**逐字不變**）⇒ 記下 watermark
+//      （當下的 `MAX(data_revision.id)`）與當時的結構指紋。
+//   2. 之後只重驗 `(watermark, 目前 revision]` 之間**由 data_revision 指名變更過的 post_id**
+//      （有界、走兩張表的主鍵）。那一段用的判定式是原判定式**同一組述詞再加上
+//      `post_id = ANY(...)` 的範圍限制**，不是另一套寫法。
+//   3. 兩道兜底：
+//      a. **結構指紋**：`pg_stat_user_tables` 的 `n_tup_ins + n_tup_del`（`listings` ＋ 投影表）。
+//         任何**沒有 data_revision 紀錄的列增減**（真正的漂移來源：有人直接 INSERT／DELETE）
+//         都會讓指紋改變 ⇒ 立刻全掃，不讓快取掩蓋漂移。
+//         ⚠️ 這一項的有效性受 PG 統計落地時機限制（`PGSTAT_MIN_INTERVAL` ≈ 1 秒；寫入端若就此
+//         閒置，要等它下一次 commit 或連線結束才會落地 —— repro 實測「INSERT 後立刻 `end()`」
+//         2ms 可見，「INSERT 後閒置」曾 >8 秒不可見）。所以它是**提早發現**、不是唯一保證：
+//         真正的硬上界是下面的週期全掃。
+//      b. **有界週期全掃**（`FULL_SCAN_INTERVAL_MS`，預設 5 分鐘）：連「沒有版本號也沒有指紋
+//         的變更」（例如有人直接 UPDATE 投影的 `district`）也只在這個窗口內沒被發現。
+//   4. 任何不確定都退回全掃：delta 太大、變更列無法逐一列舉（`entity_id IS NULL`／未知
+//      `entity_type`）、指紋讀不到、版本號倒退 —— 一律全掃。誤判 `ok=false` 只是變慢。
 const GUARD_CACHE_LIMIT = 64;
 const guardCache = new Map();
+
+function guardEnvInt(name, fallback) {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+// 週期全掃的上限（毫秒）＋單次增量可處理的變更列上限。皆由環境變數可調，預設值即文件值。
+const FULL_SCAN_INTERVAL_MS = guardEnvInt("MEMBER_DISTRICT_GUARD_FULL_SCAN_MS", 300000);
+const DELTA_ROW_LIMIT = guardEnvInt("MEMBER_DISTRICT_GUARD_DELTA_LIMIT", 4000);
 
 /** 測試／寫入端主動失效用（同 `resetPgProductCountCache` 的形狀）。 */
 export function resetDistrictProjectionCompletenessCache() {
@@ -56,8 +85,79 @@ function defaultRunOne(exec) {
   };
 }
 
+/** 多列版本：結構指紋與 delta 都是**多列**查詢（`runOne` 只看第一列）。 */
+function runAllRows(exec) {
+  if (typeof exec !== "function") return null;
+  return async (sql, params = []) => {
+    const rows = await exec(sql, params);
+    return Array.isArray(rows) ? rows : [];
+  };
+}
+
+// 結構指紋（檔頭 3a）。刻意**不含** `n_tup_upd`：爬蟲每秒都在 upsert `listings`
+// （實測：5 次 `INSERT … ON CONFLICT DO UPDATE` 讓 `n_tup_ins + n_tup_del` 變化 = 0），含 update
+// 就等於每個請求都要全掃。`schemaname = ANY(current_schemas(false))` 與本檔不帶 schema 的表名用
+// 同一組 search_path 解析，免得把同名測試 fixture schema 一起算進來。
+// 兩張表都要看得到（tables = 2）才當有效指紋：少一張（不同 schema／權限不足）就回 null ⇒ 全掃。
+const STRUCTURAL_SENTINEL_SQL = `SELECT COALESCE(SUM(n_tup_ins + n_tup_del), 0)::text AS churn,
+         COUNT(*)::int AS tables
+    FROM pg_stat_user_tables
+   WHERE relname IN ('listings', '${TABLE}')
+     AND schemaname = ANY(current_schemas(false))`;
+
+async function structuralSentinel(runAll) {
+  if (!runAll) return null;
+  try {
+    const row = (await runAll(STRUCTURAL_SENTINEL_SQL))[0] || null;
+    if (!row || Number(row.tables) < 2) return null;
+    return String(row.churn);
+  } catch {
+    return null;
+  }
+}
+
+// `(watermark, revision]` 之間由 data_revision 指名變更過的 post_id（去重、有界）。
+// 回傳 `null` ＝**無法逐一列舉** ⇒ 呼叫端必須全掃。回傳陣列（可為空）＝這一段可以逐筆重驗。
+async function changedPostIdsSince(runAll, fromRevision, toRevision) {
+  if (!runAll) return null;
+  let rows;
+  try {
+    rows = await runAll(
+      `SELECT entity_type, entity_id FROM data_revision
+        WHERE id > $1 AND id <= $2 ORDER BY id LIMIT ${DELTA_ROW_LIMIT + 1}`,
+      [fromRevision, toRevision],
+    );
+  } catch {
+    return null;
+  }
+  if (rows.length > DELTA_ROW_LIMIT) return null;
+  const ids = new Set();
+  for (const row of rows) {
+    // 只有 listing 的變更可能動到 `listings`／投影；其他 entity_type（crawl_source…）無法
+    // 逐一列舉 ⇒ 全掃（fail-safe；這類事件在正式庫罕見）。
+    if (String(row?.entity_type) !== "listing") return null;
+    const id = Number(row?.entity_id);
+    // `entity_id IS NULL`（例如 `listing_offline_confirmed` 的批次下架）無法指名受影響列 ⇒ 全掃。
+    if (!Number.isFinite(id) || id <= 0) return null;
+    ids.add(id);
+  }
+  return [...ids];
+}
+
+/** 兩張表都在嗎？（缺表時直接發查詢會讓整個快照交易 aborted ⇒ 呼叫端拿不到期待的 42P01） */
+async function projectionTablesPresent(one) {
+  try {
+    const hasTables = await one(
+      `SELECT to_regclass('listings') IS NOT NULL AND to_regclass('${TABLE}') IS NOT NULL AS ok`,
+    );
+    return Boolean(hasTables?.ok);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 投影「可用」的兩項證明（**一次往返**，兩項都必須為 0）：
+ * 全掃版本的兩項證明（**判定式逐字沿用舊版**，一次往返；兩項都必須為 0）：
  *   `missing`    —— 有 listings 列卻沒有投影列 ⇒ 投影滯後（缺列）。
  *   `mismatched` —— `source_key` 前綴屬於本次要篩的行政區、但投影 `district` 不在本次清單內
  *                   ⇒ 兩套推導不一致（＝投影內容過期，例如 refresh 失敗）。
@@ -66,64 +166,151 @@ function defaultRunOne(exec) {
  * 也就是**靜默少算**。這正是裁決 §4.1 P1「投影滯後必須退回完整掃描」的要求。
  *
  * repro 實測（184,245 列、7 個行政區）：`missing=0`、`mismatched=0`
- * （前綴相符 15,379 ＝ 投影相符 15,379），兩項同一次往返約 70–120ms，之後依版本快取。
+ * （前綴相符 15,379 ＝ 投影相符 15,379），兩項同一次往返約 70–120ms。
+ */
+async function fullProjectionProof(one, keys, names) {
+  // ⚠️ 先確認**兩個表都在**才發查詢。
+  // 為什麼非做不可：`listing-search-parity.test.js` 會把 `listings` 改名來模擬缺 schema；
+  // 若這一支在缺表時仍然送出 `FROM listings`，PG 會回 42P01 並讓**整個快照交易進入 aborted**，
+  // 後續真正的候選查詢就變成 25P02（current transaction is aborted），呼叫端再也拿不到
+  // 期待的 42P01 ⇒ 測試紅、而且真實環境的錯誤碼也會失真。
+  if (!(await projectionTablesPresent(one))) return false;
+  const prefix = districtKeyPrefixExpression("pg");
+  const placeholders = (n, offset) => Array.from({ length: n }, (_, i) => `$${i + offset}`).join(",");
+  const row = await one(
+    // 兩個證明**語意不變**（2026-10-11 第二刀：只改查詢形狀，不動判定）：
+    //   missing    —— 以 `listings` 側驅動的 anti-join（投影 `post_id` 是主鍵 ⇒ 一對一）。
+    //   mismatched —— 改由**投影側驅動**：投影表 71MB、listings 335MB，先掃小的那一邊，
+    //                 再用 `post_id`（兩邊都是主鍵）回查 listings 套前綴述詞。
+    //                 原本的 `LEFT JOIN listings × project` 會整表掃 184k 列。
+    // repro 實測：206–214ms → 136–147ms（同一組參數、同一個 revision）。
+    //
+    // 兩種寫法的判定完全相同：`p.district = ANY(...)` 為 NULL 時（投影沒有行政區），
+    // 原版 `NOT (NULL)` ＝ NULL ⇒ FILTER 不算；新版 `... IS NOT TRUE` 也排除 NULL ⇒ 一致。
+    //
+    // ⚠️ se-p7：這段字串是 authority，**不得改判定**。增量版（`scopedProjectionProof`）只在這
+    // 同一組述詞上再加 `post_id = ANY(...)` 的範圍限制，兩者的輸出必須在同一份資料上一致。
+    `SELECT
+       (SELECT COUNT(*) FROM listings l WHERE NOT EXISTS (
+          SELECT 1 FROM ${TABLE} p WHERE p.post_id = l.post_id)) AS missing,
+       (SELECT COUNT(*) FROM ${TABLE} p
+         WHERE (p.district = ANY($${keys.length + 1}::text[])) IS NOT TRUE
+           AND EXISTS (
+             SELECT 1 FROM listings l
+             WHERE l.post_id = p.post_id
+               AND (${prefix} IN (${placeholders(keys.length, 1)}))
+           )) AS mismatched`,
+    [...keys, names],
+  );
+  const missing = Number(row?.missing);
+  const mismatched = Number(row?.mismatched);
+  return missing === 0 && mismatched === 0;
+}
+
+/**
+ * 增量版本：**同一組判定式**限制在 `ids`（＝watermark 之後被指名變更的 post_id）上。
+ * 只是在原述詞上加 `post_id = ANY($1／$2::bigint[])`（走主鍵），判定式本身沒有新寫法。
+ */
+async function scopedProjectionProof(one, ids, keys, names) {
+  if (!ids.length) return true;
+  if (!(await projectionTablesPresent(one))) return false;
+  const prefix = districtKeyPrefixExpression("pg");
+  const placeholders = (n, offset) => Array.from({ length: n }, (_, i) => `$${i + offset}`).join(",");
+  const row = await one(
+    `SELECT
+       (SELECT COUNT(*) FROM listings l
+         WHERE l.post_id = ANY($1::bigint[])
+           AND NOT EXISTS (SELECT 1 FROM ${TABLE} p WHERE p.post_id = l.post_id)) AS missing,
+       (SELECT COUNT(*) FROM ${TABLE} p
+         WHERE p.post_id = ANY($2::bigint[])
+           AND (p.district = ANY($${keys.length + 3}::text[])) IS NOT TRUE
+           AND EXISTS (
+             SELECT 1 FROM listings l
+             WHERE l.post_id = p.post_id
+               AND (${prefix} IN (${placeholders(keys.length, 3)}))
+           )) AS mismatched`,
+    [ids, ids, ...keys, names],
+  );
+  const missing = Number(row?.missing);
+  const mismatched = Number(row?.mismatched);
+  return missing === 0 && mismatched === 0;
+}
+
+async function safeFullScan(one, keys, names) {
+  try {
+    return await fullProjectionProof(one, keys, names);
+  } catch {
+    return false;
+  }
+}
+
+async function safeScopedProof(one, ids, keys, names) {
+  try {
+    return await scopedProjectionProof(one, ids, keys, names);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 「全掃 ＋ 只在有結構指紋時才快取」。**指紋先讀、全掃後做**：兩者之間發生的列增減會讓下一次
+ * 請求的指紋對不上 ⇒ 下一請求立刻全掃。反過來（先掃再讀指紋）會把「掃完才發生的變更」記成
+ * 已驗證，可能掩蓋漂移。
+ */
+async function fullScanAndCache(one, runAll, cacheKey, rev, keys, names) {
+  const sentinel = await structuralSentinel(runAll);
+  const ok = await safeFullScan(one, keys, names);
+  if (!ok) {
+    guardCache.delete(cacheKey);
+    return false;
+  }
+  if (sentinel == null) {
+    // 沒有結構指紋就不可跨請求快取（fail-safe：退回舊版「每個請求都全掃」的強度）。
+    guardCache.delete(cacheKey);
+    return true;
+  }
+  if (guardCache.size >= GUARD_CACHE_LIMIT) guardCache.clear();
+  guardCache.set(cacheKey, { ok: true, revision: rev, verifiedAt: Date.now(), sentinel });
+  return true;
+}
+
+/**
+ * 投影「可用」的兩項證明（語意與舊版相同，但只把**已驗證範圍**記進快取；見檔頭）。
+ * 回傳 `true` 才准用預篩。
  */
 export async function districtProjectionVerified(exec, { districtNames = [], allowedKeys = null, runOne = null, revision = undefined } = {}) {
   const one = runOne || defaultRunOne(exec);
+  const runAll = runAllRows(exec);
   const names = [...new Set((districtNames || []).filter(Boolean))];
   const keys = Array.isArray(allowedKeys) ? allowedKeys : [];
   if (!names.length || !keys.length) return false;
   const rev = revision === undefined ? await currentRevision(one) : revision;
-  const cacheKey = `${rev == null ? "norev" : rev}|${names.join(",")}`;
-  if (rev != null && guardCache.has(cacheKey)) return guardCache.get(cacheKey);
+  // 沒有可靠版本號（表不存在／空表／查詢失敗）⇒ 不跨請求快取，逐次全掃（與舊版同契約）。
+  if (rev == null) return safeFullScan(one, keys, names);
 
-  let ok = false;
-  try {
-    // ⚠️ 先確認**兩個表都在**才發查詢。
-    // 為什麼非做不可：`listing-search-parity.test.js` 會把 `listings` 改名來模擬缺 schema；
-    // 若這一支在缺表時仍然送出 `FROM listings`，PG 會回 42P01 並讓**整個快照交易進入 aborted**，
-    // 後續真正的候選查詢就變成 25P02（current transaction is aborted），呼叫端再也拿不到
-    // 期待的 42P01 ⇒ 測試紅、而且真實環境的錯誤碼也會失真。
-    const hasTables = await one(
-      `SELECT to_regclass('listings') IS NOT NULL AND to_regclass('${TABLE}') IS NOT NULL AS ok`,
-    );
-    if (hasTables?.ok) {
-      const prefix = districtKeyPrefixExpression("pg");
-      const placeholders = (n, offset) => Array.from({ length: n }, (_, i) => `$${i + offset}`).join(",");
-      const row = await one(
-        // 兩個證明**語意不變**（2026-10-11 第二刀：只改查詢形狀，不動判定）：
-        //   missing    —— 以 `listings` 側驅動的 anti-join（投影 `post_id` 是主鍵 ⇒ 一對一）。
-        //   mismatched —— 改由**投影側驅動**：投影表 71MB、listings 335MB，先掃小的那一邊，
-        //                 再用 `post_id`（兩邊都是主鍵）回查 listings 套前綴述詞。
-        //                 原本的 `LEFT JOIN listings × project` 會整表掃 184k 列。
-        // repro 實測：206–214ms → 136–147ms（同一組參數、同一個 revision）。
-        //
-        // 兩種寫法的判定完全相同：`p.district = ANY(...)` 為 NULL 時（投影沒有行政區），
-        // 原版 `NOT (NULL)` ＝ NULL ⇒ FILTER 不算；新版 `... IS NOT TRUE` 也排除 NULL ⇒ 一致。
-        `SELECT
-           (SELECT COUNT(*) FROM listings l WHERE NOT EXISTS (
-              SELECT 1 FROM ${TABLE} p WHERE p.post_id = l.post_id)) AS missing,
-           (SELECT COUNT(*) FROM ${TABLE} p
-             WHERE (p.district = ANY($${keys.length + 1}::text[])) IS NOT TRUE
-               AND EXISTS (
-                 SELECT 1 FROM listings l
-                 WHERE l.post_id = p.post_id
-                   AND (${prefix} IN (${placeholders(keys.length, 1)}))
-               )) AS mismatched`,
-        [...keys, names],
-      );
-      const missing = Number(row?.missing);
-      const mismatched = Number(row?.mismatched);
-      ok = missing === 0 && mismatched === 0;
+  const cacheKey = names.join(",");
+  const entry = guardCache.get(cacheKey);
+  if (entry && entry.ok && entry.revision <= rev && Date.now() - entry.verifiedAt < FULL_SCAN_INTERVAL_MS) {
+    const sentinel = await structuralSentinel(runAll);
+    if (sentinel != null && sentinel === entry.sentinel) {
+      // 版本沒動、指紋沒動 ⇒ 已驗證範圍仍然有效。
+      if (entry.revision === rev) return true;
+      const ids = await changedPostIdsSince(runAll, entry.revision, rev);
+      if (ids != null) {
+        if (!ids.length) {
+          entry.revision = rev;
+          return true;
+        }
+        if (await safeScopedProof(one, ids, keys, names)) {
+          entry.revision = rev;
+          return true;
+        }
+        // 抓到漂移：不推進 watermark、不快取（誤判 ok=false 只會變慢）。
+        return false;
+      }
     }
-  } catch {
-    ok = false;
   }
-  if (rev != null) {
-    if (guardCache.size >= GUARD_CACHE_LIMIT) guardCache.clear();
-    guardCache.set(cacheKey, ok);
-  }
-  return ok;
+  return fullScanAndCache(one, runAll, cacheKey, rev, keys, names);
 }
 
 /** 只做「缺列」那一項（測試／獨立檢查用）。 */

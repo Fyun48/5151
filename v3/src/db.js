@@ -4499,29 +4499,62 @@ export async function buildSearchKeysFromPg(exec, settingsTable = "settings", gl
 
 let pgStoredSearchKeysCache = { revision: null, stored: null };
 
-// data_revision 版本化的 DISTINCT search_key 快取（見 buildSearchKeysFromPg）。
+// `SELECT DISTINCT search_key FROM listings` 的**loose index scan** 等價形狀（se-p7，2026-10-12）。
+// 為什麼：這條查詢要讀 184k 列才回 39 個不同的 key（正式庫實測 142ms／次、`pg_stat_statements`
+// queryid -1058412334999276296），而 `idx_listings_search` 早就在（本檔 `CREATE INDEX IF NOT EXISTS
+// idx_listings_search ON listings(search_key)`；正式庫 `pg_indexes` 實查確認）。
+// 遞迴每輪只做一次 `min(search_key) WHERE search_key > 上一個` 的 index probe（39 個值 ⇒ 39 次），
+// 在 repro 實測 execution 0.76ms（同一個 39 筆結果）。
+//   • 回傳值**逐筆相同**：原版在 JS 端 `.filter(Boolean)` 濾掉 `NULL` 與 `''`，這裡直接在 SQL 濾掉
+//     這兩個值 ⇒ 集合相同（`search_key` 是 text，唯一 falsy 的非空值就是 `''`）。
+//   • 排序不同（這裡是升冪；`DISTINCT` 是 planner 的順序）：消費端是 `expandSearchKeysAgainst()`
+//     ＋`search_key IN (...)` 的集合語意，不依順序。
+//   • 沒有 `idx_listings_search` 時**不能**走這條（每輪 `min()` 都會變成整表掃描）⇒ 呼叫端先用
+//     `to_regclass` 探測，探不到就退回原本的 `DISTINCT`（正確、只是慢）。
+const STORED_SEARCH_KEYS_LOOSE_SQL = `WITH RECURSIVE t(k) AS (
+    SELECT min(search_key) FROM listings WHERE COALESCE(search_key, '') <> ''
+  UNION ALL
+    SELECT (SELECT min(search_key) FROM listings WHERE search_key > t.k AND COALESCE(search_key, '') <> '')
+      FROM t WHERE t.k IS NOT NULL
+  )
+  SELECT k AS search_key FROM t WHERE k IS NOT NULL`;
+const STORED_SEARCH_KEYS_DISTINCT_SQL = "SELECT DISTINCT search_key FROM listings";
+
+function storedSearchKeyRows(rows) {
+  return (rows || []).map((row) => row?.search_key ?? row?.k).filter(Boolean);
+}
+
+async function readStoredSearchKeys(exec, looseIndex) {
+  return storedSearchKeyRows(await exec(looseIndex ? STORED_SEARCH_KEYS_LOOSE_SQL : STORED_SEARCH_KEYS_DISTINCT_SQL));
+}
+
+// data_revision 版本化的 search_key 快取（見 buildSearchKeysFromPg）。
 // 用 to_regclass 先探表（不 throw）：data_revision 延遲建立、CI 測試庫可能沒有；表不存在或
 // 空表（MAX(id) IS NULL）都不緩存、每次現讀——空表沒有可靠的版本號，跨請求快取會讓
-// 「第一個請求」的結果被後續沿用（快照契約）。
+// 「第一個請求」的結果被後續沿用（快照契約）。同一次探測順便取得 loose scan 可不可用。
 async function storedSearchKeysFromPg(exec) {
   let revision = null;
+  let looseIndex = false;
   try {
-    const hasTable = await exec("SELECT to_regclass('data_revision') IS NOT NULL AS has_table");
-    if (!hasTable?.[0]?.has_table) {
-      return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+    const probe = await exec(
+      "SELECT to_regclass('data_revision') IS NOT NULL AS has_table, to_regclass('idx_listings_search') IS NOT NULL AS has_index",
+    );
+    looseIndex = Boolean(probe?.[0]?.has_index);
+    if (!probe?.[0]?.has_table) {
+      return readStoredSearchKeys(exec, looseIndex);
     }
     const revRows = await exec("SELECT MAX(id) AS n FROM data_revision");
     if (revRows?.[0]?.n == null) {
-      return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+      return readStoredSearchKeys(exec, looseIndex);
     }
     revision = Number(revRows[0].n) || 0;
   } catch {
-    return (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+    return readStoredSearchKeys(exec, looseIndex);
   }
   if (pgStoredSearchKeysCache.revision === revision && pgStoredSearchKeysCache.stored) {
     return pgStoredSearchKeysCache.stored;
   }
-  const stored = (await exec("SELECT DISTINCT search_key FROM listings")).map((row) => row.search_key).filter(Boolean);
+  const stored = await readStoredSearchKeys(exec, looseIndex);
   pgStoredSearchKeysCache = { revision, stored };
   return stored;
 }
