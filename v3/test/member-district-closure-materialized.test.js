@@ -102,10 +102,14 @@ function materializedExec(fx, { state: stateOverrides = {}, delta = null, verify
   const calls = [];
   const exec = async (sql, params = []) => {
     calls.push(sql);
-    if (/FROM listing_match_component_state/.test(sql)) {
-      if (stateMissing) throw new Error('relation "listing_match_component_state" does not exist');
-      return [state];
+    // 探測前的目錄查詢：唯一允許「回答缺表」而不拋錯的那一句。
+    if (/to_regclass\(/.test(sql)) {
+      return [{
+        state_table: !stateMissing, component_table: true, settings_table: true,
+        covers_table: true, revision_table: true,
+      }];
     }
+    if (/FROM listing_match_component_state/.test(sql)) return [state];
     if (/FROM data_revision/.test(sql)) return delta || [];
     if (/FROM pg_stat_user_tables/.test(sql)) return [{ fingerprint: state.stat_fingerprint }];
     if (/SELECT EXISTS\(SELECT 1 FROM listing_match_component\)/.test(sql)) return [{ present: emptyTable ? false : components.size > 0 }];
@@ -205,7 +209,10 @@ test("缺表（狀態列讀不到）⇒ 回 null、排重算、對外入口改�
   // 混合 exec：狀態列那條（表不存在）拋錯，其餘照即時算回答 ⇒ 對外入口必須逐筆等於即時算。
   const live = liveExec(fx);
   const hybrid = async (sql, params = []) => {
-    if (/FROM listing_match_component_state/.test(sql)) throw new Error('relation "listing_match_component_state" does not exist');
+    // 模擬「表不存在」：目錄查詢說沒有 ⇒ 一行資料表查詢都不該發出去（發了就會把交易弄死）。
+    if (/to_regclass\(/.test(sql)) {
+      return [{ state_table: false, component_table: false, settings_table: true, covers_table: true, revision_table: true }];
+    }
     return live(sql, params);
   };
   const scheduled2 = [];

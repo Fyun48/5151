@@ -65,6 +65,10 @@
 //   • `MEMBER_DISTRICT_CLOSURE_MATERIALIZED=0` ⇒ 逐字走原本的即時算（原路徑不刪）。
 //   • 表不存在／狀態列讀不到／狀態列缺欄／證明讀不到／版本號倒退／表內沒有資料
 //     ⇒ 一律回 `null` ⇒ 呼叫端走即時算（不猜、不靜默少算）。
+//   • **不准把呼叫端的交易弄壞**：讀取端在 `withPgReadSnapshot()` 的 REPEATABLE READ 交易內，
+//     PG 只要一句失敗就整條 abort（後續一律回 25P02）。所以「表在不在」先用 `to_regclass()`
+//     這句唯一不會失敗的目錄查詢判斷，確認存在才查資料表 —— 不能靠「查了再 catch」
+//     （2026-10-12 CI 的 `prb-search-benchmark` 就是被這個坑炸到的）。
 //   • 重算失敗（含**待機不寫**）⇒ 只是下一個請求仍然走即時算。
 import { districtKeyPrefixExpression } from "./listDistrictSql.js";
 
@@ -208,18 +212,35 @@ function liveRoundMarker(row) {
   return `${covering}|${coversMax}`;
 }
 
-const STATE_PROBE_SQL = `
+// ⚠️ **探測不准把呼叫端的交易弄壞**：讀取端是在 `withPgReadSnapshot()` 的 REPEATABLE READ 交易裡
+// 被呼叫的，而 PostgreSQL 只要有一句失敗就**整條交易 abort**（後續任何句子都回 25P02
+// `current transaction is aborted`）。所以「表不存在」不能靠『查了再 catch』處理 ——
+// 那會讓後面退回的即時算也在死掉的交易裡跑（2026-10-12 CI 實測就是這樣炸的：
+// `listingSearchPage → prepareListScope → districtClosureIdsLive → 25P02`）。
+// 這一句只用目錄函式（`to_regclass`），引用缺表也不會失敗，是唯一可以先跑的東西。
+const TABLE_GUARD_SQL = `
+SELECT to_regclass('${MATCH_COMPONENT_STATE_TABLE}') IS NOT NULL AS state_table,
+       to_regclass('${MATCH_COMPONENT_TABLE}') IS NOT NULL AS component_table,
+       to_regclass('settings') IS NOT NULL AS settings_table,
+       to_regclass('crawl_covers') IS NOT NULL AS covers_table,
+       to_regclass('data_revision') IS NOT NULL AS revision_table`;
+
+/** 依「哪些表真的存在」組探測句：缺表的分量用 NULL 常數代替，語句本身永遠合法。 */
+function stateProbeSql(guard) {
+  const text = (sql) => (sql ? `(${sql})` : "NULL::text");
+  return `
 SELECT s.built_at AS built_at,
        s.round_marker AS round_marker,
        s.revision_watermark AS revision_watermark,
        s.listings_stat_fingerprint AS stat_fingerprint,
        s.node_count AS node_count,
-       (SELECT value FROM settings WHERE key = 'lastCoveringAt') AS covering,
-       (SELECT value FROM settings WHERE key = 'lastSystemCoveringAt') AS system_covering,
-       CAST((SELECT MAX(last_run_at) FROM crawl_covers) AS text) AS covers_max,
-       (SELECT COALESCE(MAX(id), 0) FROM data_revision) AS revision
+       ${text(guard.settings_table ? "SELECT value FROM settings WHERE key = 'lastCoveringAt'" : "")} AS covering,
+       ${text(guard.settings_table ? "SELECT value FROM settings WHERE key = 'lastSystemCoveringAt'" : "")} AS system_covering,
+       ${text(guard.covers_table ? "CAST((SELECT MAX(last_run_at) FROM crawl_covers) AS text)" : "")} AS covers_max,
+       ${text(guard.revision_table ? "SELECT COALESCE(MAX(id), 0) FROM data_revision" : "")} AS revision
   FROM ${MATCH_COMPONENT_STATE_TABLE} s
  WHERE s.state_key = ?`;
+}
 
 const REVISION_DELTA_SQL = `
 SELECT id, entity_id, event_type FROM data_revision
@@ -456,11 +477,26 @@ export async function loadMaterializedDistrictClosure(exec, {
   if (!Array.isArray(allKeys) || !allKeys.length) return null;
 
   let state = null;
+  let guard = null;
   try {
-    const rows = await exec(STATE_PROBE_SQL, [MATCH_GRAPH_STATE_KEY]);
+    // 只有這一句可以安全地失敗／缺席：它不引用任何可能不存在的產品表。
+    const rows = await exec(TABLE_GUARD_SQL, []);
+    guard = rows?.[0] || {};
+  } catch {
+    // 連目錄都查不到（驅動壞了／不是 PG）：不猜，退回即時算，並排一次重算。
+    notify(scheduleRebuild, "guard_unreadable");
+    return null;
+  }
+  if (guard.state_table !== true || guard.component_table !== true) {
+    // 表還沒建（第一次）／被別的 fixture 清掉：不查就不會把交易弄死，直接退回即時算。
+    notify(scheduleRebuild, "state_unreadable");
+    return null;
+  }
+  try {
+    const rows = await exec(stateProbeSql(guard), [MATCH_GRAPH_STATE_KEY]);
     state = rows?.[0] ?? null;
   } catch {
-    // 表還沒建（第一次）／讀不到狀態列：不猜，退回即時算，並在背景排一次重算。
+    // 表存在但狀態列查不到：仍然不能讓它弄死交易 ⇒ 只有這一句是「已經確認表存在」才跑的。
     notify(scheduleRebuild, "state_unreadable");
     return null;
   }
@@ -480,7 +516,7 @@ export async function loadMaterializedDistrictClosure(exec, {
 
   const markerChanged = liveRoundMarker(state) !== String(state.round_marker ?? "");
   if (revision < watermark) reason = "revision_rewound";
-  if (!reason && revision > watermark) {
+  if (!reason && revision > watermark && guard.revision_table === true) {
     let delta = null;
     try {
       delta = await exec(REVISION_DELTA_SQL, [watermark, revision]);
