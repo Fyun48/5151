@@ -223,11 +223,14 @@ export async function foldRootRefreshReady(exec) {
     // ⚠️ 一定要用「不會失敗的查詢」探測：`SELECT fold_component_root FROM listings LIMIT 1`
     // 在欄位不存在時會拋 42703，而**在呼叫端的 PG 交易裡一句失敗的 SELECT 會讓整個交易進
     // aborted（25P02）**⇒ 後續同交易的寫入全部回滾（CI 的 listing-state-writes 就是這樣紅的）。
-    // `information_schema.columns` 查詢在 PG 上欄位不存在時只是回 0 列（不拋錯）；
-    // 在 SQLite 上 `information_schema` 不存在會拋錯，但 SQLite 的交易不會因此作廢
-    // ⇒ 兩種 driver 都安全，也同時當作「這條 exec 是不是 PG」的判別。
+    // 用 `pg_attribute` ＋ `to_regclass('listings')`：不拋錯（找不到回 0 列）且**跟著 search_path**
+    // 解析「這次查詢真正會打到的那張 listings」。
+    // 為什麼不能只查 information_schema 的 table_name：那是**跨 schema** 的（CI 實測踩到）——
+    // 同一個資料庫裡 `public.listings` 有欄位、fixture 自己建的另一個 schema 的 `listings` 沒有，
+    // 探測就會說「有」而後續查詢在 fixture 的 listings 上 42703（prb-search-benchmark 就是這樣紅的）。
+    // 在 SQLite 上 `pg_attribute` 不存在會拋錯 ⇒ 直接當作「不是 PG／沒有這一欄」。
     const rows = await exec(
-      "SELECT 1 AS ok FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1",
+      "SELECT 1 AS ok FROM pg_attribute WHERE attrelid = to_regclass(?) AND attname = ? AND attnum > 0 AND NOT attisdropped LIMIT 1",
       ["listings", "fold_component_root"],
     );
     const list = Array.isArray(rows) ? rows : rows?.rows;

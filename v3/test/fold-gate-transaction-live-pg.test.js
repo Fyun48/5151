@@ -25,7 +25,7 @@ test("缺欄探測不會毒化寫入交易（information_schema 探測 ＋ 同�
   try {
     const exec = (sql, params = []) => client.query(toPostgresSql(sql), params).then((r) => r.rows);
     const hasColumn = (await exec(
-      "SELECT 1 AS ok FROM information_schema.columns WHERE table_name = 'listings' AND column_name = 'fold_component_root' LIMIT 1",
+      "SELECT 1 AS ok FROM pg_attribute WHERE attrelid = to_regclass('listings') AND attname = 'fold_component_root' AND attnum > 0 AND NOT attisdropped LIMIT 1",
     )).length > 0;
 
     await client.query("BEGIN");

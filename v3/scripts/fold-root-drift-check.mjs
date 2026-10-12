@@ -28,7 +28,7 @@ const drv = await createPostgresDriver({ env: process.env });
 
 // 欄位存在與否（缺欄 ⇒ 直接 fail-closed，不做任何重算）
 const hasColumn = (await drv.pool.query(
-  "SELECT 1 AS ok FROM information_schema.columns WHERE table_name = 'listings' AND column_name = 'fold_component_root' LIMIT 1",
+  "SELECT 1 AS ok FROM pg_attribute WHERE attrelid = to_regclass('listings') AND attname = 'fold_component_root' AND attnum > 0 AND NOT attisdropped LIMIT 1",
 )).rows.length > 0;
 if (!hasColumn) {
   console.log(JSON.stringify({ script: "fold-root-drift-check", ok: false, reason: "fold_component_root_missing" }));

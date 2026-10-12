@@ -24,7 +24,7 @@ function fakeExec({ column = true, stamp = undefined } = {}) {
   const seen = [];
   const exec = async (sql, params = []) => {
     seen.push({ sql, params });
-    if (/information_schema\.columns/.test(sql)) return column ? [{ ok: 1 }] : [];
+    if (/FROM pg_attribute/.test(sql)) return column ? [{ ok: 1 }] : [];
     if (/FROM settings WHERE key/.test(sql)) return stamp === undefined ? [] : [{ value: typeof stamp === "string" ? stamp : JSON.stringify(stamp) }];
     throw new Error(`unexpected sql: ${sql}`);
   };

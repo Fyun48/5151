@@ -104,11 +104,18 @@ const seedRows = [
   })),
 ];
 
+let columnExisted = true;      // 「本來就有這一欄」⇒ 不還原（步驟不得改變別人的 schema）
 const client = await drv.pool.connect();
 try {
   // 拋棄式 PG：schema 由 SQLite 鏡射而來 ⇒ 沒有 fold_component_root（migration 007 走 CONCURRENTLY、
   // 屬正式庫動作）。CI 這裡用等價的 plain DDL 補上（欄位、型別與 007 相同）。
-  await client.query("ALTER TABLE listings ADD COLUMN IF NOT EXISTS fold_component_root bigint");
+  // 只在「本來沒有這一欄」時才建，並在 finally 還原（步驟之間**不得留下 schema 變更**：
+  // CI 實測踩過——留下的欄位讓後續 prb-search-benchmark 的 fixture 走進「欄位存在」的
+  // 讀取分支，對它自己的 listings 查 fold_component_root ⇒ 42703 紅）。
+  columnExisted = (await client.query(
+    "SELECT 1 AS ok FROM pg_attribute WHERE attrelid = to_regclass('listings') AND attname = 'fold_component_root' AND attnum > 0 AND NOT attisdropped LIMIT 1",
+  )).rows.length > 0;
+  if (!columnExisted) await client.query("ALTER TABLE listings ADD COLUMN fold_component_root bigint");
   const required = (await client.query(
     `SELECT column_name, data_type FROM information_schema.columns
      WHERE table_schema='public' AND table_name='listings' AND is_nullable='NO' AND column_default IS NULL AND is_identity='NO'
@@ -337,6 +344,12 @@ try {
     await drv.pool.query("DELETE FROM listing_group_members WHERE post_id = ANY($1::bigint[]) OR group_id = $2", [all, bridgeGroupId]);
     await drv.pool.query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [all]);
   } finally {
+    // schema 還原（本步驟自己加的欄位自己拿掉）＋ 清掉合成列
+    if (!columnExisted) {
+      await drv.pool.query("ALTER TABLE listings DROP COLUMN IF EXISTS fold_component_root").catch((e) => {
+        console.error(`[fold-ci-parity] 還原欄位失敗（後續步驟可能受影響）: ${String(e?.message || e).slice(0, 160)}`);
+      });
+    }
     await drv.pool.end();
   }
 }
