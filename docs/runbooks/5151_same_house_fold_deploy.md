@@ -55,7 +55,7 @@ node v3/scripts/fold-gate-stamp-verify.mjs
 | 1 | `fold_component_root` 欄位存在（**跟著 search_path**） | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs`（用 `pg_attribute` ＋ `to_regclass('listings')`；**不用 `information_schema`**，跨 schema 會誤判，L-0869） | `checks.column_present=true` |
 | 2 | 全量 drift＝0（**不寫戳記**的唯讀版） | `PG_URL=… node v3/scripts/fold-root-drift-check.mjs` | `{"mismatch":0,"ok":true,"stamped":false}`、rc=0 |
 | 3 | 戳記存在且 `mismatches=0` | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs` | `stamp.mismatches=0` |
-| 4 | **戳記綁當前資料版本**（`rows`／`maxPostId`／`rootsMd5` 三者都比對） | 同上（`fold-gate-stamp-verify.mjs`） | `dataVersion_match=true`（三者逐項相同） |
+| 4 | **戳記綁當前資料版本**（`rows`／`maxPostId`／`rootsMd5` 三者都比對）**＋寫入世代鍵**（`writeGen`） | 同上（`fold-gate-stamp-verify.mjs`） | `dataVersion_match=true`（三者逐項相同）、`writeGen_match=true` |
 | 5 | 線上開閘前檢會放行（同一條判定的真實呼叫） | `PG_URL=… node v3/scripts/fold-gate-stamp-verify.mjs`（它用**真 PG exec** 呼叫 `foldSqlGateReady`） | `{ok:true, detail:{rows,maxPostId,rootsMd5}}` |
 | 6 | 告警管道可見（`[fold-gate]` 行） | `docker logs --since 15m <v3 容器> 2>&1 \| grep -c "\[fold-gate\]"`（正式站容器 `591-tracker-v3`；隔離站用該站的容器名） | 開閘後有 503 時看得到那行；平常 0 |
 | 7 | 關閘程序就緒（誰按、怎麼退、退後驗什麼） | 見 §5.1 | — |
@@ -66,17 +66,25 @@ node v3/scripts/fold-gate-stamp-verify.mjs
 ### 1.2 戳記如何綁定資料版本（已實裝 / 未實裝，逐項講清楚）
 
 - **已實裝**：`fold-root-drift-check.mjs --stamp` 在零差時寫入
-  `dataVersion = { rows, maxPostId, rootsMd5 }`（`rootsMd5 = md5(string_agg(post_id||'|'||coalesce(fold_component_root::text,'-'),'' ORDER BY post_id))`）。
-  線上 `foldSqlGateReady()` 每一請求（成功的判定有 **60 秒 TTL**，失敗永久記憶）比對
-  `SELECT count(*) AS n, max(post_id) AS max_post_id FROM listings` 與戳記的 `rows`／`maxPostId`
-  ——不符 ⇒ `reason=fold_root_drift_stamp_stale`（503）。
+  `dataVersion = { rows, maxPostId, rootsMd5 }` **＋ `writeGen`**
+  （`rootsMd5 = md5(string_agg(post_id||'|'||coalesce(fold_component_root::text,'-'),'' ORDER BY post_id))`；
+  `writeGen` ＝戳記當下的 `settings.foldRootWriteGen`，與 `rows`／`maxPostId` **同一句 SQL（同一條連線快照）**讀出）。
+  線上 `foldSqlGateReady()` 每一請求（成功的判定有 **60 秒 TTL 且以 `writeGen` 為快取鍵**，失敗永久記憶）依序比對：
+  1. `SELECT count(*) AS n, max(post_id) AS max_post_id FROM listings` 與戳記的 `rows`／`maxPostId`
+     ——不符 ⇒ `reason=fold_root_drift_stamp_stale`（503）。
+  2. 戳記的 `writeGen` 對當前 `settings.foldRootWriteGen`——戳記**缺這個欄位**（升級前寫的舊式戳記）
+     ⇒ `reason=fold_root_drift_stamp_gen_missing`；**對不上**（root 被原地改寫過）
+     ⇒ `reason=fold_root_drift_stamp_gen_stale`（兩者都 503，不降級）。
+- **寫入端怎麼維護這個世代鍵**（2026-10-13 實裝，`v3/src/foldComponentRoot.js`
+  `bumpFoldRootWriteGen()`；證據 `evidence/fold-root-write-gen-2026-10-13.md`）：
+  `listings.fold_component_root` 的**每一條寫入路徑**——fold 刷新漏斗（`refreshFoldComponentRoot()`，
+  由 `match.js refreshFoldColumns` 呼叫）、全表回填 `fold-root-backfill.mjs`、CI 合成種子
+  `fold-ci-parity.mjs`、fixture `fold-shape-fixtures.mjs`——都在**同一個交易**內把
+  `settings.foldRootWriteGen` 原子 +1（**只在同一次真的改到列時**；沒改到列 ⇒ 固化欄與重算值仍一致，
+  戳記還是真的）。⇒ 任何原地 UPDATE 之後先前的戳記立即失效，閘門關到有人重跑 `--stamp` 為止。
 - **未實裝（明文列為開閘前待辦）**：
-  1. **原地更新抓不到**：只改 `fold_component_root`、卻沒改列數也沒改 `max(post_id)` 的更新
-     （刷新鏈的原地 UPDATE），線上那兩個值不會變 ⇒ 這條靠「髒事件後重跑 `--stamp`」（§2）與
-     離線 `rootsMd5` 複核，不是靠線上檢查。**待辦**：刷新鏈寫入 root 時 bump 一個世代鍵
-     （`settings.foldRootWriteGen`），線上再比對該世代。
-  2. `rootsMd5` 沒有進線上檢查（全表聚合太貴）；它只在 §1.1 第 4 條的離線指令裡比對。
-  3. 沒有排程（Owner 2026-10-12 裁示：**先人工**、排程另行提案）⇒ 資料一變，閘門會關到
+  1. `rootsMd5` 沒有進線上檢查（全表聚合太貴）；它只在 §1.1 第 4 條的離線指令裡比對。
+  2. 沒有排程（Owner 2026-10-12 裁示：**先人工**、排程另行提案）⇒ 資料一變，閘門會關到
      有人重跑 `--stamp` 為止；這是已被接受的取捨（fail-closed 優先）。
 
 ## 2. 髒事件 ⇒ 必須重跑回填（`fold-root-backfill.mjs`）＋重跑 drift（`fold-root-drift-check.mjs --stamp`）

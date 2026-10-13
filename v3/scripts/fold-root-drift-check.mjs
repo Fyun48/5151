@@ -20,7 +20,7 @@
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
-import { componentRootMap, enabledSourcesFromPg, FOLD_DRIFT_STAMP_KEY, resetFoldSqlGate } from "../src/foldComponentRoot.js";
+import { componentRootMap, enabledSourcesFromPg, FOLD_DRIFT_STAMP_KEY, FOLD_WRITE_GEN_KEY, resetFoldSqlGate } from "../src/foldComponentRoot.js";
 
 assertPgTargetAllowed("fold-root-drift-check", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
 const stamp = process.argv.includes("--stamp");
@@ -92,23 +92,31 @@ const summary = {
 // 戳記綁定的**資料版本指紋**（升級層 2026-10-12 21:24：「僅有 stamp 不足」）：線上開閘前檢
 // （foldComponentRoot.js foldSqlGateReady）每一請求（成功結果有 TTL）比對 rows／maxPostId；
 // rootsMd5 是全表聚合，留給 runbook §1 步驟 3c 的離線複核（同一條 SQL）。
+//
+// 第 4 個欄位是**寫入世代鍵**（升級層 2026-10-13 開閘硬條件）：`rows`／`maxPostId` 抓不到
+// 「原地 UPDATE root」那種變更，所以戳記另外綁 `settings.foldRootWriteGen`。它與上面兩個欄位
+// 在**同一句 SQL（同一個連線快照）**讀出來——避免「指紋取自 A 快照、世代取自 B 快照」。
 async function dataVersionFingerprint() {
   const v = (await drv.pool.query(
     "SELECT count(*) AS n, max(post_id) AS max_post_id, "
-    + "md5(string_agg(post_id::text || '|' || COALESCE(fold_component_root::text, '-'), '' ORDER BY post_id)) AS roots_md5 "
+    + "md5(string_agg(post_id::text || '|' || COALESCE(fold_component_root::text, '-'), '' ORDER BY post_id)) AS roots_md5, "
+    + "(SELECT s.value FROM settings s WHERE s.key = $1) AS write_gen "
     + "FROM listings",
+    [FOLD_WRITE_GEN_KEY],
   )).rows[0];
-  return { rows: Number(v.n), maxPostId: Number(v.max_post_id), rootsMd5: v.roots_md5 };
+  const gen = Number(v.write_gen);
+  return { rows: Number(v.n), maxPostId: Number(v.max_post_id), rootsMd5: v.roots_md5, writeGen: Number.isFinite(gen) && gen >= 0 ? Math.floor(gen) : 0 };
 }
 if (stamp) {
   if (mismatches.length === 0) {
     const dataVersion = await dataVersionFingerprint();
     await drv.pool.query(
       toPostgresSql("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"),
-      [FOLD_DRIFT_STAMP_KEY, JSON.stringify({ at, rows: rows.length, components, mismatches: 0, dataVersion })],
+      [FOLD_DRIFT_STAMP_KEY, JSON.stringify({ at, rows: rows.length, components, mismatches: 0, writeGen: dataVersion.writeGen, dataVersion })],
     );
     resetFoldSqlGate();
     summary.stamped = true;
+    summary.writeGen = dataVersion.writeGen;
     summary.dataVersion = dataVersion;
   } else {
     summary.stamped = false;

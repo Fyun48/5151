@@ -22,7 +22,7 @@ import {
 } from "../src/db.js";
 import { districtClosureIds } from "../src/listingSearchNodePg.js";
 import { buildPublicListingsFoldSql, foldRoleCte } from "../src/listingSearchSql.js";
-import { componentRootMap } from "../src/foldComponentRoot.js";
+import { componentRootMap, bumpFoldRootWriteGen } from "../src/foldComponentRoot.js";
 import { createDecorationDataLoader, loadFoldRoots, loadGroupIds } from "../src/repository/decorationData.js";
 import { refreshListingProjection } from "../src/listingSearchProjection.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
@@ -213,6 +213,9 @@ try {
     if (!all.includes(Number(pid))) continue;
     await exec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", [root == null ? null : Number(root), Number(pid)]);
   }
+  // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：合成種子也改到 `fold_component_root`
+  // ⇒ 一樣要 bump，否則「戳記 vs 世代」的語意在 CI 的資料上不成立（本腳本自己不寫戳記）。
+  await bumpFoldRootWriteGen(exec);
   const foldRootRows = await loadFoldRoots(exec, all, "postgres");
   check("⑧ 固化欄寫入＝寫入端分量（逐列）", all.every((id) => (foldRootRows.get(Number(id)) ?? null) === (rootMap.get(Number(id)) == null ? null : Number(rootMap.get(Number(id))))));
 
