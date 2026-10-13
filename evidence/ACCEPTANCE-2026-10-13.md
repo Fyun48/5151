@@ -80,7 +80,23 @@ repro3、`member-list-benchmark.mjs`、`MEMBER_UID=1`、`RUNS=5`、單一進程�
 
 ## 7 我（規劃層）覆核過的與我沒覆核過的
 - 我親手跑過並逐項对上：drift（兩庫）、三门 log 逐行解析、17/35 重算、fixtures 53、collation 探針全部數字、閘門兩支測試 12/12、CI job 級、PR 狀態、正式庫 `source` 計數、`match.js` diff 為空、worktree porcelain。
-- 我**沒有**覆核：分頁在 repro2 的重跑（沿用第 7 輪）；`fold-endpoint-bench.mjs` 的 off 模式全量耗時（自報 baseline p50 14,400ms）；SQLite 路徑本輪未另行驗；效能 before／after 對照未做。
+- 我**沒有**覆核：分頁在 repro2 的重跑（沿用第 7 輪）；`fold-endpoint-bench.mjs` 的 off 模式全量耗時（自報 baseline p50 14,400ms）；SQLite 路徑本輪未另行驗（**2026-10-13 R12 已補核，見 §7.1①**）；效能 before／after 對照未做。
+
+### 7.1 2026-10-13 R12 補核（交辦：§7 最後兩條證據缺口；基準 `origin/master=0d2e196`）
+- **① SQLite 路徑＝已覆核；正確結論不是「同形 SQL 在 SQLite 也跑」，而是「SQLite 不跑折疊 SQL」**。以 worktree ＋ throwaway `node:sqlite` 檔 ＋ `prb-genkey-pg`(15447) 專用 schema `foldprobe_r12`（`search_path` 隔離，**不碰 `listings` 真表**）實測：
+  - 折疊查詢**逐字**在 SQLite 跑不動：`unrecognized token: ":"`（PG-only：`ANY(?::text[])`／`?::bigint`；`IFNULL`／`MATERIALIZED`／`IS DISTINCT FROM`／window function 本體 SQLite 3.51.3 都吃）。僅機械去方言（`ANY(?::text[])`→`IN` 字面值、`?::bigint`→`?`、`::text`→`CAST(… AS TEXT)`）即可跑：`rowCount=9`、欄名 `[post_id, updated_at, rent, total_monthly_cost, total_count]`。
+  - **SQLite driver 設計上不執行折疊 SQL**：`publicListingSearchAsync.js:72` 的 `driver !== "postgres"` 在折疊之前就 return；`db.js` 只 import `buildListingSearchSql`／`buildPublicListingSearchSql`；`fold_component_root` 只出現在 PG migration `v3/migrations/007_listings_fold_component_root.sql`，`writePath.js ensureFoldColumnsSqlite()` 只加四個 fold 數值欄。SQLite 端分組走 `buildSameHouseComponents` union-find、選主走 `match.js sortGroupListings`（`db.js:3820`）。
+  - **代表選擇三方逐筆相等、分歧 0**：8 群（租金軸／更新時間軸／`source=''` tie-break 軸／單成員／`offline_confirmed=1` 排除／houseprice 未就緒排除／租金 NULL／`last_seen_at` 字串軸）在 PG(SQL `foldRoleCte` 原樣) ＝ SQLite(同段 SQL 去方言) ＝ Node(`sortGroupListings`) ⇒ `onlyA/onlyB` 皆空。
+  - **閘門四態在 SQLite 與 PG 不一致，但該路徑不可達**：SQLite 四態一律 `fold_component_root_missing`（`pg_attribute` 不存在 ⇒ `foldRootRefreshReady()` 的 catch 回 false）；PG 四態為 `…_stamp_missing`／`…_gen_missing`／`…_gen_stale`／`ok:true`。兩邊都 fail-closed，且 SQLite 永不會走到 `foldSqlGateReady()`（driver 分派在前）⇒ **非缺陷**；列為觀察項（未來若新增 SQLite 折疊路徑，這裡的 reason 會誤導）。
+  - 重跑：`PG_URL=<15447/repro> node /home/cline/lab/5151-verify-r12/a-fold-sqlite-vs-pg.mjs`（原始輸出 `a-out.json`）。
+- **② `fold_refresh_kind=1` 的 `now` 平移探針＝已覆核**。新增唯讀探針 `v3/scripts/fold-now-shift-probe.mjs`（形狀仿 `fold-tiebreak-collation-probe.mjs`；全程只 SELECT，自帶 `writesSql` 自我掃描）。
+  - repro3（15435／`repro`）實測：命中群 **18,940**（成員 ≥2、含 kind=1、且有成員更新時間落在 `now±6h`）；Δ=**13,840,968ms**（可翻轉配對 10 群，10／10 的配對先後真的被翻轉）。
+  - 三時點 `now−Δ`／`now`／`now+Δ` 兩側選同一個 `post_id`：**100.0000%（18,940/18,940）×3**，分歧樣本 **0**；代表列隨 `now` 換人 **Node 0 群／SQL 0 群**。
+  - 完整性：fold 欄 vs `listingRefreshParts`／`comparableRent` 不符 **0 列**（掃 74,428 列）；`writesSql=0`。
+  - **正對照**（證明偵測器不是「量不到而回 0」）：`prb-genkey-pg` schema `foldnowctl_r12` 造兩成員群（kind=1 vs 絕對、臨界點距 `now` 10 分）⇒ 代表列由 A 換成 R，SQL 與 Node 都偵測到且三點一致（`all_agree:true`）。空結果輸出路徑亦實測（`--window-ms 1` ⇒ 顯式「沒有命中群…不是通過」）。
+  - 結論：把規格結尾「只有 kind=1 與絕對時間列混用時才會變」量化為——在 repro3 這 18,940 個命中群上、±3h50m 的 `now` 平移下，代表列 **0 群換人**，兩側 **100% 一致**。
+  - 重跑：`set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a; PG_URL=<15435/repro> node v3/scripts/fold-now-shift-probe.mjs`
+- 本節未動 `v3/src/match.js`（一行未改）、未動 `v1/v2`、未開閘、未加排程、未寫 repro2／repro3／正式庫（全程 SELECT）。
 
 ## 8 升級層建議③的成品（**可裝但先不裝**，2026-10-13 09:5x）
 - 唯讀探針：`~/lab/5151-fold-parity-20261012/tools/drift-probe.sh`（700）。`mismatch=0` 只記一行；`mismatch>0` 落告警檔並（未加 `--dry-alert` 時）用 `ask-owner` 發一封**要你准回填**的詢問。**不自動 backfill、不 `--stamp`、不寫正式庫。**
