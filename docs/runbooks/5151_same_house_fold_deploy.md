@@ -75,13 +75,23 @@ node v3/scripts/fold-gate-stamp-verify.mjs
   2. 戳記的 `writeGen` 對當前 `settings.foldRootWriteGen`——戳記**缺這個欄位**（升級前寫的舊式戳記）
      ⇒ `reason=fold_root_drift_stamp_gen_missing`；**對不上**（root 被原地改寫過）
      ⇒ `reason=fold_root_drift_stamp_gen_stale`（兩者都 503，不降級）。
-- **寫入端怎麼維護這個世代鍵**（2026-10-13 實裝，`v3/src/foldComponentRoot.js`
-  `bumpFoldRootWriteGen()`；證據 `evidence/fold-root-write-gen-2026-10-13.md`）：
-  `listings.fold_component_root` 的**每一條寫入路徑**——fold 刷新漏斗（`refreshFoldComponentRoot()`，
-  由 `match.js refreshFoldColumns` 呼叫）、全表回填 `fold-root-backfill.mjs`、CI 合成種子
-  `fold-ci-parity.mjs`、fixture `fold-shape-fixtures.mjs`——都在**同一個交易**內把
-  `settings.foldRootWriteGen` 原子 +1（**只在同一次真的改到列時**；沒改到列 ⇒ 固化欄與重算值仍一致，
-  戳記還是真的）。⇒ 任何原地 UPDATE 之後先前的戳記立即失效，閘門關到有人重跑 `--stamp` 為止。
+- **寫入端怎麼維護這個世代鍵**（2026-10-13 實裝；同日 round 11 關掉「一句話寬」的窗口後**重新措辭**，
+  見 `evidence/fold-root-write-gen-2026-10-13.md` §8；原語＝`v3/src/foldComponentRoot.js`
+  `bumpFoldRootWriteGen()`）：`listings.fold_component_root` 的**每一條寫入路徑**都在**真的改到列**時把
+  `settings.foldRootWriteGen` +1（沒改到列 ⇒ 固化欄與重算值仍一致，戳記還是真的）。**逐路徑講清楚
+  「原子」到什麼程度**（不一律寫「同一個交易」——round 10 就是栽在這種過分宣稱）：
+
+  | 寫入路徑 | 位置 | 加固方式 | 行程死在寫入段中間時的殘留語意 |
+  |---|---|---|---|
+  | fold 刷新漏斗 `refreshFoldComponentRoot()`（`match.js refreshFoldColumns` 呼叫） | `v3/src/foldComponentRoot.js` | **同一個 `exec`（呼叫端綁定的那一條連線）相鄰兩句、bump 在 root UPDATE 之前**；呼叫端目前**沒有**外層交易 ⇒ **不宣稱原子** | 世代超前、root 未動 ⇒ 舊戳記當場失效、請求被拒（**fail-closed**） |
+  | 全表回填 `fold-root-backfill.mjs` | 每批 | **同一個顯式交易**：`BEGIN`(88)…`COMMIT`(100) 內含 root UPDATE 與 bump | 整批 rollback ⇒ 兩邊都沒動（原子） |
+  | CI 合成種子 `fold-ci-parity.mjs` | 種子寫入段 | **同一條 `pool.connect()` 連線的顯式交易**，`BEGIN`…`COMMIT` 內含 root UPDATE 與 bump，且 **bump 在前**（round 11 之前這兩句在交易外、順序還相反） | 整段 rollback（原子）；bump 在前是第二道保險 |
+  | fixture `fold-shape-fixtures.mjs` | fixture 寫入段 | **bump 在 root UPDATE 之前**；兩句各自走 `pool` 查詢 ⇒ **不宣稱同一連線／原子** | 世代超前 ⇒ **fail-closed**（round 11 之前是反序） |
+
+  ⇒ 任何原地 UPDATE 之後先前的戳記立即失效，閘門關到有人重跑 `--stamp` 為止。就算行程死在寫入段的兩句
+  之間，殘留語意也只有「**世代超前**」（下一個請求走 `fold_root_drift_stamp_gen_stale` 被拒），
+  **不會**出現「root 已寫、世代未動」那種把請求放行在**過時世代**的 fail-open 窗口
+  （round 11 之前的三條非交易路徑正是反序；該窗口已關閉）。
 - **未實裝（明文列為開閘前待辦）**：
   1. `rootsMd5` 沒有進線上檢查（全表聚合太貴）；它只在 §1.1 第 4 條的離線指令裡比對。
   2. 沒有排程（Owner 2026-10-12 裁示：**先人工**、排程另行提案）⇒ 資料一變，閘門會關到

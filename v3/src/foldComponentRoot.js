@@ -590,14 +590,22 @@ export async function refreshFoldComponentRoot(exec, postId, { maxNodes = FOLD_R
     if (before !== after) writes.push([after, pid]);
   }
   if (!dryRun) {
+    // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：**只在這一次真的改了 root** 時 +1，
+    // 而且**必須排在 root 的 UPDATE 之前**（round 11 修掉「一句話寬」的 fail-open 窗口）。
+    // 為什麼順序是安全性質、不是風格問題——兩句之間行程死掉時：
+    //   ・bump 在前（本版）：世代超前、root 未動 ⇒ 已接受的舊戳記**當場失效**（fail-closed；
+    //     下一個請求走 gen_stale 被拒，要重跑 `--stamp` 才放行，而 `--stamp` 會全量重算 root、
+    //     零差才寫 ⇒ 不會把過時世代放行）。
+    //   ・bump 在後（舊版）：root 已寫、世代未動 ⇒ 舊戳記仍算有效 ⇒ 請求在**過時世代**下被放行
+    //     （fail-open）。這就是本包要關的窗口。
+    // 為什麼只在那時：沒改到任何一列 ⇒ 固化欄與重算值仍然一致，已接受的零差戳記還是真的。
+    // 交易：本函式用呼叫端傳進來的 `exec` 相鄰執行這兩件事（同一條連線），而 `match.js` 的
+    // fold 漏斗**沒有外層交易**（autocommit）⇒ 這裡**不宣稱原子**：bump 在前已把窗口從
+    // fail-open 變成 fail-closed，交易只是呼叫端若自行加上的額外加固（不依賴它）。
+    if (writes.length) await bumpFoldRootWriteGen(exec);
     for (const [root, pid] of writes) {
       await exec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", [root, pid]);
     }
-    // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：**只在這一次真的改了 root** 時 +1。
-    // 為什麼只在那時：沒改到任何一列 ⇒ 固化欄與重算值仍然一致，已接受的零差戳記還是真的；
-    // 反之每一次原地 UPDATE（rows／maxPostId 都不動）都必須讓戳記失效。同一個 exec ⇒
-    // 同一個連線／交易，呼叫端（match.js 的 fold 漏斗）把它包在自己的交易裡就是原子的。
-    if (writes.length) await bumpFoldRootWriteGen(exec);
   }
   // dryRun＝新鮮度檢查用：算但不寫，回傳閉包內每個成員「重算後應該是什麼」。
   const computed = new Map();

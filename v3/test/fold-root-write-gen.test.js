@@ -164,3 +164,85 @@ test("所有 fold_component_root 的寫入路徑都 bump（原始碼清單釘住
     assert.ok(src.includes("bumpFoldRootWriteGen"), `${file} 的寫入路徑必須 bump 世代鍵`);
   }
 });
+
+// ── round 11：bump 的位置（順序是安全性質：fail-open 窗口 vs fail-closed）───────────────
+// `anchor` 之後第一次出現 `needle` 的索引；找不到 ⇒ -1。用來對「叫用點」而非「函式定義」定位。
+const idx = (src, needle) => src.indexOf(needle);
+const BUMP_CALL = "await bumpFoldRootWriteGen(";
+const ROOT_UPDATE = "UPDATE listings SET fold_component_root";
+
+test("未交易的三條寫入路徑：bump 叫用必須在 root UPDATE 之前（round 11 關掉 fail-open 窗口）", () => {
+  // 為什麼只釘這三條：`fold-root-backfill.mjs` 的 UPDATE 與 bump 同落在一個 BEGIN…COMMIT
+  // 之間（見下一條），兩句原子 ⇒ 順序不影響窗口方向，不必重排（也刻意沒動）。
+  const bumpFirst = [
+    "v3/src/foldComponentRoot.js",
+    "v3/scripts/fold-ci-parity.mjs",
+    "v3/scripts/fold-shape-fixtures.mjs",
+  ];
+  for (const file of bumpFirst) {
+    const src = readRepo(file);
+    const updateAt = idx(src, ROOT_UPDATE);
+    const bumpAt = idx(src, BUMP_CALL);
+    assert.ok(updateAt >= 0, `${file} 應該有 root UPDATE（清單漂移就要更新這條測試）`);
+    assert.ok(bumpAt >= 0, `${file} 應該有 bump 叫用（不是只有定義）`);
+    assert.ok(
+      bumpAt < updateAt,
+      `${file}：bump（idx ${bumpAt}）必須排在 root UPDATE（idx ${updateAt}）之前——`
+      + "反過來的話，行程死在兩句之間會留下「root 已寫、世代未動」⇒ 舊戳記繼續被當有效（fail-open）",
+    );
+  }
+});
+
+test("已交易的路徑（fold-root-backfill）：UPDATE 與 bump 同落在一個 BEGIN…COMMIT 內", () => {
+  const src = readRepo("v3/scripts/fold-root-backfill.mjs");
+  const beginAt = idx(src, 'client.query("BEGIN")');
+  const updateAt = idx(src, ROOT_UPDATE);
+  const bumpAt = idx(src, BUMP_CALL);
+  const commitAt = idx(src, 'client.query("COMMIT")');
+  for (const [name, at] of [["BEGIN", beginAt], ["root UPDATE", updateAt], ["bump", bumpAt], ["COMMIT", commitAt]]) {
+    assert.ok(at >= 0, `fold-root-backfill.mjs 應該有 ${name}`);
+  }
+  assert.ok(
+    beginAt < updateAt && updateAt < bumpAt && bumpAt < commitAt,
+    "UPDATE 與 bump 必須都落在同一個 BEGIN…COMMIT 之間（同批原子 ⇒ 順序不影響窗口方向）",
+  );
+});
+
+test("bump 在前：bump 成功但 root UPDATE 未跑（模擬中途死亡）⇒ 舊戳記仍被拒、驗證以新世代為準", async () => {
+  // 真的 SQLite 跑 settings（bump 是真語句），listings／pg_attribute 用受控假值。
+  const mem = new DatabaseSync(":memory:");
+  mem.exec("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  const live = { rows: 10, maxPostId: 5 };
+  const exec = async (sql, params = []) => {
+    if (/FROM settings WHERE key/.test(sql)) return mem.prepare(sql).all(...params);
+    if (/FROM pg_attribute/.test(sql)) return [{ ok: 1 }];
+    if (/FROM listings/.test(sql)) return [{ n: live.rows, max_post_id: live.maxPostId }];
+    // bump 的 INSERT／UPDATE（ensure ＋ +1）走**真的** SQLite 語句，不 stub。
+    if (/settings/.test(sql)) return mem.prepare(sql).all(...params);
+    throw new Error(`unexpected sql: ${sql}`);
+  };
+  const putStamp = (stamp) => mem
+    .prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+    .run(FOLD_DRIFT_STAMP_KEY, JSON.stringify(stamp));
+
+  putStamp(stampOf({ writeGen: 0 }));
+  resetFoldRootRefreshProbe(); resetFoldSqlGate();
+  assert.equal((await foldSqlGateReady(exec)).ok, true, "前置：gen=0 的零差戳記先放行");
+
+  // 模擬 `refreshFoldComponentRoot()` 的寫入段在**新版順序**下的中途死亡：
+  // bump 先跑成功，行程就死在它與 root UPDATE 之間（UPDATE 從未執行）。
+  assert.equal(await bumpFoldRootWriteGen(exec), 1, "bump 必須先落地（世代超前）");
+  resetFoldSqlGate();
+  const half = await foldSqlGateReady(exec);
+  assert.equal(half.ok, false, "中途死亡後舊戳記不得被放行（舊版順序會放行 ⇒ 那才是 fail-open）");
+  assert.equal(half.reason, "fold_root_drift_stamp_gen_stale");
+  assert.equal(half.detail.stampedWriteGen, 0, "戳記仍是舊世代");
+  assert.equal(half.detail.liveWriteGen, 1, "線上世代已超前 ⇒ fail-closed");
+
+  // 「驗證以新世代為準」：重跑 `--stamp`（會全量重算 root、零差才寫）之後，驗證用的必須是 1。
+  resetFoldSqlGate();
+  putStamp(stampOf({ writeGen: 1 }));
+  const fixed = await foldSqlGateReady(exec);
+  assert.equal(fixed.ok, true, "重跑 --stamp 後才放行（世代前進不可逆，也不會退回 0）");
+  assert.equal(fixed.detail.writeGen, 1);
+});

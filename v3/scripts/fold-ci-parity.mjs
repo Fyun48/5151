@@ -209,13 +209,30 @@ try {
       return Number(row.prep_display_ready) === 1 ? false : true;
     },
   });
-  for (const [pid, root] of rootMap) {
-    if (!all.includes(Number(pid))) continue;
-    await exec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", [root == null ? null : Number(root), Number(pid)]);
+  // root UPDATE ＋ 世代鍵 bump 收進**同一條連線的顯式交易**，且 **bump 在前**（round 11）：
+  // ・`exec` 走 `drv.pool.query`，每次查詢都可能換到不同連線 ⇒ 不能拿它當交易邊界，要另借一條 client。
+  // ・bump 在前：就算哪天交易被拿掉，斷點也只會讓世代**超前**（fail-closed：舊戳記被拒），
+  //   不會出現「root 已寫、世代未動」那種 fail-open 窗口。
+  // ・合成種子也改到 `fold_component_root` ⇒ 一樣要 bump，否則「戳記 vs 世代」的語意在 CI 的
+  //   資料上不成立（本腳本自己不寫戳記）。
+  {
+    const wx = await drv.pool.connect();
+    const wexec = (sql, params = []) => wx.query(toPostgresSql(sql), params).then((r) => r.rows);
+    try {
+      await wx.query("BEGIN");
+      await bumpFoldRootWriteGen(wexec);
+      for (const [pid, root] of rootMap) {
+        if (!all.includes(Number(pid))) continue;
+        await wexec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", [root == null ? null : Number(root), Number(pid)]);
+      }
+      await wx.query("COMMIT");
+    } catch (error) {
+      await wx.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      wx.release();
+    }
   }
-  // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：合成種子也改到 `fold_component_root`
-  // ⇒ 一樣要 bump，否則「戳記 vs 世代」的語意在 CI 的資料上不成立（本腳本自己不寫戳記）。
-  await bumpFoldRootWriteGen(exec);
   const foldRootRows = await loadFoldRoots(exec, all, "postgres");
   check("⑧ 固化欄寫入＝寫入端分量（逐列）", all.every((id) => (foldRootRows.get(Number(id)) ?? null) === (rootMap.get(Number(id)) == null ? null : Number(rootMap.get(Number(id))))));
 
