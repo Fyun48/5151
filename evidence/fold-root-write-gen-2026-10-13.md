@@ -215,3 +215,186 @@ log 指紋（`/home/cline/lab/5151-genkey-r9/`，`sha256sum | cut -c1-16`）：
 ## 7 CI
 
 （PR 開好後補：run id＋四項 job 狀態）
+
+## 8 round 11：關掉「一句話寬」的 fail-open 窗口（2026-10-13）
+
+> **本節修正 §1 表格右欄的措辭**：那裡把四條寫入路徑一律寫成「同一個交易」，是**過分宣稱**——
+> 只有 `fold-root-backfill.mjs` 真的有顯式交易；其餘三條當時是**自動提交的相鄰兩句**，而且順序是
+> 「先 root UPDATE、後 bump」。以本節為準。
+
+### 8.1 缺陷（窗口的一句話寬）
+
+`refreshFoldComponentRoot()` 舊版是：
+
+```
+await exec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", …)   // :594
+if (writes.length) await bumpFoldRootWriteGen(exec);                            // :600
+```
+
+兩句之間**沒有交易**（`match.js` 的 fold 漏斗也沒有外層交易 ⇒ autocommit）。行程若死在兩句之間：
+
+- 舊版（bump 在後）：**root 已寫、世代未動** ⇒ 已接受的零差戳記仍然「有效」⇒ 請求在**過時世代**
+  下被放行（**fail-open**）。這正是本輪要關的窗口。
+- 新版（bump 在前）：**世代超前、root 未動** ⇒ 舊戳記當場失效、下一個請求走
+  `fold_root_drift_stamp_gen_stale` 被拒；要有人重跑 `--stamp` 才放行，而 `--stamp` 會全量重算
+  root、零差才寫 ⇒ **fail-closed**。
+
+`fold-ci-parity.mjs` 更嚴重：它的 `BEGIN`(:160)–`COMMIT`(:175) 只是**種子 INSERT** 的交易，root UPDATE
+與 bump 兩句都在交易**之外**，順序也相反；且它用的是 `drv.pool.query`（連線池）⇒ 連「同一條連線」
+都不成立。`fold-shape-fixtures.mjs` 同樣是交易外的反序兩句。
+
+### 8.2 四條路徑各自的改法（`origin/master` = `0d2e196` 基準）
+
+| 路徑 | 改動 | 新位置 | 原子性 |
+|---|---|---|---|
+| `v3/src/foldComponentRoot.js` | **bump 移到 root UPDATE 之前**（原本兩句反序、無交易） | bump `:605`、UPDATE `:607` | 同一個 `exec`（呼叫端綁定的連線）相鄰兩句；**不宣稱原子**，靠順序把窗口變成 fail-closed |
+| `v3/scripts/fold-root-backfill.mjs` | **未改動邏輯**，只加註解說明為何刻意不重排 | `BEGIN`(:88) → UPDATE(:92) → bump(:101) → `COMMIT`(:103) | 真的同一個顯式交易 ⇒ 整批 rollback（原子） |
+| `v3/scripts/fold-ci-parity.mjs` | root UPDATE ＋ bump **收進同一條 `drv.pool.connect()` 連線的顯式交易**，`BEGIN`(:222) → **bump(:223)** → UPDATE(:226) → `COMMIT`(:228) | 同上 | 真交易（原本兩句在 `:160`–`:175` 那個交易之外、且走連線池） |
+| `v3/scripts/fold-shape-fixtures.mjs` | 先算出「真的會改到列」的待寫清單，**bump 先送**(:259)、再送 UPDATE(:262) | 同上 | 兩句各自走 pool ⇒ **不宣稱同一連線**；靠順序 fail-closed |
+
+`bump` 語句本身**沒有改**（沿用 #743 的 `CAST(COALESCE(CAST(value AS bigint), 0) + 1 AS text)` ＋
+`ON CONFLICT(key) DO NOTHING` ensure；SQLite／PG 雙驅動語意不變）。
+
+### 8.3 測試（離線 12 條；live-pg 1 條內含 A–E 五段）
+
+`v3/test/fold-root-write-gen.test.js`（第 9 輪的 9 條全留、**沒有削弱**，新增 3 條）：
+
+1. 原始碼**順序**斷言：`v3/src/foldComponentRoot.js`／`fold-ci-parity.mjs`／`fold-shape-fixtures.mjs`
+   三條未交易路徑，`await bumpFoldRootWriteGen(` 的索引必須**小於** `UPDATE listings SET
+   fold_component_root` 的索引（失敗訊息會印兩個 idx）。
+2. 已交易路徑斷言：`fold-root-backfill.mjs` 的 BEGIN < UPDATE < bump < COMMIT（順序不影響原子性）。
+3. 單元 bump-first 語意：真的 SQLite 跑 `bump`，listings／`pg_attribute` 用受控假值——
+   先寫 gen=0 的零差戳記並放行；只送 bump（＝模擬死在兩句之間）⇒ 舊戳記**必須被拒**
+   （`gen_stale`、`stampedWriteGen=0`、`liveWriteGen=1`）；重寫戳記成 gen=1 才放行。
+
+`v3/test/fold-root-write-gen-live-pg.test.js`（真 PG、自有 schema `fold_genkey_live`、拒寫守衛不變，
+新增 D／E）：
+
+- **D**：`bumpFoldRootWriteGen()` 單獨送（＝bump 成功、root UPDATE 未跑）⇒ 世代超前 ⇒ 舊戳記被拒
+  （fail-closed）。
+- **E**：把 `exec` 包成「root UPDATE 一定失敗」的注入式 exec，呼叫**生產寫入器**
+  `refreshFoldComponentRoot()`：斷言它**向上拋**、**root 沒被寫到**、而**世代仍前進 +1**
+  ——這是「bump 在前」的**行為**證明，不是註解。
+
+```
+$ node --test v3/test/fold-root-write-gen.test.js
+# tests 12 / # pass 12 / # fail 0 / # skipped 0
+
+$ PG_URL=…15447/repro node --test v3/test/fold-root-write-gen-live-pg.test.js
+ok 1 - 原地 UPDATE fold_component_root ⇒ 世代鍵過時 ⇒ 下一句就被拒（不靠快取救回）
+# tests 1 / # pass 1 / # fail 0 / # skipped 0
+```
+
+**改過的 `fold-ci-parity.mjs` 真的跑得動**（CI 的 PostgreSQL job 會跑它，`test.yml:163`）。
+在一次性容器上實跑（`DATA_DIR=$(mktemp -d)`）：
+
+```
+$ PG_URL=…15447/repro node v3/scripts/fold-ci-parity.mjs
+rc=1  ← 但**不是**本包改動造成的：卡在 :300 的端點級查詢
+error: column "source_published_at" does not exist        （code 42703）
+
+$ git worktree add /tmp/5151-base-check 0d2e196 && PG_URL=<同一顆> node v3/scripts/fold-ci-parity.mjs
+rc=1
+error: column "source_published_at" does not exist        （code 42703，同樣在端點級查詢）
+```
+
+⇒ **改前／改後在同一顆容器上失敗在同一個錯誤**（該容器的 schema 是 repro3 的舊 dump，缺
+`source_published_at`；CI 的 `tracker_test` 由 `pg-integration-setup.mjs` 現建，不會缺）。
+本包改動的區塊（`BEGIN`(222) → bump(223) → UPDATE(226) → `COMMIT`(228)）**已成功提交**：同一顆容器
+的 `settings.foldRootWriteGen` 由 `1` → `2`（`grep '^foldRootWriteGen'`＝`gen=2`），可重跑：
+
+```bash
+ssh syn-nas "/usr/local/bin/docker exec prb-genkey-pg psql -U postgres -d repro -tA \
+  -c \"SELECT value FROM settings WHERE key='foldRootWriteGen'\""
+```
+
+完整 PG 整合（＝CI 的 `test-postgres` job 本地等價）另跑一次，見 §8.7。
+
+### 8.4 負向對照（把 bump 移回 UPDATE 之後 ⇒ 兩條都會紅）
+
+只把 `v3/src/foldComponentRoot.js` 的兩句換回舊序，其餘不動：
+
+```
+$ node --test v3/test/fold-root-write-gen.test.js
+not ok 10 - 未交易的三條寫入路徑：bump 叫用必須在 root UPDATE 之前（round 11 關掉 fail-open 窗口）
+  error: 'v3/src/foldComponentRoot.js：bump（idx 27083）必須排在 root UPDATE（idx 26976）之前——…'
+# tests 12 / # pass 11 / # fail 1     ← 順序斷言如預期變紅
+
+$ PG_URL=…15447/repro node --test v3/test/fold-root-write-gen-live-pg.test.js
+not ok 1 - 原地 UPDATE fold_component_root ⇒ 世代鍵過時 ⇒ 下一句就被拒（不靠快取救回）
+  error: 'bump 必須在 root UPDATE 之前落地——順序若反了，這裡會是 +0（＝root 已寫而世代未動的 fail-open 窗口）
+    2 !== 3'
+# tests 1 / # pass 0 / # fail 1       ← 行為斷言也變紅：root 寫了、世代 +0（＝fail-open 窗口本體）
+```
+
+還原後兩條都回綠（見 §8.5 的 `npm test` 與 §7 CI）。
+
+### 8.5 檔案清單與 log 指紋（本輪）
+
+`git diff --stat`（基準 `origin/master`= `0d2e196`，分支 `fold-gen-fix-tx`）：
+
+| 檔案 | 行數 | sha256(16) |
+|---|---|---|
+| `v3/src/foldComponentRoot.js` | +13/−5 | `bf1edae74cc1018d` |
+| `v3/scripts/fold-ci-parity.mjs` | +26/−3 | `af8fdd0b272d7a5b` |
+| `v3/scripts/fold-shape-fixtures.mjs` | +10/−2 | `07bb95dbfc7d427b` |
+| `v3/scripts/fold-root-backfill.mjs` | +3/−0 | `8949eeb623d5ccec` |
+| `v3/test/fold-root-write-gen.test.js` | +82/−0 | `c8b2c401db943bde` |
+| `v3/test/fold-root-write-gen-live-pg.test.js` | +31/−1 | `d30f810b2b96a4cc` |
+| `docs/runbooks/5151_same_house_fold_deploy.md` | +18/−6 | `7fad77ebb8d71d6d` |
+
+log（`/home/cline/lab/5151-genfix-r11/`，`sha256sum | cut -c1-16`）：
+
+| 檔 | sha256(16) | 角色 |
+|---|---|---|
+| `npm-test-r11.log` | `9622e6701b50f7ca` | 全套 `npm test`（**commit 後**跑的乾淨那一次；`rc=0`、`# tests 4218 / # pass 4085 / # fail 0 / # skipped 133 / # cancelled 0`、946.7s） |
+| `live-pg-test-r11.log` | `603bea738581ea36` | live-pg 測試原始輸出（A–E 全綠） |
+| `negative-control-order.log` | `df4dece93a2a95c4` | 負向對照（順序斷言變紅，rc=1） |
+| `negative-control-live-r11.log` | `23011320656bb930` | 負向對照（真 PG 行為斷言變紅，rc=1） |
+| `uptime-before-npm-test.txt` | `2545d6bf7e949cbe` | 跑全套前的 `uptime`（無併行重活存證） |
+| `foldComponentRoot.bumpfirst.js` | `bf1edae74cc1018d` | 負向對照的還原來源（＝本輪 `v3/src/foldComponentRoot.js` 的原樣備份） |
+| `npm-test-r11-aborted-uncommitted.log` | `0b947bef30a6ff02` | **作廢的一跑**：在 commit **前**跑，`PR A src manifest matches git tree…` 因為「`v3/src` 工作樹 ≠ HEAD」這個測試工件紅 1 條（`changed:["foldComponentRoot.js"]`）——與本包改動無關，改以 commit 後那一次為準 |
+| `pg-integration-r11.log` | `db0110e1eeee438f` | 完整 PG 整合（＝CI `test-postgres` job 本地等價），見 §8.7 |
+| `fold-ci-parity-tracker-test-r11.log` | `4b8f5b884370a529` | 改過的 `fold-ci-parity.mjs` 在新鮮 `tracker_test` 上**全綠**（16/16） |
+| `fold-ci-parity-r11.log` / `fold-ci-parity-baseline.log` | `12b1e60ee36f1087` / `a1c6b0b8d80e269d` | 在舊 schema 容器上的改前／改後同錯誤對照 |
+
+### 8.7 完整 PG 整合（本地等價於 CI 的 `test-postgres` job）
+
+CI 的 `test-postgres` job 有兩塊：`npm run test:pg`（`pg-integration-setup.mjs` 現建 schema ＋
+79 支 PG_TEST_URL-gated 測試）與**單獨一步** `node v3/scripts/fold-ci-parity.mjs`（`test.yml:163`）。
+兩塊都在一次性容器上跑過（**不動** `repro` 那顆 18.4 萬列的複本：在 `prb-genkey-pg` 內另開一個空的
+`tracker_test` 資料庫，schema 由 setup 現建）：
+
+```
+$ docker exec prb-genkey-pg createdb -U postgres tracker_test          # 空的新庫（只在這顆可毀容器內）
+$ PG_URL=…15447/tracker_test PG_TEST_URL=<同上> PG_LIVE_REPRO_URL=<同上> REQUIRE_PG=1 \
+    DATA_DIR=$(mktemp -d) npm run test:pg
+[pg] 執行 79 個整合測試檔
+# tests 325 / # pass 324 / # fail 0 / # cancelled 0 / # skipped 1     rc=0（369.9s）
+
+$ PG_URL=…15447/tracker_test DATA_DIR=$(mktemp -d) node v3/scripts/fold-ci-parity.mjs
+{"script":"fold-ci-parity","total":16,"failed":[],"allOk":true}       rc=0
+```
+
+⇒ 含本包改動的 `BEGIN`(222)→bump(223)→UPDATE(226)→`COMMIT`(228) 區塊在**新鮮 schema** 上通過
+（⑧ 固化欄逐列、⑪ 端點級逐群、⑫⑬⑭ tie-break／collation 軸全 `ok:true`）。
+`repro2`(15434)／`repro3`(15435) 全程唯讀；`repro` 那顆複本未被改動。
+
+### 8.6 紅線自檢（本輪）
+
+```bash
+$ git diff --stat origin/master -- v3/src/match.js v1/ v2/ .github/workflows
+（空輸出，rc=0）                     # match.js 0 行、v1/v2 0、無 workflow 改動（未加 gating step）
+$ git status --porcelain
+ M docs/runbooks/5151_same_house_fold_deploy.md
+ M evidence/fold-root-write-gen-2026-10-13.md
+ M v3/scripts/fold-ci-parity.mjs
+ M v3/scripts/fold-root-backfill.mjs
+ M v3/scripts/fold-shape-fixtures.mjs
+ M v3/src/foldComponentRoot.js
+ M v3/test/fold-root-write-gen-live-pg.test.js
+ M v3/test/fold-root-write-gen.test.js
+```
+
+未開閘（`PUBLIC_LISTINGS_SQL_FIRST` 仍 off／未設）、未 merge、未 dispatch、未加 cron／systemd；
+寫入只落在一次性棄用容器 `prb-genkey-pg`（NAS 15447/repro）；`repro2`(15434)／`repro3`(15435) 全程唯讀。

@@ -20,7 +20,7 @@ import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import {
   foldSqlGateReady, resetFoldSqlGate, resetFoldRootRefreshProbe,
-  readFoldRootWriteGen, refreshFoldComponentRoot,
+  readFoldRootWriteGen, refreshFoldComponentRoot, bumpFoldRootWriteGen,
   FOLD_DRIFT_STAMP_KEY,
 } from "../src/foldComponentRoot.js";
 
@@ -116,6 +116,36 @@ test("原地 UPDATE fold_component_root ⇒ 世代鍵過時 ⇒ 下一句就被�
     const gateC2 = await foldSqlGateReady(countedExec);
     assert.equal(gateC2.ok, false);
     assert.equal(gateC2.reason, "fold_root_drift_stamp_gen_missing");
+
+    // ── D. 「bump 成功、root UPDATE 未跑」（真 PG 上模擬死在兩句之間）：世代超前 ⇒ 舊戳記被拒 ──
+    resetFoldSqlGate();
+    const genD = await readFoldRootWriteGen(rawExec);
+    await writeStamp(rawExec, { rows: Number(after.n), maxPostId: Number(after.max_post_id), writeGen: genD });
+    resetFoldSqlGate();
+    assert.equal((await foldSqlGateReady(countedExec)).ok, true, "D 前置：戳記寫成當前世代後必須放行");
+    await bumpFoldRootWriteGen(rawExec); // 只有 bump ⇒ 等於行程死在 bump 與 root UPDATE 之間
+    assert.equal(await readFoldRootWriteGen(rawExec), genD + 1, "bump 已落地（世代超前）");
+    const gateD = await foldSqlGateReady(countedExec);
+    assert.equal(gateD.ok, false, `中途死亡後舊戳記不得被放行（${JSON.stringify(gateD)}）`);
+    assert.equal(gateD.reason, "fold_root_drift_stamp_gen_stale");
+    assert.equal(gateD.detail.stampedWriteGen, genD);
+    assert.equal(gateD.detail.liveWriteGen, genD + 1);
+
+    // ── E. 順序是行為、不是註解：讓 root UPDATE 失敗 ⇒ 世代仍必須已前進（bump 在前）──────
+    resetFoldSqlGate();
+    for (const pid of [A, B]) await rawExec("UPDATE listings SET fold_component_root = NULL WHERE post_id = ?", [pid]);
+    const genBeforeE = await readFoldRootWriteGen(rawExec);
+    const boomExec = (sql, params = []) => (/^UPDATE listings SET fold_component_root/.test(sql)
+      ? Promise.reject(new Error("injected: root UPDATE 失敗（模擬行程死在寫入段）"))
+      : rawExec(sql, params));
+    await assert.rejects(() => refreshFoldComponentRoot(boomExec, A), /injected: root UPDATE/,
+      "寫入段失敗必須往上拋（不吞；與 fold_* 的處理一致）");
+    assert.equal(
+      await readFoldRootWriteGen(rawExec), genBeforeE + 1,
+      "bump 必須在 root UPDATE 之前落地——順序若反了，這裡會是 +0（＝root 已寫而世代未動的 fail-open 窗口）",
+    );
+    const rootAfterE = await rawExec("SELECT fold_component_root FROM listings WHERE post_id = ?", [B]);
+    assert.equal(rootAfterE[0].fold_component_root, null, "root 沒被寫到（注入的失敗擋下了 UPDATE）");
   } finally {
     resetFoldRootRefreshProbe(); resetFoldSqlGate();
     try {
