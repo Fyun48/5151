@@ -38,7 +38,16 @@ node v3/scripts/fold-freshness-check.mjs         # fold_* 四欄
 node v3/scripts/fold-gate-stamp-verify.mjs
 
 # 4) 部署程式（讀取端開始讀 fold_component_root）
-# 5) Owner 開閘：PUBLIC_LISTINGS_SQL_FIRST=1（**只有 Owner 做**）
+# 5) Owner 開閘（**只有 Owner 做**）：在 NAS 的 /mnt/Storage1/apps/5151/.env 加一行
+#      PUBLIC_LISTINGS_SQL_FIRST=1
+#    再重建 v3（**開關閘 env 由 compose 宣告**：docker-compose.yml 已有
+#      PUBLIC_LISTINGS_SQL_FIRST: ${PUBLIC_LISTINGS_SQL_FIRST:-0}，所以 .env 的值才進得了容器）；
+#    只改 .env 不重建＝沒有作用。
+ssh casa-nas
+cd /mnt/Storage1/apps/5151      # docker compose 會自動讀同目錄的 .env
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build --no-deps --force-recreate 591-tracker-v3
+#    值真的進去了嗎：docker inspect 591-tracker-v3 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep PUBLIC_LISTINGS_SQL_FIRST
+#    關閘＝把那一行移除（或設非 1）再跑同一道指令（完整程序見 §5.1）
 ```
 
 - 3) 沒有 `mismatch = 0` 就**不要**進 4)：讀取端會用「舊／空 root」分組。
@@ -158,13 +167,24 @@ node v3/scripts/fold-gate-stamp-verify.mjs        # 開閘前檢四項（§1.1 �
 
 ### 5.1 關閘程序（誰按、怎麼退、退後驗什麼）
 
-1. **誰按**：只有 Owner（`PUBLIC_LISTINGS_SQL_FIRST` 是部署層環境變數；代理人不碰）。
-2. **怎麼退**：把該容器的 `PUBLIC_LISTINGS_SQL_FIRST` 移除或設成非 `1`，重啟／重佈該容器
+1. **誰按**：只有 Owner（`PUBLIC_LISTINGS_SQL_FIRST` 是主機端 `.env` 的部署層開關；代理人不碰）。
+2. **怎麼退**：在 NAS 的 `/mnt/Storage1/apps/5151/.env` 把 `PUBLIC_LISTINGS_SQL_FIRST` 那一行
+   **移除**（或設成非 `1`）再用同一道指令重建 v3
    ——`tryPublicListingsSqlFirst()` 第一行 `!== "1"` 就 return null，舊（Node）路徑完全不受影響
    （`v3/test/fold-sql-gate.test.js` 用原始碼位置釘住這個順序）。
+   **開關閘 env 由 compose 宣告**（`docker-compose.yml`：`PUBLIC_LISTINGS_SQL_FIRST: ${PUBLIC_LISTINGS_SQL_FIRST:-0}`）：
+   compose 的 `.env` 只做 `${VAR}` 插值、**不會**自動注入容器 env，所以「.env 有值但 compose 沒宣告」
+   以前是開不動的（2026-10-13 修）；現在開／關閘都只改 `.env` 那一行，不必碰 compose。
    指令（正式站 `591-tracker-v3`；隔離站換容器名）：
-   `ssh casa-nas "docker inspect 591-tracker-v3 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep PUBLIC_LISTINGS_SQL_FIRST"` 先看現值，
-   再由 Owner 依發版流程改 env 並重建（**不要**用 `docker exec` 改環境，行程環境改不了）。
+
+   ```bash
+   ssh casa-nas
+   cd /mnt/Storage1/apps/5151            # docker compose 自動讀同目錄的 .env（值由 Owner 編輯）
+   # 先看容器裡的現值：關閘＝0（compose 預設），開閘＝1
+   docker inspect 591-tracker-v3 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep PUBLIC_LISTINGS_SQL_FIRST
+   # 改完 .env 後重建（**不要**用 docker exec 改環境，行程環境改不了）
+   docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-build --no-deps --force-recreate 591-tracker-v3
+   ```
 3. **退後驗什麼**（三條，缺一不可）：
    - `curl -s -o /dev/null -w '%{http_code}' https://<站台>/api/listings`（或站內對應的公開列表端點）
      回 200，且**與關閘前**的 `totalMatched` 同一個值（`node v3/scripts/fold-lists-totalmatched.mjs`

@@ -41,6 +41,12 @@ services:
       # 一律預設安全（不再默默降 0、然後被 runtimeGuards 第④刀拒絕啟動）。
       # 唯一例外是爬蟲沙盒（它自己那份 compose 維持 0，原因見 runtimeGuards.js 第④刀）。
       PG_NO_SQLITE_OPEN: ${PG_NO_SQLITE_OPEN:-1}
+      # 公開列表「SQL-first 折疊路徑」閘（runbook §1 第 5 步）。2026-10-13 起由 compose 宣告：
+      # 先前只把值寫進主機端 .env 是**開不動**的——compose 的 .env 只做 ${VAR} 插值，不會自動注入容器 env。
+      # 設 1＝訪客公開列表走 SQL-first 折疊路徑（硬依賴 listings.fold_component_root ＋ 零差戳記，
+      # 任一不成立 ⇒ HTTP 503 ＋ [fold-gate]，不降級）；未設／非 1＝行為與以前逐字相同。
+      # 值放主機端 .env（600），開關閘只改那一行再 --force-recreate；**只有 Owner 開閘**。
+      PUBLIC_LISTINGS_SQL_FIRST: ${PUBLIC_LISTINGS_SQL_FIRST:-0}
       # 抓取輪次預算（分鐘）。2026-09-30（第九十一批）：正式站一輪「取頁 ＋ 落地」實測 25 分鐘上下，
       # 原本固定的 15 分鐘會在落地階段放棄 ⇒ 完成紀錄寫不進去、覆蓋條件每輪重跑。
       # 程式碼仍會逐批記錄完成（watcher.js），這裡只是把預算放寬到足以跑完。
