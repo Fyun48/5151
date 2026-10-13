@@ -1,14 +1,21 @@
-// (C) 4 種折疊邊形的合成列 fixture（repro 隔離庫，插入合成列 → Node vs SQL 折疊 → 斷言 → 清理）。
-// 驗證 foldRoleCte 與 attachSameHouseRoles 對「危險邊形」逐位元一致：
+// (C) 5 種折疊邊形的合成列 fixture（repro 隔離庫，插入合成列 → Node vs SQL 折疊 → 斷言 → 清理）。
+// 驗證 foldRoleCte（Owner 2026-10-12 准 (B)：讀 fold_component_root ＋分量內排名）與
+// attachSameHouseRoles 對「危險邊形」逐位元一致：
 //   ① 只有入邊（我沒有 match_post_id，別人指我）
 //   ② 對端 match_verdict='no'
 //   ③ 對端是 houseprice 且沒有 listing_prep 列（不顯示就緒）
 //   ④ split 對（user_match_votes vote='split'）—— 訪客 uid=0 無 split，故只驗 Node 側語意標記。
+//   ⑤ 鏈狀 P–Q–R：舊的 first-incident-edge 會產生兩個 primary，現在兩條路徑都必須只有 R。
+// root 由 foldComponentRoot.js 的同一份 union-find 在「這組合成列」上算出（與 Node 同一個 universe），
+// 以參數餵給 SQL（rootSource）⇒ 不寫任何列、也不依賴回填狀態。
 // 用法：PG_URL=$PG_LIVE_REPRO_URL node v3/scripts/fold-shape-fixtures.mjs
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { attachSameHouseRoles } from "../src/db.js";
+import { loadFoldRoots } from "../src/repository/decorationData.js";
+import { componentRootMap } from "../src/foldComponentRoot.js";
+import { foldRoleCte } from "../src/listingSearchSql.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
 
 assertPgTargetAllowed("fold-shape-fixtures", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
@@ -25,9 +32,32 @@ const ids = {
   H: BASE + 6,      // houseprice、無 prep 列
   F: BASE + 7,      // split 對：F ↔ G，user_match_votes 有 vote='split'
   G: BASE + 8,
+  P: BASE + 11,     // 鏈狀 P → Q → R（Q 與 R 都比 P 便宜 ⇒ 舊演算法會出兩個 primary）
+  Q: BASE + 12,
+  R: BASE + 13,
+  // ⑨ 空字串 source 的平手判定（spec §6.10）：同群兩列、source_id／url 皆空、post_id 位數不同。
+  TE: 9100000021,   // 10 位數、source=''（Node 的 String(source||'591') ⇒ '591'）
+  TN: 910000021,    // 9 位數、source='591'
+  // ⑨a 資格軸（租金不同 ⇒ tie-break 不會被諮詢）：XE 的 source='' 且 source_id 有值。
+  // ⚠️ 不可用 BASE+21／BASE+22：BASE+21 = 9100000021 與 TE 的硬編 post_id 撞號（pkey 衝突）。
+  XE: BASE + 31,    // source=''、source_id 有值、租金 10000（最便宜 ⇒ 應為代表）
+  XN: BASE + 32,    // source='591'、租金 30000
 };
-const all = Object.values(ids);
+// ⑥／⑦ 線狀鏈（≥15 列同群）：Owner 2026-10-12 裁決要求「線狀鏈（≥15 列同群，橋式非橋式都
+// 覆蓋）」——舊的 1-hop Node 讀取端在這種形狀會把群切開（實測 root=22075220 的 33 列同租金鏈，
+// Node 出 9 列／7 個 primary）。兩條鏈都用 16 列（≥15）：
+//   ⑥ 非橋式（純鏈）：每一條邊都是橋（移除即斷開），match 邊 i → i+1。
+//   ⑦ 橋式：兩個 8 列子鏈各自用 match 邊串起，兩子鏈之間**只有一條橋**（listing_group_members）。
+const CHAIN = BASE + 1000;
+const chainA = Array.from({ length: 16 }, (_, i) => CHAIN + 1 + i);         // ⑥ 純線狀（非橋式）
+const chainB1 = Array.from({ length: 8 }, (_, i) => CHAIN + 101 + i);       // ⑦ 子鏈 1
+const chainB2 = Array.from({ length: 8 }, (_, i) => CHAIN + 201 + i);       // ⑦ 子鏈 2
+const chainIds = [...chainA, ...chainB1, ...chainB2];
+const all = [...Object.values(ids), ...chainIds];
 
+// 自然啟用清單（不含 ''）——⑨ 就用這一份。Node 的資格判定把空字串 source 當 '591'
+// （`String(row.source || "591")`），SQL 也必須用同一個正規化（`COALESCE(NULLIF(c.source,''),'591')`）；
+// 舊版靠在清單裡偷塞 '' 才讓兩邊對上，那個 trick 已移除（見 docs/same-house-fold-spec.md §6.10）。
 const enabledSources = ["591", "hbhousing", "sinyi", "houseprice", "ddroom", "housefun", "self"];
 
 function listing(post_id, overrides = {}) {
@@ -54,7 +84,46 @@ const shapeRows = [
   //    避免將來有人修 loadUserSplitPairSet 時悄悄改變訪客顯示）。
   listing(ids.F, { match_post_id: ids.G }),
   listing(ids.G, { match_post_id: ids.F }),
+  // ⑤ 鏈狀：P → Q → R，租金 R < Q < P ⇒ 唯一主卡應該是 R
+  listing(ids.P, { match_post_id: ids.Q, fold_rent_num: 20000, price_num: 20000 }),
+  listing(ids.Q, { match_post_id: ids.R, fold_rent_num: 18000, price_num: 18000 }),
+  listing(ids.R, { fold_rent_num: 16000, price_num: 16000 }),
+  // ⑥ 非橋式（純線狀鏈）16 列：只有 match 邊 i → i+1，每一條邊都是橋（移除即斷開）。
+  //    租金遞減（第 k 列 30000-k*100）⇒ 最便宜的是鏈尾 chainA[15]。
+  ...chainA.map((pid, i) => listing(pid, {
+    match_post_id: i + 1 < chainA.length ? chainA[i + 1] : null,
+    fold_rent_num: 30000 - i * 100, price_num: 30000 - i * 100,
+  })),
+  // ⑦ 橋式：兩個 8 列子鏈各自用 match 邊串起來，**兩子鏈之間只有一條 listing_group_members
+  //    的橋邊**（chainB1[7] ↔ chainB2[0]）⇒ 整個 16 列分量只靠這條橋相連。這條同時覆蓋
+  //    「分量來源有兩種邊（match ＋ group）」在長鏈上的行為。
+  ...chainB1.map((pid, i) => listing(pid, {
+    match_post_id: i + 1 < chainB1.length ? chainB1[i + 1] : null,
+    fold_rent_num: 26000 - i * 100, price_num: 26000 - i * 100,
+  })),
+  ...chainB2.map((pid, i) => listing(pid, {
+    match_post_id: i + 1 < chainB2.length ? chainB2[i + 1] : null,
+    fold_rent_num: 25000 - i * 100, price_num: 25000 - i * 100,
+  })),
+  // ⑨ 空字串 source 的平手判定（TN → TE）、資格軸與 tie-break 軸各一組：
+  //    tie-break 軸（TE／TN）：租金／更新時間／last_seen_at 全部相同，source_id／url 皆空
+  //      ⇒ 勝負只由 tie-break key 決定。
+  //        Node：'591:' + String(post_id) + ':' + (Number(post_id)||0)
+  //        TE（source=''）→ '591:9100000021:9100000021'、TN → '591:910000021:910000021'
+  //        第 11 個字元 '0' < '2' ⇒ Node 的代表列是 TE。
+  //      舊 SQL 寫 (e.source || ':') ⇒ TE 的 key 變成 ':9100000021:…'，而 ':'(0x3A) > '5'(0x35)
+  //        ⇒ 舊 SQL 一定選 TN。
+  //    資格軸（XE／XN）：XE 的 source='' 但 source_id 有值；兩列租金不同（XE 較便宜）
+  //      ⇒ 勝負由租金決定，tie-break 永遠不會被諮詢 ⇒ 這一組只測「資格」。
+  //        Node：String('' || '591') = '591' ∈ 啟用清單 ⇒ XE 合格、且最便宜 ⇒ XE 是代表。
+  //        舊 SQL：原始 ''=ANY(啟用清單) = false ⇒ XE 被踢出 elig ⇒ XN 變成代表（XE 被降成次卡）。
+  listing(ids.TE, { source: "", source_id: "", url: "", match_post_id: ids.TN }),
+  listing(ids.TN, { source_id: "", url: "" }),
+  listing(ids.XE, { source: "", source_id: `xe${ids.XE}`, url: "", match_post_id: ids.XN, fold_rent_num: 10000, price_num: 10000 }),
+  listing(ids.XN, { source_id: `xn${ids.XN}`, url: "", fold_rent_num: 30000, price_num: 30000 }),
 ];
+// ⑦ 的橋邊：listing_group_members 一列（群組＝橋；群內兩兩連通）
+const bridgeGroupId = `fix-bridge-${CHAIN}`;
 
 // 插入合成列（listings 的 NOT NULL 欄由 information_schema 推導）。
 const client = await drv.pool.connect();
@@ -87,6 +156,11 @@ try {
       "INSERT INTO user_match_votes (user_id, post_id, peer_id, vote, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)",
       [1, ids.F, ids.G, "split", new Date().toISOString()],
     );
+    // ⑦ 橋邊：兩個子鏈各一列掛在同一個 group_id（群內兩兩連通 ⇒ B1[7] ↔ B2[0] 是唯一橋）
+    await client.query(
+      `INSERT INTO listing_group_members (post_id, group_id, source, match_evidence, joined_at) VALUES ($1, $2, '', '{}', $3), ($4, $2, '', '{}', $3)`,
+      [chainB1[chainB1.length - 1], bridgeGroupId, new Date().toISOString(), chainB2[0]],
+    );
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
@@ -106,6 +180,16 @@ const readBack = (await drv.pool.query(
 const byId = new Map(readBack.map((r) => [Number(r.post_id), r]));
 const prepById = new Map((await drv.pool.query("SELECT post_id, display_ready FROM listing_prep WHERE post_id = ANY($1::bigint[])", [all])).rows.map((r) => [Number(r.post_id), r]));
 
+// ⑦ 的橋邊（listing_group_members）：讀回來當 provider.groupId（legacy 路徑）與分量來源。
+const gidOf = new Map((await drv.pool.query(
+  "SELECT post_id, group_id FROM listing_group_members WHERE post_id = ANY($1::bigint[])",
+  [all],
+)).rows.map((r) => [Number(r.post_id), String(r.group_id || "")]));
+
+// Node 讀取端的固化欄來源：生產路徑由 preloadDecorationProviderAsync 的 loader.foldRootMap()
+// 一批載入（`foldGroups:true` ＋ 欄位已部署），這裡以同一支 loadFoldRoots 讀回（唯讀）。
+const readFoldRoots = () => loadFoldRoots(async (sql, params = []) => drv.pool.query(toPostgresSql(sql), params).then((r) => r.rows), all, "postgres");
+let foldRootRows = await readFoldRoots();
 const provider = {
   driver: "postgres", now: 1_800_000_000_000,
   sourceEnabled: (s) => enabledSources.includes(s),
@@ -113,97 +197,201 @@ const provider = {
   personalIndex: () => ({ size: 0, peers: () => [], groupKey: () => "" }),
   splitPairs: () => new Set(),
   extras: (ids2) => new Map((ids2 || []).map((id) => [Number(id), byId.get(Number(id))]).filter(([, v]) => v)),
+  groupId: (pid) => gidOf.get(Number(pid)) || "",
+  // 固化欄分組模式的開關：有這個方法 ⇒ 讀取端走 fold_component_root 分組（§1.4）。
+  foldRoot: (pid) => (foldRootRows.get(Number(pid)) == null ? null : Number(foldRootRows.get(Number(pid)))),
 };
 
-// Node ground truth
-const nodeRows = readBack.map((r) => ({ ...r }));
-attachSameHouseRoles(nodeRows, 0, provider, provider.now);
-const nodeRole = new Map(nodeRows.map((r) => [Number(r.post_id), r.same_house_role || null]));
+// root：用寫入端／刷新端同一份 union-find 在「這組合成列」上算 ⇒ 這就是固化欄該有的值
+// （讀取端不再自己算分量，只讀這一欄）。
+const rootMap = componentRootMap({
+  rows: readBack.map((r) => ({ ...r, prep_display_ready: Number(prepById.get(Number(r.post_id))?.display_ready) === 1 ? 1 : 0 })),
+  groupIdOf: (pid) => gidOf.get(Number(pid)) || "",
+  splits: new Set(),
+  isNotDisplayReady: (row) => {
+    if (!enabledSources.includes(String(row.source || "591"))) return true;
+    if (String(row.source) !== "houseprice") return false;
+    return Number(row.prep_display_ready) === 1 ? false : true;
+  },
+});
+const rootOf = (id) => (rootMap.get(Number(id)) == null ? null : Number(rootMap.get(Number(id))));
+const withRoots = (rows) => rows.map((r) => ({ ...r }));  // 分組鍵由 provider.foldRoot 提供
 
-// SQL fold（foldRoleCte 演算法，scope 到合成 post_id）
-const SQL_ROLE = `
-WITH cand AS (
-  SELECT post_id, source, source_id, url, last_seen_at, offline, match_post_id, match_verdict,
-         fold_rent_num, fold_refresh_kind, fold_refresh_rel_ms, fold_refresh_abs_ms
-  FROM listings WHERE post_id = ANY($1::bigint[])
-),
-extras AS (
-  SELECT l.post_id, l.source, l.source_id, l.url, l.last_seen_at, l.offline, l.match_post_id, l.match_verdict,
-         l.fold_rent_num, l.fold_refresh_kind, l.fold_refresh_rel_ms, l.fold_refresh_abs_ms
-  FROM listings l
-  WHERE l.post_id IN (SELECT match_post_id FROM cand WHERE match_post_id IS NOT NULL AND match_post_id > 0 AND COALESCE(match_verdict,'') <> 'no')
-    AND l.post_id NOT IN (SELECT post_id FROM cand)
-),
-display AS (
-  SELECT u.*,
-    (u.source = ANY($2::text[]) AND (u.source <> 'houseprice' OR COALESCE(p.display_ready, 0) = 1)) AS display_ready,
-    (CASE WHEN u.fold_refresh_kind = 1 THEN $3::bigint - u.fold_refresh_rel_ms ELSE u.fold_refresh_abs_ms END) AS refresh_ms,
-    (u.source || ':' || COALESCE(NULLIF(u.source_id,''), NULLIF(u.url,''), NULLIF(u.post_id,0)::text, '') || ':' || u.post_id::text) AS tie_key
-  FROM (SELECT * FROM cand UNION ALL SELECT * FROM extras) u
-  LEFT JOIN listing_prep p ON p.post_id = u.post_id
-),
-edges AS (
-  SELECT d.post_id AS src, d.match_post_id AS dst FROM display d
-  WHERE d.match_post_id IS NOT NULL AND d.match_post_id > 0 AND COALESCE(d.match_verdict,'') <> 'no'
-    AND d.post_id IN (SELECT post_id FROM cand)
-),
-eff AS (
-  SELECT e.src, e.dst FROM edges e JOIN display s ON s.post_id = e.src JOIN display d ON d.post_id = e.dst
-  WHERE s.display_ready AND d.display_ready AND COALESCE(d.match_verdict,'') <> 'no'
-),
-inc AS (
-  SELECT src AS x, src AS ord, src, dst FROM eff
-  UNION ALL
-  SELECT dst AS x, src AS ord, src, dst FROM eff WHERE dst IN (SELECT post_id FROM cand)
-),
-rk AS (SELECT x, src, dst, row_number() OVER (PARTITION BY x ORDER BY ord ASC, dst ASC) AS rn FROM inc),
-fe AS (SELECT x, src, dst FROM rk WHERE rn = 1),
-winner AS (
-  SELECT fe.x,
-    CASE
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NULL THEN a.post_id
-      WHEN b.fold_rent_num IS NOT NULL AND a.fold_rent_num IS NULL THEN b.post_id
-      WHEN a.fold_rent_num IS NOT NULL AND b.fold_rent_num IS NOT NULL AND a.fold_rent_num <> b.fold_rent_num
-        THEN CASE WHEN a.fold_rent_num < b.fold_rent_num THEN a.post_id ELSE b.post_id END
-      WHEN a.refresh_ms <> b.refresh_ms THEN CASE WHEN a.refresh_ms > b.refresh_ms THEN a.post_id ELSE b.post_id END
-      WHEN COALESCE(b.last_seen_at,'') <> COALESCE(a.last_seen_at,'')
-        THEN CASE WHEN COALESCE(b.last_seen_at,'') < COALESCE(a.last_seen_at,'') THEN a.post_id ELSE b.post_id END
-      WHEN a.tie_key <> b.tie_key THEN CASE WHEN a.tie_key < b.tie_key THEN a.post_id ELSE b.post_id END
-      ELSE CASE WHEN a.post_id <= b.post_id THEN a.post_id ELSE b.post_id END
-    END AS winner_id, a.offline AS a_offline, b.offline AS b_offline, fe.src AS src, fe.dst AS dst
-  FROM fe JOIN display a ON a.post_id = fe.src JOIN display b ON b.post_id = fe.dst
-)
-SELECT x, (CASE WHEN winner_id = x THEN 'primary' ELSE 'affiliate' END) AS role
-FROM (SELECT w.x, w.winner_id FROM winner w JOIN fe ON fe.x = w.x) w
-`;
-const sqlRows = (await drv.pool.query(SQL_ROLE, [all, enabledSources, provider.now])).rows;
-const sqlRole = new Map(sqlRows.map((r) => [Number(r.x), r.role]));
-
-// 斷言 4 形狀
 const results = [];
-const assertRole = (postId, label) => {
+const rolesOf = (rows) => new Map(rows.map((r) => [Number(r.post_id), r.same_house_role || null]));
+const assertRole = (nodeRole, sqlRole, postId, label) => {
   const n = nodeRole.get(postId) ?? null;
   const s = sqlRole.get(postId) ?? null;
-  const ok = n === s;
-  results.push({ label, post_id: postId, node: n, sql: s, ok });
+  results.push({ label, post_id: postId, node: n, sql: s, ok: n === s });
 };
 
-assertRole(ids.A, "① only-in-edge: A(no match_post_id, B→A)");
-assertRole(ids.B, "① only-in-edge: B(src)");
-assertRole(ids.C, "② peer verdict=no: C(src, D=no)");
-assertRole(ids.D, "② peer verdict=no: D(peer, verdict=no)");
-assertRole(ids.E, "③ peer houseprice no-prep: E(src)");
-assertRole(ids.H, "③ peer houseprice no-prep: H(houseprice, no prep)");
-assertRole(ids.F, "④ split pair (guest ignores split): F");
-assertRole(ids.G, "④ split pair (guest ignores split): G");
+// root 形狀斷言（寫入端語意，先於兩條讀取端）：純鏈 16 列同一個 root；橋式 16 列同一個 root
+// （兩子鏈靠 group 橋邊相連）；verdict='no' 的對端不成分量（C/D 各自獨立）。
+results.push({
+  label: "⑥ root shape: 16-row pure chain shares one root",
+  node: [...new Set(chainA.map(rootOf))].join(","),
+  sql: String(chainA[0]),
+  ok: new Set(chainA.map(rootOf)).size === 1 && rootOf(chainA[0]) === chainA[0],
+});
+results.push({
+  label: "⑦ root shape: bridged chain shares one root across the group bridge",
+  node: [...new Set([...chainB1, ...chainB2].map(rootOf))].join(","),
+  sql: String(CHAIN + 101),
+  ok: new Set([...chainB1, ...chainB2].map(rootOf)).size === 1 && rootOf(chainB2[0]) === chainB1[0],
+});
+
+// 把寫入端算出的分量固化進**這一組合成列**（正式路徑的固化欄；只碰本 fixture 的 post_id），
+// 之後兩條讀取端都**讀真的那一欄**（SQL 不用 rootSource 覆寫、Node 用 provider.foldRoot）。
+for (const [pid, root] of rootMap) {
+  if (!all.includes(Number(pid))) continue;                       // 只寫 fixture 自己的列
+  const want = root == null ? null : Number(root);
+  const have = foldRootRows.get(Number(pid));
+  if (have !== want) await drv.pool.query("UPDATE listings SET fold_component_root = $1 WHERE post_id = $2", [want, Number(pid)]);
+}
+foldRootRows = await readFoldRoots();
+{
+  const stored = foldRootRows;
+  const diffs = all.filter((id) => (stored.get(Number(id)) ?? null) !== rootOf(id));
+  results.push({ label: "固化欄寫入＝寫入端分量（逐列）", node: rootOf(chainA[0]), sql: String(stored.get(Number(chainA[0])) ?? null), ok: diffs.length === 0, diffs });
+}
+
+// ── Node 讀取端（固化欄分組）vs SQL（同一支 foldRoleCte，讀實體欄）──
+const runSql = async (subset, sources = enabledSources) => {
+  const cte = foldRoleCte("WHERE post_id = ANY(?::bigint[])")
+    + "\nSELECT post_id, role, primary_offline, primary_id FROM fold_role";
+  const rows = (await drv.pool.query(toPostgresSql(cte), [subset, sources, provider.now])).rows;
+  return { rows, role: new Map(rows.map((r) => [Number(r.post_id), r.role || null])) };
+};
+
+const nodeRows = withRoots(readBack);
+attachSameHouseRoles(nodeRows, 0, provider, provider.now);
+const nodeRole = rolesOf(nodeRows);
+const { rows: sqlRows, role: sqlRole } = await runSql(all);
+
+// 讀取端兩條路徑（固化欄 vs legacy union-find）在同一批列上必須一致（RLS：SQLite 仍走 legacy）。
+{
+  const legacyProvider = { ...provider };
+  delete legacyProvider.foldRoot;
+  const legacyRows = readBack.map((r) => ({ ...r }));
+  attachSameHouseRoles(legacyRows, 0, legacyProvider, provider.now);
+  const legacyRole = rolesOf(legacyRows);
+  const diffs = [];
+  for (const id of all.map(Number)) if ((nodeRole.get(id) ?? null) !== (legacyRole.get(id) ?? null)) diffs.push(id);
+  results.push({ label: "讀取端兩條路徑（fold_component_root 分組 vs legacy union-find）逐列一致", node: nodeRole.size, sql: legacyRole.size, ok: diffs.length === 0, diffs });
+}
+
+assertRole(nodeRole, sqlRole, ids.A, "① only-in-edge: A(no match_post_id, B→A)");
+assertRole(nodeRole, sqlRole, ids.B, "① only-in-edge: B(src)");
+assertRole(nodeRole, sqlRole, ids.C, "② peer verdict=no: C(src, D=no)");
+assertRole(nodeRole, sqlRole, ids.D, "② peer verdict=no: D(peer, verdict=no)");
+assertRole(nodeRole, sqlRole, ids.E, "③ peer houseprice no-prep: E(src)");
+assertRole(nodeRole, sqlRole, ids.H, "③ peer houseprice no-prep: H(houseprice, no prep)");
+assertRole(nodeRole, sqlRole, ids.F, "④ split pair (guest ignores split): F");
+assertRole(nodeRole, sqlRole, ids.G, "④ split pair (guest ignores split): G");
+assertRole(nodeRole, sqlRole, ids.P, "⑤ chain P-Q-R: P (cheapest is R)");
+assertRole(nodeRole, sqlRole, ids.Q, "⑤ chain P-Q-R: Q");
+assertRole(nodeRole, sqlRole, ids.R, "⑤ chain P-Q-R: R (single primary)");
+for (const id of chainIds) assertRole(nodeRole, sqlRole, id, `⑥⑦ line chain row ${id}`);
+const primaryOf = (role, ids2) => ids2.filter((id) => role.get(Number(id)) === "primary").map(Number);
+const chainAPrimary = primaryOf(nodeRole, chainA);
+const chainBPrimary = primaryOf(nodeRole, [...chainB1, ...chainB2]);
+results.push({
+  label: "⑥ 16-row pure chain: exactly one representative, and it is the cheapest row",
+  node: chainAPrimary.join(","), sql: primaryOf(sqlRole, chainA).join(","),
+  ok: chainAPrimary.length === 1 && chainAPrimary[0] === chainA[chainA.length - 1] && chainAPrimary.join(",") === primaryOf(sqlRole, chainA).join(","),
+});
+results.push({
+  label: "⑦ 16-row bridged chain: exactly one representative across the group bridge",
+  node: chainBPrimary.join(","), sql: primaryOf(sqlRole, chainB1.concat(chainB2)).join(","),
+  ok: chainBPrimary.length === 1 && chainBPrimary[0] === chainB2[chainB2.length - 1] && chainBPrimary.join(",") === primaryOf(sqlRole, chainB1.concat(chainB2)).join(","),
+});
+
+// ── ⑧ 代表列隨篩選變動（Owner 2026-10-12 裁決：代表列在「本次候選列」之內選）──────
+{
+  const comp = [...chainB1, ...chainB2];
+  const sAll = comp.map(Number);
+  const globalRep = chainB2[chainB2.length - 1];
+  const sFiltered = sAll.filter((id) => id !== globalRep);           // 篩掉全域代表列
+  const rows1 = withRoots(readBack.filter((r) => sAll.includes(Number(r.post_id))));
+  const rows2 = withRoots(readBack.filter((r) => sFiltered.includes(Number(r.post_id))));
+  attachSameHouseRoles(rows1, 0, provider, provider.now);
+  attachSameHouseRoles(rows2, 0, provider, provider.now);
+  const role1 = rolesOf(rows1);
+  const role2 = rolesOf(rows2);
+  const sql1 = await runSql(sAll);
+  const sql2 = await runSql(sFiltered);
+  const rep1 = primaryOf(role1, sAll);
+  const rep2 = primaryOf(role2, sFiltered);
+  const crossOk = sAll.every((id) => (role1.get(id) ?? null) === (sql1.role.get(id) ?? null))
+    && sFiltered.every((id) => (role2.get(id) ?? null) === (sql2.role.get(id) ?? null));
+  results.push({
+    label: "⑧ 代表列隨篩選變動：全量代表＝最便宜列；剔除它後同群重新選出不同代表（Node＝SQL）",
+    node: `${rep1.join(",")} -> ${rep2.join(",")}`,
+    sql: `${primaryOf(sql1.role, sAll).join(",")} -> ${primaryOf(sql2.role, sFiltered).join(",")}`,
+    ok: rep1.length === 1 && rep1[0] === globalRep && rep2.length === 1 && rep2[0] !== globalRep && crossOk,
+  });
+  results.push({
+    label: "⑧ 篩選剔除代表列後，該群仍在（沒有整群消失）",
+    node: role2.get(globalRep) ?? null,
+    sql: "removed-from-candidates",
+    ok: sFiltered.every((id) => role2.get(id) != null) && rep2.length === 1,
+  });
+}
+
+// ── ⑨ 空字串 source：資格軸 ＋ tie-break 軸（spec §6.10）─────────────────────
+// 兩軸分開釘：⑨a 的勝負由**租金**決定（tie-break 永遠不會被諮詢）⇒ 只測資格軸；
+// ⑨b 的租金／更新時間／last_seen_at 全平手 ⇒ 只測 tie-break 軸。
+// 啟用清單用**自然的那一份**（不含 ''）——Node 的 `String(row.source || '591')` 把 '' 當 '591'，
+// SQL 的 `COALESCE(NULLIF(c.source,''),'591') = ANY(?)` 必須逐字對齊。舊版靠在清單裡偷塞 '' 才對得上。
+{
+  // ⑨a 資格軸：XE(source='', 租金 10000) vs XN(source='591', 租金 30000)，同群。
+  const comp = [ids.XE, ids.XN];
+  const rootOk = rootOf(ids.XE) != null && rootOf(ids.XE) === rootOf(ids.XN);
+  const rows = withRoots(readBack.filter((r) => comp.includes(Number(r.post_id))));
+  attachSameHouseRoles(rows, 0, provider, provider.now);
+  const role = rolesOf(rows);
+  const sql = await runSql(comp);                       // 自然啟用清單：enabledSources（不含 ''）
+  const nodeRep = primaryOf(role, comp);
+  const sqlRep = primaryOf(sql.role, comp);
+  const roleOf = (m, id) => m.get(Number(id)) ?? null;
+  results.push({
+    label: "⑨a 資格軸：source=''＋source_id 有值＋自然啟用清單（不含 ''）⇒ Node／SQL 都判合格，代表列都是最便宜的 XE（舊 SQL 會把 XE 踢出、改選 XN）",
+    node: nodeRep.join(","), sql: sqlRep.join(","),
+    ok: rootOk && nodeRep.length === 1 && sqlRep.length === 1
+      && nodeRep[0] === Number(ids.XE) && sqlRep[0] === Number(ids.XE)
+      && comp.every((id) => roleOf(role, id) != null && roleOf(sql.role, id) != null),
+    sameRoot: rootOk,
+  });
+}
+{
+  // ⑨b tie-break 軸：TE(source='', 10 位) vs TN(source='591', 9 位)，租金／更新時間／last_seen_at 全平手。
+  const comp = [ids.TE, ids.TN];
+  const rootOk = rootOf(ids.TE) != null && rootOf(ids.TE) === rootOf(ids.TN);
+  const rows = withRoots(readBack.filter((r) => comp.includes(Number(r.post_id))));
+  attachSameHouseRoles(rows, 0, provider, provider.now);
+  const role = rolesOf(rows);
+  const sql = await runSql(comp);
+  const nodeRep = primaryOf(role, comp);
+  const sqlRep = primaryOf(sql.role, comp);
+  results.push({
+    label: "⑨b tie-break 軸：空字串 source＋source_id/url 皆空＋post_id 位數不同：Node／SQL 選出的代表列 id 相同（且為 source='' 的 TE）",
+    node: nodeRep.join(","),
+    sql: sqlRep.join(","),
+    ok: rootOk && nodeRep.length === 1 && sqlRep.length === 1
+      && nodeRep[0] === Number(ids.TE) && sqlRep[0] === Number(ids.TE),
+    sameRoot: rootOk,
+    roots: { TE: rootOf(ids.TE), TN: rootOf(ids.TN) },
+  });
+}
 
 for (const r of results) console.log(JSON.stringify(r));
-const allOk = results.every((r) => r.ok);
+const allOk = results.filter((r) => !r.residual).every((r) => r.ok);
 
-// 清理合成列 + split 投票
+// 清理合成列 + split 投票 + 橋邊
 await drv.pool.query("DELETE FROM user_match_votes WHERE post_id = ANY($1::bigint[]) OR peer_id = ANY($1::bigint[])", [all]);
+await drv.pool.query("DELETE FROM listing_group_members WHERE post_id = ANY($1::bigint[]) OR group_id = $2", [all, bridgeGroupId]);
 await drv.pool.query("DELETE FROM listings WHERE post_id = ANY($1::bigint[])", [all]);
 
 await drv.pool.end();
-console.log(JSON.stringify({ allOk, total: results.length }));
+console.log(JSON.stringify({ allOk, total: results.length, residualRows: results.filter((r) => r.residual).length, roots: Object.fromEntries(all.map((id) => [id, rootOf(id)])) }));
 process.exit(allOk ? 0 : 1);

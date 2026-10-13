@@ -7,7 +7,9 @@ import { formatFloorDisplay } from "./floors.js";
 import { listingIsDisplayable } from "./listingPrep.js";
 
 function displayableGroupMembers(listings = []) {
-  return (listings || []).filter((row) => listingIsDisplayable(row));
+  // Owner 2026-10-12：確認下架（offline_confirmed=1）完全不顯示，也不參與選主、不計入「共 N 則」。
+  // 「可能空號」（offline=1、offline_confirmed=0）維持現行行為：仍可比價、可顯示、可參與比較。
+  return (listings || []).filter((row) => listingIsDisplayable(row) && Number(row?.offline_confirmed) !== 1);
 }
 
 function normFeeText(value) {
@@ -324,6 +326,9 @@ export function publicSameHousePeer(row) {
     offline: Number(row.offline) === 1,
     offline_confirmed: Number(row.offline_confirmed) === 1,
     hidden: Number(row.hidden) === 1,
+    // 2026-10-12：三個清單都不再豁免折疊，逐則「取消關注／解除隱藏」改由展開面板提供，
+    // 面板需要知道每一則自己的個人旗標，所以在公開快照裡一併帶出（只有觀看者自己的資料）。
+    watched: Number(row.watched) === 1,
     refresh_time: row.refresh_time || "",
     last_seen_at: row.last_seen_at || "",
     match_verdict: row.match_verdict || "",

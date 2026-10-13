@@ -295,29 +295,50 @@ export function migrateListingFlagsIfNeeded(conn, userId) {
   return { migrated: true, copied };
 }
 
-export function listingIsMainListAffiliate(row, filter) {
-  if (filter === "hidden" || filter === "watched") return false;
+// Owner 2026-10-12：「特別關注／已隱藏」不再豁免折疊 —— 三個清單的呈現規則完全一致，
+// 同屋源次卡在三個清單都只出一列（逐則操作改由展開面板提供，見 public/index.html 的
+// sameHousePanel）。**沒有 `filter` 參數**：折疊判定與清單無關，所以不需要（先前
+// 「`filter` 參數保留只為相容」的註解與簽名不一致，2026-10-12 一併對齊成現在的形狀）。
+export function listingIsMainListAffiliate(row) {
   if (row?.same_house_split) return false;
   if (row?.same_house_role !== "affiliate") return false;
   if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
   return true;
 }
 
-export function listingMatchesListFilter(row, filter) {  if (listingIsMainListAffiliate(row, filter)) return false;
+// Owner 2026-10-12 裁示③「次卡要跟著主卡走」：群級聚合旗標，由 db.js 的
+// attachSameHouseRoleSteps 依「這次候選集內的所有成員」算好。沒有折疊的單列回 null＝看自己的旗標。
+function groupAggregate(row, kind) {
+  const role = row?.same_house_role;
+  if (role !== "primary" && role !== "affiliate") return null;
+  return Number(row?.[kind === "watched" ? "same_house_group_watched" : "same_house_group_hidden"]) === 1;
+}
+
+export function listingMatchesListFilter(row, filter) {
+  // 任何清單都不顯示同屋源次卡（逐則處理請用展開面板）⇒「一般」的判斷永遠只有代表列
+  // （＝主卡）參與，不會變成「逐則自判」。
+  if (listingIsMainListAffiliate(row)) return false;
   const hidden = Number(row?.hidden) === 1;
   const watched = Number(row?.watched) === 1;
   const viewed = Number(row?.viewed) === 1;
   const offline = Number(row?.offline) === 1;
   const confirmed = Number(row?.offline_confirmed) === 1;
+  // Owner 2026-10-12：確認下架（offline_confirmed=1）完全不顯示，三個清單都不例外，
+  // 也不再參與選主（選主的排除在 db.js／listingSearchSql.js 的折疊段）。
+  if (confirmed) return false;
   const dup = String(row?.match_verdict || "") === "yes";
-  if (filter === "hidden") return hidden || dup;
+  // 已隱藏：群內任一成員被隱藏 ⇒ 該群以主卡列示（次卡已在上面被排除）。
+  if (filter === "hidden") return hidden || dup || groupAggregate(row, "hidden") === true;
   if (filter === "offline") return offline && !confirmed;
   if (filter === "suspected") return Boolean(row?.match_level) && !confirmed && !dup && !hidden;
-  // 特別關注是配額管理清單：已下架、已隱藏、同屋源次要刊登都要看得見才能取消。
-  if (filter === "watched") return watched;
+  // 特別關注是配額管理清單：已下架（未確認）與同屋源次要刊登都要看得見才能取消／逐則處理。
+  // 群內任一成員被特別關注 ⇒ 該群出現，出現的那一列是主卡（即使主卡自己沒被關注）。
+  if (filter === "watched") return watched || groupAggregate(row, "watched") === true;
   // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
-  if (dup || confirmed || hidden) return false;
-  // Owner 2026-10-07：「全部」= 未看過且未特別關注；看過的物件改由「已瀏覽」清單查。
+  if (dup || hidden) return false;
+  // Owner 2026-10-12：一般清單（原「全部」）不得顯示已被特別關注或已被隱藏的物件，
+  // 除非使用者先解除該狀態；Owner 2026-10-07：「全部」＝未看過且未特別關注。
+  // 這一條讀的是「代表列自己的旗標」（次卡已折疊）⇒ 整群去留由主卡決定。
   if (filter === "all") return !watched && !viewed;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;

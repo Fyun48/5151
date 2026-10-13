@@ -1,0 +1,39 @@
+(node:3838) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+{"name":"baseline","nodeTotal":88930,"sqlTotal":88930,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=套房","nodeTotal":20542,"sqlTotal":20542,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=大安","nodeTotal":2281,"sqlTotal":2281,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=電梯","nodeTotal":10896,"sqlTotal":10896,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=編號","nodeTotal":100,"sqlTotal":100,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=101","nodeTotal":1918,"sqlTotal":1918,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=15000","nodeTotal":40,"sqlTotal":40,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=2699","nodeTotal":55,"sqlTotal":55,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=2699975575(完整ID)","nodeTotal":1,"sqlTotal":1,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=15000+kind=whole","nodeTotal":33,"sqlTotal":33,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"district=西屯區","nodeTotal":4803,"sqlTotal":4803,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"district=中正區","nodeTotal":1332,"sqlTotal":1332,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"district=西屯區+中正區","nodeTotal":6135,"sqlTotal":6135,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=whole","nodeTotal":48276,"sqlTotal":48276,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=suite_shared","nodeTotal":38329,"sqlTotal":38329,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=apartment","nodeTotal":84121,"sqlTotal":84121,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=elevator","nodeTotal":54223,"sqlTotal":54223,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=shop","nodeTotal":289,"sqlTotal":289,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=suite","nodeTotal":38173,"sqlTotal":38173,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"sort=price_asc","nodeTotal":88930,"sqlTotal":88930,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"sort=price_desc","nodeTotal":88930,"sqlTotal":88930,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"excludeRooftop=false","nodeTotal":90895,"sqlTotal":90895,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"excludeLowFloors=false","nodeTotal":100571,"sqlTotal":100571,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"hasParking=true","nodeTotal":18674,"sqlTotal":18674,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"wholeFloorOnly=true","nodeTotal":48362,"sqlTotal":48362,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"priceMax=20000","nodeTotal":50019,"sqlTotal":50019,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"areaMax=30","nodeTotal":71515,"sqlTotal":71515,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=whole+sort=price_asc","nodeTotal":48276,"sqlTotal":48276,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=套房+kind=whole","nodeTotal":1113,"sqlTotal":1113,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=套房+district=西屯區","nodeTotal":727,"sqlTotal":727,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=whole+district=西屯區","nodeTotal":2709,"sqlTotal":2709,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"q=套房+kind=whole+district=西屯區","nodeTotal":42,"sqlTotal":42,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"district=西屯區+sort=price_asc","nodeTotal":4803,"sqlTotal":4803,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"kind=whole+q=電梯+district=中正區+price_desc","nodeTotal":63,"sqlTotal":63,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"name":"excludeLowFloors=false+hasParking=true","nodeTotal":21179,"sqlTotal":21179,"totalOk":true,"orderOk":true,"orderMismatchAt":null}
+{"total":35,"allOk":true,"failed":[]}

@@ -22,7 +22,7 @@ const { raw, enabledSources, now } = await withPgReadSnapshot(drv, async snapsho
   const settings = publicSearchSettings({});
   const raw = await readPgRows(snapshot, toPostgresSql(`SELECT ${cols} FROM listings ORDER BY post_id`), []);
   const loader = createDecorationDataLoader({ exec, driver: "postgres" });
-  await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, requestContext: context });
+  await preloadDecorationProviderAsync({ exec, loader, rows: raw, settings, userId: 0, matchVoteUserId: 0, peers: false, foldGroups: true, requestContext: context });
   const enabledSources = normalizeCrawlSources(context.crawlSources.items).filter(x => x.enabled).map(x => x.id);
   return { raw, enabledSources, now: context.now };
 });

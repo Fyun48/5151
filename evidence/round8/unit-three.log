@@ -1,0 +1,133 @@
+TAP version 13
+# Subtest: 缺欄探測不會毒化寫入交易（information_schema 探測 ＋ 同交易續寫）
+ok 1 - 缺欄探測不會毒化寫入交易（information_schema 探測 ＋ 同交易續寫）
+  ---
+  duration_ms: 207.644115
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：欄位不存在 ⇒ 拒開閘（reason=fold_component_root_missing）
+ok 2 - 開閘前檢：欄位不存在 ⇒ 拒開閘（reason=fold_component_root_missing）
+  ---
+  duration_ms: 4.161322
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：欄位存在但沒有 drift 戳記 ⇒ 拒開閘
+ok 3 - 開閘前檢：欄位存在但沒有 drift 戳記 ⇒ 拒開閘
+  ---
+  duration_ms: 4.906843
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：戳記 mismatch≠0 ⇒ 拒開閘（附筆數）
+ok 4 - 開閘前檢：戳記 mismatch≠0 ⇒ 拒開閘（附筆數）
+  ---
+  duration_ms: 2.443186
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：戳記零差且資料版本相符 ⇒ 就緒
+ok 5 - 開閘前檢：戳記零差且資料版本相符 ⇒ 就緒
+  ---
+  duration_ms: 1.596644
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：戳記零差但資料版本變了（max(post_id) 變）⇒ 拒開閘（reason=fold_root_drift_stamp_stale）
+ok 6 - 開閘前檢：戳記零差但資料版本變了（max(post_id) 變）⇒ 拒開閘（reason=fold_root_drift_stamp_stale）
+  ---
+  duration_ms: 8.572017
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：戳記零差但列數變了 ⇒ 拒開閘（stale）
+ok 7 - 開閘前檢：戳記零差但列數變了 ⇒ 拒開閘（stale）
+  ---
+  duration_ms: 0.639149
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：舊式戳記（沒有 dataVersion）⇒ 拒開閘（stale，附修法）
+ok 8 - 開閘前檢：舊式戳記（沒有 dataVersion）⇒ 拒開閘（stale，附修法）
+  ---
+  duration_ms: 1.015635
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：成功結果有 TTL，失敗永久記憶（fail-closed 快路徑）
+ok 9 - 開閘前檢：成功結果有 TTL，失敗永久記憶（fail-closed 快路徑）
+  ---
+  duration_ms: 1.031236
+  type: 'test'
+  ...
+# Subtest: 開閘前檢：戳記是壞 JSON ⇒ 拒開閘（fail-closed，不是放行）
+ok 10 - 開閘前檢：戳記是壞 JSON ⇒ 拒開閘（fail-closed，不是放行）
+  ---
+  duration_ms: 3.618134
+  type: 'test'
+  ...
+# Subtest: 關閘時舊路徑隔離：env 檢查必須在開閘前檢之前 return
+ok 11 - 關閘時舊路徑隔離：env 檢查必須在開閘前檢之前 return
+  ---
+  duration_ms: 2.603609
+  type: 'test'
+  ...
+# Subtest: PUBLIC_LISTINGS_SQL_FIRST 預設必須是 off（不准在 repo 內開閘）
+ok 12 - PUBLIC_LISTINGS_SQL_FIRST 預設必須是 off（不准在 repo 內開閘）
+  ---
+  duration_ms: 3.36643
+  type: 'test'
+  ...
+# (node:858) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: listingRefreshParts round-trips listingRefreshAt for every relative/absolute format
+ok 13 - listingRefreshParts round-trips listingRefreshAt for every relative/absolute format
+  ---
+  duration_ms: 13.612561
+  type: 'test'
+  ...
+# Subtest: listingRefreshParts falls back to last_seen_at then 0
+ok 14 - listingRefreshParts falls back to last_seen_at then 0
+  ---
+  duration_ms: 0.591019
+  type: 'test'
+  ...
+# Subtest: fold refresh columns reconstruct listingRefreshAt at the same $now (16h ± 1s boundary)
+ok 15 - fold refresh columns reconstruct listingRefreshAt at the same $now (16h ± 1s boundary)
+  ---
+  duration_ms: 24.333941
+  type: 'test'
+  ...
+# Subtest: computeFoldColumns fold_rent_num equals comparableRent
+ok 16 - computeFoldColumns fold_rent_num equals comparableRent
+  ---
+  duration_ms: 0.744971
+  type: 'test'
+  ...
+# Subtest: buildPublicListingsFoldSql uses searchWhere([]) and hidden/affiliate clauses
+ok 17 - buildPublicListingsFoldSql uses searchWhere([]) and hidden/affiliate clauses
+  ---
+  duration_ms: 5.130146
+  type: 'test'
+  ...
+# Subtest: foldRoleCte groups by fold_component_root and ranks the representative inside cand
+ok 18 - foldRoleCte groups by fold_component_root and ranks the representative inside cand
+  ---
+  duration_ms: 0.712151
+  type: 'test'
+  ...
+# Subtest: 會指派 role 的路徑都必須 foldGroups: true（否則靜默退回 legacy 語意）
+ok 19 - 會指派 role 的路徑都必須 foldGroups: true（否則靜默退回 legacy 語意）
+  ---
+  duration_ms: 2.617899
+  type: 'test'
+  ...
+# Subtest: SQLite 讀取端沒有 foldRoot ⇒ 必須走 legacy union-find（不靜默用空的分組）
+ok 20 - SQLite 讀取端沒有 foldRoot ⇒ 必須走 legacy union-find（不靜默用空的分組）
+  ---
+  duration_ms: 5886.366931
+  type: 'test'
+  ...
+# [search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 6233.528142

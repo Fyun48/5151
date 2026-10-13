@@ -1,0 +1,57 @@
+(node:29255) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[search] listing_search_projection 已與 listings 對齊，訪客搜尋使用 SQL-first
+{"label":"⑥ root shape: 16-row pure chain shares one root","node":"9100001001","sql":"9100001001","ok":true}
+{"label":"⑦ root shape: bridged chain shares one root across the group bridge","node":"9100001101","sql":"9100001101","ok":true}
+{"label":"固化欄寫入＝寫入端分量（逐列）","node":9100001001,"sql":"9100001001","ok":true,"diffs":[]}
+{"label":"讀取端兩條路徑（fold_component_root 分組 vs legacy union-find）逐列一致","node":47,"sql":47,"ok":true,"diffs":[]}
+{"label":"① only-in-edge: A(no match_post_id, B→A)","post_id":9100000001,"node":"primary","sql":"primary","ok":true}
+{"label":"① only-in-edge: B(src)","post_id":9100000002,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"② peer verdict=no: C(src, D=no)","post_id":9100000003,"node":null,"sql":null,"ok":true}
+{"label":"② peer verdict=no: D(peer, verdict=no)","post_id":9100000004,"node":null,"sql":null,"ok":true}
+{"label":"③ peer houseprice no-prep: E(src)","post_id":9100000005,"node":null,"sql":null,"ok":true}
+{"label":"③ peer houseprice no-prep: H(houseprice, no prep)","post_id":9100000006,"node":null,"sql":null,"ok":true}
+{"label":"④ split pair (guest ignores split): F","post_id":9100000007,"node":"primary","sql":"primary","ok":true}
+{"label":"④ split pair (guest ignores split): G","post_id":9100000008,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑤ chain P-Q-R: P (cheapest is R)","post_id":9100000011,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑤ chain P-Q-R: Q","post_id":9100000012,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑤ chain P-Q-R: R (single primary)","post_id":9100000013,"node":"primary","sql":"primary","ok":true}
+{"label":"⑥⑦ line chain row 9100001001","post_id":9100001001,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001002","post_id":9100001002,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001003","post_id":9100001003,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001004","post_id":9100001004,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001005","post_id":9100001005,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001006","post_id":9100001006,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001007","post_id":9100001007,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001008","post_id":9100001008,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001009","post_id":9100001009,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001010","post_id":9100001010,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001011","post_id":9100001011,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001012","post_id":9100001012,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001013","post_id":9100001013,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001014","post_id":9100001014,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001015","post_id":9100001015,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001016","post_id":9100001016,"node":"primary","sql":"primary","ok":true}
+{"label":"⑥⑦ line chain row 9100001101","post_id":9100001101,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001102","post_id":9100001102,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001103","post_id":9100001103,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001104","post_id":9100001104,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001105","post_id":9100001105,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001106","post_id":9100001106,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001107","post_id":9100001107,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001108","post_id":9100001108,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001201","post_id":9100001201,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001202","post_id":9100001202,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001203","post_id":9100001203,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001204","post_id":9100001204,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001205","post_id":9100001205,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001206","post_id":9100001206,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001207","post_id":9100001207,"node":"affiliate","sql":"affiliate","ok":true}
+{"label":"⑥⑦ line chain row 9100001208","post_id":9100001208,"node":"primary","sql":"primary","ok":true}
+{"label":"⑥ 16-row pure chain: exactly one representative, and it is the cheapest row","node":"9100001016","sql":"9100001016","ok":true}
+{"label":"⑦ 16-row bridged chain: exactly one representative across the group bridge","node":"9100001208","sql":"9100001208","ok":true}
+{"label":"⑧ 代表列隨篩選變動：全量代表＝最便宜列；剔除它後同群重新選出不同代表（Node＝SQL）","node":"9100001208 -> 9100001207","sql":"9100001208 -> 9100001207","ok":true}
+{"label":"⑧ 篩選剔除代表列後，該群仍在（沒有整群消失）","node":null,"sql":"removed-from-candidates","ok":true}
+{"label":"⑨a 資格軸：source=''＋source_id 有值＋自然啟用清單（不含 ''）⇒ Node／SQL 都判合格，代表列都是最便宜的 XE（舊 SQL 會把 XE 踢出、改選 XN）","node":"9100000031","sql":"9100000032","ok":false,"sameRoot":true}
+{"label":"⑨b tie-break 軸：空字串 source＋source_id/url 皆空＋post_id 位數不同：Node／SQL 選出的代表列 id 相同（且為 source='' 的 TE）","node":"9100000021","sql":"910000021","ok":false,"sameRoot":true,"roots":{"TE":910000021,"TN":910000021}}
+{"allOk":false,"total":53,"residualRows":0,"roots":{"910000021":910000021,"9100000001":9100000001,"9100000002":9100000001,"9100000003":null,"9100000004":null,"9100000005":null,"9100000006":null,"9100000007":9100000007,"9100000008":9100000007,"9100000011":9100000011,"9100000012":9100000011,"9100000013":9100000011,"9100000021":910000021,"9100000031":9100000031,"9100000032":9100000031,"9100001001":9100001001,"9100001002":9100001001,"9100001003":9100001001,"9100001004":9100001001,"9100001005":9100001001,"9100001006":9100001001,"9100001007":9100001001,"9100001008":9100001001,"9100001009":9100001001,"9100001010":9100001001,"9100001011":9100001001,"9100001012":9100001001,"9100001013":9100001001,"9100001014":9100001001,"9100001015":9100001001,"9100001016":9100001001,"9100001101":9100001101,"9100001102":9100001101,"9100001103":9100001101,"9100001104":9100001101,"9100001105":9100001101,"9100001106":9100001101,"9100001107":9100001101,"9100001108":9100001101,"9100001201":9100001101,"9100001202":9100001101,"9100001203":9100001101,"9100001204":9100001101,"9100001205":9100001101,"9100001206":9100001101,"9100001207":9100001101,"9100001208":9100001101}}

@@ -13,6 +13,8 @@
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { computeListingProjection } from "../src/listingSearchProjection.js";
+import { toPostgresSql } from "../src/sqlDialect.js";
+import { refreshFoldComponentRoot } from "../src/foldComponentRoot.js";
 
 assertPgTargetAllowed("projection-freshness-check", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
 
@@ -73,6 +75,24 @@ for (const row of sampleRows) {
   }
 }
 
+// ── fold_component_root：逐欄抽樣（L-0595／L-0571 的「抽樣 columnMismatch=0 才准切讀取」）──
+// 這一欄不能只看單列重算（root 取決於整個分量），所以對抽樣列跑刷新端的**同一個**閉包
+// （refreshFoldComponentRoot 的 dryRun：算但不寫），再與 stored 值比對。
+const exec = (sql, params = []) => drv.pool.query(toPostgresSql(sql), params).then((r) => r.rows);
+const foldRoot = { sampled: 0, mismatch: 0, sample: [] };
+for (const row of sampleRows) {
+  const pid = Number(row.post_id);
+  const out = await refreshFoldComponentRoot(exec, pid, { dryRun: true });
+  if (out.capped || !out.computed) continue;
+  foldRoot.sampled += 1;
+  const stored = row.fold_component_root == null ? null : Number(row.fold_component_root);
+  const fresh = out.computed.get(pid) == null ? null : Number(out.computed.get(pid));
+  if (stored !== fresh) {
+    foldRoot.mismatch += 1;
+    if (foldRoot.sample.length < 10) foldRoot.sample.push({ post_id: pid, stored, fresh });
+  }
+}
+
 const columnMismatch = Object.values(mismatches).reduce((s, n) => s + n, 0);
 const countOk = listings === projected;
 
@@ -108,7 +128,8 @@ const sample = {
   columnMismatch,
   mismatchColumns: mismatches,
   perColumn,
-  pass: countOk && compared > 0 && columnMismatch === 0,
+  foldRoot,
+  pass: countOk && compared > 0 && columnMismatch === 0 && foldRoot.mismatch === 0,
 };
 
 console.log(JSON.stringify(sample, null, 2));

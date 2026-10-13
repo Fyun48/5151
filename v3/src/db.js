@@ -37,8 +37,9 @@ import { backfillListingSearchProjectionStep, ensureListingSearchProjection, pro
 import { buildListingSearchSql, buildPublicListingSearchSql, sqlDisplayFilter } from "./listingSearchSql.js";
 import { addColumnIfMissing, addColumnsIfMissing, runMigrations } from "./migrate.js";
 import { SCHEMA_MIGRATIONS } from "./schemaMigrations.js";
-import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, refreshFoldColumnsSync } from "./match.js";
+import { geoDistanceM, listingRefreshAt, matchFocusHints, preferPrimaryListing, sortGroupListings, refreshFoldColumnsSync } from "./match.js";
 import { noteRefreshFailure } from "./listingRefreshHealth.js";
+import { buildSameHouseComponents, foldRootRefreshReady } from "./foldComponentRoot.js";
 import {
   ensureUserSameHouseSchema,
   loadPersonalSameHouseIds,
@@ -3246,6 +3247,9 @@ export function preloadedDecorationProvider({
   splitPairs = new Set(),
   groupIds = new Map(),
   groupMembers = new Map(),
+  // Owner 2026-10-12 群內代表：折疊分組鍵（固化欄）。只有 PG ＋ 欄位已部署時才會是 Map
+  // ⇒ `typeof provider.foldRoot === "function"` 就是「讀取端要走固化欄分組」的開關。
+  foldRoots = null,
   peers = new Map(),
   extras = new Map(),
   routeCache = new Map(),
@@ -3273,6 +3277,9 @@ export function preloadedDecorationProvider({
     },
     splitPairs: () => splitPairs,
     groupId: (postId) => groupIds.get(Number(postId) || 0) || "",
+    ...(foldRoots instanceof Map
+      ? { foldRoot: (postId) => (foldRoots.get(Number(postId) || 0) == null ? null : Number(foldRoots.get(Number(postId) || 0))) }
+      : {}),
     groupMemberRows: (groupId) => groupMembers.get(String(groupId || "")) || [],
     // The preloader stored every peer row under both its post_id and its match_post_id.
     peerRows: (ids) => {
@@ -3367,6 +3374,9 @@ export async function preloadDecorationProviderAsync({
   // splitPairSet／prep／extras），略過**頁面專用**的 peers 2-hop 與 groupMembers。
   loader: loaderIn = null,
   peers: loadPeers = true,
+  // 2026-10-12「一群一主」：只有真的要做 role 指派的路徑才需要 group_id（多一次批次查詢）。
+  // 預設 false ⇒ 單列裝飾（詳情頁、通勤）不付這個成本。
+  foldGroups = false,
   // Only the candidate pipeline may omit prep for known non-houseprice rows.
   // Page decoration and direct callers retain the complete provider contract.
   candidatePhase = false,
@@ -3470,8 +3480,13 @@ export async function preloadDecorationProviderAsync({
 
   const groupIds = new Map();
   const groupMembers = new Map();
-  if (loadPeers) {
+  // 2026-10-12「一群一主」：`listing_group_members`（系統同屋源群組）是折疊分量的來源之一，
+  // 所以**候選階段也必須**載入 group_id（一次批次查詢）——否則候選期的 role 只看 match 邊，
+  // 只存在於群組表、兩端都沒有邊的列會永遠留在主列表。群成員列仍只在頁面階段（loadPeers）載入。
+  if (loadPeers || foldGroups) {
     for (const [id, gid] of await loader.groupIdsFor([...prepIds])) groupIds.set(id, gid);
+  }
+  if (loadPeers) {
     // astra §4.3：成員列改為**一次查詢**取回（原本每 group 一筆 ✗，頁面可能數十個 group）。
     const gids = [...new Set([...groupIds.values()].filter(Boolean))];
     for (const [gid, rows] of await loader.groupMemberRowsFor(gids)) groupMembers.set(gid, rows);
@@ -3534,6 +3549,18 @@ export async function preloadDecorationProviderAsync({
   const routeJobs = new Map();
   for (const [key, row] of await loader.routeJobsMap(jobKeys)) if (row) routeJobs.set(key, row);
 
+  // Owner 2026-10-12 群內代表：分組鍵＝固化欄 `listings.fold_component_root`。
+  // 只在「真的要做 role 指派」（`foldGroups`，候選階段）且這一欄已部署（PG ＋ 欄位存在）時載入。
+  // SQLite 沒有這一欄、正式庫在 Owner 跑 DDL 之前也沒有 ⇒ 不載入，讀取端走 legacy union-find（§1.4）。
+  // 只查候選 id（`onPage`）：代表列只在候選列內選，非候選列的 root 不影響結果。
+  let foldRoots = null;
+  if (foldGroups && await foldRootRefreshReady(exec)) {
+    foldRoots = new Map();
+    for (const [id, root] of await loader.foldRootMap([...onPage])) {
+      if (root != null) foldRoots.set(Number(id), Number(root));
+    }
+  }
+
   return preloadedDecorationProvider({
     userId: voteUid,
     crawlSources,
@@ -3544,6 +3571,7 @@ export async function preloadDecorationProviderAsync({
     splitPairs,
     groupIds,
     groupMembers,
+    foldRoots,
     peers,
     extras,
     routeCache,
@@ -3664,6 +3692,13 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   const byId = new Map();
   const linked = [];
   const grouped = new Map();
+  // Owner 2026-10-12 裁決（群內代表）：PG 讀取端由 decoration provider 的 `foldRoot()` 拿到
+  // 固化欄 `listings.fold_component_root`（preload 時一批查詢載入；不進候選載體，因為 SQLite
+  // 沒有這一欄），直接拿它當**分組鍵**，**不再做 1-hop 走訪**。舊的 1-hop（候選集＋match/extras）
+  // 會把鏈狀分量切開：root=22075220 是 33 列同租金 10999 的線狀鏈，舊 Node 只看到 9 列、
+  // 還選出 7 個 primary，SQL 只出 1 列。SQLite 沒有這個欄位（也沒有折疊固化欄的寫入端），
+  // 沿用原本的 union-find 路徑 —— 兩條路徑的**分組定義**因此都只有一份：分量標籤。
+  const frozenRoot = typeof source.foldRoot === "function";
   let visited = 0;
   for (const row of list) {
     byId.set(Number(row.post_id), row);
@@ -3679,100 +3714,138 @@ export function* attachSameHouseRoleSteps(rows, voteUserId, provider, now = prov
   }
   if (visited % 256) yield {label:'relations.index',units:visited % 256};
   visited = 0;
-  const missing = new Set();
-  // Most candidates have no relation. Keep their index for resolution without
-  // repeatedly walking them in each relation-only pass. Input order is retained.
-  for (const row of linked) {
-    const mid = Number(row.match_post_id) || 0;
-    if (mid && !byId.has(mid)) missing.add(mid);
-    if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
-  }
-  if (hasPersonal) for (const members of grouped.values()) {
-    for (const row of members) {
-      if (String(row.match_verdict || "") === "no") continue;
-      for (const pid of personal.peers(row.post_id)) {
-        if (!byId.has(pid)) missing.add(pid);
-        if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+  const splits = source.splitPairs();
+  let groups;
+  if (frozenRoot) {
+    // ── 固化欄分組（PG 讀取端）────────────────────────────────────────
+    // 分組鍵＝`fold_component_root`（NULL ⇒ 自己一群，key 用 post_id）。代表列只在
+    // **本次候選列**之內選（下面共用的 eligible＋sortGroupListings），所以「全域主卡
+    // 不符本次篩選」不會讓整群消失，而「同群在不同篩選下可能露出不同代表列」是這個
+    // 語意的既定代價（docs/same-house-fold-spec.md §1.5）。
+    const keyOf = (row) => {
+      const root = source.foldRoot(row?.post_id);
+      const n = root == null ? 0 : Number(root);
+      return n > 0 ? `r${n}` : `s${Number(row?.post_id) || 0}`;
+    };
+    const parent = new Map();
+    const find = (k) => {
+      const p = parent.get(k);
+      if (p == null) { parent.set(k, k); return k; }
+      if (p === k) return k;
+      const r = find(p);
+      parent.set(k, r);
+      return r;
+    };
+    const union = (a, b) => { const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+    const keyByPost = new Map();
+    for (const [id, row] of byId) {
+      const k = keyOf(row);
+      keyByPost.set(id, k);
+      find(k);
+      if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+    }
+    // 個人併組（user_same_house_members）**不**固化在 fold_component_root（B-plan）⇒
+    // 讀取端另疊一層：同一個 personal.groupKey 的候選列，其分量鍵互相 union。
+    if (hasPersonal) {
+      for (const members of grouped.values()) {
+        const keys = members.map((row) => keyByPost.get(Number(row.post_id))).filter(Boolean);
+        for (let i = 1; i < keys.length; i += 1) union(keys[0], keys[i]);
       }
     }
-  }
-  if (visited % 256) yield {label:'relations.missing',units:visited % 256};
-  const extras = new Map();
-  if (missing.size) {
-    for (const [id, item] of source.extras([...missing])) extras.set(id, item);
-  }
-  const resolve = (id) => byId.get(id) || extras.get(id) || null;
-  const splits = source.splitPairs();
-  visited = 0;
-  for (const row of linked) {
-    if (visited && visited % 256 === 0) yield {label:'relations.pairs',units:256};
-    visited++;
-    const mid = Number(row.match_post_id) || 0;
-    const peer = resolve(mid);
-    if (!peer || String(peer.match_verdict || "") === "no") continue;
-    if (housepriceNotDisplayReady(peer, source) || housepriceNotDisplayReady(row, source)) continue;
-    if (splits.has(votePairKey(row.post_id, mid))) {
-      row.same_house_split = true;
-      continue;
+    groups = new Map();
+    for (const [id, row] of byId) {
+      const k = find(keyByPost.get(id));
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push({ id, row });
     }
-    const primary = preferPrimaryListing(row, peer, now);
-    const primaryId = Number(primary.post_id);
-    const primaryOffline = Number(primary.offline) === 1;
-    // 疑似／確定同源都是成對關係。即使只有其中一側存 match_post_id，
-    // 也要把「非主卡」那側標成 affiliate 收進展開列，避免同一對在主列表出現兩次。
-    const assignRole = (target) => {
-      if (!target || target.same_house_split || target.same_house_role) return;
-      target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
-      target.same_house_primary_id = primaryId;
-      target.same_house_primary_offline = primaryOffline;
-    };
-    assignRole(row);
-    assignRole(byId.get(mid));
-  }
-  if (visited) yield {label:'relations.pairs',units:(visited - 1) % 256 + 1};
-  if (hasPersonal) {
-    visited = 0;
-    for (const members of grouped.values()) {
-      const pool = [];
-      const seen = new Set();
-      const add = (item) => {
-        const id = Number(item?.post_id) || 0;
-        if (!id || seen.has(id) || item.same_house_split) return;
-        seen.add(id);
-        pool.push(item);
-      };
+  } else {
+    const missing = new Set();
+    // Most candidates have no relation. Keep their index for resolution without
+    // repeatedly walking them in each relation-only pass. Input order is retained.
+    for (const row of linked) {
+      const mid = Number(row.match_post_id) || 0;
+      if (mid && !byId.has(mid)) missing.add(mid);
+      if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
+    }
+    if (hasPersonal) for (const members of grouped.values()) {
       for (const row of members) {
-        add(row);
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+        if (String(row.match_verdict || "") === "no") continue;
         for (const pid of personal.peers(row.post_id)) {
-          add(resolve(pid));
-          if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
+          if (!byId.has(pid)) missing.add(pid);
+          if (++visited % 256 === 0) yield {label:'relations.missing',units:256};
         }
       }
-      const visible = [];
-      for (const item of pool) {
-        if (!housepriceNotDisplayReady(item, source)) visible.push(item);
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-      }
-      if (visible.length < 2) continue;
-      let primary = visible[0];
-      for (const item of visible) {
-        primary = preferPrimaryListing(primary, item, now);
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-      }
-      const primaryId = Number(primary.post_id);
-      const primaryOffline = Number(primary.offline) === 1;
-      for (const target of visible) {
-        if (++visited % 256 === 0) yield {label:'relations.groups',units:256};
-        if (!byId.has(Number(target.post_id))) continue;
-        target.same_house_role = Number(target.post_id) === primaryId ? "primary" : "affiliate";
-        target.same_house_primary_id = primaryId;
-        target.same_house_primary_offline = primaryOffline;
-        target.same_house_personal = true;
-      }
     }
-    if (visited % 256) yield {label:'relations.groups',units:visited % 256};
+    if (visited % 256) yield {label:'relations.missing',units:visited % 256};
+    const extras = new Map();
+    if (missing.size) {
+      for (const [id, item] of source.extras([...missing])) extras.set(id, item);
+    }
+    const resolve = (id) => byId.get(id) || extras.get(id) || null;
+    // ── 一群一主：連通分量（union-find，SQLite 讀取端）──────────────────
+    // 舊版是「first-incident-edge 成對」——每條邊各自算贏家再先到先贏，所以同一連通群
+    // 可以出現多個 primary（鏈狀 A–B–C 就是反例）。這裡改成把三種關係全部併進同一張
+    // 無向圖，一個分量只選一個 primary（比較式仍是 match.js 的 sortGroupListings）：
+    //   ① match 邊（維持既有三道跳過規則：verdict='no'／houseprice 未就緒／split）
+    //   ② listing_group_members（系統同屋源群組；群內兩兩連通）
+    //   ③ user_same_house_members（會員自己的併組，personalIndex）
+    const universe = new Map();
+    for (const [id, row] of byId) universe.set(id, row);
+    for (const [id, row] of extras) if (!universe.has(id)) universe.set(id, row);
+    // 分量（連通分量）併法只有一份：foldComponentRoot.js 的 buildSameHouseComponents。
+    // 刷新端（fold 漏斗）／回填端用它把結果固化成 fold_component_root，這裡是 SQLite 的
+    // 請求期替代路徑（沒有固化欄可讀）。
+    const { comps } = yield* buildSameHouseComponents({
+      universe,
+      linked,
+      resolve,
+      splits,
+      isNotDisplayReady: (row) => housepriceNotDisplayReady(row, source),
+      groupIdOf: typeof source.groupId === "function" ? (pid) => source.groupId(pid) : null,
+      personal,
+      grouped,
+      hasPersonal,
+    });
+    groups = comps;
   }
+  visited = 0;
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    // Owner 2026-10-12 定案：確認下架（offline_confirmed=1）不參與選主。
+    // 未就緒（houseprice 無 prep／來源停用）同樣不得當贏家，否則會「不顯示卻把可顯示的擠掉」。
+    const eligible = members.filter((m) => (
+      Number(m.row.offline_confirmed) !== 1 && !housepriceNotDisplayReady(m.row, source)
+    ));
+    if (!eligible.length) continue;
+    const primary = sortGroupListings(eligible.map((m) => m.row), now)[0];
+    if (!primary) continue;
+    const primaryId = Number(primary.post_id);
+    const primaryOffline = Number(primary.offline) === 1;
+    // Owner 2026-10-12 裁示③「次卡要跟著主卡走」：三個清單的**群級**判斷輸入。
+    //   一般：代表列（＝主卡）自己的 watched／hidden 決定整群（次卡本來就被折疊、
+    //         不參與判斷 ⇒ 不准逐則自判）。
+    //   特別關注／已隱藏：群內**任一**成員被關注／被隱藏 ⇒ 該群出現，出現的那一列是主卡。
+    // 聚合只涵蓋「在這次候選集裡」的成員（帶有觀看者自己的 flags）；extras 是原始 listings 列，
+    // 沒有觀看者 flags，故不計入（理由與影響見 docs/same-house-fold-spec.md §6.5）。
+    let groupWatched = 0;
+    let groupHidden = 0;
+    for (const { id: memberId, row: flagRow } of members) {
+      if (!byId.has(memberId)) continue;
+      if (Number(flagRow.watched) === 1) groupWatched = 1;
+      if (Number(flagRow.hidden) === 1) groupHidden = 1;
+    }
+    for (const { id: memberId, row: target } of members) {
+      if (target.same_house_split) continue;
+      if (personal.groupKey(memberId)) target.same_house_personal = true;
+      if (!byId.has(memberId)) continue;
+      target.same_house_role = memberId === primaryId ? "primary" : "affiliate";
+      target.same_house_primary_id = primaryId;
+      target.same_house_primary_offline = primaryOffline;
+      target.same_house_group_watched = groupWatched;
+      target.same_house_group_hidden = groupHidden;
+    }
+  }
+  if (visited % 256) yield {label:'relations.groups',units:visited % 256};
   return list;
 }
 

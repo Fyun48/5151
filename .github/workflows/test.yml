@@ -145,6 +145,23 @@ jobs:
           set -euo pipefail
           npm run test:pg
 
+      # 同屋源折疊「群內代表」語意守門（Owner 2026-10-12 裁決，零容差）。
+      #
+      # 為什麼放這裡、而不是用全量快照：全量 parity 需要 18.4 萬列的凍結快照（人工 merge 前步驟，
+      # 見 docs/runbooks/5151_same_house_fold_deploy.md §4）；CI 這裡改用**合成種子資料**
+      # （線狀鏈 ≥15 列同群、橋式／非橋式、代表列隨篩選變動），讓「兩條路徑語意分歧」在 PR 就紅。
+      # 資料主權：腳本自己 INSERT／DELETE，只用這個 job 的拋棄式 PG（PG_URL 指向 127.0.0.1）。
+      # 層級：角色級（fold_role vs attachSameHouseRoles）＋ 端點級（totalMatched／順序／逐列對稱差）。
+      #   • DATA_DIR 必須指向獨立暫存目錄：import db.js 會初始化 SQLite，不可繼承正式 /data。
+      #   • 這一步是 gate（不是診斷）：任何一條不一致就 exit 1。
+      - name: Same-house fold parity (synthetic seeds, gating)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DATA_DIR="$(mktemp -d)"
+          node v3/scripts/fold-ci-parity.mjs
+
       # 43 欄 vs 23 欄 A/B（astra 2026-09-25 裁決 §5A／§6.3）——**診斷、非 gate** ✓。
       #   • 用同一顆已由 pg-integration-setup 灌好 schema ＋ 可重現列的拋棄式 PG ✓
       #   • DATA_DIR 指向獨立暫存目錄 ✓（不可繼承正式 /data —— `db.js` 的 import 會初始化 SQLite ✓）

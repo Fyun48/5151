@@ -49,6 +49,11 @@ export function candidateRowFromValues(values) {
     source_published_at: values[42],
   };
 }
+// Owner 2026-10-12 裁決（群內代表）的讀取端分組鍵 `listings.fold_component_root` **不進候選載體**：
+// 載體由 SQLite 與 PG 共用（`db.js listListings` 用同一份 LIST_CANDIDATE_COLUMNS），而 SQLite
+// 沒有這一欄；把它塞進載體會讓所有 SQLite 查詢變成 `no such column: fold_component_root`。
+// 因此 PG 讀取端改由 decoration provider 的 `foldRootMap()` 另外一批查詢載入（見 db.js
+// preloadDecorationProviderAsync 的 foldRoots 與 listingSearchNodePg 的 foldGroups:true）。
 
 export const LIST_CANDIDATE_KEYS = Object.freeze(Object.keys(candidateRowFromValues([])));
 export const LIST_CANDIDATE_COLUMNS = LIST_CANDIDATE_KEYS.join(", ");
