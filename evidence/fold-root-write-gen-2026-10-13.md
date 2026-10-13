@@ -321,6 +321,21 @@ ssh syn-nas "/usr/local/bin/docker exec prb-genkey-pg psql -U postgres -d repro 
 
 完整 PG 整合（＝CI 的 `test-postgres` job 本地等價）另跑一次，見 §8.7。
 
+**改過的 `fold-shape-fixtures.mjs` 也真的跑得動**（它是 runbook 的手動診斷，**不在 CI**，
+所以更要本地實跑一次）。在一次性容器的 `repro`（有完整 schema）上：
+
+```
+$ PG_URL=…15447/repro DATA_DIR=$(mktemp -d) node v3/scripts/fold-shape-fixtures.mjs
+{"allOk":true,"total":53,"residualRows":0,…}                          rc=0
+```
+
+53 條全 `ok:true`、`residualRows=0`（自己收乾淨），代表本包改的「先算待寫清單 → bump(:259)
+→ UPDATE(:262)」在真 PG 上可執行。**追記**：同一支在 `tracker_test` 上會先卡在 `:192`
+`column "fold_component_root" does not exist`（該庫由 `pg-integration-setup.mjs` 現建，沒有
+release 期才加的欄位；`fold-ci-parity.mjs` 自己會 `ALTER TABLE … ADD COLUMN`，所以那裡不受影響），
+補上欄位後又撞到 seed 交易 `:149` 的 `listings_pkey` 重複鍵（**在本包改動區塊之前**，未再追因，
+改用有完整 schema 的 `repro` 完成驗證）。
+
 ### 8.4 負向對照（把 bump 移回 UPDATE 之後 ⇒ 兩條都會紅）
 
 只把 `v3/src/foldComponentRoot.js` 的兩句換回舊序，其餘不動：
@@ -368,6 +383,8 @@ log（`/home/cline/lab/5151-genfix-r11/`，`sha256sum | cut -c1-16`）：
 | `pg-integration-r11.log` | `db0110e1eeee438f` | 完整 PG 整合（＝CI `test-postgres` job 本地等價），見 §8.7 |
 | `fold-ci-parity-tracker-test-r11.log` | `4b8f5b884370a529` | 改過的 `fold-ci-parity.mjs` 在新鮮 `tracker_test` 上**全綠**（16/16） |
 | `fold-ci-parity-r11.log` / `fold-ci-parity-baseline.log` | `12b1e60ee36f1087` / `a1c6b0b8d80e269d` | 在舊 schema 容器上的改前／改後同錯誤對照 |
+| `fold-shape-fixtures-repro-r11.log` | `03c47c1e51dbf74e` | 改過的 `fold-shape-fixtures.mjs` 在 `repro`（完整 schema）上 53/53 全綠 |
+| `fold-shape-fixtures-r11.log` | `15c899c52b4500fe` | 同支在 `tracker_test` 上的環境性失敗（見 §8.3 追記），非本包改動 |
 
 ### 8.7 完整 PG 整合（本地等價於 CI 的 `test-postgres` job）
 
