@@ -75,9 +75,15 @@ repro3、`member-list-benchmark.mjs`、`MEMBER_UID=1`、`RUNS=5`、單一進程�
 - **既存債已證明（2026-10-13 補量，升級層建議①／③要求）**：同機、同協定（`RUNS=5`、`MEMBER_UID=1`、`repro3`、同一份 `node_modules` realpath `/workspace/repos/5151/node_modules`）、**交替串行三輪** `before(60cbd58)`↔`after(f45280d)`、每段間隔 30s、全程不重疊：
   - `stats p95` 的 Δ（after−before）**中位 +6ms、平均 −19ms**，15 格中 8 慢 7 快 ⇒ **符號不一致 ⇒ 本包對 stats 無可測影響**；Δ 範圍 `−1079 ~ +949ms` 就是這台共用機的噪聲頻帶（同期有四支不屬於我的 dev server 在跑）。
   - **兩側都爆門檻**：`before` 最差 `2467ms`、`after` 最差 `2806ms`（門檻 1.0s）⇒ 「`stats` 未達標屬既存債」**從宣稱變成實測結論**。`list p95` 逐組 Δ 中位 `+32/+79/−70ms` ⇒ 同樣是噪聲。
-  - 我一度用**單輪**對照得出「+379／+530／+774ms 變慢、不能用雜音帶過」的結論，那個方法本身是錯的：單輪 p95（5 樣本取最大）在共用機上雜音敏感。**教訓＝前後對照必須交替重複、以符號一致性判讀**（已沉澱 `L-0900`）。
+  - 我一度用**單輪**對照得出「+379／+530／+774ms 變慢、不能用雜音帶過」的結論，那個方法本身是錯的：單輪 p95（5 樣本取最大）在共用機上雜音敏感。**教訓＝前後對照必須交替重複、以符號一致性判讀**（已沉澱 `L-0922`）。
   - 复算指令（只讀 JSON，不碰 DB）：`cd /home/cline/lab/5151-fold-parity-20261012 && python3 tools/perf-pair-report.py results/bench-pair/alt`；原始六份 `results/bench-pair/alt/r{1,2,3}-{before,after}.json`，各段起始 load 記在 `alt/meta.txt`。
 
 ## 7 我（規劃層）覆核過的與我沒覆核過的
 - 我親手跑過並逐項对上：drift（兩庫）、三门 log 逐行解析、17/35 重算、fixtures 53、collation 探針全部數字、閘門兩支測試 12/12、CI job 級、PR 狀態、正式庫 `source` 計數、`match.js` diff 為空、worktree porcelain。
 - 我**沒有**覆核：分頁在 repro2 的重跑（沿用第 7 輪）；`fold-endpoint-bench.mjs` 的 off 模式全量耗時（自報 baseline p50 14,400ms）；SQLite 路徑本輪未另行驗；效能 before／after 對照未做。
+
+## 8 升級層建議③的成品（**可裝但先不裝**，2026-10-13 09:5x）
+- 唯讀探針：`~/lab/5151-fold-parity-20261012/tools/drift-probe.sh`（700）。`mismatch=0` 只記一行；`mismatch>0` 落告警檔並（未加 `--dry-alert` 時）用 `ask-owner` 發一封**要你准回填**的詢問。**不自動 backfill、不 `--stamp`、不寫正式庫。**
+- 兩邊試跑：`repro3 → rc=0 mismatch=0`（無告警）；`repro2 → rc=1 mismatch=15`（告警檔 `~/.local/state/fold-drift/ALERT-20261013-0952.txt`，試跑加 `--dry-alert` 未送出）。狀態目錄與歷史檔 grep `postgres://`／`password=` 各 0 命中。
+- **裝載時機刻意往後**：正式庫目前查 `fold_component_root` 直接回 `column "fold_component_root" does not exist`，此刻進 crontab 等於每天必報錯的殭屍任務；cron 行寫在腳本註解裡，**等 007＋回填＋drift=0＋`--stamp` 完成後才裝**（那四步是你手動，`F-0001`）。
+- 升級層同一句裡還有「批次後探測」＝要碰爬蟲寫入鏈的 code 改動，**不塞進本 PR**（會讓審查面從折疊擴大到寫入鏈），另開交辦。
