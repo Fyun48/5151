@@ -16,7 +16,7 @@ const DEFAULT_BATCH = 2000;
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
-import { componentRootMap, enabledSourcesFromPg } from "../src/foldComponentRoot.js";
+import { componentRootMap, enabledSourcesFromPg, bumpFoldRootWriteGen } from "../src/foldComponentRoot.js";
 
 assertPgTargetAllowed("fold-root-backfill", process.env.PG_URL || "", { allow: ["repro", "crawl_sandbox", "tracker_test", "repro2"] });
 
@@ -90,6 +90,15 @@ try {
       for (const [root, pid] of batch) {
         // 只寫 NULL 或非 NULL 的 root 值；WHERE 比對現值 ⇒ 併發寫入不會被覆蓋成過期值的情況最小化。
         await client.query(toPostgresSql("UPDATE listings SET fold_component_root = ? WHERE post_id = ? AND fold_component_root IS DISTINCT FROM ?"), [root, pid, root]);
+      }
+      // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：與本批的 UPDATE **同一個交易** +1，
+      // 回填改到任何一列都會讓既有的零差戳記失效（回填後照 runbook §1 重跑 `--stamp` 才會再放行）。
+      // 沒寫任何列的一批不 bump：資料沒動 ⇒ 戳記仍然是真的。
+      // 順序：**刻意不動**（bump 在 UPDATE 之後）——兩句都在這個 BEGIN(88)…COMMIT(100) 之間，
+      // 行程中途死掉是整批 rollback（真正的原子），不是 round 11 那種「非交易相鄰兩句」的窗口；
+      // 把它改成 bump 在前只會讓「同一批」的語意更難讀，安全性質不變。
+      if (batch.length) {
+        await bumpFoldRootWriteGen((sql, params = []) => client.query(toPostgresSql(sql), params).then((r) => r.rows));
       }
       await client.query("COMMIT");
       written += batch.length;

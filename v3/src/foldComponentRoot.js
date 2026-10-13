@@ -255,6 +255,10 @@ export const FOLD_SQL_GATE_REASON = Object.freeze({
   DRIFT_STAMP_DIRTY: "fold_root_drift_stamp_mismatch",
   // 戳記存在且零差，但**對不上當前資料版本**（升級層 2026-10-12 21:24 加嚴：「僅有 stamp 不足」）。
   DRIFT_STAMP_STALE: "fold_root_drift_stamp_stale",
+  // 戳記沒有寫入世代鍵（升級前寫的舊式戳記）⇒ 身分不明，fail-closed（升級層 2026-10-13 開閘硬條件）。
+  DRIFT_STAMP_GEN_MISSING: "fold_root_drift_stamp_gen_missing",
+  // 戳記的寫入世代鍵 ≠ 當前值：root 被**原地更新**過（列數與 max(post_id) 都看不出來）⇒ 拒開閘。
+  DRIFT_STAMP_GEN_STALE: "fold_root_drift_stamp_gen_stale",
 });
 
 // `fold-root-drift-check.mjs --stamp` 在「全量重算 vs 固化欄」逐列零差時寫入的 settings 鍵。
@@ -277,13 +281,61 @@ export const FOLD_DRIFT_STAMP_KEY = "foldRootDriftStamp";
  */
 export const FOLD_DATA_VERSION_SQL = "SELECT count(*) AS n, max(post_id) AS max_post_id FROM listings";
 
+// ---------------------------------------------------------------------------
+// 寫入世代鍵 `settings.foldRootWriteGen`（text 存整數，單調遞增）
+// ---------------------------------------------------------------------------
+//
+// 為什麼需要它（升級層 2026-10-13 裁為**開閘硬條件**；evidence/ACCEPTANCE-2026-10-13.md §4①）：
+// 上面的 `dataVersion` 只綁 `rows`／`maxPostId`，而刷新鏈對 root 是**原地 UPDATE**——列數與
+// `max(post_id)` 都不變 ⇒ 一次已接受的零差戳記在 root 被改寫後依然「有效」，請求就在**過時的
+// 世代**下被放行。修法：**每一次實際寫入 root** 都在同一個交易內把這個鍵 +1（寫入路徑見
+// `refreshFoldComponentRoot()`／`v3/scripts/fold-root-backfill.mjs`／CI 與 fixture 種子），
+// 線上開閘前檢再比對「戳記的 `writeGen` ＝ 當前值」；不符或缺欄 ⇒ 503（fail-closed）。
+//
+// 形狀照既有 settings 慣例（`adminAuditSchema.js`／`crawlScheduleAsync.js`：key/value 皆 text、
+// `?` 佔位由 PG 呼叫端 `toPostgresSql()` 轉譯）：`key` 是 PK ⇒ `ON CONFLICT(key)` 兩邊合法。
+export const FOLD_WRITE_GEN_KEY = "foldRootWriteGen";
+// 不存在就先建 0（`ON CONFLICT(key) DO NOTHING`：SQLite 3.24+ 與 PostgreSQL 都支援）。
+export const FOLD_WRITE_GEN_ENSURE_SQL = "INSERT INTO settings(key, value) VALUES (?, '0') ON CONFLICT(key) DO NOTHING";
+// 原子 +1（單句 ⇒ 併發安全）。`CAST(value AS bigint)` 兩邊都吃：PG 有 bigint；SQLite 的型別名含
+// "INT" ⇒ INTEGER affinity，同一句不用分岔。值一律以 text 落地（settings.value 是 TEXT NOT NULL）。
+export const FOLD_WRITE_GEN_BUMP_SQL =
+  "UPDATE settings SET value = CAST(COALESCE(CAST(value AS bigint), 0) + 1 AS text) WHERE key = ?";
+export const FOLD_WRITE_GEN_READ_SQL = "SELECT value FROM settings WHERE key = ?";
+
+function firstRowValue(raw) {
+  const list = Array.isArray(raw) ? raw : raw?.rows;
+  return list?.[0]?.value;
+}
+
+/**
+ * 讀當前寫入世代鍵：缺鍵／壞值一律當 **0**（不猜、不拋；呼叫端自行決定 fail-open 還是 fail-closed，
+ * 開閘前檢是後者）。
+ */
+export async function readFoldRootWriteGen(exec) {
+  const n = Number(firstRowValue(await exec(FOLD_WRITE_GEN_READ_SQL, [FOLD_WRITE_GEN_KEY])));
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * 原子 +1，回傳新值。**必須用與 root 的 UPDATE 同一個 exec**（＝同一個連線／交易），
+ * 否則「root 寫了、世代沒動」的窗口會讓戳記驗證失效。
+ */
+export async function bumpFoldRootWriteGen(exec) {
+  await exec(FOLD_WRITE_GEN_ENSURE_SQL, [FOLD_WRITE_GEN_KEY]);
+  await exec(FOLD_WRITE_GEN_BUMP_SQL, [FOLD_WRITE_GEN_KEY]);
+  return readFoldRootWriteGen(exec);
+}
+
 // 成功判定可快取多久（毫秒；0＝每請求都重驗）。失敗**永遠**記憶（fail-closed 快路徑：修好依賴後
-// 要重啟行程，這是刻意的）；成功只記這麼久，讓「資料一變就失效」在 TTL 內生效。
+// 要重啟行程，這是刻意的）；成功只記這麼久，**而且快取鍵含寫入世代鍵**（見 FOLD_WRITE_GEN_KEY）：
+// 只比 TTL 會讓「原地 UPDATE root」在 TTL 內繼續吃舊的成功判定（升級層 2026-10-13）。
 const FOLD_SQL_GATE_OK_TTL_MS = (() => {
   const raw = Number(process.env.FOLD_SQL_GATE_OK_TTL_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : 60_000;
 })();
 
+// `{ result, at, gen }`：gen＝這個成功判定成立時的寫入世代鍵（快取鍵的一部分）。
 let foldSqlGateCache = null;
 
 /** 測試用：清掉開閘前檢的記憶（同一行程先後接不同 driver／不同戳記時才需要）。 */
@@ -306,17 +358,32 @@ export function resetFoldSqlGate() { foldSqlGateCache = null; }
  *   3. **戳記綁定當前資料版本**：戳記內的 `dataVersion {rows, maxPostId}` 必須等於線上
  *      `FOLD_DATA_VERSION_SQL` 的實測值；不符（或缺欄位）⇒ 拒開閘，reason=`DRIFT_STAMP_STALE`。
  *      升級層 2026-10-12 21:24：「僅有 stamp 不足」。資料變了就要重跑 `--stamp`（runbook §1）。
+ *   4. **戳記綁定寫入世代鍵**（升級層 2026-10-13 開閘硬條件）：戳記的 `writeGen` 必須存在
+ *      （缺 ⇒ `DRIFT_STAMP_GEN_MISSING`，舊式戳記）且等於當前 `settings.foldRootWriteGen`
+ *      （不等 ⇒ `DRIFT_STAMP_GEN_STALE`）。這一條才抓得到**原地 UPDATE root**（rows／maxPostId
+ *      都不變的那種）——每一次實際寫入 root 都會把該鍵 +1（見 `bumpFoldRootWriteGen`）。
  *
  * 回傳 `{ ok, reason, detail }`。快取：**失敗永遠記**（修好依賴後需重啟行程，刻意的 fail-closed）；
- * **成功只記 `FOLD_SQL_GATE_OK_TTL_MS`**（預設 60s，可用環境變數調；0＝每請求重驗），
- * 否則「資料一變就失效」會被行程內快取永久蓋住。呼叫端**不得**在 `ok:false` 時退回 Node 路徑。
+ * **成功只記 `FOLD_SQL_GATE_OK_TTL_MS`**（預設 60s，可用環境變數調；0＝每請求重驗）**且以寫入
+ * 世代鍵為鍵**——只有「同一個 gen」才准吃快取，否則原地 UPDATE 後最長 60 秒仍會吃舊的成功判定。
+ * 呼叫端**不得**在 `ok:false` 時退回 Node 路徑。
  */
 export async function foldSqlGateReady(exec) {
   if (foldSqlGateCache) {
+    // 失敗永久記憶 ⇒ 不再送任何查詢（維持既有 fail-closed 語意）。
+    if (!foldSqlGateCache.result.ok) return foldSqlGateCache.result;
     const age = Date.now() - foldSqlGateCache.at;
-    if (!foldSqlGateCache.result.ok || age < FOLD_SQL_GATE_OK_TTL_MS) return foldSqlGateCache.result;
+    if (age < FOLD_SQL_GATE_OK_TTL_MS) {
+      // 成功的快取必須以寫入世代鍵為鍵：gen 一變（＝root 被寫過）就落到下面的完整重驗，
+      // 不讓 60 秒 TTL 掩蓋過時的成功判定。讀不到 gen（拋錯）⇒ 一樣重驗（fail-closed）。
+      let cachedGen = null;
+      try { cachedGen = await readFoldRootWriteGen(exec); } catch { cachedGen = null; }
+      if (cachedGen !== null && cachedGen === foldSqlGateCache.gen) return foldSqlGateCache.result;
+    }
   }
   let result;
+  // 這一次判定成立時的寫入世代鍵（快取鍵）；只有真的讀到才不是 null。
+  let liveGen = null;
   try {
     if (!(await foldRootRefreshReady(exec))) {
       result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_COLUMN, detail: null };
@@ -352,11 +419,33 @@ export async function foldSqlGateReady(exec) {
             detail: { stamped: { rows: stampedRows, maxPostId: stampedMax }, live: { rows: liveRows, maxPostId: liveMax }, at: stamp.at || null },
           };
         } else {
-          result = {
-            ok: true,
-            reason: null,
-            detail: { at: stamp.at || null, rows: liveRows, maxPostId: liveMax, rootsMd5: stamp.dataVersion.rootsMd5 || null },
-          };
+          // 第 4 條（升級層 2026-10-13 開閘硬條件）：寫入世代鍵。放在最後一關，reason 才不會被
+          // 前面的「資料版本不符」蓋掉（原地 UPDATE 的形狀正是「版本相符、世代不符」）。
+          liveGen = await readFoldRootWriteGen(exec);
+          const stampedGenRaw = stamp.writeGen;
+          const hasStampedGen = stampedGenRaw != null && Number.isFinite(Number(stampedGenRaw));
+          if (!hasStampedGen) {
+            result = {
+              ok: false,
+              reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_GEN_MISSING,
+              detail: { missing: "writeGen", at: stamp.at || null, liveWriteGen: liveGen, fix: "node v3/scripts/fold-root-drift-check.mjs --stamp" },
+            };
+          } else if (Number(stampedGenRaw) !== liveGen) {
+            result = {
+              ok: false,
+              reason: FOLD_SQL_GATE_REASON.DRIFT_STAMP_GEN_STALE,
+              detail: {
+                stampedWriteGen: Number(stampedGenRaw), liveWriteGen: liveGen, at: stamp.at || null,
+                fix: "node v3/scripts/fold-root-drift-check.mjs --stamp",
+              },
+            };
+          } else {
+            result = {
+              ok: true,
+              reason: null,
+              detail: { at: stamp.at || null, rows: liveRows, maxPostId: liveMax, rootsMd5: stamp.dataVersion.rootsMd5 || null, writeGen: liveGen },
+            };
+          }
         }
       }
     }
@@ -364,7 +453,7 @@ export async function foldSqlGateReady(exec) {
     // 讀不到戳記（表不存在／連線壞）⇒ 一樣拒開閘。
     result = { ok: false, reason: FOLD_SQL_GATE_REASON.NO_DRIFT_STAMP, detail: { error: String(error?.message || error).slice(0, 160) } };
   }
-  foldSqlGateCache = { result, at: Date.now() };
+  foldSqlGateCache = { result, at: Date.now(), gen: liveGen };
   return result;
 }
 
@@ -501,6 +590,19 @@ export async function refreshFoldComponentRoot(exec, postId, { maxNodes = FOLD_R
     if (before !== after) writes.push([after, pid]);
   }
   if (!dryRun) {
+    // 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：**只在這一次真的改了 root** 時 +1，
+    // 而且**必須排在 root 的 UPDATE 之前**（round 11 修掉「一句話寬」的 fail-open 窗口）。
+    // 為什麼順序是安全性質、不是風格問題——兩句之間行程死掉時：
+    //   ・bump 在前（本版）：世代超前、root 未動 ⇒ 已接受的舊戳記**當場失效**（fail-closed；
+    //     下一個請求走 gen_stale 被拒，要重跑 `--stamp` 才放行，而 `--stamp` 會全量重算 root、
+    //     零差才寫 ⇒ 不會把過時世代放行）。
+    //   ・bump 在後（舊版）：root 已寫、世代未動 ⇒ 舊戳記仍算有效 ⇒ 請求在**過時世代**下被放行
+    //     （fail-open）。這就是本包要關的窗口。
+    // 為什麼只在那時：沒改到任何一列 ⇒ 固化欄與重算值仍然一致，已接受的零差戳記還是真的。
+    // 交易：本函式用呼叫端傳進來的 `exec` 相鄰執行這兩件事（同一條連線），而 `match.js` 的
+    // fold 漏斗**沒有外層交易**（autocommit）⇒ 這裡**不宣稱原子**：bump 在前已把窗口從
+    // fail-open 變成 fail-closed，交易只是呼叫端若自行加上的額外加固（不依賴它）。
+    if (writes.length) await bumpFoldRootWriteGen(exec);
     for (const [root, pid] of writes) {
       await exec("UPDATE listings SET fold_component_root = ? WHERE post_id = ?", [root, pid]);
     }

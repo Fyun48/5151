@@ -14,7 +14,7 @@ import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { attachSameHouseRoles } from "../src/db.js";
 import { loadFoldRoots } from "../src/repository/decorationData.js";
-import { componentRootMap } from "../src/foldComponentRoot.js";
+import { componentRootMap, bumpFoldRootWriteGen } from "../src/foldComponentRoot.js";
 import { foldRoleCte } from "../src/listingSearchSql.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
 
@@ -242,11 +242,25 @@ results.push({
 
 // 把寫入端算出的分量固化進**這一組合成列**（正式路徑的固化欄；只碰本 fixture 的 post_id），
 // 之後兩條讀取端都**讀真的那一欄**（SQL 不用 rootSource 覆寫、Node 用 provider.foldRoot）。
+let fixtureRootWrites = 0;
+// 先把「真的會改到列」的待寫清單算出來，**bump 先送**，再送 root UPDATE（round 11）。
+// 順序是安全性質：兩句之間行程死掉時，bump 在前 ⇒ 世代超前、舊戳記被拒（fail-closed），
+// 不會出現「root 已寫、世代未動」那種把請求放行在過時世代的 fail-open 窗口。
+const fixtureRootPending = [];
 for (const [pid, root] of rootMap) {
   if (!all.includes(Number(pid))) continue;                       // 只寫 fixture 自己的列
   const want = root == null ? null : Number(root);
   const have = foldRootRows.get(Number(pid));
-  if (have !== want) await drv.pool.query("UPDATE listings SET fold_component_root = $1 WHERE post_id = $2", [want, Number(pid)]);
+  if (have !== want) fixtureRootPending.push([want, Number(pid)]);
+}
+// 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：fixture 也是 `fold_component_root` 的寫入路徑，
+// 有真的改到列就要 bump（否則「戳記 vs 世代」在這一組資料上不成立）。
+if (fixtureRootPending.length) {
+  await bumpFoldRootWriteGen((sql, params = []) => drv.pool.query(toPostgresSql(sql), params).then((r) => r.rows));
+}
+for (const [want, pid] of fixtureRootPending) {
+  await drv.pool.query("UPDATE listings SET fold_component_root = $1 WHERE post_id = $2", [want, pid]);
+  fixtureRootWrites += 1;
 }
 foldRootRows = await readFoldRoots();
 {

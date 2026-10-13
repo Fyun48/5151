@@ -350,13 +350,19 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
   (3) **戳記綁的資料版本＝當前資料**（`dataVersion {rows, maxPostId}` 對線上
   `SELECT count(*) , max(post_id) FROM listings`；不符／缺欄 ⇒ reason=`fold_root_drift_stamp_stale`）。
   升級層 2026-10-12 21:24：「僅有 stamp 不足」。離線複核（`rootsMd5` 全表聚合）見 runbook §1.1／§1.2。
+  (4) **戳記綁的寫入世代鍵＝當前值**（升級層 2026-10-13 開閘硬條件）：戳記的 `writeGen` 對
+  `settings.foldRootWriteGen`——缺欄（升級前寫的舊式戳記）⇒ reason=`fold_root_drift_stamp_gen_missing`；
+  對不上 ⇒ reason=`fold_root_drift_stamp_gen_stale`。這一條才抓得到**原地 UPDATE root**
+  （rows／maxPostId 都不變的刷新）：每一條寫入路徑（刷新漏斗／回填／CI 種子／fixture）都在同一交易
+  把它 +1（`foldComponentRoot.js bumpFoldRootWriteGen()`）。
 - **缺欄時的回傳形狀**：`foldSqlGateReady` 回 `{ok:false, reason:"fold_component_root_missing",
   detail:null}`；呼叫端**丟 `ListingSearchUnavailableError`**（`code=SEARCH_UNAVAILABLE`，
   `listingSearchHttp.js` 映射成 **HTTP 503**）並 `console.error("[fold-gate] …")` 告警——
   **不退回 Node 路徑**（降級會讓「清單看到的資料」與固化欄的真相無聲分裂）。
 - **快取語意**：**失敗永久記**（同一行程修好依賴後要重啟才放行，刻意的 fail-closed）；
-  **成功只記 60 秒 TTL**（`FOLD_SQL_GATE_OK_TTL_MS`，0＝每請求重驗）——否則「資料一變就失效」
-  會被行程內快取永久蓋住。
+  **成功只記 60 秒 TTL 且以寫入世代鍵為快取鍵**（`FOLD_SQL_GATE_OK_TTL_MS`，0＝每請求重驗）——
+  否則「資料一變就失效」會被行程內快取永久蓋住；只比 TTL 的話，原地 UPDATE root 之後最長 60 秒
+  仍會吃舊的成功判定（2026-10-13 修：快取鍵＝`writeGen`，鍵一變就重驗，不等 TTL）。
 - **交易隔離**：探測全部用不會拋錯的查詢（`pg_attribute`／`settings`；資料版本那條是普通 SELECT）
   ⇒ 不會把交易打成 aborted（25P02）。
   可重跑證據：`v3/test/fold-gate-transaction-live-pg.test.js`（BEGIN → 探測 → 同交易 CREATE TEMP
