@@ -14,7 +14,7 @@
 import { createPostgresDriver } from "../src/dbDriverPostgres.js";
 import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
-import { foldSqlGateReady, resetFoldSqlGate, FOLD_DRIFT_STAMP_KEY } from "../src/foldComponentRoot.js";
+import { foldSqlGateReady, resetFoldSqlGate, FOLD_DRIFT_STAMP_KEY, FOLD_WRITE_GEN_KEY, readFoldRootWriteGen } from "../src/foldComponentRoot.js";
 
 assertPgTargetAllowed("fold-gate-stamp-verify", process.env.PG_URL || "", { allow: ["repro", "repro2", "tracker_test", "crawl_sandbox"] });
 const drv = await createPostgresDriver({ env: process.env });
@@ -40,6 +40,12 @@ const dataVersionMatch = Boolean(stamped)
   && Number(stamped.maxPostId) === liveVersion.maxPostId
   && String(stamped.rootsMd5 || "") === String(liveVersion.rootsMd5 || "");
 
+// 第 4 條（升級層 2026-10-13 開閘硬條件）：戳記的 writeGen 必須存在且等於當前的寫入世代鍵。
+// 這一條抓的是 `rows`／`maxPostId` 看不出來的**原地 UPDATE**（刷新鏈／回填）。
+const liveWriteGen = await readFoldRootWriteGen(exec);
+const stampWriteGen = stamp?.writeGen;
+const writeGenMatch = stampWriteGen != null && Number.isFinite(Number(stampWriteGen)) && Number(stampWriteGen) === liveWriteGen;
+
 resetFoldSqlGate();
 const gate = await foldSqlGateReady(exec);
 resetFoldSqlGate();
@@ -49,6 +55,7 @@ const checks = {
   stamp_present: Boolean(stamp),
   stamp_mismatches_zero: Number(stamp?.mismatches) === 0,
   dataVersion_match: dataVersionMatch,
+  writeGen_match: writeGenMatch,
   gate_ok: gate.ok === true,
 };
 const ok = Object.values(checks).every(Boolean);
@@ -56,9 +63,11 @@ console.log(JSON.stringify({
   script: "fold-gate-stamp-verify",
   at: new Date().toISOString(),
   checks,
-  stamp: stamp ? { at: stamp.at || null, rows: stamp.rows ?? null, components: stamp.components ?? null, mismatches: stamp.mismatches } : null,
+  stamp: stamp ? { at: stamp.at || null, rows: stamp.rows ?? null, components: stamp.components ?? null, mismatches: stamp.mismatches, writeGen: stampWriteGen ?? null } : null,
   stampedVersion: stamped,
   liveVersion,
+  liveWriteGen,
+  key: FOLD_WRITE_GEN_KEY,
   gate,
   ok,
 }));

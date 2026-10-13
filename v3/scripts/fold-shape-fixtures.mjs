@@ -14,7 +14,7 @@ import { assertPgTargetAllowed } from "../src/domainToolGuards.js";
 import { toPostgresSql } from "../src/sqlDialect.js";
 import { attachSameHouseRoles } from "../src/db.js";
 import { loadFoldRoots } from "../src/repository/decorationData.js";
-import { componentRootMap } from "../src/foldComponentRoot.js";
+import { componentRootMap, bumpFoldRootWriteGen } from "../src/foldComponentRoot.js";
 import { foldRoleCte } from "../src/listingSearchSql.js";
 import { normalizeCrawlSources } from "../src/crawlSources.js";
 
@@ -242,11 +242,17 @@ results.push({
 
 // 把寫入端算出的分量固化進**這一組合成列**（正式路徑的固化欄；只碰本 fixture 的 post_id），
 // 之後兩條讀取端都**讀真的那一欄**（SQL 不用 rootSource 覆寫、Node 用 provider.foldRoot）。
+let fixtureRootWrites = 0;
 for (const [pid, root] of rootMap) {
   if (!all.includes(Number(pid))) continue;                       // 只寫 fixture 自己的列
   const want = root == null ? null : Number(root);
   const have = foldRootRows.get(Number(pid));
-  if (have !== want) await drv.pool.query("UPDATE listings SET fold_component_root = $1 WHERE post_id = $2", [want, Number(pid)]);
+  if (have !== want) { await drv.pool.query("UPDATE listings SET fold_component_root = $1 WHERE post_id = $2", [want, Number(pid)]); fixtureRootWrites += 1; }
+}
+// 寫入世代鍵（升級層 2026-10-13 開閘硬條件）：fixture 也是 `fold_component_root` 的寫入路徑，
+// 有真的改到列就要 bump（否則「戳記 vs 世代」在這一組資料上不成立）。
+if (fixtureRootWrites) {
+  await bumpFoldRootWriteGen((sql, params = []) => drv.pool.query(toPostgresSql(sql), params).then((r) => r.rows));
 }
 foldRootRows = await readFoldRoots();
 {
