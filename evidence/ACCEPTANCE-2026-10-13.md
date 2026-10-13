@@ -84,6 +84,6 @@ repro3、`member-list-benchmark.mjs`、`MEMBER_UID=1`、`RUNS=5`、單一進程�
 
 ## 8 升級層建議③的成品（**可裝但先不裝**，2026-10-13 09:5x）
 - 唯讀探針：`~/lab/5151-fold-parity-20261012/tools/drift-probe.sh`（700）。`mismatch=0` 只記一行；`mismatch>0` 落告警檔並（未加 `--dry-alert` 時）用 `ask-owner` 發一封**要你准回填**的詢問。**不自動 backfill、不 `--stamp`、不寫正式庫。**
-- 兩邊試跑：`repro3 → rc=0 mismatch=0`（無告警）；`repro2 → rc=1 mismatch=15`（告警檔 `~/.local/state/fold-drift/ALERT-20261013-0952.txt`，試跑加 `--dry-alert` 未送出）。狀態目錄與歷史檔 grep `postgres://`／`password=` 各 0 命中。
+- 兩邊試跑：`repro3 → rc=0 mismatch=0`（無告警）；`repro2 → rc=1 mismatch=15`（告警檔 `~/.local/state/fold-drift/ALERT-20261013-0952.txt`，試跑加 `--dry-alert` 未送出）。狀態目錄與歷史檔 grep 連線字串樣式（scheme 帶帳號密碼、以及密碼欄位賦值樣式）各 0 命中。
 - **裝載時機刻意往後**：正式庫目前查 `fold_component_root` 直接回 `column "fold_component_root" does not exist`，此刻進 crontab 等於每天必報錯的殭屍任務；cron 行寫在腳本註解裡，**等 007＋回填＋drift=0＋`--stamp` 完成後才裝**（那四步是你手動，`F-0001`）。
 - 升級層同一句裡還有「批次後探測」＝要碰爬蟲寫入鏈的 code 改動，**不塞進本 PR**（會讓審查面從折疊擴大到寫入鏈），另開交辦。
