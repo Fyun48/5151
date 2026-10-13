@@ -288,14 +288,38 @@ function textKeyFilter(column, keys, driver) {
 // returned raw - the parsing/rounding stays in db.js so both drivers share one parser.
 const ROUTE_CACHE_COLUMNS = "route_key, distances, min_km, min_m, rush_am_min, rush_pm_min, rush_updated_at";
 
+// ── route_cache 的鍵清單分批上限（2026-10-13，會員列表剩餘成本歸因的「一刀」）────────────
+//
+// 為什麼要分批：`route_cache` 只有 `route_cache_pkey`（UNIQUE btree(route_key)），但整包 key
+// 一起送時 PG 的成本模型選的是 **59MB 表的平行 Seq Scan**——隔離靶實測
+//
+//   keys=2848  → Seq Scan，每次讀 4,800 個 block（37MB）、exec 42–63ms
+//   keys=7422  → Seq Scan，每次讀 4,704 個 block（37MB）、exec 69–98ms
+//
+// （同一條 SQL 只換鍵數：1024 個鍵時是 `Bitmap Index Scan on route_cache_pkey`、read=0。）
+// 會員列表每個請求會呼叫兩次這條查詢（list 前置與 stats provider，鍵集合互斥 ⇒ 兩次都真的
+// 落到 DB），線上實測合計 156ms、佔請求 SQL 時間 28%，換算下來每請求要從磁碟重讀 74MB。
+//
+// 分批**只改「一條 SQL 帶幾個鍵」**，不回傳值、不改述詞、不動任何呼叫端：
+//   • 同一組 key、同一組列；缺列一律不回（呼叫端本來就會補 null）
+//   • 回傳 Map 的插入順序不影響任何消費者（`rowsByKeys` 會依請求的 key 順序重建 Map）
+//   • PostgreSQL 端每次仍是 `route_key = ANY($1::text[])`（一個陣列參數，不隨鍵數成長）；
+//     SQLite 端仍是 `route_key IN (?,?…)`——分批讓**單一語句的變數數反而變少**（更安全）
+// 1024 這個上界刻意留在「計畫翻車點」之下：實測 1280 仍走索引、1536 起翻成 Seq Scan，
+// 所以留了 25% 的餘裕。要調這個數字必須重跑 `v3/scripts/route-cache-chunk-probe.mjs`。
+export const ROUTE_CACHE_KEY_CHUNK = 1024;
+
 export async function loadRouteCacheEntries(exec, keys, driver = "sqlite") {
   const map = new Map();
   const list = [...new Set((keys || []).map((key) => String(key || "")).filter(Boolean))];
   if (!list.length) return map;
-  const filter = textKeyFilter("route_key", list, driver);
-  const rows = await exec(`SELECT ${ROUTE_CACHE_COLUMNS} FROM route_cache WHERE ${filter.sql}`, filter.params);
-  for (const row of rows || []) {
-    map.set(String(row.route_key), normalizeRow(row, ["min_km", "min_m", "rush_am_min", "rush_pm_min"]));
+  for (let at = 0; at < list.length; at += ROUTE_CACHE_KEY_CHUNK) {
+    const chunk = list.slice(at, at + ROUTE_CACHE_KEY_CHUNK);
+    const filter = textKeyFilter("route_key", chunk, driver);
+    const rows = await exec(`SELECT ${ROUTE_CACHE_COLUMNS} FROM route_cache WHERE ${filter.sql}`, filter.params);
+    for (const row of rows || []) {
+      map.set(String(row.route_key), normalizeRow(row, ["min_km", "min_m", "rush_am_min", "rush_pm_min"]));
+    }
   }
   return map;
 }
