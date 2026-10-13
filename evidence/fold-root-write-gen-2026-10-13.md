@@ -214,7 +214,18 @@ log 指紋（`/home/cline/lab/5151-genkey-r9/`，`sha256sum | cut -c1-16`）：
 
 ## 7 CI
 
-（PR 開好後補：run id＋四項 job 狀態）
+**round 9（PR #743，分支 `fold-gen-key`）**：已合併（`origin/master` = `0d2e196`）。
+
+**round 11（PR #744，分支 `fold-gen-fix-tx`）**：下表是 **head `0ca0f83`** 的執行結果（那是含全部
+程式碼改動的 head；後續 commit 只改本證據檔，`v3/` 一個位元組都沒動 ⇒ 下表對最終 head 同樣成立，
+最終 head 的 run id 記在 PR #744 的 checks）：
+
+| 檢查 | run／job | 結果 |
+|---|---|---|
+| Run Tests | run `38357850281`／job `115164804067` | ✅ pass（4m30s）：`# tests 4218 / # pass 4084 / # fail 0`；`fold-root-write-gen-live-pg` 在此 job 如常 **SKIP**（沒有 `PG_TEST_URL`，符合設計） |
+| Run Tests (PostgreSQL integration) | run `38357850281`／job `115164804233` | ✅ pass（4m10s）：`# tests 325 / # pass 324 / # fail 0 / # skipped 1`；`ok 69 - 原地 UPDATE fold_component_root ⇒ 世代鍵過時 ⇒ 下一句就被拒`（＝含本輪 D／E 段的 live-pg 測試**真的跑了**）；**gate 步驟 `node v3/scripts/fold-ci-parity.mjs` 也跑過且通過**（`test.yml:163`）⇒ 本包改的顯式交易在 CI 有直接覆蓋 |
+| Review diff with the configured model | run `38357850226` | ✅ pass（4s，**advisory**：`REVIEW_API_KEY` 未設定 ⇒ 該步直接 skip，不是真的審過） |
+| GitGuardian Security Checks | — | ✅ pass（1s） |
 
 ## 8 round 11：關掉「一句話寬」的 fail-open 窗口（2026-10-13）
 
