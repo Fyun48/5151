@@ -44,10 +44,11 @@ python3 - 逐筆比 results/gates-repro3/parity.log（軸一改前） vs evidenc
 ```
 → `combo 數 35/35`、**totalMatched 差異 0 筆**、同庫 `nodeTotal≠sqlTotal` 0 筆；加上 `repro3`／`repro2`／**正式庫**三者 `source` 為 `''` 或 NULL 均 **0 列**（正式庫 `total=194564|src_null=0|src_empty=0`，纯唯讀 SELECT）⇒ 對真實資料零影響。
 - 軸三（collation，本輪量化）：`node v3/scripts/fold-tiebreak-collation-probe.mjs`（只讀）
-  → `multi_member_groups=27638／rows=95322`；走到 `last_seen_at` 字串層 `4421 群／11100 列`；走到 tie-break key 字串層 **0 群／0 列**（SQL 交叉驗算 `key_layer_groups=0`）；`winnerDiffs` 四項（`pgDefault_vs_pgC`、`nodeLocaleCompare_vs_pgDefault`、`_vs_pgC`、`_vs_nodeCodePoint`）**皆 0**；`divergencesTotal=0`；`last_seen_at` **184,754 列全部 24 octets 定寬 ISO8601**（`notIsoFixedWidth=0`、`groupsWithMixedWidths=0`）⇒ 字串序＝時間序。非 ASCII key 全庫僅 1 列（`post_id=2414061000`，`fold_component_root IS NULL`＝孤列不進群內排名）。證據檔 `round8/collation-probe.log` 
+  → `multi_member_groups=27638／rows=95322`；走到 `last_seen_at` 字串層 `4421 群／11100 列`；走到 tie-break key 字串層 **0 群／0 列**（SQL 交叉驗算 `key_layer_groups=0`）；`winnerDiffs` 四項（`pgDefault_vs_pgC`、`nodeLocaleCompare_vs_pgDefault`、`_vs_pgC`、`_vs_nodeCodePoint`）**皆 0**；`divergencesTotal=0`；`last_seen_at` **184,754 列全部 24 octets 定寬 ISO8601**（`notIsoFixedWidth=0`、`groupsWithMixedWidths=0`）⇒ 字串序＝時間序。非 ASCII key 全庫僅 1 列（`post_id=2414061000`，`fold_component_root IS NULL`＝孤列不進群內排名）。證據檔 `round8/collation-probe.log` 3ff29eef436f2a41 
 - fixtures：`node v3/scripts/fold-shape-fixtures.mjs` → `allOk:true total:53 residualRows:0` rc=0（第 7 輪是 `residualRows:1`，代表殘餘軸被**真的修掉**而非標記）；⑨a `node=9100000031=sql`、⑨b `node=9100000021=sql`；`grep -c enabledSourcesWithEmpty = 0`（「把 `''` 塞進啟用清單」的 trick 已移除）。
-- **反向對照（防空斷言）**：把 `listingSearchSql.js` 還原成改前版本 → `allOk:false`、⑨a 選 XN／⑨b 選 TN；CI 種子同理（修前 `rc=1`、修後 `rc=0`）。檔：`round8/negative-control-old-sql.log` ｜`round8/fold-ci-parity-negative-control.log` 
+- **反向對照（防空斷言）**：把 `listingSearchSql.js` 還原成改前版本 → `allOk:false`、⑨a 選 XN／⑨b 選 TN；CI 種子同理（修前 `rc=1`、修後 `rc=0`）。檔：`round8/negative-control-old-sql.log` 80c30f1d9499d67c ｜`round8/fold-ci-parity-negative-control.log` 78024d0ab2e305ee 
 
+- 上面三個 `round8/*.log` 的 sha 是對 **repo 內 blob** 算的，审査者不依赖我这台机也能重算：`git cat-file blob f45280d:evidence/round8/collation-probe.log | sha256sum | cut -c1-16`（另兩檔同法）；其餘 `gates-repro3/*.log` 的 sha 來自本機 `~/lab/5151-fold-parity-20261012/results/`，路徑已寫在行內。
 ## 4 閘門與交易隔離（fail-closed）
 - `publicListingSearchAsync.js:28`：`if (process.env.PUBLIC_LISTINGS_SQL_FIRST !== "1") return null` ⇒ **預設 off 未改**（本包不曾把它打開，正式庫也還沒有 `fold_component_root` 欄：實測回 `column "fold_component_root" does not exist`）。
 - 開閘不就緒 ⇒ 結構化 `[fold-gate]` 告警＋HTTP 503 `SEARCH_UNAVAILABLE`，**絕不退回 Node 路徑**（Owner 2026-10-12 接受此取捨）。
@@ -70,8 +71,12 @@ repro3、`member-list-benchmark.mjs`、`MEMBER_UID=1`、`RUNS=5`、單一進程�
 | rent 3000-8000 | 475／502 | 1229／1368 | 1777 |
 | q=新莊 | 228／246 | 1783／1823 | 2053 |
 | multi | 54／58 | 1625／1651 | **1914** |
-- 逐門檻：`list ≤2.0s` **通過**；`stats ≤1.0s` **未達標**（五情境 1.2–1.9s）；cold 總和 `≤3.0s` **未達標**（最差 4,473ms）。門檻來源 D-0036。
-- **尚未證明**：我宣稱 stats 屬既存債（`60cbd58` 同協定 `[1594,1389,1813]ms`），但**沒有同機同協定的 before／after 對照**；升級層 2026-10-13 明文「缺對照，不能認定既存債」⇒ 列為待補（需一次 before／after 重測）。
+- 逐門檻：`list ≤2.0s` **通過**；`stats ≤1.0s` **未達標**（兩側皆未達標，見上）；cold 總和 `≤3.0s` **未達標**（最差 4,473ms；交替三輪中 `cold>3.0s` 的情境數 before／after 皆在 1–2 個，同樣落在噪聲內）。門檻來源 D-0036。
+- **既存債已證明（2026-10-13 補量，升級層建議①／③要求）**：同機、同協定（`RUNS=5`、`MEMBER_UID=1`、`repro3`、同一份 `node_modules` realpath `/workspace/repos/5151/node_modules`）、**交替串行三輪** `before(60cbd58)`↔`after(f45280d)`、每段間隔 30s、全程不重疊：
+  - `stats p95` 的 Δ（after−before）**中位 +6ms、平均 −19ms**，15 格中 8 慢 7 快 ⇒ **符號不一致 ⇒ 本包對 stats 無可測影響**；Δ 範圍 `−1079 ~ +949ms` 就是這台共用機的噪聲頻帶（同期有四支不屬於我的 dev server 在跑）。
+  - **兩側都爆門檻**：`before` 最差 `2467ms`、`after` 最差 `2806ms`（門檻 1.0s）⇒ 「`stats` 未達標屬既存債」**從宣稱變成實測結論**。`list p95` 逐組 Δ 中位 `+32/+79/−70ms` ⇒ 同樣是噪聲。
+  - 我一度用**單輪**對照得出「+379／+530／+774ms 變慢、不能用雜音帶過」的結論，那個方法本身是錯的：單輪 p95（5 樣本取最大）在共用機上雜音敏感。**教訓＝前後對照必須交替重複、以符號一致性判讀**（已沉澱 `L-0900`）。
+  - 复算指令（只讀 JSON，不碰 DB）：`cd /home/cline/lab/5151-fold-parity-20261012 && python3 tools/perf-pair-report.py results/bench-pair/alt`；原始六份 `results/bench-pair/alt/r{1,2,3}-{before,after}.json`，各段起始 load 記在 `alt/meta.txt`。
 
 ## 7 我（規劃層）覆核過的與我沒覆核過的
 - 我親手跑過並逐項对上：drift（兩庫）、三门 log 逐行解析、17/35 重算、fixtures 53、collation 探針全部數字、閘門兩支測試 12/12、CI job 級、PR 狀態、正式庫 `source` 計數、`match.js` diff 為空、worktree porcelain。
