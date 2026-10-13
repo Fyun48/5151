@@ -9,7 +9,9 @@ import { withPgReadSnapshot, readPgRows } from "./pgReadSnapshot.js";
 import { listingRequestTime } from "./listingRequestTime.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { PUBLIC_LISTING_CANDIDATE_COLUMNS } from "./listingCandidateRow.js";
-import { districtClosureIds } from "./listingSearchNodePg.js";
+// closure 的進程內 TTL 記憶（策略 H-A）：與會員路徑**共用同一個實例**（鍵含 userId／relatedOnly，
+// 訪客一律 userId: 0，不會與會員的鍵互串）。見 `listingClosureMemo.js` 的檔頭開關。
+import { districtClosureIdsMemoized } from "./listingSearchNodePg.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { buildPublicListingsFoldSql } from "./listingSearchSql.js";
 import { normalizeCrawlSources } from "./crawlSources.js";
@@ -83,7 +85,7 @@ export async function searchPublicListingsAsync(input = {}, options = {}) {
       const settings = args.settings || publicSearchSettings(args);
       const districts = (Array.isArray(args.districts) ? args.districts : String(args.districts || "").split(","))
         .map(x => String(x).trim()).filter(Boolean).slice(0, GUEST_MAX_DISTRICTS);
-      const districtIds = await districtClosureIds(exec, { districtNames: districts, userId: 0 });
+      const districtIds = await districtClosureIdsMemoized(exec, { districtNames: districts, userId: 0 });
       const loader = createDecorationDataLoader({ exec, driver: "postgres" });
       // SQL-first 折疊（預設 off；外框外回 null → 走 Node 路徑）。
       const sqlFirst = await tryPublicListingsSqlFirst({ exec, args, settings, districts, districtIds, context, loader });

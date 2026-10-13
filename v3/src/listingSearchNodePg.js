@@ -21,6 +21,7 @@ import {
 } from "./db.js";
 import { districtKeyLists, districtKeyPrefixExpression } from "./listDistrictSql.js";
 import { loadDistrictPrefilterIds } from "./listingDistrictPrefilter.js";
+import { createClosureMemo } from "./listingClosureMemo.js";
 import { normalizeListQuery } from "./floors.js";
 import { createDecorationDataLoader } from "./repository/decorationData.js";
 import { toPostgresSql } from "./sqlDialect.js";
@@ -182,6 +183,19 @@ export async function districtClosureIds(exec, { districtNames = [], userId = 0,
   return [...ids];
 }
 
+/**
+ * closure 的**進程內 TTL 記憶**（策略 H-A，Owner 2026-10-13 11:15 裁決選 A）。
+ *
+ * 原函式 `districtClosureIds` **逐字不變**（既有測試直接 import 它），這裡只是**多一層包裝**：
+ * 「同一個行政區組合＋同一個 `userId`／`relatedOnly` 在 TTL 內問第二次」直接回上一份結果，
+ * 省掉那 869–927ms 的即時算。開關與語意（TTL 上界 20s、過期重算不做 SWR、`null` 不進快取、
+ * 單飛、LRU 32）全部登記在 `listingClosureMemo.js` 的檔頭。
+ *
+ * 兩個呼叫點（會員 `prepareListScope` 與訪客 `publicListingSearchAsync`）**共用這一個實例**：
+ * 鍵已含 `userId`／`relatedOnly`，會員與訪客不會互相串（訪客一律 `userId: 0`）。
+ */
+export const districtClosureIdsMemoized = createClosureMemo(districtClosureIds, {});
+
 export async function searchListingsNodePg(args = {}, opts = {}) {
   args = { ...args, ...listingRequestTime(args.asOf ?? args.context?.asOf) };
   return withPgReadSnapshot(opts.pgDriver, pgDriver => searchListingsNodePgInner(args, {...opts, pgDriver}));
@@ -272,7 +286,7 @@ export async function prepareListScope(exec, args = {}, { settings = null, conte
     context,
     // B3b：filter=watched 不使用行政區子句；其餘先在 PG 算好 closure，再以 id 集合進 builder。
     districtProjectedIds: districtPrefilter ? districtPrefilter.postIds : null,
-    districtRelatedIds: filter === "watched" ? null : await districtClosureIds(exec, {
+    districtRelatedIds: filter === "watched" ? null : await districtClosureIdsMemoized(exec, {
       districtNames,
       userId: vote,
       relatedOnly: true,
