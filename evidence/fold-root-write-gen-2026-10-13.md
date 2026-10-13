@@ -362,7 +362,7 @@ log（`/home/cline/lab/5151-genfix-r11/`，`sha256sum | cut -c1-16`）：
 | `live-pg-test-r11.log` | `603bea738581ea36` | live-pg 測試原始輸出（A–E 全綠） |
 | `negative-control-order.log` | `df4dece93a2a95c4` | 負向對照（順序斷言變紅，rc=1） |
 | `negative-control-live-r11.log` | `23011320656bb930` | 負向對照（真 PG 行為斷言變紅，rc=1） |
-| `uptime-before-npm-test.txt` | `2545d6bf7e949cbe` | 跑全套前的 `uptime`（無併行重活存證） |
+| `uptime-before-npm-test.txt` | `36c8800f624a4ede` | 跑全套前的 `uptime`（`14:14:04 up 30 days, 22:54, load 2.42` ⇒ 無併行重活存證） |
 | `foldComponentRoot.bumpfirst.js` | `bf1edae74cc1018d` | 負向對照的還原來源（＝本輪 `v3/src/foldComponentRoot.js` 的原樣備份） |
 | `npm-test-r11-aborted-uncommitted.log` | `0b947bef30a6ff02` | **作廢的一跑**：在 commit **前**跑，`PR A src manifest matches git tree…` 因為「`v3/src` 工作樹 ≠ HEAD」這個測試工件紅 1 條（`changed:["foldComponentRoot.js"]`）——與本包改動無關，改以 commit 後那一次為準 |
 | `pg-integration-r11.log` | `db0110e1eeee438f` | 完整 PG 整合（＝CI `test-postgres` job 本地等價），見 §8.7 |
