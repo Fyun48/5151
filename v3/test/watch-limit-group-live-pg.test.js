@@ -245,6 +245,27 @@ test("live PG：特別關注使用量按疑似同屋源整群去重（含 SQLite
   assert.match(pgNew.error, /6 筆/);
   assert.deepEqual(liteNew, pgNew, "SQLite 與 PG 的 verdict 必須一致（同一條規則）");
 
+  // ── ⑤ 欄位未部署的真 PG（CI 的拋棄式 PG、007 之前的正式庫）────────────────
+  // 2026-10-14 的 CI 紅燈：群口徑那一句在**交易內**失敗 ⇒ `current transaction is aborted`，
+  // catch 之後再送舊口徑也一樣炸，還連坐同一交易裡後面所有語句。所以產品碼改成「先探測欄位
+  // 在不在，再決定送哪一句」。這裡就照那個失敗形狀驗一次：把自己的欄位拿掉（**只動這個
+  // 隔離庫**，收尾整庫 DROP），在一個交易裡跑完整條路徑，再送第二句證明交易還活著。
+  await pgDriver.query("ALTER TABLE listings DROP COLUMN fold_component_root");
+  limits.resetFoldColumnProbe();
+  const legacyCount = await pgDriver.withTransaction(async (client) => {
+    const tx = async (sql, params = []) => (await client.query(toPostgresSql(sql), params)).rows;
+    const n = await limitsAsync.countWatchedAsync(UIDS[0], { driver: "postgres", exec: tx, strict: true });
+    // 若前一句把交易 abort 了，這一句會丟 `current transaction is aborted`
+    await client.query("SELECT 1 AS still_alive");
+    return n;
+  });
+  assert.equal(legacyCount, 4, "沒有分組鍵 ⇒ 舊口徑：U1 的 4 筆未確認下架（同群那兩筆各算一次）");
+  assert.equal(await limitsAsync.watchedGroupHitAsync(UIDS[1], u2[0].postId, opts), false,
+    "欄位不在 ⇒ 沒有分組鍵 ⇒ 一律當新群（維持改動前的行為）");
+  const legacyBatch = await limitsAsync.countWatchedBatchAsync([UIDS[0], UIDS[1]], opts);
+  assert.equal(legacyBatch.get(UIDS[0]), 4, "批次版同一口徑");
+  assert.equal(legacyBatch.get(UIDS[1]), 6, "批次版同一口徑（U2 六筆各自一群）");
+
   // 收尾自我檢查：這一支只碰自己的資料庫。
   const who = (await pgDriver.query("SELECT current_database() AS db")).rows[0];
   assert.equal(who.db, DB_NAME);

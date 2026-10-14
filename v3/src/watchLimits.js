@@ -43,6 +43,46 @@ export const WATCHED_COUNT_SQL_LEGACY = `SELECT COUNT(*) AS n
                AND IFNULL(l.offline_confirmed, 0) = 0
            )`;
 
+// ── 「這個庫有沒有 fold_component_root？」的探測（PG 目錄查詢）──────────────────
+// 為什麼要**先問再送**，而不是「先跑群口徑、失敗再退回舊口徑」：PG 的交易只要有一句失敗就整條
+// abort（`current transaction is aborted, commands ignored until end of transaction block`）
+// ⇒ catch 之後再送舊口徑一樣失敗，還會連坐同一交易裡後面所有語句
+// （2026-10-14 CI 的 PG job 就是這樣整片紅的）。目錄查詢本身不會失敗，所以先問「欄位在不在」。
+// 用 `pg_attribute` ＋ `to_regclass('listings')`（跟著 search_path），不要用 `information_schema`
+//（跨 schema 會誤判，L-0869）。
+export const FOLD_COLUMN_PROBE_SQL = `SELECT 1 AS ok FROM pg_attribute
+         WHERE attrelid = to_regclass('listings') AND attname = 'fold_component_root'
+           AND attnum > 0 AND NOT attisdropped
+         LIMIT 1`;
+
+const FOLD_PROBE_TTL_MS = 60_000;
+const foldProbeCache = new Map();
+
+/** 測試（或欄位剛部署完）要主動失效時用；不帶 key ＝ 全部清掉。 */
+export function resetFoldColumnProbe(key) {
+  if (key === undefined) foldProbeCache.clear();
+  else foldProbeCache.delete(key);
+}
+
+// 回傳「這個庫能不能用群口徑」。`runOne(sql, params)` 的回傳形狀兩種都吃
+// （裸列陣列，或單列物件）。查不到（SQLite 一向沒有這一欄、SQLite 替身沒有 pg_attribute、
+// 交易已 abort）一律回 `false` ＝ 退回不去重的舊口徑（**不得**反過來 fail-open 成 0 筆）。
+export async function foldColumnDeployed(runOne, { key = "watch-limits", ttlMs = FOLD_PROBE_TTL_MS, now = Date.now } = {}) {
+  const at = now();
+  const cached = foldProbeCache.get(key);
+  if (cached && at - cached.at < ttlMs) return cached.value;
+  let value = false;
+  try {
+    const raw = await runOne(FOLD_COLUMN_PROBE_SQL, []);
+    const row = Array.isArray(raw) ? raw[0] : raw;
+    value = Boolean(row?.ok);
+  } catch {
+    value = false;
+  }
+  foldProbeCache.set(key, { value, at });
+  return value;
+}
+
 // 「這個新列所屬的群是否已經在特別關注裡」：同群已計 ⇒ 這次加入不增量。
 // NULL root ⇒ 自己一群 ⇒ 不可能與別的列同群（同一列已在特別關注則由 `alreadyWatched` 短路）。
 export const WATCHED_GROUP_HIT_SQL = `SELECT 1 AS hit

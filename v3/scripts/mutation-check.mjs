@@ -5969,10 +5969,13 @@ const WATCHLIMITS_MUTATIONS = [
   {
     // 這一條真的抓到過：模組的 runner 約定是**裸陣列**，但 callback 一度寫成 `(...).rows`
     // ⇒ 永遠回 0（額度算成 0 筆，會員可以無限加入關注）。
+    // 2026-10-14：`countWatchedAsync` 的查詢搬進 `countWatchedVia()`，且會依探測結果挑
+    // 「群口徑／舊口徑」兩句之一。錨點改指向**舊口徑那一句**：那是不支援群口徑的庫
+    // （SQLite 替身、CI 的拋棄式 PG）實際會跑到的那一句，殺手測試（PG 與同步版相同）涵蓋它。
     name: "countWatchedAsync 把裸陣列當 {rows}（永遠回 0）",
     file: "v3/src/watchLimitsAsync.js",
-    from: "  return run(options, async (exec) => Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0,",
-    to: "  return run(options, async (exec) => Number(one((await exec(WATCHED_COUNT_SQL, [uid])).rows)?.n) || 0,",
+    from: "  return Number(one(await exec(WATCHED_COUNT_SQL_LEGACY, [uid]))?.n) || 0;",
+    to: "  return Number(one((await exec(WATCHED_COUNT_SQL_LEGACY, [uid])).rows)?.n) || 0;",
     expect: "PG 與同步版相同：已確認離線的不佔額度",
   },
   {

@@ -13,7 +13,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { WATCHED_COUNT_SQL, WATCHED_COUNT_SQL_LEGACY, WATCHED_GROUP_HIT_SQL, countWatched as countWatchedSync, watchedGroupHit as watchedGroupHitSync } from "./watchLimits.js";
+import { WATCHED_COUNT_SQL, WATCHED_COUNT_SQL_LEGACY, WATCHED_GROUP_HIT_SQL, countWatched as countWatchedSync, foldColumnDeployed, watchedGroupHit as watchedGroupHitSync } from "./watchLimits.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 const one = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
@@ -38,17 +38,17 @@ async function run(options, runPostgres, runSqlite) {
 // ⚠️ 同步版在查詢失敗時會退回「不算離線確認」的簡化版；PG 版刻意**不**退那一版
 // （那只會讓額度算得更鬆），失敗就照 fail-open 政策回本機。
 //
-// Owner 2026-10-14 的群去重需要 `listings.fold_component_root`。那一欄**只跟著 migration 007**
-// （PG；CONCURRENTLY、不在 `pg-integration-setup.mjs` 的鏡射裡，SQLite 一向沒有）⇒ 欄位還沒部署
-// 的庫（CI 的拋棄式 PG、007 之前的正式庫、所有 SQLite）跑 `WATCHED_COUNT_SQL` 會丟 42703／
-// `no such column`。這時**退回不去重的舊口徑**（`WATCHED_COUNT_SQL_LEGACY`，也就是改動前的
-// 那一句），而不是讓額度變成 0 筆（那會 fail-open 成「無限關注」）。
+// Owner 2026-10-14 的群去重需要 `listings.fold_component_root`。那一欄只跟著 migration 007
+// （PG；SQLite 一向沒有、CI 的拋棄式 PG 也沒有、正式庫目前亦尚未部署）⇒ **先用目錄探測問
+// 「欄位在不在」再決定送哪一句**（`foldColumnDeployed()`；理由見 `watchLimits.js` 的說明：
+// 在 PG 交易裡「先失敗再退回」會把整條交易 abort，連舊口徑都送不出去）。
+// 沒有這一欄時退回不去重的舊口徑（`WATCHED_COUNT_SQL_LEGACY`，也就是改動前的那一句），
+// 而不是讓額度變成 0 筆（那會 fail-open 成「無限關注」）。
 async function countWatchedVia(exec, uid) {
-  try {
+  if (await foldColumnDeployed(exec)) {
     return Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0;
-  } catch {
-    return Number(one(await exec(WATCHED_COUNT_SQL_LEGACY, [uid]))?.n) || 0;
   }
+  return Number(one(await exec(WATCHED_COUNT_SQL_LEGACY, [uid]))?.n) || 0;
 }
 
 export async function countWatchedAsync(userId, options = {}) {
@@ -67,17 +67,14 @@ export async function countWatchedAsync(userId, options = {}) {
 // `watchLimits.watchedGroupHit(conn, userId, postId)` 的 PG 版：這一個 post 所屬的疑似同屋源群
 // 是否已在特別關注裡（Owner 2026-10-14 的群去重規則；SQL 文字共用 `watchLimits.js` 那一句）。
 // SQLite 分支沿用同步版——沒有 `fold_component_root` 時它會回 `false`（＝當成新群）；
-// PG 分支同理：欄位未部署 ⇒ 沒有分組鍵 ⇒ 一律當新群（維持改動前的行為）。
+// PG 分支同理：探測說欄位不在 ⇒ 沒有分組鍵 ⇒ 一律當新群（維持改動前的行為）。
 export async function watchedGroupHitAsync(userId, postId, options = {}) {
   const uid = Number(userId) || 0;
   const pid = Number(postId) || 0;
   if (!uid || !pid) return false;
   return run(options, async (exec) => {
-    try {
-      return Boolean(one(await exec(WATCHED_GROUP_HIT_SQL, [pid, uid]))?.hit);
-    } catch {
-      return false;
-    }
+    if (!(await foldColumnDeployed(exec))) return false;
+    return Boolean(one(await exec(WATCHED_GROUP_HIT_SQL, [pid, uid]))?.hit);
   }, () => watchedGroupHitSync(sqliteHandle(), uid, pid));
 }
 
@@ -134,14 +131,11 @@ export async function countWatchedBatchAsync(userIds, options = {}) {
   const counts = new Map();
   if (!ids.length) return counts;
   await run(options, async (exec) => {
-    let rows;
-    try {
-      rows = await exec(watchedCountBatchSql(ids.length), ids);
-    } catch {
-      // `fold_component_root` 未部署（見 `countWatchedVia()` 的說明）⇒ 退回不去重的批次口徑。
-      rows = await exec(watchedCountBatchSqlLegacy(ids.length), ids);
-    }
-    for (const row of rows) {
+    // 探測結果決定送哪一句（見 `countWatchedVia()`）；一整頁仍然只有一條查詢，退化路徑也一樣。
+    const sql = (await foldColumnDeployed(exec))
+      ? watchedCountBatchSql(ids.length)
+      : watchedCountBatchSqlLegacy(ids.length);
+    for (const row of await exec(sql, ids)) {
       counts.set(Number(row.user_id), Number(row.n) || 0);
     }
   }, () => {
