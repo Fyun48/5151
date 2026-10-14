@@ -155,7 +155,7 @@ filter 非 hidden/watched；
 ```
 if (listingIsMainListAffiliate) return false;   // 次卡從主列表排除
 dup(match_verdict==='yes') || confirmed(offline && offline_confirmed) || hidden → false
-return !watched && !viewed;                     // 訪客 watched/viewed 皆 0
+return !watched（2026-10-14 Owner 裁決：一般清單改為包含已瀏覽，僅排除特別關注；「未看過」語意自 2026-10-14 起不再適用於一般清單，實作見 v3/src/personalFlags.js 與 #751）;                     // 訪客 watched/viewed 皆 0
 ```
 
 ## 4. SQL 折疊的等價形式（本包實作依據）
@@ -210,7 +210,7 @@ win(a,b) =
 |---|---|---|---|
 | 1 | 三個清單（一般／特別關注／已隱藏）呈現規則一致：**不再豁免折疊** | `personalFlags.js:301-306`（移除 `filter === "hidden" \|\| filter === "watched"` 的豁免） | `same-house-fold-component.test.js`「watched list folds…」 |
 | 1b | 逐則「取消關注／解除隱藏」改由展開面板提供（不新增端點） | `public/index.html` `sameHouseGoneBtn()`；`POST /api/listings/:id/flags`（`server.js:5033`）body `{watched:false}`／`{hidden:false}` | 同上「same-house panel offers per-post…」（靜態斷言面板按鈕與端點契約） |
-| 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:308-331`（`filter === "all"` → `!watched && !viewed`，且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
+| 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:308-331`（`filter === "all"` → `!watched`，且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
 | 3 | 確認下架（`offline_confirmed = 1`）**三個清單都不顯示**、**不參與選主** | 顯示：`personalFlags.js:316-318`；選主：`db.js:3783-3785`；群組成員集合：`listingCompare.js:9-13` | 「offline_confirmed rows are never primary…」 |
 | 3b | **定案（2026-10-12 Owner）**：「尚（未）確認下架」＝`offline = 1` 且 `offline_confirmed = 0`（可能空號）**可以**當 primary，也**計入**「共 N 則」；**程式碼維持現況**（現況就是允許，不另改）。可比價／可顯示／可參與比較 | 未改（上述三處都只排除 `offline_confirmed`；「共 N 則」的 `peer_count` 在 `listingCompare.js:379`） | 「compensation clause keeps the live affiliate…」 |
 | 4 | 「共 N 則」＝**群組真實大小**（截斷只准用於「列出幾則」） | 資料：`listingCompare.js:379`（`peer_count`）；前端：`public/index.html` `sameHouseTag()`（`count = peer_count + 1`） | 「bundle exposes the true group size…」「frontend renders 共 N 則…」 |
