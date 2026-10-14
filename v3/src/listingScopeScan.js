@@ -116,20 +116,33 @@ export async function runScopeScan(pgDriver, { candidateColumns, statsScope, lis
   // 兩個旗標掛在**版本預讀**那一趟（`extraColumns`），與列逐列對齊。
   //
   // ⚠️ 版本預讀那條 SQL 是 `SELECT <version 欄><旗標> FROM listings <主查詢的 WHERE>`：
-  //    主查詢的 WHERE 已經翻譯成 `$1..$k`，旗標則是原始的 `?` ⇒ 必須把旗標翻成 `$k+1..`
-  //    （PG 不在意 `$n` 在文字裡的順序，只看編號與參數陣列對不對得上）。
+  //    主查詢的 WHERE 已經翻譯成 `$1..$k`，旗標則是原始的 `?` ⇒ 必須把旗標的 `?` 對到
+  //    **主查詢那一組編號**上（PG 不在意 `$n` 在文字裡的順序，只看編號與參數陣列對不對得上）。
+  //
+  // 2026-10-14（順手車）：旗標**沿用 WHERE 裡同一組 `$n`**，不再各帶一份重複參數。
+  // 主查詢的參數順序是 `[COMMON, statsRest, listRest]`（見 `buildScopeScanQuery` 的 params），
+  // 所以 listRest 的 `?` 落在 `$(k-listLen+1)..$(k)`、statsRest 的落在
+  // `$(k-listLen-statsLen+1)..$(k-listLen)`；兩個片段仍然**互不重疊且連續**
+  // （list 在後、stats 在前），原本「各自從 $1 起算會撞號」的契約一樣成立
+  //（實測踩過：`double precision <= bigint[]` ⇒ 數值參數收到陣列值）。
+  //
+  // 為什麼要省：那兩份被重複綁定的參數是**同一組 bigint 陣列**（會員七區 16,600 個 id、
+  // 請求行政區 5,142 個 id、關係閉包 5,575 個 id，各出現兩次）⇒ 每個請求多送 ~330KB 的
+  // 陣列文字並讓 PG 多解析一次。隔離靶端到端量測（DECLARE＋FETCH，5 輪交替中位）：
+  // 174.7ms → 160.1ms（−8.4%），回傳列逐列相同。
   const mainSql = toPostgresSql(query.sql);
   const k = translateSqliteToPg(query.sql).placeholders;
   const shift = (fragment, offset) => toPostgresSql(fragment).replace(/\$(\d+)/g, (_, d) => `$${Number(d) + offset}`);
-  // ⚠️ 兩個旗標片段的編號必須**連續**（list 先、stats 後），各自從 $1 起算會撞號
-  //    （實測踩過：`double precision <= bigint[]` ⇒ 數值參數收到陣列值）。
-  const listFlagSql = shift(query.listFlagSql, k);
-  const statsFlagSql = shift(query.statsFlagSql, k + query.listFlagParams.length);
+  const listOffset = k - query.listFlagParams.length;
+  const listFlagSql = shift(query.listFlagSql, listOffset);
+  const statsFlagSql = shift(query.statsFlagSql, listOffset - query.statsFlagParams.length);
   const rows = await readPgRows(pgDriver, mainSql, query.params, {
     arrayRows: true,
     extraColumns: {
       selectSql: `, (${listFlagSql}) AS in_list_scope, (${statsFlagSql}) AS in_stats_scope`,
-      params: [...query.listFlagParams, ...query.statsFlagParams],
+      // 旗標不再自帶參數：每一段都指向主查詢 `$1..$k` 裡已經有的那一個
+      //（版本預讀那一趟的參數因此與主查詢逐字同一份，不重複綁定）。
+      params: [],
       onRow,
     },
   });

@@ -8,6 +8,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
+// 兩支「1.5 秒牆鐘預算」測試**只在 CI 執行**（2026-10-14）：
+//   這兩支會 spawn 子行程跑真的 server（`listListings`／`list+stats`），斷言 `out.ms < 1500`。
+//   牆鐘預算只在 CI 的專用 runner 上有意義；在共用／高負載的開發機（爬蟲、其他測試、其他
+//   session 同時在跑）會假紅，於是每次本機全測都要人為判讀一次。
+//   GitHub Actions 會設 `CI=true` ⇒ CI 一定跑；本機要跑就：
+//     CI=true node --test v3/test/list-unhang.test.js
+//   ⚠️ 不放寬 1.5s、也不改任何斷言語意（本檔其餘測試不受影響，照常在本地跑）。
+const WALL_CLOCK_BUDGET_SKIP = process.env.CI
+  ? false
+  : "牆鐘預算（1.5s）只保證 CI 環境；共用機器負載會假紅，本機要跑請設 CI=true";
+
 test("watcher classify/geo paths skip same-house decorate", () => {
   const src = readFileSync(path.join(dir, "../src/watcher.js"), "utf8");
   assert.match(src, /function listingForWatch\(/);
@@ -24,7 +35,7 @@ test("startup tick no longer starts geo backfill in parallel", () => {
   assert.match(src, /if \(reason !== "startup"\) queueGeoBackfill\(\)/);
 });
 
-test("listListings attaches same-house only on the returned page", () => {
+test("listListings attaches same-house only on the returned page", { skip: WALL_CLOCK_BUDGET_SKIP }, () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-unhang-"));
   const script = `
     import { listListings, upsertListing, setListingMatch } from ${JSON.stringify(pathToFileURL(path.join(dir, "../src/db.js")).href)};
@@ -104,7 +115,7 @@ test("index and login HTML are sent from memory and list APIs yield first", () =
   assert.doesNotMatch(root, /sendFile/);
 });
 
-test("commute list plus stats stay under 1.5s on a 2000-row route cache", () => {
+test("commute list plus stats stay under 1.5s on a 2000-row route cache", { skip: WALL_CLOCK_BUDGET_SKIP }, () => {
   const dataDir = mkdtempSync(path.join(os.tmpdir(), "v3-unhang-commute-"));
   const script = `
     import {
