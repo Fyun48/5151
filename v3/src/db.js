@@ -7710,8 +7710,19 @@ export function buildListListingsClauses({
   const districtSet = new Set(districtNames);
   const clauses = [];
   const params = [];
-  searchWhere(searchKeys, clauses, params, context);
   if (filter !== "watched") {
+    // ⚠️ `searchWhere()`（`(search_key IN (<本請求的展開清單>) OR source='self')`）**只給
+    // 非 watched 的 filter**。Owner 2026-10-14 裁決：特別關注是**配額管理清單**，必須看得到
+    // 自己所有的關注（否則配額被佔用卻看不到那一列、也無法取消），所以豁免 search_key 子句。
+    //
+    // 為什麼要豁免（2026-10-14 唯讀調查，個案 uid=2 / post 2458719926）：row 的
+    // `listings.search_key` 是**當時 crawler 用的搜尋 URL**，一旦那條 URL 退役（或使用者的
+    // searchUrls 改過），`expandSearchKeysAgainst()`＋`sameSearch()` 就再也收不到它
+    // ⇒ 這一列在會員的**任何**清單都進不了候選（正式庫實測：83 筆 watched 旗標有 61 筆＝73%
+    // 落在當時的 request-time key 集合之外）。這與 `buildListListingsSteps()` 裡
+    // 「特別關注不被行政區／類型／樓層／來源再篩空」的既有契約相衝（那條漏列了 search_key）。
+    // `source='self'` 的列本來就不受影響。
+    searchWhere(searchKeys, clauses, params, context);
     listingVisibilityClauses(clauses, params, context, { sqliteDb });
     if (Array.isArray(districtRelatedIds)) {
       // 投影預篩先接手（有 projectedIds 時）；沒有就退回原本的 `split_part` 表達式。
@@ -7747,6 +7758,10 @@ export function buildListListingsClauses({
     // （`PRAGMA table_info(listings)`）。改走與 listingVisibilityClauses 同一條 context 路徑
     // （隔離子句本身相同），PG 缺 context 時明確失敗。watched 不受行政區／價格／顯示篩選
     // 限制的既有契約不變。
+    //
+    // Owner 2026-10-14：**再豁免 `searchWhere()` 的 search_key 子句**（見上方註解與
+    // `v3/test/watched-searchkey-exempt.test.js`）⇒ watched 的候選＝「隔離子句 ＋ 這一條
+    // EXISTS 旗標子句」，配額管理清單因此一定看得到自己的每一筆關注。
     const isolation = browseIsolationClause(context, sqliteDb, "listings");
     clauses.push(isolation.sql);
     params.push(...isolation.params);
