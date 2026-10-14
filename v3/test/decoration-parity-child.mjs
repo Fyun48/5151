@@ -91,18 +91,29 @@ const settings = {
 const args = { userId: uid, settings, sort: "newest", limit: 50 };
 
 // A: the SQLite pipeline (default sqliteDecorationProvider).
-// Owner 2026-10-07：「全部」不再包含已瀏覽的物件，而 591301 正是被標記 viewed 的那一張
+// Owner 2026-10-07（舊）：「全部」不含已瀏覽的物件，而 591301 正是被標記 viewed 的那一張
 // （它同時掛著 591303 的 same_house bundle，是 peers/extras 預載唯一的覆蓋來源）。
-// 所以這裡跑「全部＋已瀏覽」兩條清單再取聯集：覆蓋面不縮，也順帶把新篩選語意鎖進測試。
+// Owner 2026-10-14（新，只改一半）：一般＝排除特別關注／隱藏／確認下架／重複，**已瀏覽照常顯示**
+// ⇒ 591301 會出現在「全部」；下面仍然跑「全部＋已瀏覽」兩條清單取聯集，覆蓋面不縮。
 const allCards = listListings({ ...args, filter: "all" }).listings;
 const viewedCards = listListings({ ...args, filter: "viewed" }).listings;
-const pipeline = { listings: [...allCards, ...viewedCards] };
+// 兩條清單在新裁決下會重疊（591301 同時在「全部」與「已瀏覽」）⇒ 取聯集時按 post_id 去重，
+// 否則下面「兩邊逐位元一致」的比對會拿重複列去比對單一列。
+const seenPostIds = new Set();
+const pipeline = {
+  listings: [...allCards, ...viewedCards].filter((row) => {
+    const id = Number(row.post_id);
+    if (seenPostIds.has(id)) return false;
+    seenPostIds.add(id);
+    return true;
+  }),
+};
 // 591303 was personally merged into 591301, so it must NOT be its own card - it travels in
 // 591301's same_house bundle (which exercises the peers/extras preload too).
 assert.deepEqual(
   allCards.map((r) => Number(r.post_id)).sort((a, b) => a - b),
-  [591302],
-  "已瀏覽的 591301 不該再出現在「全部」",
+  [591301, 591302],
+  "已瀏覽的 591301 照常出現在「全部」（Owner 2026-10-14）",
 );
 assert.deepEqual(
   viewedCards.map((r) => Number(r.post_id)).sort((a, b) => a - b),

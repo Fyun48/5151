@@ -19,7 +19,7 @@ import { buildListRequestContextFromPg } from "../db.js";
 import { appendDistrictProjectedCandidates } from "../listDistrictSql.js";
 import { loadDistrictPrefilterIds } from "../listingDistrictPrefilter.js";
 import { listingTotalsOrNull } from "../listingTotalsPgCounter.js";
-import { WATCHED_COUNT_SQL } from "../watchLimits.js";
+import { WATCHED_COUNT_SQL, WATCHED_COUNT_SQL_LEGACY } from "../watchLimits.js";
 import { loadPersonalFlagMap } from "./decorationData.js";
 import { LIST_CANDIDATE_COLUMNS } from "../listingCandidateRow.js";
 
@@ -79,11 +79,21 @@ export function normalizeStatsCandidateRow(row) {
 }
 
 // watchLimits.countWatched() through the executor (the `IFNULL` is translated for PostgreSQL).
+//
+// Owner 2026-10-14：使用量改成「疑似同屋源的群整群算 1 次」，分組鍵是 `listings.fold_component_root`
+// ——那一欄只跟著 migration 007（PG；SQLite 一向沒有）⇒ 欄位還沒部署的庫跑新口徑會丟 42703。
+// 這時退回改動前那一句（`WATCHED_COUNT_SQL_LEGACY`，同樣只算未確認下架、孤兒不計），
+// 而不是讓列表頁的 `watchedTotal` 直接爆掉。
 async function countWatchedListings(runOne, uid) {
   const id = Number(uid) || 0;
   if (!id) return 0;
-  const row = await runOne(WATCHED_COUNT_SQL, [id]);
-  return Number(row?.n) || 0;
+  try {
+    const row = await runOne(WATCHED_COUNT_SQL, [id]);
+    return Number(row?.n) || 0;
+  } catch {
+    const row = await runOne(WATCHED_COUNT_SQL_LEGACY, [id]);
+    return Number(row?.n) || 0;
+  }
 }
 
 // db.js productListingCount() (P1-18: member-visible totals never reveal a Stage 1 fixture).

@@ -197,20 +197,32 @@ test("overlayRowsPersonal uses per-user flag map", () => {
   assert.equal(rows[1].viewed, 0);
 });
 
-// Owner 2026-10-07：「全部」= 未看過且未特別關注；看過的改走「已瀏覽」。
-test("list filter: all excludes viewed, viewed returns only viewed", () => {
+// Owner 2026-10-07（舊）：「全部」= 未看過且未特別關注；看過的改走「已瀏覽」。
+// Owner 2026-10-14（新，只改一半）：一般＝排除特別關注（watched）／隱藏／確認下架／重複，
+//   **已瀏覽（viewed）照常顯示**；`viewed` 專用 chip 與 server 的 `unseen` filter 都不動。
+test("list filter: all excludes watched (viewed 照常顯示), viewed returns only viewed", () => {
   const base = { offline: 0, offline_confirmed: 0, match_verdict: "", match_level: "", last_event: "" };
   const fresh = { ...base, watched: 0, hidden: 0, viewed: 0 };
   const seen = { ...base, watched: 0, hidden: 0, viewed: 1 };
   const watched = { ...base, watched: 1, hidden: 0, viewed: 0 };
   const watchedSeen = { ...base, watched: 1, hidden: 0, viewed: 1 };
   assert.equal(listingMatchesListFilter(fresh, "all"), true);
-  assert.equal(listingMatchesListFilter(seen, "all"), false, "看過的不再出現在全部");
-  assert.equal(listingMatchesListFilter(watched, "all"), false);
-  assert.equal(listingMatchesListFilter(watchedSeen, "all"), false);
+  assert.equal(listingMatchesListFilter(seen, "all"), true, "已瀏覽的照常出現在一般（Owner 2026-10-14；舊裁決的「未看過」那一半作廢）");
+  assert.equal(listingMatchesListFilter(watched, "all"), false, "特別關注的仍然排除");
+  assert.equal(listingMatchesListFilter(watchedSeen, "all"), false, "已瀏覽＋特別關注仍在一般被排除");
   assert.equal(listingMatchesListFilter(seen, "viewed"), true);
   assert.equal(listingMatchesListFilter(fresh, "viewed"), false);
   assert.equal(listingMatchesListFilter(watchedSeen, "viewed"), true, "看過且關注也要在已瀏覽找得到");
+});
+
+// 正向測試（Owner 2026-10-14）：`viewed` 本身不再讓物件離開「一般」。
+test("list filter: all includes viewed (positive)", () => {
+  const base = { offline: 0, offline_confirmed: 0, match_verdict: "", match_level: "", last_event: "", watched: 0, hidden: 0 };
+  assert.equal(listingMatchesListFilter({ ...base, viewed: 1 }, "all"), true);
+  assert.equal(listingMatchesListFilter({ ...base, viewed: 0 }, "all"), true);
+  // 對照組：`unseen` 仍然排除已瀏覽（這一條不動）。
+  assert.equal(listingMatchesListFilter({ ...base, viewed: 1 }, "unseen"), false);
+  assert.equal(listingMatchesListFilter({ ...base, viewed: 0 }, "unseen"), true);
 });
 
 // 「全部清除」：只歸零指定欄位，另一欄仍保留（列不會被誤刪）。

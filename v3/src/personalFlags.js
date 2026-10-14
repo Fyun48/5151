@@ -337,9 +337,16 @@ export function listingMatchesListFilter(row, filter) {
   // 「下架確認中」（pending）留在一般列表（灰階）；只有「確認已下架」才排除。
   if (dup || hidden) return false;
   // Owner 2026-10-12：一般清單（原「全部」）不得顯示已被特別關注或已被隱藏的物件，
-  // 除非使用者先解除該狀態；Owner 2026-10-07：「全部」＝未看過且未特別關注。
+  // 除非使用者先解除該狀態。
+  // ── 這一條的裁決沿革（舊痕跡刻意保留，不要刪）──────────────────────────────
+  // Owner 2026-10-07（舊）：「全部」＝未看過且未特別關注；看過的物件改由「已瀏覽」清單查。
+  // Owner 2026-10-14（新，只改掉舊裁決的一半）：「一般」＝排除特別關注（watched）、
+  //   隱藏（hidden）、確認下架（confirmed）、重複（dup）；**已瀏覽（viewed）照常顯示**
+  //   ⇒ 舊裁決的「未看過」那一半作廢，「未特別關注」那一半保留。
+  //   hidden／confirmed／dup 在上面已經 return false，所以這裡只剩 watched。
+  //   已瀏覽標籤本來就會畫；`viewed` 專用 chip 與 server 的 `unseen` filter 都不動。
   // 這一條讀的是「代表列自己的旗標」（次卡已折疊）⇒ 整群去留由主卡決定。
-  if (filter === "all") return !watched && !viewed;
+  if (filter === "all") return !watched;
   if (filter === "unseen") return !viewed;
   if (filter === "viewed") return viewed === true || viewed === 1;
   if (filter === "same_source") {

@@ -144,6 +144,20 @@ test("unwatch flies to the all chip before reloading", () => {
   assert.match(unwatch, /取消失敗，已還原卡片/);
 });
 
+test("guest list filter 'all' 依 Owner 2026-10-14 裁決：已瀏覽照常顯示、只排除特別關注", () => {
+  const html = pub("index.html");
+  // 訪客版 matcher（`guestFilterMatch`）：舊版是 `!watched && !viewed`。
+  assert.match(html, /if \(key === "all"\) return !watched;/);
+  assert.doesNotMatch(html, /if \(key === "all"\) return !watched && !viewed;/);
+  // 會員版（server 端同一條規則）：舊版是 `!watched && !viewed`。
+  const server = readFileSync(path.join(dir, "../src/personalFlags.js"), "utf8");
+  assert.match(server, /if \(filter === "all"\) return !watched;/);
+  assert.doesNotMatch(server, /if \(filter === "all"\) return !watched && !viewed;/);
+  // `viewed` 專用 chip／`unseen` filter 不動（新裁決只改「一般」）。
+  assert.match(server, /if \(filter === "unseen"\) return !viewed;/);
+  assert.match(html, /if \(key === "viewed"\) return viewed;/);
+});
+
 test("watch draft, LINE add, avatar preview and profile stats copy", () => {
   const html = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../public/index.html"), "utf8");
   assert.match(html, /watch-draft-pair/);
