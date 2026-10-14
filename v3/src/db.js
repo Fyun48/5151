@@ -6614,7 +6614,9 @@ export function setFlags(postId, flags, userId) {
   const turningOn = flags && (flags.watched === true || flags.watched === 1);
   if (turningOn && !Number(listing.watched)) {
     const user = getUserById(uid) || {};
-    const gate = canAddWatch(db, uid, user);
+    // postId 讓 `canAddWatch()` 能判斷「這個新列所屬的疑似同屋源群是否已在特別關注裡」
+    // （同群不增量，Owner 2026-10-14）。
+    const gate = canAddWatch(db, uid, user, { postId });
     if (!gate.ok) {
       const err = new Error(gate.error);
       err.status = 409;

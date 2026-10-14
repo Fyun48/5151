@@ -37,15 +37,20 @@ function worlds() {
     mem.exec(ddl.sql);
   }
   disk.close();
+  // PG 側（用記憶體 SQLite 當替身）要跑得到新的群去重口徑：`fold_component_root` 是真 PG
+  // 才有的固化欄（SQLite 沒有），所以替身自己加一欄（測試自己的 schema，不是產品 DDL）。
+  mem.exec("ALTER TABLE listings ADD COLUMN fold_component_root INTEGER");
   const flag = (db, postId) => db.prepare(
     "INSERT INTO user_listing_flags(user_id, post_id, viewed, watched, hidden, watch_note, watch_group_id) VALUES (?,?,0,1,0,'','')",
   ).run(UID, postId);
-  const listing = (db, postId, offline) => {
+  const listing = (db, postId, offline, root = null) => {
     const info = db.prepare("PRAGMA table_info(listings)").all();
     const provided = {
       post_id: postId, title: `t${postId}`, source: "591", source_key: `1|${postId}`,
       offline_confirmed: offline, listed_by_user_id: UID,
     };
+    // 只有真的那一欄存在時才塞（真 SQLite 的 listings 沒有 fold_component_root）。
+    if (info.some((c) => c.name === "fold_component_root")) provided.fold_component_root = root;
     const required = info.filter((c) => c.notnull === 1 && c.dflt_value === null && c.pk === 0);
     const names = info.map((c) => c.name).filter((n) => n in provided || required.some((c) => c.name === n));
     db.prepare(`INSERT INTO listings(${names.join(",")}) VALUES (${names.map(() => "?").join(",")})`)
@@ -58,11 +63,11 @@ function worlds() {
     ).run(UID, "watch@example.test", "member", "free", "2026-01-01T00:00:00.000Z");
     db.prepare("DELETE FROM user_listing_flags WHERE user_id = ?").run(UID);
     db.prepare("DELETE FROM listings WHERE listed_by_user_id = ?").run(UID);
-    // 三筆關注：兩筆還在（佔額度）、一筆已確認離線（不佔）。
+    // 三筆關注：兩筆還在（佔額度）、一筆已確認離線（不佔）。兩筆的 root 不同 ⇒ 各算一群。
     for (const postId of [920001, 920002, 920003]) flag(db, postId);
-    listing(db, 920001, 0);
-    listing(db, 920002, 0);
-    listing(db, 920003, 1);
+    listing(db, 920001, 0, 77001);
+    listing(db, 920002, 0, 77002);
+    listing(db, 920003, 1, 77003);
     // 一筆沒被關注的刊登（不得被算進去）
     listing(db, 920004, 0);
   }
@@ -103,4 +108,131 @@ test("非 postgres：走同步路徑（讀磁碟、不碰 exec）", async () => 
   const boom = async () => { calls += 1; throw new Error("exec 不該被呼叫（sqlite 模式）"); };
   assert.equal(await limitsAsync.countWatchedAsync(UID, { driver: "sqlite", exec: boom }), limits.countWatched(lite, UID));
   assert.equal(calls, 0, "sqlite 模式不得呼叫 PG runner");
+});
+
+// ── Owner 2026-10-14：疑似同屋源整群算 1 次 ────────────────────────────────────
+// SQLite 與 PG 兩版**同一句 SQL 文字**（`WATCHED_COUNT_SQL`）、**同一條規則**（`watchGateVerdict`）。
+// 這裡用「有 `fold_component_root` 的記憶體 SQLite」當兩邊的共同靶：左邊是同步版
+// （`countWatched(conn)`），右邊是 PG 版（`countWatchedAsync` ＋ 注入式 exec）。
+const GROUP_UID = 900000007002;
+
+function groupWorld() {
+  const mem = new DatabaseSync(":memory:");
+  mem.exec(`CREATE TABLE listings (
+    post_id INTEGER PRIMARY KEY,
+    offline_confirmed INTEGER NOT NULL DEFAULT 0,
+    fold_component_root INTEGER
+  )`);
+  mem.exec(`CREATE TABLE user_listing_flags (
+    user_id INTEGER NOT NULL, post_id INTEGER NOT NULL, viewed INTEGER NOT NULL DEFAULT 0,
+    watched INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0,
+    watch_note TEXT NOT NULL DEFAULT '', PRIMARY KEY (user_id, post_id)
+  )`);
+  const seen = [];
+  // 這一支假裝自己是「有 `fold_component_root` 的 PG」：目錄探測（`FOLD_COLUMN_PROBE_SQL`）
+  // 要回「有這一欄」，`countWatchedAsync` 才會送群口徑那一句。
+  const exec = async (sql, params = []) => {
+    seen.push(sql);
+    if (sql === limits.FOLD_COLUMN_PROBE_SQL) return [{ ok: 1 }];
+    return mem.prepare(sql).all(...params);
+  };
+  exec.raw = mem;
+  exec.seen = seen;
+  exec.sqls = () => seen.filter((sql) => sql !== limits.FOLD_COLUMN_PROBE_SQL);
+  return { mem, exec };
+}
+
+function seedGroupWorld(mem, uid, rows) {
+  let postId = 950000;
+  for (const row of rows) {
+    postId += 1;
+    mem.prepare("INSERT INTO user_listing_flags(user_id, post_id, viewed, watched) VALUES (?,?,?,?)")
+      .run(uid, postId, row.viewed ? 1 : 0, 1);
+    if (!row.orphan) {
+      mem.prepare("INSERT INTO listings(post_id, offline_confirmed, fold_component_root) VALUES (?,?,?)")
+        .run(postId, row.offlineConfirmed ? 1 : 0, row.root ?? null);
+    }
+    row.postId = postId;
+  }
+  return rows;
+}
+
+test("群去重口徑：同步版與 PG 版同結果（同一句 SQL 文字）", async () => {
+  limits.resetFoldColumnProbe();
+  const { mem, exec } = groupWorld();
+  const rows = seedGroupWorld(mem, GROUP_UID, [
+    { root: 88001 },                    // 同群 2 筆
+    { root: 88001 },
+    { root: 88002 },                    // 不同群 2 筆
+    { root: 88003 },
+    { root: 88004, offlineConfirmed: 1 }, // 確認下架不計
+    { orphan: true },                   // 孤兒旗標不計
+  ]);
+  const sync = limits.countWatched(mem, GROUP_UID);
+  assert.equal(sync, 3, "同群 2＋不同群 2 ＝ 3 群；確認下架與孤兒不計");
+  const viaAsync = await limitsAsync.countWatchedAsync(GROUP_UID, { ...PG, exec, strict: true });
+  assert.equal(viaAsync, sync, "兩版必須同結果");
+  assert.equal(exec.seen[0], limits.FOLD_COLUMN_PROBE_SQL, "先問欄位在不在，再決定送哪一句");
+  assert.equal(exec.sqls()[0], limits.WATCHED_COUNT_SQL, "PG 版跑的必須是同一句 SQL 文字（不得另抄一份）");
+  assert.match(exec.sqls()[0], /COUNT\(DISTINCT COALESCE\(l\.fold_component_root, f\.post_id\)\) AS n/);
+
+  // 「這個 post 的群是否已在特別關注裡」兩版也要一致
+  const sameGroup = rows[1].postId;   // root 88001，已在關注裡
+  const otherGroup = rows[3].postId;  // 另一個已在關注的群
+  assert.equal(limits.watchedGroupHit(mem, GROUP_UID, sameGroup), true);
+  assert.equal(await limitsAsync.watchedGroupHitAsync(GROUP_UID, sameGroup, { ...PG, exec, strict: true }), true);
+  assert.equal(limits.watchedGroupHit(mem, GROUP_UID, otherGroup), true);
+  assert.equal(await limitsAsync.watchedGroupHitAsync(GROUP_UID, otherGroup, { ...PG, exec, strict: true }), true);
+  // 沒被關注的群 ⇒ false
+  mem.prepare("INSERT INTO listings(post_id, offline_confirmed, fold_component_root) VALUES (?,?,?)").run(960001, 0, 88099);
+  assert.equal(limits.watchedGroupHit(mem, GROUP_UID, 960001), false);
+  assert.equal(await limitsAsync.watchedGroupHitAsync(GROUP_UID, 960001, { ...PG, exec, strict: true }), false);
+  // NULL root 的新列 ⇒ 自己一群 ⇒ 不算同群
+  mem.prepare("INSERT INTO listings(post_id, offline_confirmed, fold_component_root) VALUES (?,?,?)").run(960002, 0, null);
+  assert.equal(limits.watchedGroupHit(mem, GROUP_UID, 960002), false);
+  assert.equal(await limitsAsync.watchedGroupHitAsync(GROUP_UID, 960002, { ...PG, exec, strict: true }), false);
+});
+
+test("後台會員列表的批次 SQL 也必須是群數口徑（同一份 WATCHED_COUNT_SQL 推導）", () => {
+  const sql = limitsAsync.watchedCountBatchSql(3);
+  assert.match(sql, /SELECT f\.user_id AS user_id, COUNT\(DISTINCT COALESCE\(l\.fold_component_root, f\.post_id\)\) AS n/);
+  assert.match(sql, /f\.user_id IN \(\?,\?,\?\)/);
+  assert.match(sql, /GROUP BY f\.user_id/);
+  assert.match(sql, /JOIN listings l ON l\.post_id = f\.post_id/);
+  assert.match(sql, /IFNULL\(l\.offline_confirmed, 0\) = 0/);
+  assert.throws(() => limitsAsync.watchedCountBatchSql(0), /形狀變了/);
+  // 退化版（沒有 fold_component_root 的庫）同樣由 `WATCHED_COUNT_SQL_LEGACY` 推導。
+  const legacy = limitsAsync.watchedCountBatchSqlLegacy(2);
+  assert.match(legacy, /SELECT f\.user_id AS user_id, COUNT\(\*\) AS n/);
+  assert.match(legacy, /f\.user_id IN \(\?,\?\)/);
+  assert.match(legacy, /GROUP BY f\.user_id/);
+  assert.match(legacy, /EXISTS \(/);
+});
+
+test("沒有 fold_component_root 的庫（SQLite／007 之前的 PG）⇒ 走不去重的舊口徑，不拋錯也不 abort 交易", async () => {
+  // 探測結果有 60 秒 TTL 快取；上一個測試假裝「有這一欄」，這裡要重新探測。
+  limits.resetFoldColumnProbe();
+  const mem = new DatabaseSync(":memory:");
+  mem.exec("CREATE TABLE listings (post_id INTEGER PRIMARY KEY, offline_confirmed INTEGER NOT NULL DEFAULT 0)");
+  mem.exec("CREATE TABLE user_listing_flags (user_id INTEGER NOT NULL, post_id INTEGER NOT NULL, viewed INTEGER NOT NULL DEFAULT 0, watched INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0, watch_note TEXT NOT NULL DEFAULT '', PRIMARY KEY (user_id, post_id))");
+  const uid = 900000007003;
+  for (const postId of [1, 2, 3]) {
+    mem.prepare("INSERT INTO user_listing_flags(user_id, post_id, watched) VALUES (?,?,1)").run(uid, postId);
+  }
+  mem.prepare("INSERT INTO listings(post_id, offline_confirmed) VALUES (?,0)").run(1);
+  mem.prepare("INSERT INTO listings(post_id, offline_confirmed) VALUES (?,0)").run(2);
+  // post 3 ＝ 孤兒旗標（沒有 listings 列）
+  const seen = [];
+  // 這一支沒有 `pg_attribute`（＝探測會失敗）⇒ 必須走舊口徑，**不得**先把群口徑送出去
+  // （在 PG 上那會 abort 整條交易，連舊口徑都送不出來）。
+  const exec = async (sql, params = []) => { seen.push(sql); return mem.prepare(sql).all(...params); };
+  assert.equal(await limitsAsync.countWatchedAsync(uid, { ...PG, exec, strict: true }), 2,
+    "舊口徑：兩筆未確認下架，孤兒不計（**不得** fail-open 成 0 筆）");
+  assert.equal(seen[0], limits.FOLD_COLUMN_PROBE_SQL, "第一句必須是目錄探測");
+  assert.equal(seen[1], limits.WATCHED_COUNT_SQL_LEGACY, "第二句必須是共用常數裡的舊口徑，不是另抄的字串");
+  assert.ok(!seen.includes(limits.WATCHED_COUNT_SQL), "欄位不在時**不得**送出群口徑那一句");
+  assert.equal(await limitsAsync.watchedGroupHitAsync(uid, 1, { ...PG, exec, strict: true }), false,
+    "沒有分組鍵 ⇒ 一律當新群（維持改動前的行為）");
+  const batch = await limitsAsync.countWatchedBatchAsync([uid], { ...PG, exec, strict: true });
+  assert.equal(batch.get(uid), 2, "批次版也要退回舊口徑，而且不拋錯");
 });

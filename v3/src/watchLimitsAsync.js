@@ -13,7 +13,7 @@ import { sqliteHandle } from "./db.js";
 import { sharedPgDriver } from "./pgSharedDriver.js";
 import { toPostgresSql } from "./sqlDialect.js";
 import { sqliteFallbackAllowed } from "./sqliteFallback.js";
-import { WATCHED_COUNT_SQL, countWatched as countWatchedSync } from "./watchLimits.js";
+import { WATCHED_COUNT_SQL, WATCHED_COUNT_SQL_LEGACY, WATCHED_GROUP_HIT_SQL, countWatched as countWatchedSync, foldColumnDeployed, watchedGroupHit as watchedGroupHitSync } from "./watchLimits.js";
 
 const isPg = (options = {}) => (options.driver || resolveDbDriver()) === "postgres";
 const one = (rows) => (Array.isArray(rows) && rows.length ? rows[0] : null);
@@ -37,6 +37,20 @@ async function run(options, runPostgres, runSqlite) {
 // `watchLimits.countWatched(conn, userId)` 的 PG 版。
 // ⚠️ 同步版在查詢失敗時會退回「不算離線確認」的簡化版；PG 版刻意**不**退那一版
 // （那只會讓額度算得更鬆），失敗就照 fail-open 政策回本機。
+//
+// Owner 2026-10-14 的群去重需要 `listings.fold_component_root`。那一欄只跟著 migration 007
+// （PG；SQLite 一向沒有、CI 的拋棄式 PG 也沒有、正式庫目前亦尚未部署）⇒ **先用目錄探測問
+// 「欄位在不在」再決定送哪一句**（`foldColumnDeployed()`；理由見 `watchLimits.js` 的說明：
+// 在 PG 交易裡「先失敗再退回」會把整條交易 abort，連舊口徑都送不出去）。
+// 沒有這一欄時退回不去重的舊口徑（`WATCHED_COUNT_SQL_LEGACY`，也就是改動前的那一句），
+// 而不是讓額度變成 0 筆（那會 fail-open 成「無限關注」）。
+async function countWatchedVia(exec, uid) {
+  if (await foldColumnDeployed(exec)) {
+    return Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0;
+  }
+  return Number(one(await exec(WATCHED_COUNT_SQL_LEGACY, [uid]))?.n) || 0;
+}
+
 export async function countWatchedAsync(userId, options = {}) {
   const uid = Number(userId) || 0;
   if (!uid) return 0;
@@ -46,8 +60,22 @@ export async function countWatchedAsync(userId, options = {}) {
   if (prefetched !== undefined) return prefetched;
   // ⚠️ 這裡的 `exec` 是**裸陣列**（本模組的 runner 約定，與 `usersAsync` 的 `{rows}` 不同）；
   // 寫成 `(...).rows` 會拿到 undefined ⇒ 永遠回 0（實測中過一次，靠對照組才看出來）。
-  return run(options, async (exec) => Number(one(await exec(WATCHED_COUNT_SQL, [uid]))?.n) || 0,
+  return run(options, (exec) => countWatchedVia(exec, uid),
     () => countWatchedSync(sqliteHandle(), uid));
+}
+
+// `watchLimits.watchedGroupHit(conn, userId, postId)` 的 PG 版：這一個 post 所屬的疑似同屋源群
+// 是否已在特別關注裡（Owner 2026-10-14 的群去重規則；SQL 文字共用 `watchLimits.js` 那一句）。
+// SQLite 分支沿用同步版——沒有 `fold_component_root` 時它會回 `false`（＝當成新群）；
+// PG 分支同理：探測說欄位不在 ⇒ 沒有分組鍵 ⇒ 一律當新群（維持改動前的行為）。
+export async function watchedGroupHitAsync(userId, postId, options = {}) {
+  const uid = Number(userId) || 0;
+  const pid = Number(postId) || 0;
+  if (!uid || !pid) return false;
+  return run(options, async (exec) => {
+    if (!(await foldColumnDeployed(exec))) return false;
+    return Boolean(one(await exec(WATCHED_GROUP_HIT_SQL, [pid, uid]))?.hit);
+  }, () => watchedGroupHitSync(sqliteHandle(), uid, pid));
 }
 
 // ---------------------------------------------------------------------------
@@ -59,9 +87,12 @@ export async function countWatchedAsync(userId, options = {}) {
 //
 // ⚠️ 批次 SQL 由**同一份** `WATCHED_COUNT_SQL` 推導（`watchLimits.js` 的那一句），不另抄一份：
 // 抄一份就會漂移，而 `repository/listingStats.js` 的 `watchedTotal` 用的也是同一句。
+// Owner 2026-10-14：使用量改成「疑似同屋源的群整群算 1 次」⇒ 批次版的 select 也必須是
+// `COUNT(DISTINCT COALESCE(l.fold_component_root, f.post_id))`（後台每會員的使用量欄同一口徑）。
 // `?` 佔位符由 runner 的 `toPostgresSql()` 轉成 `$1..$n`（SQLite 直接吃）。
 const marks = (count) => Array.from({ length: count }, () => "?").join(",");
-const WATCHED_COUNT_ONE_SELECT = "SELECT COUNT(*) AS n";
+export const WATCHED_COUNT_GROUP_EXPR = "COUNT(DISTINCT COALESCE(l.fold_component_root, f.post_id)) AS n";
+const WATCHED_COUNT_ONE_SELECT = `SELECT ${WATCHED_COUNT_GROUP_EXPR}`;
 const WATCHED_COUNT_ONE_WHERE = "f.user_id = ?";
 
 export function watchedCountBatchSql(count) {
@@ -72,7 +103,23 @@ export function watchedCountBatchSql(count) {
     );
   }
   return `${WATCHED_COUNT_SQL
-    .replace(WATCHED_COUNT_ONE_SELECT, "SELECT f.user_id AS user_id, COUNT(*) AS n")
+    .replace(WATCHED_COUNT_ONE_SELECT, `SELECT f.user_id AS user_id, ${WATCHED_COUNT_GROUP_EXPR}`)
+    .replace(WATCHED_COUNT_ONE_WHERE, `f.user_id IN (${marks(size)})`)}
+         GROUP BY f.user_id`;
+}
+
+// 欄位未部署時的批次版（同樣由 `WATCHED_COUNT_SQL_LEGACY` 推導，不另抄一份）：
+// 一整頁仍然只有一條查詢（2026-10-11 連線池事故的回歸條件不因為退化路徑而放寬）。
+const LEGACY_ONE_SELECT = "SELECT COUNT(*) AS n";
+export function watchedCountBatchSqlLegacy(count) {
+  const size = Math.max(0, Number(count) || 0);
+  if (!size || !WATCHED_COUNT_SQL_LEGACY.includes(LEGACY_ONE_SELECT) || !WATCHED_COUNT_SQL_LEGACY.includes(WATCHED_COUNT_ONE_WHERE)) {
+    throw new Error(
+      "watchedCountBatchSqlLegacy：WATCHED_COUNT_SQL_LEGACY 的形狀變了，批次版必須跟著改（不要另外抄一份 SQL）",
+    );
+  }
+  return `${WATCHED_COUNT_SQL_LEGACY
+    .replace(LEGACY_ONE_SELECT, "SELECT f.user_id AS user_id, COUNT(*) AS n")
     .replace(WATCHED_COUNT_ONE_WHERE, `f.user_id IN (${marks(size)})`)}
          GROUP BY f.user_id`;
 }
@@ -84,7 +131,11 @@ export async function countWatchedBatchAsync(userIds, options = {}) {
   const counts = new Map();
   if (!ids.length) return counts;
   await run(options, async (exec) => {
-    for (const row of await exec(watchedCountBatchSql(ids.length), ids)) {
+    // 探測結果決定送哪一句（見 `countWatchedVia()`）；一整頁仍然只有一條查詢，退化路徑也一樣。
+    const sql = (await foldColumnDeployed(exec))
+      ? watchedCountBatchSql(ids.length)
+      : watchedCountBatchSqlLegacy(ids.length);
+    for (const row of await exec(sql, ids)) {
       counts.set(Number(row.user_id), Number(row.n) || 0);
     }
   }, () => {

@@ -28,7 +28,7 @@ import {
 } from "./db.js";
 import { listingStatsAsync } from "./listingStatsAsync.js";
 import { WRITE_PATH_SQL } from "./repository/writePath.js";
-import { watchLimitForActor, watchLimitMessage } from "./watchLimits.js";
+import { WATCHED_COUNT_SQL, WATCHED_COUNT_SQL_LEGACY, WATCHED_GROUP_HIT_SQL, foldColumnDeployed, watchGateVerdict, watchLimitForActor } from "./watchLimits.js";
 import { groupIdForPost } from "./listingGroupsAsync.js";
 import { getListingAsync } from "./listingDetailAsync.js";
 import { resolveDbDriver } from "./dbDriver.js";
@@ -46,7 +46,8 @@ export const FLAGS_BY_USER_POST_SQL = "SELECT * FROM user_listing_flags WHERE us
 export const FLAGS_BY_USER_SQL = "SELECT * FROM user_listing_flags WHERE user_id = ?";
 // `copyUserFlagsForRelist()` 的來源查詢（同步版逐字相同）：讀某個 post_id 的所有會員旗標。
 const FLAGS_BY_POST_SQL = "SELECT * FROM user_listing_flags WHERE post_id = ?";
-const COUNT_WATCHED_SQL = "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1";
+// 額度語句**不再自己抄一份**：`WATCHED_COUNT_SQL`／`WATCHED_GROUP_HIT_SQL` 一律從
+// `watchLimits.js` 進口（同步版、`repository/listingStats.js`、後台批次版用的是同一份文字）。
 const SET_WATCH_GROUP_SQL = "UPDATE user_listing_flags SET watch_group_id = ? WHERE user_id = ? AND post_id = ?";
 const USER_BY_EMAIL_SQL = "SELECT id, role, plan FROM users WHERE email = ? LIMIT 1";
 const USER_BY_ID_SQL = "SELECT id, role, plan FROM users WHERE id = ? LIMIT 1";
@@ -96,19 +97,31 @@ async function resolveUserId(exec, userId) {
 
 async function countWatched(exec, uid) {
   try {
-    return Number(one(await exec(COUNT_WATCHED_SQL, [uid]))?.n) || 0;
+    // 先探測「這個庫有沒有 fold_component_root」再決定口徑（見 watchLimits.js：在 PG 交易裡
+    // 「先失敗再退回」會 abort 整條交易，連舊口徑都送不出去）。沒有這一欄 ⇒ 退回不去重的
+    // 舊口徑；真的連舊口徑都失敗才回 0（與改動前相同：查詢失敗視為 0 筆，不讓收藏動作掛掉）。
+    const sql = (await foldColumnDeployed(exec)) ? WATCHED_COUNT_SQL : WATCHED_COUNT_SQL_LEGACY;
+    return Number(one(await exec(sql, [uid]))?.n) || 0;
   } catch {
-    // 與 watchLimits.countWatched() 相同：查詢失敗視為 0 筆，不讓收藏動作整個掛掉。
     return 0;
   }
 }
 
-// watchLimits.canAddWatch() 的 PG 版，規則完全相同。
-function canAddWatch(limit, count, alreadyWatched) {
-  if (alreadyWatched) return { ok: true, limit, count };
-  if (!limit) return { ok: true, limit: 0, count };
-  if (count >= limit) return { ok: false, limit, count, error: watchLimitMessage(limit) };
-  return { ok: true, limit, count };
+// 「這個 post 所屬的疑似同屋源群是否已在特別關注裡」（watchLimits.watchedGroupHit() 的 PG 版）。
+// 沒有分組鍵（欄位未部署）或查詢失敗一律視為「不在」＝當成新群，與同步版的退化口徑一致。
+async function watchedGroupHit(exec, uid, postId) {
+  try {
+    if (!(await foldColumnDeployed(exec))) return false;
+    return Boolean(one(await exec(WATCHED_GROUP_HIT_SQL, [Number(postId) || 0, uid]))?.hit);
+  } catch {
+    return false;
+  }
+}
+
+// watchLimits.watchGateVerdict() —— 配額規則**只有一份**，SQLite 與 PG 兩版呼叫同一個純函式，
+// 兩邊不會漂移（這裡只負責把 count／groupHit 查出來）。
+function canAddWatch(limit, count, alreadyWatched, groupHit = false) {
+  return watchGateVerdict({ limit, count, alreadyWatched, groupHit });
 }
 
 // db.js setFlags() 的 PG 分支。
@@ -122,7 +135,12 @@ export async function setFlags(postId, flags, userId, options = {}) {
     const exec = await pgExec(options);
     const actor = one(await exec(USER_BY_ID_SQL, [uid])) || {};
     const limit = watchLimitForActor(actor);
-    const gate = canAddWatch(limit, await countWatched(exec, uid), false);
+    const gate = canAddWatch(
+      limit,
+      await countWatched(exec, uid),
+      false,
+      await watchedGroupHit(exec, uid, postId),
+    );
     if (!gate.ok) {
       const err = new Error(gate.error);
       err.status = 409;

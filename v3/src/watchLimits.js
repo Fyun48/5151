@@ -19,7 +19,22 @@ export function watchLimitMessage(limit) {
 // (repository/listingStats.js) runs the same predicate through its executor, so the quota
 // count and the list-page `watchedTotal` cannot drift apart. A watch only occupies quota
 // while its listing is not confirmed-offline; orphan flags never count.
-export const WATCHED_COUNT_SQL = `SELECT COUNT(*) AS n
+//
+// Owner 2026-10-14（使用量口徑）：**被判定疑似同屋源的物件群，整群算 1 次**
+// （同屋源 2 筆 ⇒ 1 次；不同屋源 2 筆 ⇒ 2 次）。分組鍵＝`listings.fold_component_root`
+// （fold 工作線的固化欄；NULL ⇒ 自己一群，用 `post_id` 當鍵，與 db.js:3721 的分組語意相同）。
+// 只讀這一欄，不動 fold 的任何程式碼。
+export const WATCHED_COUNT_SQL = `SELECT COUNT(DISTINCT COALESCE(l.fold_component_root, f.post_id)) AS n
+         FROM user_listing_flags f
+         JOIN listings l ON l.post_id = f.post_id
+         WHERE f.user_id = ? AND f.watched = 1
+           AND IFNULL(l.offline_confirmed, 0) = 0`;
+
+// SQLite 一向沒有 `fold_component_root` 這一欄（db.js:3696：只有 PG 有；SQLite 的折疊走
+// union-find，不固化），所以同步版在 `no such column` 時退回**沒有分組鍵可用的退化口徑**：
+// 「只有未確認下架佔配額、孤兒旗標不計」的語意逐字不變，差別只在無法按群去重。
+// 這不是第二份規則，是同一條規則在缺少分組鍵時的形狀。
+export const WATCHED_COUNT_SQL_LEGACY = `SELECT COUNT(*) AS n
          FROM user_listing_flags f
          WHERE f.user_id = ? AND f.watched = 1
            AND EXISTS (
@@ -27,6 +42,69 @@ export const WATCHED_COUNT_SQL = `SELECT COUNT(*) AS n
              WHERE l.post_id = f.post_id
                AND IFNULL(l.offline_confirmed, 0) = 0
            )`;
+
+// ── 「這個庫有沒有 fold_component_root？」的探測（PG 目錄查詢）──────────────────
+// 為什麼要**先問再送**，而不是「先跑群口徑、失敗再退回舊口徑」：PG 的交易只要有一句失敗就整條
+// abort（`current transaction is aborted, commands ignored until end of transaction block`）
+// ⇒ catch 之後再送舊口徑一樣失敗，還會連坐同一交易裡後面所有語句
+// （2026-10-14 CI 的 PG job 就是這樣整片紅的）。目錄查詢本身不會失敗，所以先問「欄位在不在」。
+// 用 `pg_attribute` ＋ `to_regclass('listings')`（跟著 search_path），不要用 `information_schema`
+//（跨 schema 會誤判，L-0869）。
+export const FOLD_COLUMN_PROBE_SQL = `SELECT 1 AS ok FROM pg_attribute
+         WHERE attrelid = to_regclass('listings') AND attname = 'fold_component_root'
+           AND attnum > 0 AND NOT attisdropped
+         LIMIT 1`;
+
+const FOLD_PROBE_TTL_MS = 60_000;
+const foldProbeCache = new Map();
+
+/** 測試（或欄位剛部署完）要主動失效時用；不帶 key ＝ 全部清掉。 */
+export function resetFoldColumnProbe(key) {
+  if (key === undefined) foldProbeCache.clear();
+  else foldProbeCache.delete(key);
+}
+
+// 回傳「這個庫能不能用群口徑」。`runOne(sql, params)` 的回傳形狀兩種都吃
+// （裸列陣列，或單列物件）。查不到（SQLite 一向沒有這一欄、SQLite 替身沒有 pg_attribute、
+// 交易已 abort）一律回 `false` ＝ 退回不去重的舊口徑（**不得**反過來 fail-open 成 0 筆）。
+export async function foldColumnDeployed(runOne, { key = "watch-limits", ttlMs = FOLD_PROBE_TTL_MS, now = Date.now } = {}) {
+  const at = now();
+  const cached = foldProbeCache.get(key);
+  if (cached && at - cached.at < ttlMs) return cached.value;
+  let value = false;
+  try {
+    const raw = await runOne(FOLD_COLUMN_PROBE_SQL, []);
+    const row = Array.isArray(raw) ? raw[0] : raw;
+    value = Boolean(row?.ok);
+  } catch {
+    value = false;
+  }
+  foldProbeCache.set(key, { value, at });
+  return value;
+}
+
+// 「這個新列所屬的群是否已經在特別關注裡」：同群已計 ⇒ 這次加入不增量。
+// NULL root ⇒ 自己一群 ⇒ 不可能與別的列同群（同一列已在特別關注則由 `alreadyWatched` 短路）。
+export const WATCHED_GROUP_HIT_SQL = `SELECT 1 AS hit
+         FROM user_listing_flags f
+         JOIN listings l ON l.post_id = f.post_id
+         JOIN listings t ON t.post_id = ?
+         WHERE f.user_id = ? AND f.watched = 1
+           AND IFNULL(l.offline_confirmed, 0) = 0
+           AND l.fold_component_root IS NOT NULL
+           AND l.fold_component_root = t.fold_component_root
+         LIMIT 1`;
+
+// 配額規則的**唯一一份**純函式：SQLite（`canAddWatch`）與 PG（`personalFlagsAsync`）都呼叫它，
+// 兩邊只差在「怎麼把 count／groupHit 查出來」，規則本身不會漂移。
+export function watchGateVerdict({ limit = 0, count = 0, alreadyWatched = false, groupHit = false } = {}) {
+  if (alreadyWatched) return { ok: true, limit, count };
+  if (!limit) return { ok: true, limit: 0, count };
+  // 同群已佔一格 ⇒ 不增量，直接放行（群數不變）。
+  if (groupHit) return { ok: true, limit, count };
+  if (count >= limit) return { ok: false, limit, count, error: watchLimitMessage(limit) };
+  return { ok: true, limit, count };
+}
 
 export function countWatched(conn, userId) {
   const uid = Number(userId) || 0;
@@ -38,9 +116,7 @@ export function countWatched(conn, userId) {
   } catch {
     try {
       return Number(
-        conn.prepare(
-          "SELECT COUNT(*) AS n FROM user_listing_flags WHERE user_id = ? AND watched = 1",
-        ).get(uid)?.n,
+        conn.prepare(WATCHED_COUNT_SQL_LEGACY).get(uid)?.n,
       ) || 0;
     } catch {
       return 0;
@@ -48,11 +124,24 @@ export function countWatched(conn, userId) {
   }
 }
 
-export function canAddWatch(conn, userId, actor = {}, { alreadyWatched = false } = {}) {
-  if (alreadyWatched) return { ok: true, limit: watchLimitForActor(actor), count: countWatched(conn, userId) };
-  const limit = watchLimitForActor(actor);
-  const count = countWatched(conn, userId);
-  if (!limit) return { ok: true, limit: 0, count };
-  if (count >= limit) return { ok: false, limit, count, error: watchLimitMessage(limit) };
-  return { ok: true, limit, count };
+// 「這個 post 所屬的群是否已在特別關注裡」。SQLite 沒有 `fold_component_root` ⇒ 查詢失敗時
+// 回 `false`（＝當成新群），與 `countWatched()` 的退化口徑一致：沒有分組鍵就無法判同群。
+export function watchedGroupHit(conn, userId, postId) {
+  const uid = Number(userId) || 0;
+  const pid = Number(postId) || 0;
+  if (!uid || !pid) return false;
+  try {
+    return Boolean(conn.prepare(WATCHED_GROUP_HIT_SQL).get(pid, uid)?.hit);
+  } catch {
+    return false;
+  }
+}
+
+export function canAddWatch(conn, userId, actor = {}, { alreadyWatched = false, postId = 0 } = {}) {
+  return watchGateVerdict({
+    limit: watchLimitForActor(actor),
+    count: countWatched(conn, userId),
+    alreadyWatched,
+    groupHit: watchedGroupHit(conn, userId, postId),
+  });
 }

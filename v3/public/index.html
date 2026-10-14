@@ -5117,12 +5117,22 @@
       if (meIsAdmin) return 0;
       return mePlan === "sponsor" ? SPONSOR_MAX_WATCHED : MEMBER_MAX_WATCHED;
     }
+    // 使用量一律讀伺服器回傳的 `watchedTotal`（`lastStats`）——伺服器端已經是
+    // 「疑似同屋源的群整群算 1 次」的口徑（Owner 2026-10-14），前端**不自己算筆數**。
     function watchedCount() {
       return Number(lastStats?.watchedTotal != null ? lastStats.watchedTotal : lastStats?.watched) || 0;
     }
-    function watchLimitReached() {
+    // 這一列所屬的疑似同屋源群是否已在特別關注裡（群級聚合由伺服器算好）。
+    // 欄位缺席（沒有折疊資料）⇒ 回 false ＝ 沿用舊行為；伺服器仍是唯一權威（409 WATCH_LIMIT）。
+    function groupAlreadyWatched(item) {
+      return Number(item?.same_house_group_watched) === 1;
+    }
+    // 群已佔一格 ⇒ 這次加入不增量，所以即使筆數已達上限也不該先把按鈕鎖住
+    // （與伺服器 `watchLimits.watchGateVerdict` 的 groupHit 分支同一條規則）。
+    function watchLimitReached(item) {
       const cap = watchLimit();
-      return cap > 0 && watchedCount() >= cap;
+      if (!(cap > 0) || watchedCount() < cap) return false;
+      return !groupAlreadyWatched(item);
     }
     function watchLimitText() {
       return mePlan === "sponsor"
@@ -6453,7 +6463,11 @@
       if (key === "suspected") return Boolean(item.match_level) && !confirmed && !dup && !hidden;
       // 「物件暫離」（pending）留在一般列表（灰階）；只有「已下架」才排除。
       if (dup || confirmed || hidden) return false;
-      if (key === "all") return !watched && !viewed;
+      // 訪客版與會員版（`v3/src/personalFlags.js` 的 `listingMatchesListFilter`）同一條規則：
+      // Owner 2026-10-07 舊裁決「全部＝未看過且未特別關注」→ Owner 2026-10-14 新裁決
+      // 「一般＝排除特別關注／隱藏／確認下架／重複，已瀏覽照常顯示」。
+      // 訪客沒有旗標資料（watched／viewed 恆 0）⇒ 改了行為不變，但兩邊必須一致。
+      if (key === "all") return !watched;
       if (key === "viewed") return viewed;
       if (key === "watched") return watched;
       if (key === "same_source") {
@@ -8148,7 +8162,7 @@
               ? `<button class="primary btn-card-action btn-watch" data-watched="${id}">取消關注</button>`
               : draftWatch.has(String(id))
                 ? `<div class="watch-draft-pair"><button class="primary btn-card-action btn-watch" data-watch-draft-commit="${id}">加入</button><button class="primary btn-card-action btn-watch" data-watch-draft-cancel="${id}">取消</button></div>`
-                : `<button class="ghost btn-card-action btn-watch" data-watched="${id}"${watchLimitReached() ? ` disabled aria-disabled="true" title="${esc(watchLimitText())}"` : ""}>特別關注</button>`}
+                : `<button class="ghost btn-card-action btn-watch" data-watched="${id}"${watchLimitReached(item) ? ` disabled aria-disabled="true" title="${esc(watchLimitText())}"` : ""}>特別關注</button>`}
             ${item.watched || draftWatch.has(String(id)) ? "" : `<button type="button" class="ghost btn-card-action btn-hide" data-hidden="${id}">${item.hidden ? "取消隱藏" : "不再顯示"}</button>`}
             </div>
             ${item.source === "self" && !item.mine && !isGuest ? `<button class="ghost" data-self-report="${id}">檢舉</button>` : ""}
@@ -8255,7 +8269,7 @@
     }
 
     function beginWatchDraft(id) {
-      if (watchLimitReached()) {
+      if (watchLimitReached(listingById(id))) {
         flash(watchLimitText(), { alert: true });
         return false;
       }
@@ -8388,7 +8402,7 @@
     async function commitWatchDraft(id, note) {
       const key = String(id);
       if (!draftWatch.has(key)) return;
-      if (watchLimitReached()) {
+      if (watchLimitReached(listingById(id))) {
         draftWatch.delete(key);
         noteDrafts.delete(key);
         flash(watchLimitText(), { alert: true });
