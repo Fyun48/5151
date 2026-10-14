@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import {
   DEFAULT_CATALOG_CONDITIONS,
@@ -358,4 +359,11 @@ test("bulk avoid leaves disallow-avoid conditions unspecified", () => {
   const row = catalog.conditions.find((item) => item.label === "法定用途");
   const next = applyBulkWishActions(catalog, row.category_id, "avoid", {});
   assert.equal(next[row.id], undefined);
+});
+
+// 型錄篩選的顯示標籤同樣統一（id 仍是 furniture，不動，那是資料鍵不是用字）。
+test("rentalCatalog：furniture 分類標籤用「家俱」", () => {
+  const src = readFileSync(new URL("../src/rentalCatalog.js", import.meta.url), "utf8");
+  assert.match(src, /\{ id: "furniture", label: "家俱", sort_order: \d+ \}/);
+  assert.doesNotMatch(src, /label: "家具"/);
 });

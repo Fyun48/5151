@@ -308,3 +308,12 @@ test("detail.html：推估設備要在訪客詳情頁標示（沿用既有 .stat
   assert.match(body, /class="state-note"[^<]*推估：來源未提供設備欄位，由刊登內文判斷/);
   assert.match(body, /<\/div>' \+ inferred;/, "推估說明要接在設備格子後面，不能擋掉項目本身");
 });
+
+// ---- 用字統一：全站給使用者看的「家俱」（Owner 決定 2026-10-08）----
+// 來源內文兩種寫法都有（listingPrep.js 的正字元故意同時收「家俱|家具」，那類比對字串不准改），
+// 但我們自己渲染的標題一律跟列表頁按鈕「此屋家俱家電狀態」一致。
+test("detail.html：設備區塊標題用「家俱」不用「家具」", () => {
+  const html = readFileSync(new URL("../public/detail.html", import.meta.url), "utf8");
+  assert.match(html, /renderSection\("amenities", "設備與家俱家電"/);
+  assert.doesNotMatch(html, /設備與家具家電/);
+});

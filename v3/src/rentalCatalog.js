@@ -144,7 +144,7 @@ export const DEFAULT_CATALOG_CATEGORIES = Object.freeze([
   { id: "living_lease", label: "生活與租賃", sort_order: 10 },
   { id: "building", label: "建物與社區", sort_order: 20 },
   { id: "mail_trash", label: "收件與垃圾", sort_order: 30 },
-  { id: "furniture", label: "家具", sort_order: 40 },
+  { id: "furniture", label: "家俱", sort_order: 40 },
   { id: "appliance", label: "家電", sort_order: 50 },
   { id: "media", label: "網路與影音", sort_order: 60 },
   { id: "parking", label: "交通與停車", sort_order: 70 },
