@@ -167,7 +167,7 @@ const DATA_HEALTH_SQL = `SELECT
   SUM(CASE WHEN COALESCE(area_name, '') = '' THEN 1 ELSE 0 END) AS missing_area,
   SUM(CASE WHEN COALESCE(layout, '') = '' THEN 1 ELSE 0 END) AS missing_layout,
   SUM(CASE WHEN COALESCE(extra_fees, '') IN ('', '[]', 'null')
-             AND COALESCE(extra_fee, '') = ''
+              AND extra_fee IS NULL
              AND COALESCE(extra_fee_text, '') = '' THEN 1 ELSE 0 END) AS missing_fees,
   SUM(CASE WHEN COALESCE(furnish_items, '') IN ('', '[]') THEN 1 ELSE 0 END) AS missing_furnish
  FROM listings WHERE COALESCE(hidden, 0) = 0`;

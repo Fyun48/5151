@@ -718,6 +718,7 @@
           <h2>資料健康度</h2>
           <p class="hint">讓管理員知道底庫現在缺什麼，而不是等使用者發現。只讀，不啟動補算。</p>
           <div class="admin-metric-grid" id="dataHealthGrid"></div>
+          <p class="msg" id="dataHealthMsg"></p>
         </section>
       </div>
       <div id="system-maps" class="admin-panel" data-admin-page="system/maps">
@@ -4294,7 +4295,11 @@
     async function loadDataHealth() {
       const res = await fetch("/api/admin/data-health", { cache: "no-store" });
       const data = await readApi(res);
-      if (!res.ok || !$("dataHealthGrid")) return;
+      if (!$("dataHealthGrid")) return;
+      if (!res.ok) {
+        setMsg("dataHealthMsg", data.error || "讀取資料健康度失敗（HTTP " + res.status + "）");
+        return;
+      }
       $("dataHealthGrid").innerHTML = [
         metric("缺完整地址", data.missingAddress || 0),
         metric("缺座標", data.missingCoords || 0),
