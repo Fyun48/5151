@@ -193,7 +193,7 @@ export function buildAdminDataHealth(listingPrep) {
       SUM(CASE WHEN IFNULL(area_name, '') = '' THEN 1 ELSE 0 END) AS missing_area,
       SUM(CASE WHEN IFNULL(layout, '') = '' THEN 1 ELSE 0 END) AS missing_layout,
       SUM(CASE WHEN IFNULL(extra_fees, '') IN ('', '[]', 'null')
-                 AND IFNULL(extra_fee, '') = ''
+                 AND extra_fee IS NULL
                  AND IFNULL(extra_fee_text, '') = '' THEN 1 ELSE 0 END) AS missing_fees,
       SUM(CASE WHEN IFNULL(furnish_items, '') IN ('', '[]') THEN 1 ELSE 0 END) AS missing_furnish
     FROM listings
