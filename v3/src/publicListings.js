@@ -1,13 +1,37 @@
 /** Cheap guest listing cache. Identical queries reuse a short-lived payload. */
 
-// 訪客快取的時間常數（2026-10-10，SWR 批次）：
-//   - TTL_MS：同 generation 的「新鮮命中」窗口（SQLite 路徑維持原語意：超過就重算）。
-//   - BUCKET_MS：PG revision generation 讀取的粗粒度 bucket（行程內 memo 的窗口）。
-//   - MAX_STALE_MS：SWR 的陳舊上限——entry 年齡 ≤ 45s 就先回舊值＋背景重算；
-//     超過 45s 才同步重算。這是「比現行 TTL 政策更寬」都不准的硬上限。
+// 訪客快取的時間常數（2026-10-10 建立；2026-10-16 放寬 SWR 陳舊上界）：
+//   - TTL_MS：同 generation 的「新鮮窗口」——窗口內直接命中，不發背景重算。
+//   - BUCKET_MS：PG revision generation 讀取的粗粒度 bucket（行程內 memo 的窗口）＝
+//     「資料被改掉之後，最慢多久會被 generation 換代偵測到」的上界。
+//   - MAX_STALE_MS：SWR 的**陳舊上界**（預設 10 分鐘）。entry 年齡 ≤ 上界 ⇒ 一律先回舊值
+//     （同一個 key 只發一次 single-flight 背景重算）；只有「沒有 entry」或「年齡 > 上界」
+//     才同步重算。
+//
+// 為什麼是 10 分鐘（600_000ms，2026-10-16 Owner 核可）：本專案資料由爬蟲**約每 20 分鐘**
+// 更新一輪，所以「entry 陳舊 45 秒以上就不准回舊值」比資料本身的更新節奏嚴格一個量級，
+// 低流量站的訪客幾乎每一發都落在「同步重算」那一格（正式站實測：間隔 150s 連續 7 發為
+// 17.5／17.0／16.6／17.3／17.1／15.8／16.4 秒；改為 10 分鐘上界後走 SWR，同一支量測
+// 每發 < 3 秒）。上界仍然存在，是為了讓「使用者最多看到多久以前的清單」有明確答案：
+// 600 秒 ＋ 該次計算本身的耗時（見 docs/handoffs/20261016-guest-swr-stale-window.md）。
+//
+// 開關清單（照 repo 慣例：只認環境變數，不動 compose／.env）：
+//   - GUEST_SWR_MAX_STALE_MS：覆寫陳舊上界（毫秒），**硬上界 clamp 在 [TTL_MS, 600_000]**。
+//     只能調小、不能調大於 Owner 核可的 10 分鐘；解析失敗（未設、空字串、非正數）
+//     一律回到預設 600_000。
 export const TTL_MS = 20_000;
 export const BUCKET_MS = 20_000;
-export const MAX_STALE_MS = 45_000;
+export const GUEST_SWR_MAX_STALE_MS_ENV = "GUEST_SWR_MAX_STALE_MS";
+/** 陳舊上界的硬上界（＝Owner 核可值）：環境變數再怎麼設都不會超過這個數。 */
+export const MAX_STALE_MS_CEILING = 600_000;
+export const MAX_STALE_MS = guestSwrMaxStaleMs();
+
+/** 陳舊上界（毫秒）：環境變數覆寫一律 clamp 進 [TTL_MS, MAX_STALE_MS_CEILING]。 */
+export function guestSwrMaxStaleMs(env = process.env) {
+  const raw = Number(env?.[GUEST_SWR_MAX_STALE_MS_ENV]);
+  const wanted = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : MAX_STALE_MS_CEILING;
+  return Math.min(Math.max(wanted, TTL_MS), MAX_STALE_MS_CEILING);
+}
 const MAX_ENTRIES = 200;
 const cache = new Map();
 // 進行中的計算（single-flight）：同一 key 的併發請求（含 SWR 的背景重算）共用同一個
@@ -78,18 +102,24 @@ export function getCachedPublicListings(query, load, { namespace = "sqlite:guest
 
   if (hit) {
     const age = nowMs - hit.at;
-    const sameGeneration = hit.namespace === namespace;
-    if (sameGeneration && age < TTL_MS) {
+    const generationChanged = hit.namespace !== namespace;
+    if (!generationChanged && age < TTL_MS) {
       // 同 generation 且仍在新鮮窗口：直接命中，不做背景重算。
       return { ...hit.payload, cache_hit: true, cache_age_ms: age };
     }
-    if (!sameGeneration && age <= MAX_STALE_MS) {
-      // generation 已換代、entry 年齡 ≤ MAX_STALE_MS：SWR——先回舊值，
-      // 同時背景重算（single-flight），重算完成才把 entry 換成新代。
+    if (age <= MAX_STALE_MS) {
+      // 陳舊上界內 ⇒ SWR：先回舊值，同時發一次 single-flight 背景重算。兩種情形：
+      //   (a) 同 generation、年齡 ≥ TTL_MS：generation 是 `data_revision.MAX(id)`，沒換代
+      //       代表寫入端沒有 bump 過 ⇒ 這筆 entry 的資料仍然有效，回舊值就是「正確值」，
+      //       不是「將就的舊資料」。仍然發背景重算是為了讓 entry 的年齡回到 0——否則同一筆
+      //       entry 會一路被養到上界，之後每 MAX_STALE_MS 就有一發請求掉回同步重算
+      //       （低流量站＝每隔幾發卡一次十幾秒）。
+      //   (b) generation 已換代：資料真的變了，但舊值仍在上界內 ⇒ 標準 SWR，先回舊值。
+      // `stale: true` 的語意是「這次回的是快取舊值，且已發出背景重算」，不等於資料一定過期。
       revalidateInBackground(key, load, namespace, now);
       return { ...hit.payload, cache_hit: true, stale: true, cache_age_ms: age };
     }
-    // 其餘（年齡 > MAX_STALE_MS；或同 generation 但已過新鮮窗口）→ 同步重算。
+    // 年齡 > MAX_STALE_MS：超過陳舊上界，不准再回舊值 → 落回下面的同步重算。
   }
 
   // 同步重算（single-flight：同 key 正在算時，併發的請求共用同一個 in-flight promise，
@@ -127,7 +157,7 @@ function revalidateInBackground(key, load, namespace, now) {
     return;
   }
   if (result && typeof result.then === "function") {
-    // pending 本身會 reject（讓年齡 > 45s 的 inflight joiners 拿到正確錯誤，而非 undefined）；
+    // pending 本身會 reject（讓年齡 > MAX_STALE_MS 的 inflight joiners 拿到正確錯誤，而非 undefined）；
     // 這裡用「不 throw 的 rejection handler」把背景這條吞掉＋log，失敗不影響已回出的舊值。
     const pending = result.then((payload) => rememberInto(key, namespace, now, payload));
     inflight.set(key, pending);
@@ -157,8 +187,10 @@ function logRevalidateError(error) {
  * `sqlite:guest:v2` (verbatim, #674). In PostgreSQL the durable `data_revision`
  * change-log is the generation: `pg:guest:v${MAX(id)}`. When a write bumps the
  * revision the namespace changes, so the next guest request resolves a different
- * namespace and the entry is treated as stale (SWR, ≤ MAX_STALE_MS) instead of a
- * hard miss against the previous generation.
+ * namespace and the entry is served as stale (SWR, ≤ MAX_STALE_MS = 10 min) while a
+ * single-flight revalidation runs in the background — instead of a hard miss.
+ * （generation 沒換代、但年齡超過 TTL_MS 的 entry 同樣走 SWR，見 getCachedPublicListings
+ * 的分支註解：沒換代＝寫入端沒 bump ⇒ 舊值仍是正確值，但仍發背景重算讓年齡歸零。）
  *
  * A `null` namespace means "never hit, never write" (fail-closed) — the caller
  * must still serve the freshly-loaded payload.
@@ -195,9 +227,10 @@ async function readCurrentRevisionNative() {
  * 跨窗口才重讀。讀取失敗 ⇒ fail-closed 回 `null`（不回傳舊 generation、不命中、
  * 不寫入），呼叫端仍回傳正確資料。
  *
- * 多節點（web-A／web-B）各自有行程內 bucket memo：generation 不同時，年齡 ≤
- * MAX_STALE_MS 的 entry 會先回舊值（SWR）＋背景重算，超過才同步重算；不會回錯資料
- * （回舊值的前提是「同參數、年齡 ≤ MAX_STALE_MS」，且重算完成前舊值仍在上限內）。
+ * 多節點（web-A／web-B）各自有行程內 bucket memo：BUCKET_MS（20 秒）也是「資料被改掉之後，
+ * 最慢多久會被偵測到換代」的上界；偵測到之後，年齡 ≤ MAX_STALE_MS（10 分鐘）的 entry 會先回
+ * 舊值（SWR）＋背景重算，超過才同步重算，因此不會回錯資料（回舊值的前提是「同參數、
+ * 年齡 ≤ MAX_STALE_MS」，且重算完成前舊值仍在上限內）。
  */
 export async function resolveGuestCacheNamespace({ driver = "sqlite", readRevision = null, now = Date.now } = {}) {
   if (driver !== "postgres") return "sqlite:guest:v2";
