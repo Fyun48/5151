@@ -22,6 +22,7 @@ import {
   previewSupportConfig,
   publicSupportConfig,
   publishSupportConfig,
+  recordSupportEvent,
   resetSupportCheckoutRateLimit,
   saveSupportConfig,
   supportDashboard,
@@ -33,6 +34,8 @@ import {
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const serverSrc = readFileSync(path.join(dir, "../src/server.js"), "utf8");
 const authSrc = readFileSync(path.join(dir, "../src/auth.js"), "utf8");
+const supportSrc = readFileSync(path.join(dir, "../src/support.js"), "utf8");
+const supportAsyncSrc = readFileSync(path.join(dir, "../src/supportAsync.js"), "utf8");
 
 function open() {
   const db = new DatabaseSync(":memory:");
@@ -40,6 +43,16 @@ function open() {
   initSupportDomain(db, new Date("2026-09-15T00:00:00.000Z"));
   return db;
 }
+
+/** 把 domain 打開＋啟用一個有網址的收款管道，才能走到「有得結帳」的分支。 */
+function openCheckout(db, { page_url = "https://buymeacoffee.com/demo" } = {}) {
+  saveSupportConfig(db, { flags: { enabled: true } });
+  const provider = listSupportProviders(db).find((row) => row.kind === "buy_me_a_coffee");
+  updateSupportProvider(db, provider.id, { is_active: true, page_url });
+  return provider;
+}
+
+const customTier = (db) => listSupportTiers(db).find((row) => row.amount === 0);
 
 test("feature flags default false and public payload stays dark", () => {
   const db = open();
@@ -284,4 +297,103 @@ test("admin support routes stay behind requireAdminApi and public paths are allo
   assert.match(ctaRoute, /handleSupportCtaRequest/);
   assert.doesNotMatch(ctaRoute, /markSupportCtaShown/);
   assert.doesNotMatch(ctaRoute, /recordSupportEvent/);
+});
+
+// ---------------------------------------------------------------------------
+// 自訂金額（B1）：前端送的 amount 真的到後端、有驗證、而且只有「自訂支持」採用它。
+// ---------------------------------------------------------------------------
+
+test("custom amount is carried through the checkout and validated as an integer 10–100000", async () => {
+  const db = open();
+  openCheckout(db);
+  const custom = customTier(db);
+
+  const ok = await createSupportCheckout(db, { tierId: custom.id, amount: 500 });
+  assert.equal(ok.available, true);
+  assert.equal(ok.amount, 500);
+  assert.equal(ok.checkoutType, "external");
+  // 瀏覽器表單送出的是字串，數字字串要收。
+  assert.equal((await createSupportCheckout(db, { tierId: custom.id, amount: "320" })).amount, 320);
+  // 邊界值本身合法。
+  assert.equal((await createSupportCheckout(db, { tierId: custom.id, amount: 10 })).amount, 10);
+  assert.equal((await createSupportCheckout(db, { tierId: custom.id, amount: 100000 })).amount, 100000);
+  db.close();
+});
+
+test("custom amount rejects non-integers and out-of-range values", async () => {
+  const db = open();
+  openCheckout(db);
+  const custom = customTier(db);
+
+  const bad = [9, 0, -10, 100001, 12.5, "12.5", "abc", "", " ", null, undefined, 1e9];
+  for (const amount of bad) {
+    await assert.rejects(
+      () => createSupportCheckout(db, { tierId: custom.id, amount }),
+      (error) => error.code === "INVALID_AMOUNT" && /整數/.test(error.message),
+      `amount=${String(amount)} 應該被 INVALID_AMOUNT 擋下`,
+    );
+  }
+  // 被擋下之後，同一個資料庫再送合法金額仍然可以結帳（驗證沒留下壞狀態）。
+  const after = await createSupportCheckout(db, { tierId: custom.id, amount: 500 });
+  assert.equal(after.available, true);
+  assert.equal(after.amount, 500);
+  db.close();
+});
+
+test("a tier with a fixed amount wins over the amount sent by the client", async () => {
+  const db = open();
+  openCheckout(db);
+  const fixed = listSupportTiers(db).find((row) => row.amount === 150);
+
+  assert.equal((await createSupportCheckout(db, { tierId: fixed.id, amount: 99999 })).amount, 150);
+  assert.equal((await createSupportCheckout(db, { tierId: fixed.id })).amount, 150);
+  // 固定方案的金額不是使用者控制的，亂帶也不該讓結帳失敗（維持既有規則）。
+  assert.equal((await createSupportCheckout(db, { tierId: fixed.id, amount: "abc" })).amount, 150);
+  db.close();
+});
+
+test("amount without a tier is validated when present and keeps the legacy 0 when absent", async () => {
+  const db = open();
+  openCheckout(db);
+  assert.equal((await createSupportCheckout(db, { amount: 250 })).amount, 250);
+  assert.equal((await createSupportCheckout(db, {})).amount, 0);
+  await assert.rejects(
+    () => createSupportCheckout(db, { amount: 5 }),
+    (error) => error.code === "INVALID_AMOUNT",
+  );
+  db.close();
+});
+
+test("sync and async checkout share one amount rule", () => {
+  assert.match(supportSrc, /resolveSupportCheckoutAmount\(\{ amount, tier \}\)/);
+  assert.match(supportAsyncSrc, /resolveSupportCheckoutAmount\(\{ amount, tier \}\)/);
+  // 金額驗證只留一份：兩支結帳函式都不再自己 moneyAmount(amount) 決定金額。
+  assert.doesNotMatch(supportSrc, /let payAmount = moneyAmount\(amount\)/);
+  assert.doesNotMatch(supportAsyncSrc, /let payAmount = moneyAmount\(amount\)/);
+});
+
+test("support_checkout_opened records the effective amount and the tier it came from", () => {
+  const db = open();
+  recordSupportEvent(db, "support_checkout_opened", { meta: { tierId: 7, amount: 500 } });
+  const row = db.prepare(
+    "SELECT meta_json FROM support_event WHERE kind='support_checkout_opened' ORDER BY id DESC LIMIT 1",
+  ).get();
+  // meta 是白名單（只留 ruleId／tierId／amount／sponsorId／days），沒加欄位就會被默默丢掉。
+  assert.deepEqual(JSON.parse(row.meta_json), { tierId: 7, amount: 500 });
+  db.close();
+});
+
+test("checkout route keeps the 200 + available:false shape for invalid amounts", () => {
+  const route = serverSrc.slice(
+    serverSrc.indexOf('app.post("/api/support/checkout"'),
+    serverSrc.indexOf('app.post("/api/support/cta"'),
+  );
+  assert.match(route, /meta\.amount = Math\.round\(paidAmount\)/);
+  assert.match(
+    route,
+    /if \(error\.code === "INVALID_AMOUNT"\) \{\s*res\.json\(\{ available: false, message: error\.message, code: error\.code \}\);\s*return;\s*\}/,
+  );
+  // 不擅自改成 400：既有呼叫端只看 available／message，HTTP 狀態維持 200。
+  assert.doesNotMatch(route, /res\.status\(400\)/);
+  assert.match(route, /error\.code === "RATE_LIMITED"[\s\S]{0,80}res\.status\(429\)/);
 });
