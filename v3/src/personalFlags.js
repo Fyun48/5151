@@ -299,10 +299,19 @@ export function migrateListingFlagsIfNeeded(conn, userId) {
 // 同屋源次卡在三個清單都只出一列（逐則操作改由展開面板提供，見 public/index.html 的
 // sameHousePanel）。**沒有 `filter` 參數**：折疊判定與清單無關，所以不需要（先前
 // 「`filter` 參數保留只為相容」的註解與簽名不一致，2026-10-12 一併對齊成現在的形狀）。
+//
+// Owner 2026-10-16 裁示（本函式移除「補償條款」）：**同一個同屋源群在清單上只顯示 1 列＝代表列**。
+// 代表列就是「這次篩選的候選列裡按 `preferPrimaryListing` 選出的那一列」；它即使是「暫離」
+// （`offline=1` 且 `offline_confirmed=0`），依 2026-10-12 定案 3b 照樣可以當代表、也照樣顯示
+// （見 v3/src/db.js 的 eligible：只排除 `offline_confirmed=1`）。
+// 舊的補償條款（`primary_offline=1` 且本列 `offline<>1` ⇒ 本列仍留列表）是在 3b 之前寫的：
+// 當時假設「主卡暫離就看不到主卡」，所以留次卡墊檔；3b 之後主卡自己就會顯示 ⇒ 補償條款變成
+// 「主卡與次卡同時出現」的重覆顯示（正式庫 2026-10-16 實測：8 群／27 列會多顯示）。
+// 線上仍存在的次卡改由展開面板觸達（前端 sameHousePanel 的 peers；資料面 `same_house.peers`
+// 仍帶著它們，只是不進清單列）。
 export function listingIsMainListAffiliate(row) {
   if (row?.same_house_split) return false;
   if (row?.same_house_role !== "affiliate") return false;
-  if (row?.same_house_primary_offline && Number(row.offline) !== 1) return false;
   return true;
 }
 

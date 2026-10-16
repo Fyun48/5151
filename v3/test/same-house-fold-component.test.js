@@ -119,8 +119,11 @@ test("a group with a single member in scope keeps no role", () => {
   assert.equal(listingMatchesListFilter(solo, "all"), true);
 });
 
-// ④ 補償條款：primary 已下架（offline）而 affiliate 還在 ⇒ affiliate 仍留列表。
-test("compensation clause keeps the live affiliate when the primary is offline", () => {
+// ④ Owner 2026-10-16 裁示：同一個同屋源群在清單上只出 1 列＝代表列。
+// 代表列即使是「暫離」（offline=1、offline_confirmed=0）也照樣顯示（2026-10-12 定案 3b）；
+// 舊的「補償條款」（主卡暫離就讓線上次卡留在列表）已移除 ⇒ 線上次卡不再多出一列，
+// 改由展開面板觸達（資料面 bundle.peers 仍帶著它）。
+test("one row per same-house group: the representative stays listed even when temporarily offline", () => {
   const gone = listing(34001, { rent: 15000, offline: 1 });
   const live = listing(34002, { rent: 19000 });
   gone.match_post_id = live.post_id;
@@ -128,9 +131,22 @@ test("compensation clause keeps the live affiliate when the primary is offline",
   assert.equal(gone.same_house_role, "primary");
   assert.equal(live.same_house_role, "affiliate");
   assert.equal(live.same_house_primary_offline, true);
-  assert.equal(listingIsMainListAffiliate(live, "all"), false, "affiliate 仍留列表");
-  assert.equal(listingMatchesListFilter(live, "all"), true);
+  assert.equal(listingIsMainListAffiliate(live), true, "次卡一律折疊（補償條款已移除）");
+  assert.equal(listingMatchesListFilter(live, "all"), false, "線上 affiliate 不再因代表列暫離而多出一列");
   assert.equal(listingMatchesListFilter(gone, "all"), true, "可能空號（offline=1 未確認）維持顯示");
+  // 一般清單在這一群恰好 1 列（＝代表列 34001）。
+  const listed = [gone, live].filter((row) => listingMatchesListFilter(row, "all"));
+  assert.deepEqual(listed.map((row) => Number(row.post_id)), [34001], "同群只出一列＝代表列");
+  // 線上次卡只能從展開面板觸達：bundle 仍帶著它，只是不進清單列。
+  const bundle = sameHouseBundle(gone, [live], NOW);
+  assert.ok(bundle, "群內有 2 則 ⇒ 展開面板資料仍在");
+  assert.equal(bundle.is_primary, true);
+  assert.equal(bundle.primary_id, 34001, "暫離的代表列仍是群內贏家");
+  assert.deepEqual(
+    [...(bundle.peers || []), ...(bundle.collapsed || [])].map((p) => Number(p.post_id)),
+    [34002],
+    "線上次卡 34002 仍可從展開面板觸達",
+  );
 });
 
 // Owner ③：確認下架（offline_confirmed=1）不參與選主、三個清單都 0 列。

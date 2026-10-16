@@ -14,7 +14,7 @@
   → false，`db.js:3641`）。
 - **2026-10-12 起改為「一群一主」＋「群內代表」**：分組鍵＝全域固化欄
   `listings.fold_component_root`（NULL ⇒ 自己一群，用 `post_id` 當鍵）；**代表列在「本次符合
-  篩選條件的候選列」之內**用既有比較式 `sortGroupListings(...)[0]` 選出（`match.js:468`），
+  篩選條件的候選列」之內**用既有比較式 `sortGroupListings(...)[0]` 選出（`match.js:482`），
   同群其他候選列＝affiliate 被折疊。兩條路徑（Node `db.js attachSameHouseRoleSteps`／
   SQL `listingSearchSql.js foldRoleCte`）用**同一個定義**；Node 端**不再做 1-hop 走訪**。
 - 單節點群（自身一群、沒有同群的第二個候選列）維持「無 role」＝留在主列表。
@@ -54,7 +54,7 @@ groups = groupBy(候選列, rootKey)          // rootKey = fold_component_root�
 if (hasPersonal) union(同一 personal.groupKey 的候選列的 rootKey)   // 個人併組不固化（§6.5）
 for 每個群 G（|G| ≥ 2 個候選列）:
   eligible = G 中 offline_confirmed ≠ 1 且 !housepriceNotDisplayReady 的成員（Owner③）  // db.js:3783
-  primary  = sortGroupListings(eligible, now)[0]        // 唯一比較式（match.js:468，未改）
+  primary  = sortGroupListings(eligible, now)[0]        // 唯一比較式（match.js:482，未改）
   role     = (post_id === primary.post_id) ? "primary" : "affiliate"
   same_house_primary_offline = Number(primary.offline) === 1
   same_house_group_watched / _hidden = 群內候選列的聯集（Owner③，§6.6）
@@ -73,9 +73,13 @@ fold_role = cand LEFT JOIN winner → rn=1 → 'primary'，同群其他 cand 列
 - 群內若沒有任何合格候選（全 `offline_confirmed=1`／未就緒）⇒ 該群 role 一律 NULL（不折疊）。
 - `same_house_split`：PG 讀取端沿用 §1.3 第 3 條，split 列不進圖、維持無 role、留在主列表；
   個人 split／併組**不固化**（§6.5），只在 Node 讀取端疊加。
-- 補償條款保留且兩邊一致：`listingIsMainListAffiliate`（`personalFlags.js:301-306`）與 SQL 的
-  `affiliateExclusion`（`listingSearchSql.js`）都讓「代表列已下架（`offline=1`）而自己還在線」的
-  affiliate 留在列表。
+- **同群只顯示 1 列＝代表列（Owner 2026-10-16 裁示，已取代舊的補償條款）**：兩邊一致 ——
+  `listingIsMainListAffiliate`（`personalFlags.js:312-316`）與 SQL 的 `affiliateExclusion`
+  （`listingSearchSql.js:459`，`(f.role IS DISTINCT FROM 'affiliate')`）都只保留非 affiliate 的列。
+  舊的補償條款（「代表列已下架（`offline=1`）而自己還在線」的 affiliate 留列表）**已移除**：
+  代表列若只是「暫離」（`offline=1` 且 `offline_confirmed=0`），依 §6 定案 3b 自己就會顯示
+  ⇒ 再補償次卡只會變成同群兩列。線上次卡改由展開面板觸達（資料面 `same_house.peers` 仍帶著它們，
+  只是不進清單列）。完整裁示與量測見 §6.11。
 - SQLite 沒有固化欄（也沒有折疊固化欄的寫入漏斗）⇒ 讀取端走 legacy union-find
   （`foldComponentRoot.js buildSameHouseComponents`，由 `yield*` 共用），**同一批列上兩條路徑
   逐列一致**由 `fold-shape-fixtures.mjs` 釘住。
@@ -95,17 +99,29 @@ fold_role = cand LEFT JOIN winner → rn=1 → 'primary'，同群其他 cand 列
 - 舊的 first-incident-edge 會在同一連通群出現多個 primary；2026-10-12 起一個群只有一個贏家，
   `v3/test/same-house-fold-component.test.js` 第 1、2 條測試釘住這件事。
 
-## 2. `preferPrimaryListing(a, b, now)` 比較式（`match.js:451-466`；`sortGroupListings` `match.js:468-475`）
+## 2. `preferPrimaryListing(a, b, now)` 比較式（`match.js:457-480`；`sortGroupListings` `match.js:482-489`）
 
 逐層比較，**第一層分出勝負即回傳**：
 
 | # | 層 | 規則 | 出處 |
 |---|---|---|---|
-| 1 | 可比較租金 | 一方 null 另一方非 null → 非 null 贏；兩者非 null 且不等 → **較小**贏 | `match.js:366-370` |
-| 2 | 刷新時間 | `listingRefreshAt(a) - listingRefreshAt(b)`；`>0` → a 贏（較新贏） | `match.js:371-372` |
-| 3 | last_seen_at 字串 | `String(b.last_seen_at).localeCompare(String(a.last_seen_at))`；`<0` → a 贏 | `match.js:373-374` |
-| 4 | tie-break key | `listingTieBreakKey(a).localeCompare(listingTieBreakKey(b))`；較小贏 | `match.js:375-376` |
-| 5 | post_id | `Number(a.post_id) <= Number(b.post_id)` → a 贏 | `match.js:377` |
+| 1 | 可比較租金 | 一方 null 另一方非 null → 非 null 贏；兩者非 null 且不等 → **較小**贏 | `match.js:460-464` |
+| 2 | 刷新時間 | `listingRefreshAt(a) - listingRefreshAt(b)`；`>0` → a 贏（較新贏） | `match.js:465-466` |
+| 3 | last_seen_at 字串 | `String(b.last_seen_at).localeCompare(String(a.last_seen_at))`；`<0` → a 贏 | `match.js:467-468` |
+| 4 | **591 平台優先**（Owner 2026-10-16） | `String(a.source \|\| "591") === "591"` 與對側不同 → 是 591 的那一側贏 | `match.js:469-476` |
+| 5 | tie-break key | `listingTieBreakKey(a).localeCompare(listingTieBreakKey(b))`；較小贏 | `match.js:477-478` |
+| 6 | post_id | `Number(a.post_id) <= Number(b.post_id)` → a 贏 | `match.js:479` |
+
+**Owner 2026-10-16 的完整規則**：「租金便宜優先 → 更新時間較近 → **有 591 就用 591** → 都沒有就任選」。
+本專案把最後一句「任選」實作成長度 5、6 的**固定序**（tie-break key → post_id），**不引入隨機**：
+清單分頁是「同一份有序集合的切段」（§6.7），隨機挑會讓同一群在換頁之間換代表列。
+這是對 Owner 原句的**刻意偏離**，偏離的只有「完全平手時選誰」這一段，不影響前三層。
+
+SQL 側的同一個順序在 `listingSearchSql.js` 的 `foldRoleCte` `ranked` ORDER BY
+（`listingSearchSql.js:649-665`）：`(rent IS NULL) ASC, rent ASC, refresh DESC, last_seen_at DESC,
+(591 層) DESC, tie_key ASC, post_id ASC`；591 層寫成
+`(COALESCE(NULLIF(e.source, ''), '591') = '591') DESC`（`listingSearchSql.js:657`），
+來源正規化沿用 §6.10。**兩邊必須同序**，只改一邊就是「一群兩主」的來源。
 
 ### 2.1 `comparableRent(listing)`（`match.js:103-106`，行號已核對，未位移）
 - `n = listingCompareCost(listing, { includeExtras: true })`；`Number.isFinite(n) && n > 0 ? n : null`。
@@ -144,14 +160,14 @@ fold_role = cand LEFT JOIN winner → rn=1 → 'primary'，同群其他 cand 列
 - `decorationSourceEnabled`（`db.js:2969-2975`）：PG 路徑用 `provider.sourceEnabled(source)`
   （enabled crawl sources 集合）。
 
-### 3.2 `listingIsMainListAffiliate(row, "all")`（`personalFlags.js:298-304`）
+### 3.2 `listingIsMainListAffiliate(row)`（`personalFlags.js:312-316`）
 ```
-filter 非 hidden/watched；
-!same_house_split && same_house_role === "affiliate"
-&& !(same_house_primary_offline && Number(row.offline) !== 1)
+!same_house_split && same_house_role === "affiliate"      // 2026-10-16 起沒有其他例外
 ```
+（函式**沒有 `filter` 參數**：折疊判定與清單無關，三個清單一致；2026-10-12 定案①。
+舊的補償條款 `&& !(same_house_primary_offline && Number(row.offline) !== 1)` 已於 2026-10-16 移除，見 §6.11。）
 
-### 3.3 `listingMatchesListFilter(row, "all")`（`personalFlags.js:306-328`）
+### 3.3 `listingMatchesListFilter(row, "all")`（`personalFlags.js:326-365`）
 ```
 if (listingIsMainListAffiliate) return false;   // 次卡從主列表排除
 dup(match_verdict==='yes') || confirmed(offline && offline_confirmed) || hidden → false
@@ -202,18 +218,19 @@ win(a,b) =
 - **searchKeys 訪客＝[]**：`buildPublicListingsClauses` 用 `searchWhere([], …)`（`db.js:8061`），
   而 `buildPublicListingSearchSql` 未傳 `searchKeys=[]` → 展開成 28 鍵（少算 2,265 筆）。
 - **hidden**：候選 `where` 補 `COALESCE(hidden,0) != 1`（`listingMatchesListFilter` 的 hidden 分支，
-  `personalFlags.js:307`；實務 44 筆）。
+  `personalFlags.js:347`；實務 44 筆）。
 
 ## 6. 2026-10-12 Owner 五項定案（本節優先於上面各節）
 
 | # | 定案 | 實作位置 | 驗收測試 |
 |---|---|---|---|
-| 1 | 三個清單（一般／特別關注／已隱藏）呈現規則一致：**不再豁免折疊** | `personalFlags.js:301-306`（移除 `filter === "hidden" \|\| filter === "watched"` 的豁免） | `same-house-fold-component.test.js`「watched list folds…」 |
+| 1 | 三個清單（一般／特別關注／已隱藏）呈現規則一致：**不再豁免折疊** | `personalFlags.js:312-316`（移除 `filter === "hidden" \|\| filter === "watched"` 的豁免） | `same-house-fold-component.test.js`「watched list folds…」 |
 | 1b | 逐則「取消關注／解除隱藏」改由展開面板提供（不新增端點） | `public/index.html` `sameHouseGoneBtn()`；`POST /api/listings/:id/flags`（`server.js:5033`）body `{watched:false}`／`{hidden:false}` | 同上「same-house panel offers per-post…」（靜態斷言面板按鈕與端點契約） |
-| 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:308-331`（`filter === "all"` → `!watched`，且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
-| 3 | 確認下架（`offline_confirmed = 1`）**三個清單都不顯示**、**不參與選主** | 顯示：`personalFlags.js:316-318`；選主：`db.js:3783-3785`；群組成員集合：`listingCompare.js:9-13` | 「offline_confirmed rows are never primary…」 |
-| 3b | **定案（2026-10-12 Owner）**：「尚（未）確認下架」＝`offline = 1` 且 `offline_confirmed = 0`（可能空號）**可以**當 primary，也**計入**「共 N 則」；**程式碼維持現況**（現況就是允許，不另改）。可比價／可顯示／可參與比較 | 未改（上述三處都只排除 `offline_confirmed`；「共 N 則」的 `peer_count` 在 `listingCompare.js:379`） | 「compensation clause keeps the live affiliate…」 |
-| 4 | 「共 N 則」＝**群組真實大小**（截斷只准用於「列出幾則」） | 資料：`listingCompare.js:379`（`peer_count`）；前端：`public/index.html` `sameHouseTag()`（`count = peer_count + 1`） | 「bundle exposes the true group size…」「frontend renders 共 N 則…」 |
+| 2 | **一般清單**排除 `watched ∪ hidden`（以「該列自己的個人旗標」為準），解除後回到一般清單 | `personalFlags.js:326-365`（`filter === "all"` → `!watched`，在 `personalFlags.js:358`；且 `hidden` 於上方即 return false） | 「general list excludes watched and hidden…」 |
+| 3 | 確認下架（`offline_confirmed = 1`）**三個清單都不顯示**、**不參與選主** | 顯示：`personalFlags.js:337`；選主：`db.js:3816-3818`；群組成員集合：`listingCompare.js:9-13` | 「offline_confirmed rows are never primary…」 |
+| 3b | **定案（2026-10-12 Owner）**：「尚（未）確認下架」＝`offline = 1` 且 `offline_confirmed = 0`（可能空號）**可以**當 primary，也**計入**「共 N 則」；**程式碼維持現況**（現況就是允許，不另改）。可比價／可顯示／可參與比較 | 未改（上述三處都只排除 `offline_confirmed`；「共 N 則」的 `peer_count` 在 `listingCompare.js:384`） | 「one row per same-house group: the representative stays listed even when temporarily offline」 |
+| 3c | **定案（2026-10-16 Owner）**：同一個同屋源群在清單上**只顯示 1 列＝代表列**；代表列即使「暫離」（`offline=1`、`offline_confirmed=0`，依 3b）也照樣顯示；線上次卡只能從展開面板觸達。**舊的補償條款移除** | `personalFlags.js:312-316`（`listingIsMainListAffiliate`）；`listingSearchSql.js:459`（`affiliateExclusion`） | 「one row per same-house group…」（Node 端）；`fold-ci-parity.mjs` ⑮（端點級、Node＝SQL） |
+| 4 | 「共 N 則」＝**群組真實大小**（截斷只准用於「列出幾則」） | 資料：`listingCompare.js:384`（`peer_count`）；前端：`public/index.html` `sameHouseTag()`（`count = peer_count + 1`） | 「bundle exposes the true group size…」「frontend renders 共 N 則…」 |
 | 5 | 篩選按鈕文案「全部」→「一般」 | `public/index.html`（`data-filter="all"` 按鈕、`renderStats` 標籤、空狀態文案）；`helpQa.js:73` | 「general filter chip is labelled 一般」 |
 
 ### 6.1 「主卡被關注、次卡沒被關注」的邊界（Owner②要求出臺說明）
@@ -373,7 +390,8 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
   不呼叫開閘前檢）⇒ 新路徑的任何損壞都傳染不到舊路徑；`v3/test/fold-sql-gate.test.js` 靜態釘住順序。
 
 ### 6.10 tie-break 邊界：空字串 source（零容差加固，2026-10-12）
-- **規則**：SQL 端（`listingSearchSql.js foldRoleCte` 內 ranked 的 ORDER BY 第 5 鍵）必須與
+- **規則**：SQL 端（`listingSearchSql.js foldRoleCte` 內 ranked 的 ORDER BY 第 6 鍵；2026-10-16 起
+  第 5 鍵是「591 平台優先」，見 §2／§6.11）必須與
   `match.js listingTieBreakKey(listing)` **逐字等價**：
   1. 來源段：Node 是 `String(listing.source || "591")` ⇒ `source` 為空字串或 NULL 一律當 `591`。
   2. origin 段：Node 是 `String(source_id || url || post_id || "")`（三者都 falsy 才退到空字串）。
@@ -404,7 +422,7 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
   **真實資料零影響（強證明）**：`repro3`（184,754 列，`source` 空字串或 NULL 共 0 列）重跑
   `fold-endpoint-parity.mjs` ⇒ **35 個 combo 的 totalMatched 與修前逐筆相同**。
 - **軸二（`localeCompare` vs 資料庫 collation）＝已量化判定（不再寫「未經驗證」）**：`match.js:467`
-  （`last_seen_at`）與 `:469`（tie-break key）都用 `localeCompare`；`listingSearchSql.js` 的 `COLLATE`
+  （`last_seen_at`）與 `:477`（tie-break key，2026-10-16 起；591 層在 `:474-476`）都用 `localeCompare`；`listingSearchSql.js` 的 `COLLATE`
   命中 **0**（＝走資料庫預設 `en_US.utf8`）。在 `repro3` 上唯讀實測：
   1. 多成員群 **27,638 群／95,322 列**；勝負由 **`last_seen_at` 字串層**決定的 **4,421 群／11,100 列**；
      由 **tie-break key 字串層**（租金＋更新時間＋last_seen_at 全平手）決定的 **0 群／0 列**。
@@ -424,3 +442,43 @@ offset／cursor 不再有意義）、**跨快照**（新快照的資料已變）
   gating）新增三組合成種子，斷言 Node 代表列 id ＝ SQL 代表列 id：⑫ tie-break 軸（`source=''` ＋
   `source_id`／`url` 皆空 ＋ post_id 位數不同）、⑬ 資格軸（`source=''` ＋ `source_id` 有值 ＋ 租金不同）、
   ⑭ collation 軸（key 只差一個標點：`'A-B'` vs `'AB'`、`'x.y'` vs `'xy'`）。
+  （2026-10-16 追加第 ⑮ 組：代表列 `offline=1` 未確認 ＋ 線上 affiliate ⇒ 端點恰好 1 列，見 §6.11。）
+
+### 6.11 2026-10-16 Owner 裁示：同群只顯示 1 列（代表列）＋「591 平台優先」寫進比較式
+
+**症狀**：同一個同屋源群在清單出現**兩列**，各自主物件不同。Owner 2026-10-16 截圖案例＝標題
+`中山北路六段靜巷公寓2樓`：591 `post_id=22033530`（`offline=1`、`offline_confirmed=0`，暫離）與
+住商 `hbhousing post_id=2246774123`（線上），兩列租金都是 30,000；群鍵 `fold_component_root=21969185`
+（同群第三列 21969185 是 `offline_confirmed=1`，不顯示也不參與選主）。
+
+**成因**：`personalFlags.js` 的 `listingIsMainListAffiliate` 與 `listingSearchSql.js` 的
+`affiliateExclusion` 各有一條**補償條款**——「代表列是 `offline=1` 而這列 affiliate 的
+`offline<>1` ⇒ 這列 affiliate 仍留列表」。那是 2026-10-12 定案 3b **之前**寫的（當時假設
+代表列暫離就看不到代表列）；3b 之後代表列自己就會顯示 ⇒ 補償條款變成「代表列與次卡同時出現」。
+
+**修正（三個檔）**：
+1. 兩邊都只保留非 affiliate：`personalFlags.js:312-316`、`listingSearchSql.js:459`。
+2. 「有 591 就用 591」明文寫進比較式：Node `match.js:469-476`、SQL `listingSearchSql.js:657`，
+   位置都在 `last_seen_at` 之後、tie-break 之前（§2 比較式表）。
+   這一層**不引入隨機**：清單分頁需要唯一全序（§6.7），末段仍用固定序。
+3. 測試：`same-house-fold-component.test.js`「one row per same-house group…」（含展開面板仍可觸達）、
+   `personal-flags.test.js` 的 `liveWhilePrimaryGone` 斷言反轉、`relist-match.test.js`「591 platform
+   preference sits between last_seen_at and the tie-break key」、`same-house-fold-sql.test.js`（補償條款
+   不得復辟＋591 層的位置）、`fold-ci-parity.mjs` 新增第 ⑮ 組種子（代表列 `offline=1` 未確認 ＋
+   線上 affiliate ⇒ 端點恰好 1 列、Node 與 SQL 逐列一致）。
+
+**量測（正式庫唯讀；資料持續被爬蟲寫入，數字會隨時間小幅變動）**：
+- 修前 `q=中山北路六段靜巷公寓2樓` ⇒ **2 列**（22033530 primary、2246774123 affiliate 也在清單）。
+- 修後同一條查詢 ⇒ **1 列**（22033530 primary），2246774123 仍出現在同一群的 `same_house.peers`。
+- 因補償條款多出的列：planner 16:27 量測 8 群／27 列；本包 16:50 量測 **7 群／25 列**（同一時刻
+  planner 的 `impact.mjs` 與本量測 SQL 逐項相同 ⇒ 差異來自正式庫持續更新）。修後 **0 列**、
+  每群最多 1 列（33,118 群）。
+- 591 層的影響：同一條查詢比較「加層前後」選出的代表列 id ⇒ **差異 0 群**（33,118 群，來源變動亦 0）。
+  原因是現行來源（591／hbhousing／sinyi／houseprice／ddroom／housefun／self）在 tie-break key 的第一段
+  就決定了同一件事（`'5'` < `'d'`／`'h'`／`'s'`）⇒ 這一層是保險，不是行為改變。
+- 可重跑指令（只 SELECT）：
+  `v3/scripts/fold-single-row-impact.mjs`（連線後立刻 `SET default_transaction_read_only = on`）。
+  隔離庫：`set -a; . /home/cline/.secrets/postgres/5151-live-repro.env; set +a;`
+  `PG_URL="$PG_LIVE_REPRO_URL" node v3/scripts/fold-single-row-impact.mjs` ⇒ `allOk:true`、`rc=0`。
+  正式庫唯讀：`ALLOW_PRODUCTION_PG_TARGET=1 PGOPTIONS="-c default_transaction_read_only=on"`
+  ＋正式庫 `PG_URL` ⇒ `v4_zero_diff.rep_changed:0`、`v5_compensation.new_groups_with_multiple:0`、`rc=0`。
