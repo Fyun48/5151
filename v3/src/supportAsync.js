@@ -42,6 +42,7 @@ import {
   pickEligibleCtaRule,
   publicProviderView,
   resolveSponsorStatus,
+  resolveSupportCheckoutAmount,
   sanitizeUsage,
   sortSupportTiers,
   sponsorWindowActive,
@@ -614,18 +615,19 @@ export async function createSupportCheckoutAsync({ tierId, amount } = {}, option
   if (!provider) {
     return { available: false, message: "目前支持付款服務暫時無法使用，稍後再試即可。" };
   }
-  let payAmount = moneyAmount(amount);
+  let tier = null;
   if (tierId) {
-    const tier = tierRow((await exec(TIER_BY_ID_SQL, [Number(tierId) || 0]))[0]);
+    tier = tierRow((await exec(TIER_BY_ID_SQL, [Number(tierId) || 0]))[0]);
     if (!tier || !tier.is_active) throw httpError("找不到支持方案", 404);
-    if (tier.amount > 0) payAmount = tier.amount;
   }
+  // 與同步版共用同一組規則（supportDomain.resolveSupportCheckoutAmount）。
+  const payAmount = resolveSupportCheckoutAmount({ amount, tier });
   try {
     const checkout = await resolveSupportCheckout(provider, { amount: payAmount });
-    return { available: true, ...checkout };
+    return { available: true, amount: payAmount, ...checkout };
   } catch (error) {
     if (error instanceof SupportPaymentUnavailable) {
-      return { available: false, message: error.message };
+      return { available: false, amount: payAmount, message: error.message };
     }
     throw error;
   }
@@ -743,6 +745,8 @@ export async function recordSupportEventAsync(kind, { userId = null, guestKey = 
   if (meta && typeof meta === "object") {
     if (meta.ruleId) safe.ruleId = Number(meta.ruleId) || 0;
     if (meta.tierId) safe.tierId = Number(meta.tierId) || 0;
+    // meta 是白名單：support_checkout_opened 要記實際金額，漏了這行 amount 會被默默丢掉。
+    if (meta.amount) safe.amount = Number(meta.amount) || 0;
     if (meta.sponsorId) safe.sponsorId = Number(meta.sponsorId) || 0;
     if (meta.days) safe.days = Number(meta.days) || 0;
   }

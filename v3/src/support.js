@@ -32,6 +32,7 @@ import {
   pickEligibleCtaRule,
   publicProviderView,
   resolveSponsorStatus,
+  resolveSupportCheckoutAmount,
   sanitizeUsage,
   sortSupportTiers,
   sponsorWindowActive,
@@ -856,6 +857,8 @@ export function recordSupportEvent(db, kind, { userId = null, guestKey = "", met
   if (meta && typeof meta === "object") {
     if (meta.ruleId) safe.ruleId = Number(meta.ruleId) || 0;
     if (meta.tierId) safe.tierId = Number(meta.tierId) || 0;
+    // meta 是白名單：support_checkout_opened 要記實際金額，漏了這行 amount 會被默默丢掉。
+    if (meta.amount) safe.amount = Number(meta.amount) || 0;
     if (meta.sponsorId) safe.sponsorId = Number(meta.sponsorId) || 0;
     if (meta.days) safe.days = Number(meta.days) || 0;
   }
@@ -1025,18 +1028,20 @@ export async function createSupportCheckout(db, { tierId, amount } = {}) {
   if (!provider) {
     return { available: false, message: "目前支持付款服務暫時無法使用，稍後再試即可。" };
   }
-  let payAmount = moneyAmount(amount);
+  let tier = null;
   if (tierId) {
-    const tier = tierRow(db.prepare("SELECT * FROM support_tier WHERE id=?").get(tierId));
+    tier = tierRow(db.prepare("SELECT * FROM support_tier WHERE id=?").get(tierId));
     if (!tier || !tier.is_active) throw httpError("找不到支持方案", 404);
-    if (tier.amount > 0) payAmount = tier.amount;
   }
+  // 金額規則集中在 resolveSupportCheckoutAmount()：固定方案以方案金額為準，
+  // 只有「自訂支持」（amount = 0）才採用帶進來的 amount，且必須是 10–100000 的整數。
+  const payAmount = resolveSupportCheckoutAmount({ amount, tier });
   try {
     const checkout = await resolveSupportCheckout(provider, { amount: payAmount });
-    return { available: true, ...checkout };
+    return { available: true, amount: payAmount, ...checkout };
   } catch (error) {
     if (error instanceof SupportPaymentUnavailable) {
-      return { available: false, message: error.message };
+      return { available: false, amount: payAmount, message: error.message };
     }
     throw error;
   }

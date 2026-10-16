@@ -16,6 +16,42 @@
     return "NT$ " + Math.round(v).toLocaleString("zh-Hant-TW");
   }
 
+  // 「自訂支持」的金額範圍，與後端 v3/src/supportDomain.js 的 SUPPORT_AMOUNT_MIN／MAX、
+  // SUPPORT_AMOUNT_MESSAGE 保持一致（support-ui.test.js 會斷言兩邊一致）。
+  const AMOUNT_MIN = 10;
+  const AMOUNT_MAX = 100000;
+  const AMOUNT_MESSAGE = `自訂金額請填 ${AMOUNT_MIN} 到 ${AMOUNT_MAX} 之間的整數。`;
+  const providerFallbackLabels = {
+    buy_me_a_coffee: "Buy Me a Coffee",
+    external_url: "外部收款頁",
+    custom: "外部收款頁",
+  };
+
+  function providerLabel(kind, provider) {
+    const name = provider && provider.display_name;
+    return String(name || providerFallbackLabels[kind] || "支持服務");
+  }
+
+  // 公開頁 payload 裡的收款管道資訊（含後台設定的顯示名稱），給送出前確認訊息用。
+  let providerInfo = null;
+
+  /** 只收整數、10–100000；回傳 { ok, amount, message }，不合法時 amount 為 null。 */
+  function readAmount(input) {
+    const raw = String((input && input.value) == null ? "" : input.value).trim();
+    if (!raw) return { ok: false, amount: null, message: "請先填寫自訂金額。" };
+    const n = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n < AMOUNT_MIN || n > AMOUNT_MAX) {
+      return { ok: false, amount: null, message: AMOUNT_MESSAGE };
+    }
+    return { ok: true, amount: n, message: "" };
+  }
+
+  function setAmountError(errorEl, message) {
+    if (!errorEl) return;
+    errorEl.textContent = message || "";
+    errorEl.hidden = !message;
+  }
+
   // 後台「贊助連結」的公開收款頁（與 Support domain 的旗標無關）。沒有這些連結時，
   // 支持頁在 domain 關閉的狀態下只會剩一句「尚未開放」，使用者找不到任何出口。
   function renderDirectWays(list, { domainOpen }) {
@@ -47,6 +83,7 @@
   }
 
   function render(data) {
+    providerInfo = (data && data.provider) || null;
     const ways = Array.isArray(data?.sponsor_links) ? data.sponsor_links : [];
     const domainOpen = Boolean(data && data.enabled !== false);
     renderDirectWays(ways, { domainOpen });
@@ -118,7 +155,6 @@
       title.textContent = `${tier.icon || ""} ${tier.title}`.trim();
       const amt = document.createElement("div");
       amt.className = "amt";
-      amt.textContent = tier.amount > 0 ? money(tier.amount) : "自訂";
       const desc = document.createElement("p");
       desc.className = "muted";
       desc.textContent = tier.description || "";
@@ -127,8 +163,69 @@
       btn.className = "primary";
       btn.textContent = copy.cta_label || "支持本站";
       btn.disabled = !available;
-      btn.addEventListener("click", () => checkout(tier.id));
-      card.append(title, amt, desc, btn);
+      // amount > 0 是固定金額方案；只有 amount = 0（種子資料的「自訂支持」）才給輸入框，
+      // 而且卡片絕不顯示「NT$ 0」——未填時顯示「自訂金額」，填了才顯示實際金額。
+      if (Number(tier.amount) > 0) {
+        amt.textContent = money(tier.amount);
+        btn.addEventListener("click", () => checkout({ tierId: tier.id, amount: Number(tier.amount), title: tier.title }));
+        card.append(title, amt, desc, btn);
+        list.appendChild(card);
+        continue;
+      }
+      amt.textContent = "自訂金額";
+      const field = document.createElement("div");
+      field.className = "amount-field";
+      const inputId = `tierAmount-${tier.id}`;
+      const hintId = `tierAmountHint-${tier.id}`;
+      const errorId = `tierAmountError-${tier.id}`;
+      const label = document.createElement("label");
+      label.className = "amount-label";
+      label.setAttribute("for", inputId);
+      label.htmlFor = inputId;
+      label.textContent = "自訂金額（新台幣）";
+      const input = document.createElement("input");
+      input.setAttribute("type", "number");
+      input.setAttribute("id", inputId);
+      input.setAttribute("name", inputId);
+      input.setAttribute("inputmode", "numeric");
+      input.setAttribute("min", String(AMOUNT_MIN));
+      input.setAttribute("max", String(AMOUNT_MAX));
+      input.setAttribute("step", "1");
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("placeholder", "例如 500");
+      input.setAttribute("aria-describedby", `${hintId} ${errorId}`);
+      const hint = document.createElement("p");
+      hint.className = "amount-hint";
+      hint.setAttribute("id", hintId);
+      hint.textContent = `請填 ${AMOUNT_MIN} 到 ${AMOUNT_MAX} 的整數，單位是新台幣。`;
+      const error = document.createElement("p");
+      error.className = "amount-error";
+      error.setAttribute("id", errorId);
+      error.setAttribute("role", "status");
+      error.setAttribute("aria-live", "polite");
+      error.hidden = true;
+      input.addEventListener("input", () => {
+        setAmountError(error, "");
+        input.removeAttribute("aria-invalid");
+        const parsed = readAmount(input);
+        amt.textContent = parsed.ok ? money(parsed.amount) : "自訂金額";
+      });
+      btn.addEventListener("click", () => {
+        const parsed = readAmount(input);
+        if (!parsed.ok) {
+          // 不合法就不送 API：把訊息留在卡片裡（aria-live 會唸出來）並把焦點移回輸入框。
+          setAmountError(error, parsed.message);
+          input.setAttribute("aria-invalid", "true");
+          if (typeof input.focus === "function") input.focus();
+          return;
+        }
+        setAmountError(error, "");
+        input.removeAttribute("aria-invalid");
+        amt.textContent = money(parsed.amount);
+        checkout({ tierId: tier.id, amount: parsed.amount, title: tier.title });
+      });
+      field.append(label, input, hint, error);
+      card.append(title, amt, desc, field, btn);
       list.appendChild(card);
     }
 
@@ -181,25 +278,42 @@
     }
   }
 
-  async function checkout(tierId) {
+  /** 送出前的確認訊息（不必 modal）：沿用 .fallback 的輕量樣式，並由 aria-live 唸出。 */
+  function showConfirm(message) {
+    const note = $("checkoutConfirm") || $("checkoutFallback");
+    if (!note) return;
+    note.textContent = message;
+    note.hidden = false;
+  }
+
+  async function checkout({ tierId, amount, title } = {}) {
+    const body = { tierId };
+    if (Number.isInteger(amount) && amount > 0) body.amount = amount;
     fetch("/api/support/event", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "support_tier_clicked", meta: { tierId } }),
+      body: JSON.stringify({ kind: "support_tier_clicked", meta: { tierId, amount: body.amount } }),
     }).catch(() => {});
     try {
       const res = await fetch("/api/support/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tierId }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (data.available && data.url) {
-        window.location.href = data.url;
+        // 先講清楚「去哪個管道、多少錢」再導外；等一個 frame 讓訊息真的畫出來，
+        // 也讓讀屏有時間唸完（不必使用者再按一次，故不是 modal）。
+        const payAmount = Number.isInteger(data.amount) ? data.amount : body.amount;
+        showConfirm(`將前往「${providerLabel(data.provider, providerInfo)}」完成支持${payAmount ? ` NT$ ${Number(payAmount).toLocaleString("zh-Hant-TW")}` : ""}${title ? `（${title}）` : ""}…`);
+        const go = () => { window.location.href = data.url; };
+        if (typeof setTimeout === "function") setTimeout(go, 700);
+        else go();
         return;
       }
-      $("checkoutFallback").hidden = false;
-      $("checkoutFallback").textContent = data.message || "目前支持付款服務暫時無法使用，稍後再試即可。";
+      const note = $("checkoutFallback");
+      note.hidden = false;
+      note.textContent = data.message || "目前支持付款服務暫時無法使用，稍後再試即可。";
     } catch {
       $("checkoutFallback").hidden = false;
     }

@@ -108,6 +108,12 @@ export const DEFAULT_SEED_TIERS = Object.freeze([
 
 export const FORBIDDEN_COPY = Object.freeze(["donate", "捐款給我們", "急需資金", "救救本站"]);
 
+// 「自訂支持」的金額範圍。前端 support-page.js 是純瀏覽器腳本、不能 import 這裡，
+// 所以它複製同一組數字；v3/test/support-ui.test.js 會斷言兩邊一致，避免漂移。
+export const SUPPORT_AMOUNT_MIN = 10;
+export const SUPPORT_AMOUNT_MAX = 100000;
+export const SUPPORT_AMOUNT_MESSAGE = `自訂金額請填 ${SUPPORT_AMOUNT_MIN} 到 ${SUPPORT_AMOUNT_MAX} 之間的整數。`;
+
 export function httpError(message, status = 400, code = "") {
   const error = new Error(message);
   error.status = status;
@@ -129,6 +135,36 @@ export function moneyAmount(value) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 100) / 100;
+}
+
+/** 只接受整數且在 10–100000 之間；字串 "30" 可以，30.5、""、"abc"、null 不行。 */
+export function isSupportAmount(value) {
+  if (value === null || value === undefined || value === "") return false;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= SUPPORT_AMOUNT_MIN && n <= SUPPORT_AMOUNT_MAX;
+}
+
+/** 金額不合法時沿用現行回應形狀（HTTP 200 + available:false + message），只多帶一個 code。 */
+export function supportAmountError() {
+  return httpError(SUPPORT_AMOUNT_MESSAGE, 400, "INVALID_AMOUNT");
+}
+
+/**
+ * 決定這一筆結帳實際要帶的金額（整數）。
+ * - 方案金額 > 0：一律以方案金額為準，帶進來的 amount 不影響（維持既有規則）。
+ * - 方案金額 = 0（「自訂支持」）：只有這種方案才採用帶進來的 amount，且必須合法。
+ * - 沒有指定方案：有帶 amount 就要合法；完全沒帶就沿用舊行為（0）。
+ * 不合法時丟出 code = "INVALID_AMOUNT" 的錯誤，呼叫端負責轉成 available:false。
+ */
+export function resolveSupportCheckoutAmount({ amount, tier } = {}) {
+  if (tier) {
+    if (Number(tier.amount) > 0) return moneyAmount(tier.amount);
+    if (!isSupportAmount(amount)) throw supportAmountError();
+    return Number(amount);
+  }
+  if (amount === null || amount === undefined || amount === "") return 0;
+  if (!isSupportAmount(amount)) throw supportAmountError();
+  return Number(amount);
 }
 
 export function monthlyCostAmount(amount, billingCycle) {

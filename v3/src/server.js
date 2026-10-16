@@ -2345,14 +2345,25 @@ app.post("/api/support/checkout", async (req, res) => {
       amount: req.body?.amount,
     });
     const session = readSession(req);
+    // meta 帶實際會用的金額（固定方案 = 方案金額；自訂支持 = 使用者填的金額），
+    // 不是原始 request body，才看得出「按了哪個方案、實際多少錢」。
+    const meta = { tierId: req.body?.tierId ?? null };
+    const paidAmount = Number(result?.amount);
+    if (Number.isFinite(paidAmount) && paidAmount > 0) meta.amount = Math.round(paidAmount);
     await recordSupportEventAsync("support_checkout_opened", {
       userId: session?.userId || null,
-      meta: { tierId: req.body?.tierId },
+      meta,
     });
     res.json(result);
   } catch (error) {
     if (error.code === "RATE_LIMITED") {
       res.status(429).json({ available: false, message: error.message, code: error.code });
+      return;
+    }
+    // 自訂金額不合法：沿用現行形狀（HTTP 200 + available:false + message），
+    // 只多一個 code，不改 4xx，既有呼叫端（只看 available／message）不受影響。
+    if (error.code === "INVALID_AMOUNT") {
+      res.json({ available: false, message: error.message, code: error.code });
       return;
     }
     res.json({ available: false, message: "目前支持付款服務暫時無法使用，稍後再試即可。" });
