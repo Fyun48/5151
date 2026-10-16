@@ -56,7 +56,13 @@ const CI_EL_B = BASE + 52;
 //    （'A-B' vs 'AB'、'x.y' vs 'xy'）——這是 localeCompare 與 DB collation 最容易分岔的形狀。
 const CI_PN_A = BASE + 61; const CI_PN_B = BASE + 62;
 const CI_PN_C = BASE + 63; const CI_PN_D = BASE + 64;
-const axisIds = [CI_TB_A, CI_TB_B, CI_EL_A, CI_EL_B, CI_PN_A, CI_PN_B, CI_PN_C, CI_PN_D];
+// ⑮ Owner 2026-10-16 的單列裁示：代表列「暫離」（offline=1、offline_confirmed=0）＋ 線上 affiliate。
+//    這一組就是正式庫 2026-10-16 截圖案例的形狀（591 代表列 offline=1 未確認、另一家來源還在線）：
+//    舊的補償條款會讓兩列**同時**出現在清單（同群兩列），移除後端點必須恰好 1 列＝代表列。
+//    租金刻意不同（12000 vs 18000）⇒ 勝負由租金先決定，不依賴 tie-break 的細節。
+const CI_OFF_A = BASE + 71;   // 591、offline=1 未確認、租金 12000 ⇒ 代表列（且照樣顯示）
+const CI_OFF_B = BASE + 72;   // 別家來源、還在線、租金 18000 ⇒ 次卡（只在展開面板）
+const axisIds = [CI_TB_A, CI_TB_B, CI_EL_A, CI_EL_B, CI_PN_A, CI_PN_B, CI_PN_C, CI_PN_D, CI_OFF_A, CI_OFF_B];
 const all = [...chainA, ...chainB1, ...chainB2, ...axisIds];
 
 // kind 只用於「代表列隨篩選變動」那一組：鏈尾四列是整層住家，其餘是套房 ⇒ 換 kind 篩選會換代表。
@@ -129,6 +135,17 @@ const seedRows = [
   seedRow(CI_PN_B, { source_id: "AB", url: "", fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
   seedRow(CI_PN_C, { source_id: "x.y", url: "", match_post_id: CI_PN_D, fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
   seedRow(CI_PN_D, { source_id: "xy", url: "", fold_rent_num: 15000, price: "15000元", price_num: 15000 }),
+  // ⑮ 代表列暫離（offline=1、offline_confirmed=0）＋ 線上次卡：端點必須恰好 1 列（＝CI_OFF_A）。
+  seedRow(CI_OFF_A, {
+    source: "591", source_id: `foldci-off-${CI_OFF_A}`, url: `https://example.test/foldci/${CI_OFF_A}`,
+    match_post_id: CI_OFF_B, offline: 1, offline_confirmed: 0,
+    fold_rent_num: 12000, price: "12000元", price_num: 12000,
+  }),
+  seedRow(CI_OFF_B, {
+    source: "hbhousing", source_id: `foldci-off-${CI_OFF_B}`, url: `https://example.test/foldci/${CI_OFF_B}`,
+    match_post_id: null, offline: 0, offline_confirmed: 0,
+    fold_rent_num: 18000, price: "18000元", price_num: 18000,
+  }),
 ];
 
 let columnExisted = true;      // 「本來就有這一欄」⇒ 不還原（步驟不得改變別人的 schema）
@@ -402,6 +419,35 @@ try {
         && (a.expect == null || nodeRep[0] === a.expect),
       { pair: a.pair, nodeRep, sqlRep, expect: a.expect, nodeRole: [...nodeRole2], sqlRole: [...sqlRole2] });
     }
+  }
+
+  // ── 4. ⑮ Owner 2026-10-16：代表列暫離（offline=1 未確認）＋ 線上次卡 ⇒ 端點恰好 1 列 ──
+  //    舊的補償條款會讓這一群在清單出現 2 列（代表列 ＋ 線上次卡）；移除後必須只剩代表列。
+  //    同時釘住「代表列自己照樣顯示」（2026-10-12 定案 3b）與「Node＝SQL 逐列一致」。
+  {
+    const pair = [CI_OFF_A, CI_OFF_B];
+    const rows3 = readBack.filter((r) => pair.includes(Number(r.post_id))).map((r) => ({ ...r }));
+    attachSameHouseRoles(rows3, 0, provider, provider.now);
+    const nodeRole3 = new Map(rows3.map((r) => [Number(r.post_id), r.same_house_role || null]));
+    const sqlRows3 = await exec(cte, [pair, enabledSources, provider.now]);
+    const sqlRole3 = new Map(sqlRows3.map((r) => [Number(r.post_id), r.role || null]));
+    const roleOk = nodeRole3.get(CI_OFF_A) === "primary" && nodeRole3.get(CI_OFF_B) === "affiliate"
+      && sqlRole3.get(CI_OFF_A) === "primary" && sqlRole3.get(CI_OFF_B) === "affiliate";
+    const perCombo = [];
+    let ok = roleOk;
+    let nonEmpty = 0;
+    for (const e of endpoint) {
+      const nodeHit = (e.nodeOrder || []).filter((id) => pair.includes(id));
+      const sqlHit = (e.sqlOrder || []).filter((id) => pair.includes(id));
+      const same = nodeHit.join(",") === sqlHit.join(",");
+      // 同群最多 1 列，而且那一列只能是代表列（CI_OFF_B 出現在清單就是補償條款復辟）。
+      const single = nodeHit.length <= 1 && nodeHit.every((id) => id === CI_OFF_A);
+      if (nodeHit.length === 1) nonEmpty += 1;
+      if (!same || !single) ok = false;
+      perCombo.push({ combo: e.name, node: nodeHit, sql: sqlHit, same, single });
+    }
+    if (nonEmpty === 0) ok = false;   // 這一組必須真的進過候選集，否則這條斷言是空的
+    check("⑮ 代表列暫離＋線上次卡：端點恰好 1 列＝代表列，且 Node＝SQL", ok, { roleOk, nonEmpty, perCombo });
   }
 
   const failed = results.filter((r) => !r.ok);

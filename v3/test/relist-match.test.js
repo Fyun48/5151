@@ -107,6 +107,31 @@ test("same rent and refresh uses deterministic tie-break", () => {
   assert.equal(preferPrimaryListing(a, b, now).post_id, 20);
 });
 
+// Owner 2026-10-16 的「有 591 就用 591」層：位置在 last_seen_at 層之後、tie-break key 層之前。
+// 註：本專案現行來源（591／hbhousing／sinyi／houseprice／ddroom／housefun／self）的第一個字元
+// 都排在 '5' 之後，所以這一層對現行來源通常與 tie-break 同向（正式庫 2026-10-16 實測 0 群由
+// tie-break 決定勝負 ⇒ 行為中性）；要單獨釘住這一層的位置，只能用排在最前面的合成來源。
+test("591 platform preference sits between last_seen_at and the tie-break key", () => {
+  const now = Date.parse("2026-08-31T12:00:00.000Z");
+  const shared = { price_num: 20000, refresh_time: "剛剛", last_seen_at: "2026-08-31T11:00:00.000Z" };
+  const p591 = { ...shared, post_id: 50, source: "591", source_id: "z" };
+  // '0zzz' 的 key（'0zzz:a:801'）字典序在 '591:z:50' 之前 ⇒ 若少了 591 層，合成的 0zzz 會贏。
+  const earlierKey = { ...shared, post_id: 801, source: "0zzz", source_id: "a" };
+  assert.equal(preferPrimaryListing(earlierKey, p591, now).post_id, 50, "有 591 就用 591");
+  assert.equal(preferPrimaryListing(p591, earlierKey, now).post_id, 50, "順序無關（同一贏家）");
+  // 空字串 source 正規化成 '591'（與 SQL 的 COALESCE(NULLIF(source,''),'591') 同一條，spec §6.10）。
+  const blank = { ...shared, post_id: 802, source: "", source_id: "a" };
+  assert.equal(preferPrimaryListing(blank, earlierKey, now).post_id, 802, "空字串 source 視為 591");
+  // last_seen_at 層在前：另一邊 last_seen_at 較大時，即使它是別家來源也先贏。
+  const newerOther = { ...shared, post_id: 803, source: "hbhousing", source_id: "a", last_seen_at: "2026-08-31T11:30:00.000Z" };
+  assert.equal(preferPrimaryListing(newerOther, p591, now).post_id, 803);
+  // 兩邊都不是 591 ⇒ 回到固定序（tie-break key 較小者贏），不得引入隨機。
+  const h1 = { ...shared, post_id: 804, source: "hbhousing", source_id: "a" };
+  const h2 = { ...shared, post_id: 805, source: "sinyi", source_id: "b" };
+  assert.equal(preferPrimaryListing(h1, h2, now).post_id, preferPrimaryListing(h2, h1, now).post_id);
+  assert.equal(preferPrimaryListing(h1, h2, now).post_id, 804);
+});
+
 test("cross-source community_id numbers do not veto", () => {
   const incoming = {
     ...base,

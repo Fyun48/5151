@@ -452,7 +452,7 @@ export function listingTieBreakKey(listing) {
 
 /**
  * 主物件：可比較租金最低者優先；無／錯租金不得贏過正常租金。
- * 同價取來源更新較近；再以穩定 key 決勝負，避免重排跳動。
+ * 同價取來源更新較近；再取 last_seen_at 較大者；再取「有 591 就用 591」；最後以穩定 key 決勝負。
  */
 export function preferPrimaryListing(a, b, now = Date.now()) {
   if (!a) return b;
@@ -466,6 +466,14 @@ export function preferPrimaryListing(a, b, now = Date.now()) {
   if (refreshDiff !== 0) return refreshDiff > 0 ? a : b;
   const seenDiff = String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || ""));
   if (seenDiff !== 0) return seenDiff < 0 ? a : b;
+  // 591 平台優先（Owner 2026-10-16）：租金便宜優先 → 更新時間較近 → 有 591 就用 591。
+  // 來源正規化沿用 §6.10：空字串與 NULL 都當 '591'（同 SQL 的 COALESCE(NULLIF(source,''),'591')）。
+  // **不引入隨機**：Owner 規則的末句是「都沒有就任選」，但清單分頁需要唯一全序（spec §6.7）；
+  // 「任選」若做成隨機，同一份有序集合會在換頁之間變動 ⇒ 這裡仍用固定序（tie-break key → post_id），
+  // 並在 docs/same-house-fold-spec.md §2 明寫這個偏離。
+  const is591A = String(a.source || "591") === "591";
+  const is591B = String(b.source || "591") === "591";
+  if (is591A !== is591B) return is591A ? a : b;
   const keyDiff = listingTieBreakKey(a).localeCompare(listingTieBreakKey(b));
   if (keyDiff !== 0) return keyDiff < 0 ? a : b;
   return Number(a.post_id) <= Number(b.post_id) ? a : b;

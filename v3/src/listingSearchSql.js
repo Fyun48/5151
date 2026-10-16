@@ -451,7 +451,12 @@ export function buildPublicListingsFoldSql(args = {}, deps = {}) {
   const displayFilter = sqlDisplayFilter(settings);
   const projectionFilter = projectionClauses.length ? `AND ${projectionClauses.join(" AND ")}` : "";
 
-  const affiliateExclusion = `(f.role IS DISTINCT FROM 'affiliate' OR (f.role = 'affiliate' AND f.primary_offline = 1 AND f.offline <> 1))`;
+  // Owner 2026-10-16 裁示：同一個同屋源群在清單上只顯示 1 列＝代表列 ⇒ 一律排除 affiliate。
+  // 舊的補償條款（`f.primary_offline = 1 AND f.offline <> 1` 的 affiliate 仍留列表）已移除，
+  // 理由與 Node 端 `listingIsMainListAffiliate`（personalFlags.js）逐條一致：代表列自己是
+  // 「暫離」（offline=1、offline_confirmed=0）時，依 2026-10-12 定案 3b 仍會顯示 ⇒ 再補償次卡
+  // 就變成「同群兩列」。線上次卡改由展開面板觸達（列表仍帶 peers，只是不進清單列）。
+  const affiliateExclusion = `(f.role IS DISTINCT FROM 'affiliate')`;
 
   const countQuery = {
     sql: `${foldCte}
@@ -644,6 +649,12 @@ export function foldRoleCte(candWhere, { rootSource = null } = {}) {
         ORDER BY (e.fold_rent_num IS NULL) ASC, e.fold_rent_num ASC,
                  COALESCE(CASE WHEN e.fold_refresh_kind = 1 THEN ?::bigint - e.fold_refresh_rel_ms ELSE e.fold_refresh_abs_ms END, 0) DESC,
                  COALESCE(e.last_seen_at, '') DESC,
+                 -- 591 平台優先（Owner 2026-10-16）：租金／更新時間／last_seen_at 全平手時，有 591 就選 591。
+                 -- 位置在 last_seen_at 之後、tie-break 之前，與 match.js 的 preferPrimaryListing 同序
+                 --（docs/same-house-fold-spec.md §2 比較式表）。來源正規化沿用 §6.10：
+                 -- 空字串／NULL 都當 '591'，與 Node 的 String(x.source || '591') 逐字對齊。
+                 -- 這裡**不引入隨機**：清單分頁需要唯一全序（spec §6.7）。
+                 (COALESCE(NULLIF(e.source, ''), '591') = '591') DESC,
                  -- 與 match.js 的 listingTieBreakKey 逐字對齊（見 docs/same-house-fold-spec.md §6.10）：
                  --   source：Node 是 String(listing.source || '591') ⇒ 空字串／NULL 都當 '591'；
                  --   origin：Node 是 String(source_id || url || post_id || '')；

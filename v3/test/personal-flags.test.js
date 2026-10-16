@@ -80,6 +80,8 @@ test("overlay keeps system-hidden duplicates even without a personal hide flag",
 test("main list hides cheaper-house affiliates except hidden filter or personal split", () => {
   const affiliate = { same_house_role: "affiliate", hidden: 0, offline: 0, match_verdict: "" };
   const split = { ...affiliate, same_house_split: true };
+  // Owner 2026-10-16：補償條款已移除 ⇒ 「代表列暫離（offline=1 未確認）而本列還在線」不再讓
+  // 本列回到清單（否則會與代表列同時出現＝同群兩列）。代表列自己照 3b 顯示。
   const liveWhilePrimaryGone = { ...affiliate, same_house_primary_offline: true, offline: 0 };
   assert.equal(listingIsMainListAffiliate(affiliate, "all"), true);
   assert.equal(listingMatchesListFilter(affiliate, "all"), false);
@@ -87,7 +89,10 @@ test("main list hides cheaper-house affiliates except hidden filter or personal 
   assert.equal(listingMatchesListFilter(affiliate, "hidden"), false);
   assert.equal(listingIsMainListAffiliate(split, "all"), false);
   assert.equal(listingMatchesListFilter({ ...split, match_level: "high" }, "all"), true);
-  assert.equal(listingIsMainListAffiliate(liveWhilePrimaryGone, "all"), false);
+  assert.equal(listingIsMainListAffiliate(liveWhilePrimaryGone, "all"), true, "補償條款已移除：仍算折疊的次卡");
+  assert.equal(listingMatchesListFilter(liveWhilePrimaryGone, "all"), false);
+  assert.equal(listingMatchesListFilter(liveWhilePrimaryGone, "watched"), false);
+  assert.equal(listingMatchesListFilter(liveWhilePrimaryGone, "hidden"), false);
 });
 
 test("confirmed same-house duplicates leave the suspected filter", () => {

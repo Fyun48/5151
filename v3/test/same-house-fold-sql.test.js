@@ -106,6 +106,9 @@ test("buildPublicListingsFoldSql uses searchWhere([]) and hidden/affiliate claus
   assert.match(built.where, /COALESCE\(hidden, 0\) != 1/);
   assert.match(built.countQuery.sql, /fold_role/);
   assert.match(built.countQuery.sql, /IS DISTINCT FROM 'affiliate'/);
+  // Owner 2026-10-16：補償條款已移除 ⇒ 不得再有「primary_offline=1 且 offline<>1 的 affiliate 仍留列表」。
+  assert.ok(!/primary_offline = 1 AND f\.offline <> 1/.test(built.countQuery.sql), "補償條款不得復辟");
+  assert.ok(!/f\.primary_offline = 1/.test(built.pageQuery({ limit: 5 }).sql), "分頁查詢也一樣");
   assert.match(built.countQuery.sql, /SELECT COUNT\(\*\) AS n/);
   assert.match(built.pageQuery({ limit: 5 }).sql, /LIMIT \? OFFSET \?/);
 });
@@ -126,6 +129,12 @@ test("foldRoleCte groups by fold_component_root and ranks the representative ins
   assert.ok(/fold_role AS/.test(cte));
   // 參數順序（文字順序）：候選參數 → elig 的 enabledSources → ranked 的 now。
   assert.ok(cte.indexOf("ANY(?::text[])") < cte.indexOf("?::bigint - e.fold_refresh_rel_ms"), "param order: enabledSources before now");
+  // Owner 2026-10-16 的「591 平台優先」層：必須夾在 last_seen_at 與 tie-break key 之間，
+  // 且與 match.js `preferPrimaryListing` 同序（spec §2 比較式表）；只改一邊就會在這裡紅。
+  const iSeen = cte.indexOf("COALESCE(e.last_seen_at, '') DESC");
+  const i591 = cte.indexOf("(COALESCE(NULLIF(e.source, ''), '591') = '591') DESC");
+  const iTie = cte.indexOf("COALESCE(NULLIF(e.source, ''), '591') || ':' ||");
+  assert.ok(iSeen > 0 && i591 > iSeen && iTie > i591, "591 層必須在 last_seen_at 之後、tie-break key 之前");
 });
 
 // 接線防護（L-0503 精神：不准有「靜默換語意」的門）：
