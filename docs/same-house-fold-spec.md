@@ -14,7 +14,7 @@
   → false，`db.js:3641`）。
 - **2026-10-12 起改為「一群一主」＋「群內代表」**：分組鍵＝全域固化欄
   `listings.fold_component_root`（NULL ⇒ 自己一群，用 `post_id` 當鍵）；**代表列在「本次符合
-  篩選條件的候選列」之內**用既有比較式 `sortGroupListings(...)[0]` 選出（`match.js:468`），
+  篩選條件的候選列」之內**用既有比較式 `sortGroupListings(...)[0]` 選出（`match.js:482`），
   同群其他候選列＝affiliate 被折疊。兩條路徑（Node `db.js attachSameHouseRoleSteps`／
   SQL `listingSearchSql.js foldRoleCte`）用**同一個定義**；Node 端**不再做 1-hop 走訪**。
 - 單節點群（自身一群、沒有同群的第二個候選列）維持「無 role」＝留在主列表。
@@ -54,7 +54,7 @@ groups = groupBy(候選列, rootKey)          // rootKey = fold_component_root�
 if (hasPersonal) union(同一 personal.groupKey 的候選列的 rootKey)   // 個人併組不固化（§6.5）
 for 每個群 G（|G| ≥ 2 個候選列）:
   eligible = G 中 offline_confirmed ≠ 1 且 !housepriceNotDisplayReady 的成員（Owner③）  // db.js:3783
-  primary  = sortGroupListings(eligible, now)[0]        // 唯一比較式（match.js:468，未改）
+  primary  = sortGroupListings(eligible, now)[0]        // 唯一比較式（match.js:482，未改）
   role     = (post_id === primary.post_id) ? "primary" : "affiliate"
   same_house_primary_offline = Number(primary.offline) === 1
   same_house_group_watched / _hidden = 群內候選列的聯集（Owner③，§6.6）
