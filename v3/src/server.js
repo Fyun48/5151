@@ -684,6 +684,7 @@ import {
 } from "./support.js";
 import { getAdminDataHealthAsync, getAdminOverviewAsync } from "./adminOverview.js";
 import { commuteSettingsFingerprint, finishBackfillRequest, rememberBackfillRequest } from "./commuteState.js";
+import { createBackfillDeadline, resolveBackfillBudgetMs, runBackfillRounds } from "./backfillBudget.js";
 import { profileNameOrDraft, resolveWorkPointForSave } from "./settingsState.js";
 import {
   OAUTH_PROVIDERS,
@@ -4514,7 +4515,14 @@ async function queueGeoBackfill(settings = null) {
     } catch (error) {
       console.warn("補完整地址失敗：", error.message);
     }
+    // 單一背景 job（一次補完流程）的牆鐘預算：補路線與補定位兩個迴圈**共用同一個截止時間**，
+    // 不是各給 8 秒（各給會變成 16 秒，等於沒有單一請求上限）。理由與 clamp 見 backfillBudget.js 檔頭。
+    const commuteBackfillDeadline = createBackfillDeadline({ budgetMs: resolveBackfillBudgetMs() });
     async function runRoutes() {
+      // 下面的補座標／補地址迴圈也會呼叫這裡；預算用完就不再開新的路線計算。
+      if (commuteBackfillDeadline.expired()) {
+        return { attempted: 0, located: 0, postIds: [], fingerprint: "" };
+      }
       const routes = await backfillListingRoutes(settings, { limit: 20, priorityIds: visibleFocusIds() });
       if (routes.attempted || (routes.listings && routes.listings.length)) {
         const commutePostIds = Array.isArray(routes.postIds) ? routes.postIds : [];
@@ -4538,70 +4546,80 @@ async function queueGeoBackfill(settings = null) {
       // `console.warn("補路線失敗：", error.message)` —— 正式站 24 小時 80 行
       // `business SQLite is closed ... reached at listUserIds` 就是被這一行吞掉的：
       // 看不出第幾輪、也看不出 error 的 name／code，讀起來像一時的資料問題。
-      let routeBackfillFailures = 0;
-      let routeBackfillConsecutive = 0;
-      for (let round = 0; round < 80; round += 1) {
-        try {
-          const routes = await runRoutes();
-          if (routeBackfillConsecutive) routeBackfillConsecutive = 0;
-          if (!routes.attempted) break;
+      //
+      // 2026-10-17：迴圈不再只靠 80 輪上限。`runBackfillRounds` 每次進場先問截止時間，
+      // 到點就收手並留 `route-backfill-budget-exhausted`；連續失敗 3 次就
+      // `route-backfill-gave-up`，不會再 80 輪 × 1.5 秒。回傳／廣播的物件形狀不變。
+      const routeStats = await runBackfillRounds(() => runRoutes(), {
+        deadline: commuteBackfillDeadline,
+        maxRounds: 80,
+        label: "route-backfill",
+        stage: "routes",
+        // 與原本語意相同：這一輪沒有待補就正常收手；連續 3 輪 attempted 但 located=0 也收手。
+        onResult: (routes) => {
+          if (!routes?.attempted) return;
           if (routes.located > 0) emptyRouteRounds = 0;
           else emptyRouteRounds += 1;
-          if (emptyRouteRounds >= 3) break;
-        } catch (error) {
-          // 重試上限維持 80 輪（不會變成無限迴圈）；錯誤本身照樣往上報，不吞。
-          routeBackfillFailures += 1;
-          routeBackfillConsecutive += 1;
-          console.warn(
-            `route-backfill-failed round=${round} consecutive=${routeBackfillConsecutive}`
-            + ` name=${error?.name || "Error"} code=${error?.code ?? ""} ${error?.message || error}`,
-          );
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
-      }
-      if (routeBackfillFailures) {
+        },
+        shouldStop: (routes) => !routes?.attempted || emptyRouteRounds >= 3,
+      });
+      if (routeStats.failures) {
         // 固定前綴可 grep；講清楚這**不是**房源資料問題，而是補路線這條讀取路徑失敗。
         console.warn(
-          `route-backfill-failed total=${routeBackfillFailures} of 80 rounds：`
+          `route-backfill-failed total=${routeStats.failures} of 80 rounds：`
           + "補路線這一輪放棄了，沒有完成的物件下一輪會再排；這不是房源資料問題，請看上面的 name／code。",
         );
       }
-      for (let round = 0; round < 80; round += 1) {
-        try {
-          const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
-          if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
-          const notified = await flushPendingNotifications(settings);
-          if (notified.length) await broadcastNotify(notified);
-          if (geo.located) await runRoutes();
-          if (!geo.attempted) break;
-        } catch (error) {
-          console.warn("補定位失敗：", error.message);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
+      const coordsStats = await runBackfillRounds(async () => {
+        const geo = await backfillListingCoords(settings, { limit: LIST_PAGE_SIZE });
+        if (geo.attempted) broadcast({ type: "geo", geoBackfill: geo });
+        const notified = await flushPendingNotifications(settings);
+        if (notified.length) await broadcastNotify(notified);
+        if (geo.located) await runRoutes();
+        return geo;
+      }, {
+        deadline: commuteBackfillDeadline,
+        maxRounds: 80,
+        label: "route-backfill",
+        stage: "coords",
+        shouldStop: (geo) => !geo?.attempted,
+      });
+      if (coordsStats.failures) {
+        console.warn(`route-backfill-failed total=${coordsStats.failures} of 80 rounds（補定位）：沒有完成的物件下一輪會再排。`);
       }
-      for (let round = 0; round < 40; round += 1) {
-        try {
-          const geo = await backfillAddressGeo(settings, { limit: 12 });
-          if (geo.attempted) broadcast({ type: "geo", addressGeo: geo });
-          const notified = await flushPendingNotifications(settings);
-          if (notified.length) await broadcastNotify(notified);
-          if (geo.located) await runRoutes();
-          if (!geo.attempted) break;
-        } catch (error) {
-          console.warn("補地址定位失敗：", error.message);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
+      // 補地址定位（40 輪）與下面的補捷運距離（80 輪）原本也是「失敗就 sleep 1.5 秒、最多跑滿輪數」。
+      // 2026-10-17 開發站實測：補路線煞住之後，這兩個迴圈仍以 80 輪 × 1.5 秒重試，
+      // 其中 MRT 每次吃 12–15 秒 PG statement timeout（7 次），把連線池打滿、連坐訪客清單。
+      // 同一個缺陷的其餘實例 ⇒ 套同一個連續失敗上限（3 次）；**不加牆鐘預算**，避免改變語意。
+      const addressStats = await runBackfillRounds(async () => {
+        const geo = await backfillAddressGeo(settings, { limit: 12 });
+        if (geo.attempted) broadcast({ type: "geo", addressGeo: geo });
+        const notified = await flushPendingNotifications(settings);
+        if (notified.length) await broadcastNotify(notified);
+        if (geo.located) await runRoutes();
+        return geo;
+      }, {
+        maxRounds: 40,
+        label: "backfill",
+        stage: "address",
+        shouldStop: (geo) => !geo?.attempted,
+      });
+      if (addressStats.failures) {
+        console.warn(`backfill-failed total=${addressStats.failures} of 40 rounds（補地址定位）：沒有完成的物件下一輪會再排。`);
       }
     }
-    for (let round = 0; round < 80; round += 1) {
-      try {
-        const mrt = await backfillListingMrt({ limit: 20 });
-        if (mrt.attempted) broadcast({ type: "geo", mrtBackfill: mrt });
-        if (!mrt.attempted) break;
-      } catch (error) {
-        console.warn("補捷運距離失敗：", error.message);
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+    const mrtStats = await runBackfillRounds(async () => {
+      const mrt = await backfillListingMrt({ limit: 20 });
+      if (mrt.attempted) broadcast({ type: "geo", mrtBackfill: mrt });
+      return mrt;
+    }, {
+      maxRounds: 80,
+      label: "backfill",
+      stage: "mrt",
+      shouldStop: (mrt) => !mrt?.attempted,
+    });
+    if (mrtStats.failures) {
+      console.warn(`backfill-failed total=${mrtStats.failures} of 80 rounds（補捷運距離）：沒有完成的物件下一輪會再排。`);
     }
     try {
       broadcast({ type: "geo", stats: await safeStats(0), done: true });

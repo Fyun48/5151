@@ -253,8 +253,14 @@ test("crawlerReads.js：PG 的補路線掃描把 plan 算好傳進去（不再�
 test("server.js：補路線重試圈留下可搜的失敗前綴與輪次（不再只吞 error.message）", () => {
   const server = src("server.js");
   assert.doesNotMatch(server, /console\.warn\("補路線失敗：", error\.message\)\s*;/, "不得再只印 error.message");
-  assert.match(server, /route-backfill-failed round=\$\{round\} consecutive=\$\{routeBackfillConsecutive\}/);
-  assert.match(server, /name=\$\{error\?\.name \|\| "Error"\} code=\$\{error\?\.code \?\? ""\}/);
-  assert.match(server, /route-backfill-failed total=\$\{routeBackfillFailures\} of 80 rounds/);
-  assert.match(server, /for \(let round = 0; round < 80; round \+= 1\) \{/, "重試上限不能變成無限迴圈");
+  // 2026-10-17：逐輪失敗訊息與 80 輪上限搬進 `backfillBudget.js`（迴圈加牆鐘預算／失敗上限），
+  // server.js 只負責接線與彙總；守衛改成「兩邊都在、而且 server 真的有接」。
+  const budget = src("backfillBudget.js");
+  assert.match(server, /runBackfillRounds\(/, "server.js 的補路線圈必須走 backfillBudget.js");
+  assert.match(server, /route-backfill-failed total=\$\{routeStats\.failures\} of 80 rounds/);
+  assert.match(budget, /`\$\{label\}-failed stage=\$\{stage\} round=\$\{round\} consecutive=\$\{stats\.consecutiveFailures\}`/);
+  assert.match(budget, /name=\$\{error\?\.name \|\| "Error"\} code=\$\{error\?\.code \?\? ""\}/);
+  assert.match(budget, /for \(let round = 0; round < Math\.max\(1, Number\(maxRounds\) \|\| DEFAULT_MAX_ROUNDS\); round \+= 1\)/,
+    "重試上限不能變成無限迴圈");
+  assert.match(budget, /consecutiveFailures >=/, "連續失敗上限必須真的拿來判斷");
 });
