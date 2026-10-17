@@ -527,6 +527,7 @@ import {
 // 後台總覽的統計在 PG 模式下必須走 listingStatsAsync（已是既有的 PG 路徑，
 // 內部會 resolveDbDriver 並在有快照的情況下回同一組計數）。
 import { listingStatsAsync } from "./listingStatsAsync.js";
+import { STATS_CACHE_MAX_ENTRIES, STATS_CACHE_TTL_MS, createStatsCache, statsCacheKey } from "./statsResponseCache.js";
 import { queueAccountMail } from "./systemMail.js";
 import { assertHuman, issueCaptcha } from "./captcha.js";
 import { assertCaptchaIssuable, assertDemoReadable, assertImportAllowed, assertPublicListingsReadable, authAttemptKeys, clientIp } from "./rateLimit.js";
@@ -4796,9 +4797,35 @@ async function confirmExpiredOfflineFromSettingsAsync() {
 
 // `stats()`（db.js）的 driver-aware 版：PG 模式讀 PG 的統計島嶼（`listingStatsAsync`），
 // 失敗時回同一個安全形狀（與同步版同一個契約：統計壞掉不該讓整個回應 500）。
+//
+// 2026-10-17（Owner 回報「開發站按隱藏縣市沒反應」）：PG 的 `listingStatsAsync()` 冷算實測
+// 38.9–44.8 秒，而 `POST /api/settings` 的回應要等它、前端只有 20 秒（`AbortSignal.timeout`）
+// ⇒ 設定其實已寫入，但 UI 只看到逾時。這裡在**呼叫端**加一層 45 秒快取（不改共用
+// `listingStatsAsync()`）：同一會員、同一組「會影響統計的設定」在 TTL 內只算一次，
+// 併發時 single-flight。快取命中／未命中都會留一行 log（`stats-cache hit=0|1 …`），
+// 不新增回應欄位，避免動到既有 JSON 契約。
+const statsResponseCache = createStatsCache({
+  ttlMs: STATS_CACHE_TTL_MS,
+  maxEntries: STATS_CACHE_MAX_ENTRIES,
+});
+
 async function safeStats(userId) {
+  const started = Date.now();
   try {
-    return await listingStatsAsync({ userId });
+    const uid = Number(userId) || 0;
+    // key 必須反映「這次統計實際會用的設定」：PG 路徑的 `listingStatsAsync({userId})` 是從
+    // `requestContext.settingsForUser(uid)` 讀同一份 PG 設定；這裡先讀一次、再明確傳進去，
+    // 指紋與計算用的設定就一定是同一份（不會出現「key 是舊設定、算的是新設定」）。
+    const settings = await getSettingsAsync(uid);
+    const key = statsCacheKey(uid, settings);
+    const { value, cached, shared } = await statsResponseCache.getOrCompute(
+      key,
+      () => listingStatsAsync({ userId: uid, settings }),
+    );
+    console.log(
+      `stats-cache hit=${cached ? 1 : 0}${shared ? " shared=1" : ""} key=${key} ms=${Date.now() - started}`,
+    );
+    return value;
   } catch (error) {
     console.warn("讀取統計失敗：", error.message);
     return { total: 0, error: error.message };
