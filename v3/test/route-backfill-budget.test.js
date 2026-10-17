@@ -124,7 +124,7 @@ test("(c) 正常情況（少量待補）行為不變：輪數、attempted／loca
   assert.equal(firstResult.fingerprint, "25.03,121.52|scooter");
 });
 
-test("server.js 接線：兩個迴圈都用同一組 runBackfillRounds／單一截止時間，routeBackfill 廣播形狀不變", () => {
+test("server.js 接線：四個迴圈都套用 runBackfillRounds，路線／座標共用單一截止時間、routeBackfill 廣播形狀不變", () => {
   assert.match(
     serverSrc,
     /import \{ createBackfillDeadline, resolveBackfillBudgetMs, runBackfillRounds \} from "\.\/backfillBudget\.js";/,
@@ -134,10 +134,72 @@ test("server.js 接線：兩個迴圈都用同一組 runBackfillRounds／單一�
     1,
     "路線與座標迴圈必須共用同一個截止時間（不是各給一份預算）",
   );
-  assert.equal((serverSrc.match(/runBackfillRounds\(/g) || []).length, 2, "補路線與補定位兩個迴圈都要套用");
-  assert.match(serverSrc, /stage: "routes"/);
-  assert.match(serverSrc, /stage: "coords"/);
+  assert.equal(
+    (serverSrc.match(/runBackfillRounds\(/g) || []).length,
+    4,
+    "補路線／補定位（牆鐘預算）與補地址／補捷運（失敗上限）四個迴圈都要套用",
+  );
+  for (const stage of ["routes", "coords", "address", "mrt"]) {
+    assert.match(serverSrc, new RegExp(`stage: "${stage}"`), `缺 stage=${stage} 的接線`);
+  }
+  // 只有前兩個（路線／座標）帶 deadline；地址／捷運沿用原語意，只加失敗上限。
+  assert.equal(
+    (serverSrc.match(/deadline: commuteBackfillDeadline/g) || []).length,
+    2,
+    "地址／捷運迴圈不該有牆鐘預算（只加失敗上限）",
+  );
+  assert.match(serverSrc, /maxRounds: 40/);
   assert.match(serverSrc, /maxRounds: 80/);
   assert.match(serverSrc, /broadcast\(\{ type: "geo", routeBackfill: routes \}\)/);
   assert.match(serverSrc, /if \(commuteBackfillDeadline\.expired\(\)\) \{/);
+});
+
+test("(d) 補捷運迴圈：label=backfill／stage=mrt 連續失敗 3 次就停，日誌可 grep", async () => {
+  const lines = [];
+  let sleeps = 0;
+  let calls = 0;
+  const stats = await runBackfillRounds(async () => {
+    calls += 1;
+    const error = new Error("canceling statement due to statement timeout");
+    error.code = "57014";
+    throw error;
+  }, {
+    maxRounds: 80,
+    label: "backfill",
+    stage: "mrt",
+    log: (line) => lines.push(line),
+    sleep: async () => { sleeps += 1; },
+  });
+  assert.equal(calls, 3);
+  assert.equal(stats.stoppedBy, "failures");
+  assert.equal(stats.failures, 3);
+  assert.equal(sleeps, 2);
+  const out = lines.join("\n");
+  assert.match(out, /backfill-failed stage=mrt round=0 consecutive=1 .*code=57014/);
+  assert.match(out, /backfill-gave-up stage=mrt failures=3 consecutive=3 rounds=3/);
+});
+
+test("(e) 補地址迴圈：正常情況（attempted>0 → attempted=0）行為不變、沒有收手日誌", async () => {
+  let calls = 0;
+  const seen = [];
+  const stats = await runBackfillRounds(async () => {
+    calls += 1;
+    return calls === 1
+      ? { attempted: 12, located: 5 }
+      : { attempted: 0, located: 0 };
+  }, {
+    maxRounds: 40,
+    label: "backfill",
+    stage: "address",
+    onResult: (result) => seen.push(result),
+    shouldStop: (result) => !result?.attempted,
+    log: (line) => { throw new Error(`正常情況不該有收手日誌：${line}`); },
+  });
+  assert.equal(calls, 2);
+  assert.equal(stats.stoppedBy, "idle");
+  assert.equal(stats.failures, 0);
+  assert.equal(stats.attempted, 12);
+  assert.equal(stats.located, 5);
+  assert.equal(seen[0].located, 5);
+  assert.deepEqual(seen[1], { attempted: 0, located: 0 });
 });
