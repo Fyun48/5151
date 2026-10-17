@@ -37,6 +37,14 @@ export const PG_NO_SQLITE_OPEN_ENV = "PG_NO_SQLITE_OPEN";
 // 怎麼驗證：`node v3/scripts/member-listing-cache-bench.mjs`（隔離庫，同一組參數連打兩次）。
 export const MEMBER_LISTING_CACHE_ENV = "MEMBER_LISTING_CACHE";
 
+// 訪客清單快取的陳舊上界（`v3/src/publicListings.js` 的 `MAX_STALE_MS`，2026-10-16 放寬）。
+//
+// **預設 600000ms＝10 分鐘**（Owner 核可，對齊爬蟲約 20 分鐘一輪的節奏）。可選鍵
+// `GUEST_SWR_MAX_STALE_MS` 只能把上界**調小**：模組內 clamp 在 [TTL_MS(20000), 600000]，
+// 調大於 600000 一律被夾回 600000，解析失敗回到預設。這個鍵不影響啟動檢查（純效能參數）。
+// 怎麼驗證：`node v3/scripts/guest-latency-probe.mjs --base-url <本機> --gap-seconds 150 --count 5`
+// （改前每發十幾秒、改後 < 3 秒）；離線語意在 `v3/test/public-cache-swr.test.js`。
+
 // 與 dbDriverPostgres.js 的 resolvePostgresConfig() 對齊：這些 env 只要有一個非空，
 // 就代表「有 PG 連線」，driver 必須解析成 postgres。
 //

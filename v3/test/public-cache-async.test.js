@@ -11,7 +11,7 @@ test('public cache awaits success, preserves rejection, and serves stale across 
   assert.equal(first.cache_hit,false);
   const hit=await getCachedPublicListings({},async()=>assert.fail('must reuse success'),{namespace:'test:v1'});
   assert.equal(hit.cache_hit,true);
-  // generation 換代但 entry 仍年輕（≤ MAX_STALE_MS）：SWR 先回舊值＋背景重算，不當下重算。
+  // generation 換代但 entry 仍年輕（≤ MAX_STALE_MS＝600s）：SWR 先回舊值＋背景重算，不當下重算。
   const next=await getCachedPublicListings({},async()=>({listings:[2]}),{namespace:'test:v2'});
   assert.deepEqual(next.listings,[1]);
   assert.equal(next.cache_hit,true);
