@@ -406,9 +406,12 @@ test("more than 800 coarse candidates still count all and keep highest rank firs
     });
     if (i === 800) late = row;
   }
+  // 這批資料的 last_confirmed_at 固定在 2026-09-16／2026-07-01；不固定 now 的話，
+  // 2026-10-16 之後兩者都超過 30 天、rank_score 同分，就只會靠 public_token 決勝。
+  const fixedNow = new Date("2026-09-16T08:00:00.000Z");
   const started = Date.now();
-  const summary = ownerListingMatchSummary(db, listing.post_id, 1);
-  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 5 });
+  const summary = ownerListingMatchSummary(db, listing.post_id, 1, fixedNow);
+  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 5, now: fixedNow });
   const elapsed = Date.now() - started;
   assert.equal(summary.count, 801);
   assert.equal(page.total, 801);
@@ -451,11 +454,33 @@ test("owner matching uses login view and watch activity signals", () => {
   db.prepare("UPDATE demand_posts SET last_confirmed_at = ?, updated_at = ? WHERE id IN (?, ?)")
     .run("2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z", quiet.id, busy.id);
   clearRentalMatchCache();
-  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 20 });
+  // 活動／新鮮度分數是相對 `now`（預設牆鐘）計算的：2026-09-16 之後超過 30 天，
+  // 兩筆的 activity/freshness 都會歸零 ⇒ 同分後只剩 randomBytes 的 public_token 決勝，
+  // 這條就隨機紅（2026-10-17 CI run 39016052592）。固定時鐘後，busy 的 login/view/watch
+  // 訊號仍讓 rank_score 較高，測到的還是原本的「活動訊號」語意。
+  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 20, now: new Date("2026-09-16T08:00:00.000Z") });
   assert.equal(page.total, 2);
   assert.equal(page.items[0].wish_ref, busy.public_token);
   assert.equal(page.items[0].match_score, page.items[1].match_score);
   assert.doesNotMatch(JSON.stringify(page), /"rank_score"|"freshness_score"|"activity_score"|"wish_id"/);
+  db.close();
+});
+
+test("owner matching breaks score ties by stable demand post id", () => {
+  const db = open();
+  const listing = createSelfListing(db, 1, listingInput());
+  // 使用者 2、3 由 open() 先播好；兩筆需求的 demand_posts.id 由插入順序決定（older 先、newer 後）。
+  const older = createDemandPost(db, 2, wishInput({ body: "較早的需求找士林兩房" }));
+  const newer = createDemandPost(db, 3, wishInput({ body: "較晚的需求找士林兩房" }));
+  db.prepare("UPDATE demand_posts SET last_confirmed_at = ?, updated_at = ? WHERE id IN (?, ?)")
+    .run("2026-08-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z", older.id, newer.id);
+  clearRentalMatchCache();
+  // 2026-10-17 對這兩筆都已超過 30 天 ⇒ freshness/activity 皆 0、rank_score 同分。
+  // 同分 ⇒ 依 demand_posts.id 升冪（穩定的決勝鍵），不是 randomBytes 的 public_token。
+  const page = ownerListingMatches(db, listing.post_id, 1, { limit: 20, now: new Date("2026-10-17T00:00:00.000Z") });
+  assert.equal(page.total, 2);
+  assert.equal(page.items[0].match_score, page.items[1].match_score);
+  assert.deepEqual(page.items.map((item) => item.wish_ref), [older.public_token, newer.public_token]);
   db.close();
 });
 
