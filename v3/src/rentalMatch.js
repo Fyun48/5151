@@ -599,10 +599,15 @@ export function compareMatchRank(a, b) {
   const ma = Number(a.match_score) || 0;
   const mb = Number(b.match_score) || 0;
   if (ma !== mb) return mb - ma;
+  // 同分決勝鍵：`demand_posts.id`（穩定、唯一的遞增序列；SQLite 與 PG 都是同一個 id）。
+  // 不可用 `public_token`：它是 randomBytes 產生，同分時會讓每次執行的輸出順序翻面
+  // （2026-10-17 `rental-match-query.test.js`「owner matching uses login view…」的 flaky 根因）。
+  const ia = Number(a.wish_id) || 0;
+  const ib = Number(b.wish_id) || 0;
+  if (ia !== ib) return ia - ib;
   const ta = String(a.wish_ref || a.public_token || "");
   const tb = String(b.wish_ref || b.public_token || "");
-  if (ta !== tb) return ta.localeCompare(tb);
-  return (Number(a.wish_id) || 0) - (Number(b.wish_id) || 0);
+  return ta.localeCompare(tb);
 }
 
 const matchSnapshots = new Map();

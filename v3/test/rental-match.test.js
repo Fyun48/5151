@@ -294,19 +294,21 @@ test("wish snapshot keeps historical choices without inventing unspecified match
 });
 
 test("rank sort and cursor pagination are stable", () => {
+  // 同分決勝鍵是 demand_posts.id（wish_id）升冪。這裡刻意讓 public_token 與 id 反向，
+  // 證明排序不會被 randomBytes 產生的 token 影響（2026-10-17 的 flaky 根因）。
   const rows = [
-    { rank_score: 8000, match_score: 90, wish_ref: "bb", wish_id: 2 },
-    { rank_score: 8000, match_score: 90, wish_ref: "aa", wish_id: 1 },
+    { rank_score: 8000, match_score: 90, wish_ref: "zz", wish_id: 1 },
+    { rank_score: 8000, match_score: 90, wish_ref: "aa", wish_id: 2 },
     { rank_score: 1000, match_score: 40, wish_ref: "cc", wish_id: 3 },
   ].sort(compareMatchRank);
-  assert.deepEqual(rows.map((row) => row.wish_ref), ["aa", "bb", "cc"]);
+  assert.deepEqual(rows.map((row) => row.wish_ref), ["zz", "aa", "cc"]);
   const first = applyMatchCursor(rows, null, 1, { listingId: "L1" });
   assert.equal(first.items.length, 1);
-  assert.equal(first.items[0].wish_ref, "aa");
+  assert.equal(first.items[0].wish_ref, "zz");
   assert.ok(first.next_cursor);
   assert.equal(inspectMatchCursorPayload(first.next_cursor).reversible_json, false);
   const second = applyMatchCursor(rows, first.next_cursor, 1, { listingId: "L1" });
-  assert.equal(second.items[0].wish_ref, "bb");
+  assert.equal(second.items[0].wish_ref, "aa");
   assert.equal(encodeMatchCursor(rows[0]).length > 4, true);
   assert.ok(freshnessScoreFrom(wish(), now) > 0);
 });
